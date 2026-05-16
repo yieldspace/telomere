@@ -1,16 +1,17 @@
 use std::ops::{Deref, DerefMut};
 
 use crate::common::{Instr, Op, Operand};
+use smallvec::{smallvec, SmallVec};
 
 pub(crate) struct InstructionGenerator {
     instr: Vec<Instr>,
-    unreachable: Vec<bool>,
+    unreachable: SmallVec<[bool; 8]>,
 }
 impl InstructionGenerator {
     pub(crate) fn new() -> Self {
         Self {
             instr: vec![],
-            unreachable: vec![false],
+            unreachable: smallvec![false],
         }
     }
     #[allow(dead_code)]

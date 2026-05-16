@@ -609,6 +609,38 @@ async fn indexed_cross_memory_copy_supports_local_to_shared() {
     );
 }
 
+#[tokio::test]
+#[ignore = "measurement fixture for cross-memory copy transient allocation"]
+async fn large_cross_memory_copy_measurement_fixture() {
+    const COPY_LEN: i32 = 32 * 1024 * 1024;
+
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory $src 512)
+          (memory $dst 512)
+          (func (export "copy") (param i32)
+            (memory.copy $dst $src (i32.const 0) (i32.const 0) (local.get 0))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "copy",
+            &ResultValue::new(vec![WasmValue::I32(COPY_LEN)])
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+}
+
 #[cfg(feature = "simd")]
 async fn assert_indexed_simd_memory_roundtrip(memory_decl: &str) {
     let store = Store::new();

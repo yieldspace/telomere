@@ -27,6 +27,7 @@
   - canonical ABI metadata (`type_infos`)
   - component / instance / func / core module / core instance / core func / core memory / core table の relation store snapshot
 - runtime は `bytes` の再走査や export 名 fallback に依存せず、この IR snapshot を index ベースで解決する。
+- original `bytes` は public API / debugging compatibility のため保持するが、instantiate / call の実行経路では使わない。
 
 ## Wasmtime Sync Parity Boundary
 この runtime の parity 目標は Wasmtime の同期 component API に合わせている。

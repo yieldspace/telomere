@@ -1,10 +1,12 @@
-use std::collections::VecDeque;
-
 use crate::common::{BlockType, FuncType, ResultType, TypeIdx, ValType};
+use smallvec::SmallVec;
 
 use super::instruction::BlockKind;
 use super::validate::assert_valtype;
 use super::{Result, WasmParserError};
+
+pub(crate) type StackTypes = SmallVec<[ValType; 8]>;
+
 #[derive(Debug)]
 pub enum MaybeUnreachable {
     Unreachable(bool),
@@ -14,23 +16,28 @@ pub enum MaybeUnreachable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StackSnapshot {
     pub(crate) reachable: bool,
-    pub(crate) types: Vec<ValType>,
+    pub(crate) types: StackTypes,
 }
 #[derive(Debug)]
 pub struct TypeChecker {
     types: Vec<MaybeUnreachable>,
-    blocks: VecDeque<(BlockKind, BlockType, usize)>,
+    blocks: Vec<(BlockKind, BlockType, usize)>,
 }
 impl TypeChecker {
     pub fn new(typeidx: TypeIdx) -> Self {
         Self {
             types: vec![],
-            blocks: VecDeque::from([(BlockKind::Block, BlockType::TypeIdx(typeidx), 0)]),
+            blocks: vec![(BlockKind::Block, BlockType::TypeIdx(typeidx), 0)],
         }
     }
     pub fn get_block(&self, idx: usize) -> Result<(&BlockKind, &BlockType, &usize)> {
+        let stack_idx = self
+            .blocks
+            .len()
+            .checked_sub(1 + idx)
+            .ok_or(WasmParserError::InvalidStackValTypeAny)?;
         self.blocks
-            .get(idx)
+            .get(stack_idx)
             .ok_or(WasmParserError::InvalidStackValTypeAny)
             .map(|(a, b, c)| (a, b, c))
     }
@@ -40,7 +47,7 @@ impl TypeChecker {
 
     pub(crate) fn snapshot_stack(&self) -> StackSnapshot {
         let mut reachable = true;
-        let mut types = Vec::with_capacity(self.types.len());
+        let mut types = StackTypes::with_capacity(self.types.len());
         for ty in &self.types {
             match ty {
                 MaybeUnreachable::Normal(ty) => types.push(*ty),
@@ -115,7 +122,7 @@ impl TypeChecker {
         self.op_result_type(&ft.0, &ft.1)
     }
     pub fn enter_block(&mut self, kind: BlockKind, block_type: BlockType) {
-        self.blocks.push_front((kind, block_type, self.types.len()));
+        self.blocks.push((kind, block_type, self.types.len()));
     }
 
     pub fn leave_block(&mut self) -> Result<()> {
@@ -126,7 +133,7 @@ impl TypeChecker {
         if !last_is_unreachable {
             Err(WasmParserError::InvalidStackValTypeAny)?
         }
-        self.blocks.pop_front();
+        self.blocks.pop();
         Ok(())
     }
     pub fn block_base_stack_size(&self) -> Result<u32> {

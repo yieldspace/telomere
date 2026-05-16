@@ -796,11 +796,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             len: instrs.len() - function_return_start,
             stack_before: crate::parser::core::type_checker::StackSnapshot {
                 reachable: true,
-                types: functype.1 .0.clone(),
+                types: functype.1 .0.iter().copied().collect(),
             },
             stack_after: crate::parser::core::type_checker::StackSnapshot {
                 reachable: true,
-                types: Vec::new(),
+                types: Default::default(),
             },
             preserved_prefix_len: 0,
             fresh_result_count: 0,

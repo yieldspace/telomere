@@ -58,6 +58,7 @@ tokio = { version = "1.0", features = ["full"] }
 getrandom = "0.3.3"
 libc = "0.2.175"
 mmap-rs = "0.7.0"
+smallvec = "1.14.0"
 
 regex = "1.11.1"
 

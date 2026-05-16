@@ -19,13 +19,12 @@ pub(super) fn optimize_function(
     instrs: Vec<Instr>,
     meta: Vec<InstructionMeta>,
 ) -> LoweredFunction {
-    let fallback_instrs = instrs.clone();
     let fallback_op_lens = meta
         .iter()
         .map(|entry| u16::try_from(entry.len).expect("instruction length exceeds u16::MAX"))
         .collect::<Vec<_>>();
     let Some(program) = build_program(&instrs, meta) else {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     };
 
     let canon = ir::CanonFunc::from_program(
@@ -35,44 +34,44 @@ pub(super) fn optimize_function(
         &program,
     );
     if !canon.verify() {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     }
 
     let analysis = analysis::analyze(&canon);
     if !analysis.verify(&canon) {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     }
 
     let transformed = transform::run(canon, locals, &analysis);
     if !transformed.verify() {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     }
 
     let transformed_analysis = analysis::analyze(&transformed.func);
     if !transformed_analysis.verify(&transformed.func) {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     }
 
     let kernel = select::select(&transformed.func, &transformed_analysis);
     if !select::verify(&kernel) {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     }
 
     let versioned = versioning::apply(kernel, &transformed.func, &transformed_analysis);
     if !versioning::verify(&versioned) {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     }
 
     let lowered_kernel = lower::lower(versioned);
     if !lower::verify(&lowered_kernel) {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     }
 
     let lowered = encode::encode(lowered_kernel);
     if !encode::verify(&lowered)
         || exceeds_code_size_budget(fallback_op_lens.len(), lowered.code.len())
     {
-        return LoweredFunction::from_materialized(fallback_instrs, fallback_op_lens);
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     }
     lowered
 }

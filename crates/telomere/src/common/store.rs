@@ -1091,45 +1091,76 @@ impl StoreInner {
         self.shared_memory(id).fill(ptr, len, data)
     }
 
-    #[inline(never)]
-    fn local_read_bytes_to_vec(
-        &self,
-        id: LocalMemoryId,
-        offset: u32,
-        len: u32,
-    ) -> VMResult<Vec<u8>> {
+    fn checked_memory_range(offset: u32, len: u32) -> VMResult<(usize, usize)> {
         let start = offset as usize;
         let end = vm_try!(VMResult::from_option(
             start.checked_add(len as usize),
             || { VMResult::MemoryIndexOutOfRange }
         ));
+        VMResult::Success((start, end))
+    }
+
+    #[inline(never)]
+    fn check_local_memory_range(&self, id: LocalMemoryId, offset: u32, len: u32) -> VMResult<()> {
+        let (start, end) = vm_try!(Self::checked_memory_range(offset, len));
+        vm_try!(VMResult::from_option(
+            self.local_memory(id).memory().get(start..end),
+            || VMResult::MemoryIndexOutOfRange
+        ));
+        VMResult::Success(())
+    }
+
+    #[inline(never)]
+    fn check_shared_memory_range(&self, id: SharedMemoryId, offset: u32, len: u32) -> VMResult<()> {
+        let (start, end) = vm_try!(Self::checked_memory_range(offset, len));
+        self.shared_memory(id).with_memory(|memory| {
+            vm_try!(VMResult::from_option(memory.get(start..end), || {
+                VMResult::MemoryIndexOutOfRange
+            }));
+            VMResult::Success(())
+        })
+    }
+
+    #[inline(never)]
+    fn local_read_bytes_into(
+        &self,
+        id: LocalMemoryId,
+        offset: u32,
+        out: &mut [u8],
+    ) -> VMResult<()> {
+        let (start, end) = vm_try!(Self::checked_memory_range(offset, out.len() as u32));
         let bytes = vm_try!(VMResult::from_option(
             self.local_memory(id).memory().get(start..end),
             || VMResult::MemoryIndexOutOfRange
         ));
-        VMResult::Success(bytes.to_vec())
+        super::memory::trusted_copy_from_slice(out, bytes);
+        VMResult::Success(())
     }
 
     #[inline(never)]
-    fn shared_read_bytes_to_vec(
+    fn shared_read_bytes_into(
         &self,
         id: SharedMemoryId,
         offset: u32,
-        len: u32,
-    ) -> VMResult<Vec<u8>> {
-        let start = offset as usize;
-        let end = vm_try!(VMResult::from_option(
-            start.checked_add(len as usize),
-            || { VMResult::MemoryIndexOutOfRange }
-        ));
+        out: &mut [u8],
+    ) -> VMResult<()> {
+        let (start, end) = vm_try!(Self::checked_memory_range(offset, out.len() as u32));
         self.shared_memory(id).with_memory(|memory| {
-            VMResult::Success(
-                vm_try!(VMResult::from_option(memory.get(start..end), || {
-                    VMResult::MemoryIndexOutOfRange
-                }))
-                .to_vec(),
-            )
+            let bytes = vm_try!(VMResult::from_option(memory.get(start..end), || {
+                VMResult::MemoryIndexOutOfRange
+            }));
+            super::memory::trusted_copy_from_slice(out, bytes);
+            VMResult::Success(())
         })
+    }
+
+    fn copy_chunk_size(remaining: usize) -> usize {
+        const CHUNK_SIZE: usize = 4096;
+        remaining.min(CHUNK_SIZE)
+    }
+
+    fn copy_chunk_buffer() -> [u8; 4096] {
+        [0; 4096]
     }
 
     #[inline(never)]
@@ -1137,15 +1168,27 @@ impl StoreInner {
         &mut self,
         dst: LocalMemoryId,
         src: LocalMemoryId,
-        dst_offset: u32,
-        src_offset: u32,
+        mut dst_offset: u32,
+        mut src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
         if dst == src {
             return self.local_copy_memory(dst, dst_offset, src_offset, len);
         }
-        let bytes = vm_try!(self.local_read_bytes_to_vec(src, src_offset, len));
-        self.local_write_bytes(dst, dst_offset as usize, &bytes)
+        vm_try!(self.check_local_memory_range(src, src_offset, len));
+        vm_try!(self.check_local_memory_range(dst, dst_offset, len));
+        let mut remaining = len as usize;
+        let mut chunk = Self::copy_chunk_buffer();
+        while remaining != 0 {
+            let size = Self::copy_chunk_size(remaining);
+            let slice = &mut chunk[..size];
+            vm_try!(self.local_read_bytes_into(src, src_offset, slice));
+            vm_try!(self.local_write_bytes(dst, dst_offset as usize, slice));
+            src_offset += size as u32;
+            dst_offset += size as u32;
+            remaining -= size;
+        }
+        VMResult::Success(())
     }
 
     #[inline(never)]
@@ -1153,12 +1196,24 @@ impl StoreInner {
         &mut self,
         dst: SharedMemoryId,
         src: LocalMemoryId,
-        dst_offset: u32,
-        src_offset: u32,
+        mut dst_offset: u32,
+        mut src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
-        let bytes = vm_try!(self.local_read_bytes_to_vec(src, src_offset, len));
-        self.shared_write_bytes(dst, dst_offset as usize, &bytes)
+        vm_try!(self.check_local_memory_range(src, src_offset, len));
+        vm_try!(self.check_shared_memory_range(dst, dst_offset, len));
+        let mut remaining = len as usize;
+        let mut chunk = Self::copy_chunk_buffer();
+        while remaining != 0 {
+            let size = Self::copy_chunk_size(remaining);
+            let slice = &mut chunk[..size];
+            vm_try!(self.local_read_bytes_into(src, src_offset, slice));
+            vm_try!(self.shared_write_bytes(dst, dst_offset as usize, slice));
+            src_offset += size as u32;
+            dst_offset += size as u32;
+            remaining -= size;
+        }
+        VMResult::Success(())
     }
 
     #[inline(never)]
@@ -1166,12 +1221,24 @@ impl StoreInner {
         &mut self,
         dst: LocalMemoryId,
         src: SharedMemoryId,
-        dst_offset: u32,
-        src_offset: u32,
+        mut dst_offset: u32,
+        mut src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
-        let bytes = vm_try!(self.shared_read_bytes_to_vec(src, src_offset, len));
-        self.local_write_bytes(dst, dst_offset as usize, &bytes)
+        vm_try!(self.check_shared_memory_range(src, src_offset, len));
+        vm_try!(self.check_local_memory_range(dst, dst_offset, len));
+        let mut remaining = len as usize;
+        let mut chunk = Self::copy_chunk_buffer();
+        while remaining != 0 {
+            let size = Self::copy_chunk_size(remaining);
+            let slice = &mut chunk[..size];
+            vm_try!(self.shared_read_bytes_into(src, src_offset, slice));
+            vm_try!(self.local_write_bytes(dst, dst_offset as usize, slice));
+            src_offset += size as u32;
+            dst_offset += size as u32;
+            remaining -= size;
+        }
+        VMResult::Success(())
     }
 
     #[inline(never)]
@@ -1179,15 +1246,27 @@ impl StoreInner {
         &mut self,
         dst: SharedMemoryId,
         src: SharedMemoryId,
-        dst_offset: u32,
-        src_offset: u32,
+        mut dst_offset: u32,
+        mut src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
         if dst == src {
             return self.shared_copy_memory(dst, dst_offset, src_offset, len);
         }
-        let bytes = vm_try!(self.shared_read_bytes_to_vec(src, src_offset, len));
-        self.shared_write_bytes(dst, dst_offset as usize, &bytes)
+        vm_try!(self.check_shared_memory_range(src, src_offset, len));
+        vm_try!(self.check_shared_memory_range(dst, dst_offset, len));
+        let mut remaining = len as usize;
+        let mut chunk = Self::copy_chunk_buffer();
+        while remaining != 0 {
+            let size = Self::copy_chunk_size(remaining);
+            let slice = &mut chunk[..size];
+            vm_try!(self.shared_read_bytes_into(src, src_offset, slice));
+            vm_try!(self.shared_write_bytes(dst, dst_offset as usize, slice));
+            src_offset += size as u32;
+            dst_offset += size as u32;
+            remaining -= size;
+        }
+        VMResult::Success(())
     }
 
     #[inline(always)]

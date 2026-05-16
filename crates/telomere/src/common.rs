@@ -5,6 +5,7 @@ mod vm_result;
 use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
+use smallvec::SmallVec;
 
 pub use vm_result::VMResult;
 pub(crate) mod memory;
@@ -719,7 +720,9 @@ pub(crate) struct LoweredFunction {
 }
 
 impl LoweredFunction {
-    pub(crate) fn from_materialized(instrs: Vec<Instr>, op_lens: Vec<u16>) -> Self {
+    pub(crate) fn from_materialized(mut instrs: Vec<Instr>, mut op_lens: Vec<u16>) -> Self {
+        instrs.shrink_to_fit();
+        op_lens.shrink_to_fit();
         let mut code = Vec::with_capacity(op_lens.len());
         let mut cursor = 0usize;
         for len in &op_lens {
@@ -1518,7 +1521,7 @@ pub const fn word_size<T>() -> usize {
     std::mem::size_of::<T>() / std::mem::size_of::<u32>()
 }
 #[derive(Debug)]
-pub(crate) struct LocalReassignTable(pub(crate) Vec<(u32, ValType, u32)>);
+pub(crate) struct LocalReassignTable(pub(crate) SmallVec<[(u32, ValType, u32); 8]>);
 #[derive(Default, Debug, Clone)]
 pub struct LocalsData {
     count_i32: u32,
@@ -1577,7 +1580,7 @@ impl LocalsData {
         let mut count_f64 = 0u32;
         let mut count_v128 = 0u32;
         let mut index = 0u32;
-        let mut res = vec![];
+        let mut res = SmallVec::with_capacity(locals.len());
         for Locals { n, t } in locals {
             index = index
                 .checked_add(*n)

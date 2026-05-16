@@ -15,6 +15,7 @@ use crate::{
     },
     Instance, Module, Registry, Stack, Store, VMResult,
 };
+use std::sync::Arc;
 
 #[cfg(test)]
 use crate::common::{decode_local_binop32_kind, LocalBinop32Op, LocalFastRhsShape};
@@ -390,13 +391,12 @@ pub async fn instantiate(
 
             let func_addr = match func {
                 FunctionBody::Wasm(code) => {
-                    let materialized = code.lowered.materialize();
                     let func_addr = gc.new_func(&FunctionInstanceData {
                         instance: inst_id,
                         body: RuntimeFunctionBody::Wasm {
                             locals: code.locals,
-                            code: materialized.instrs.into(),
-                            op_lens: materialized.op_lens.into(),
+                            code: Arc::<[Instr]>::from([]),
+                            op_lens: Arc::<[u16]>::from([]),
                             lowered: code.lowered.clone(),
                         },
                         funcidx,
@@ -413,6 +413,49 @@ pub async fn instantiate(
 
             funcs.push(func_addr);
             tracing::trace!("linking: {funcidx} => {func_addr:?}");
+        }
+
+        let recipe_slots = funcs
+            .iter()
+            .map(|&funcaddr| gc.call_recipe_slot_for_func(funcaddr))
+            .collect::<Vec<_>>();
+        #[cfg(feature = "jit")]
+        let jit_local_wasm_recipe_slots = local_wasm_funcs
+            .iter()
+            .map(|&func_addr| gc.call_recipe_slot_for_func(func_addr))
+            .collect::<Vec<_>>();
+        for &func_addr in &local_wasm_funcs {
+            let materialized = match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { lowered, .. } => {
+                    lowered.materialize_with_recipe_slots(&recipe_slots)
+                }
+                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
+            };
+            #[cfg(feature = "jit")]
+            let mut materialized = materialized;
+            #[cfg(feature = "jit")]
+            if crate::runtime::jit::supported() && store.runtime_config().jit.enabled {
+                rewrite_direct_wasm_calls_for_jit(
+                    &mut materialized.instrs,
+                    &materialized.op_lens,
+                    &jit_local_wasm_recipe_slots,
+                );
+            }
+            #[cfg(feature = "vm-diagnostics")]
+            dump_materialized_function_if_requested(
+                funcs
+                    .iter()
+                    .position(|&addr| addr == func_addr)
+                    .expect("local wasm function must belong to instance") as u32,
+                &materialized.instrs,
+                &materialized.op_lens,
+            );
+            let func = gc.get_func_mut(func_addr);
+            let RuntimeFunctionBody::Wasm { code, op_lens, .. } = &mut func.body else {
+                unreachable!("materialized local wasm function must remain wasm")
+            };
+            *op_lens = materialized.op_lens.into();
+            *code = materialized.instrs.into();
         }
 
         for init in &global_init {
@@ -485,50 +528,6 @@ pub async fn instantiate(
             gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
-        let recipe_slots = instance
-            .funcs
-            .iter()
-            .map(|&funcaddr| gc.call_recipe_slot_for_func(funcaddr))
-            .collect::<Vec<_>>();
-        #[cfg(feature = "jit")]
-        let jit_local_wasm_recipe_slots = local_wasm_funcs
-            .iter()
-            .map(|&func_addr| gc.call_recipe_slot_for_func(func_addr))
-            .collect::<Vec<_>>();
-        for func_addr in local_wasm_funcs {
-            let materialized = match &gc.get_func(func_addr).body {
-                RuntimeFunctionBody::Wasm { lowered, .. } => {
-                    lowered.materialize_with_recipe_slots(&recipe_slots)
-                }
-                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
-            };
-            #[cfg(feature = "jit")]
-            let mut materialized = materialized;
-            #[cfg(feature = "jit")]
-            if crate::runtime::jit::supported() && store.runtime_config().jit.enabled {
-                rewrite_direct_wasm_calls_for_jit(
-                    &mut materialized.instrs,
-                    &materialized.op_lens,
-                    &jit_local_wasm_recipe_slots,
-                );
-            }
-            #[cfg(feature = "vm-diagnostics")]
-            dump_materialized_function_if_requested(
-                instance
-                    .funcs
-                    .iter()
-                    .position(|&addr| addr == func_addr)
-                    .expect("local wasm function must belong to instance") as u32,
-                &materialized.instrs,
-                &materialized.op_lens,
-            );
-            let func = gc.get_func_mut(func_addr);
-            let RuntimeFunctionBody::Wasm { code, op_lens, .. } = &mut func.body else {
-                unreachable!("materialized local wasm function must remain wasm")
-            };
-            *op_lens = materialized.op_lens.into();
-            *code = materialized.instrs.into();
-        }
         for &funcaddr in &instance.funcs {
             let recipe = gc.build_call_recipe(funcaddr);
             gc.set_call_recipe_for_func(funcaddr, recipe);
