@@ -1187,7 +1187,7 @@ impl X64BaselineMasm {
             self.load_slot64(RAX, rn).expect("virtual register fits");
         } else if signed {
             let disp = Self::slot_disp(rn).expect("virtual register fits");
-            self.emit_rex(false, RAX, RBP);
+            self.emit_rex(true, RAX, RBP);
             self.emit(&[0x63]);
             self.modrm_rbp_disp32(RAX, disp);
         } else {
@@ -1393,5 +1393,22 @@ mod tests {
             .into_bytes()
             .windows(3)
             .any(|window| window == [0xf3, 0x0f, 0x58]));
+    }
+
+    #[test]
+    fn signed_i32_to_float_sign_extends_before_64_bit_conversion() {
+        let mut asm = X64BaselineMasm::with_capacity(64);
+        asm.cvtf_s_from_w(0, 1, true);
+        let bytes = asm.into_bytes();
+        assert!(
+            bytes.windows(2).any(|window| window == [0x48, 0x63]),
+            "signed i32 conversion must use movsxd r64, r/m32 before cvtsi2ss: {bytes:02x?}"
+        );
+        assert!(
+            bytes
+                .windows(5)
+                .any(|window| window == [0xf3, 0x48, 0x0f, 0x2a, 0xc0]),
+            "signed i32 conversion must convert the sign-extended 64-bit value: {bytes:02x?}"
+        );
     }
 }
