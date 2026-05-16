@@ -120,7 +120,6 @@ fn wast_store() -> Store {
             jit: telomere::JitConfig {
                 enabled: true,
                 code_cache_max_bytes,
-                ..telomere::JitConfig::default()
             },
         });
     }
