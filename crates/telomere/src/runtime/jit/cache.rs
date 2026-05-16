@@ -25,6 +25,13 @@ pub(crate) struct StoreJitCache {
     inner: Mutex<StoreJitCacheInner>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JitCacheStats {
+    pub compiled_functions: usize,
+    pub rejected_functions: usize,
+    pub used_bytes: usize,
+}
+
 #[derive(Default)]
 struct StoreJitCacheInner {
     compiled: HashMap<ObjectRef, CachedFunction>,
@@ -169,6 +176,15 @@ impl StoreJitCache {
             inner.used_bytes = inner.used_bytes.saturating_sub(cached.tiers.code_size());
         }
         inner.disabled.insert(funcaddr);
+    }
+
+    pub(crate) fn stats(&self) -> JitCacheStats {
+        let inner = self.inner.lock();
+        JitCacheStats {
+            compiled_functions: inner.compiled.len(),
+            rejected_functions: inner.disabled.len(),
+            used_bytes: inner.used_bytes,
+        }
     }
 }
 

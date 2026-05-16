@@ -58,26 +58,29 @@ the `jit` Cargo feature and enable it at runtime with `--jit` or
       active tier is currently always baseline.
 - [x] W^X executable memory through `mmap-rs`; each compiled function owns an
       independent executable mapping that is never made writable again.
-- [x] Unsupported direct native op shapes fail closed at function compile time;
-      accepted JIT frames do not side-exit into the interpreter.
+- [x] Unsupported direct native op shapes are accepted through JIT ABI helper
+      calls or continuation bridges; opcode coverage alone does not
+      whole-function reject baseline compilation.
 - [x] Tail-call-threading integration through the existing direct call and
       return-call paths.
-- [x] Minimal runtime exits for done, trap, direct call, pending async work, and
-      callee-level interpreter execution when a called function is not JIT
-      accepted.
+- [x] Runtime exits for done, trap, direct call, pending async work,
+      continuation bridges, and callee-level interpreter execution when a
+      called function is not JIT accepted.
 - [x] Native emission for the scalar baseline subset: i32/i64 integer
       arithmetic and comparisons, f32/f64 arithmetic/comparisons/rounding,
       numeric conversions, globals, locals, select, references, direct and
       indirect calls, control flow, memory.size/grow, and default-memory
       8/16/32/64-bit load/store helpers.
-- [x] Native helper calls remain for supported JIT ABI operations, while
-      complex VM operations that would require interpreter continuation are
-      rejected for whole-function interpreter execution.
+- [x] Native helper calls and continuation bridges cover complex VM operations
+      without `BaselineOp::RuntimeStub` /
+      `BaselineOp::RuntimeContinuationStub` compile rejection.
+- [x] Baseline acceptance coverage for enabled core Wasm SIMD (`v128`) and
+      threads/atomics through direct native paths where implemented and JIT ABI
+      helper/continuation bridges for the remaining handlers.
 - [ ] Full Wasm SIMD (`v128`) and threads/atomics coverage in direct native
-      code; `i8x16.extract_lane_s`, `v128.bitselect`, and atomic wait/notify
-      currently use native runtime stubs.
+      code.
 - [ ] Direct native emission for remaining shape-general branch-heavy guarded
-      memory patterns that currently use continuation runtime stubs.
+      memory patterns that currently use continuation bridges.
 - [x] Benchmark-specific whole-function rewrites are intentionally not enabled;
       JIT improvements should be reusable Wasm instruction patterns rather than
       CoreMark-only recognizers.

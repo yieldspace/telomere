@@ -28,6 +28,8 @@ thread_local! {
 #[cfg(feature = "jit")]
 pub use abi::JitNativeExit;
 #[cfg(feature = "jit")]
+pub use cache::JitCacheStats;
+#[cfg(feature = "jit")]
 pub(crate) use cache::StoreJitCache;
 
 pub fn supported() -> bool {
@@ -111,6 +113,11 @@ pub(crate) fn should_stop_interpreter_at(pc: *const Instr) -> bool {
         let target = stop.get();
         !target.is_null() && target == pc
     })
+}
+
+#[cfg(feature = "jit")]
+pub(crate) fn interpreter_stop_active() -> bool {
+    JIT_INTERPRETER_STOP_AT.with(|stop| !stop.get().is_null())
 }
 
 #[cfg(feature = "jit")]

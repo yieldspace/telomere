@@ -174,6 +174,28 @@ fn assert_success_values(result: VMResult<ResultValue>, expected: ResultValue) {
         all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
     )
 ))]
+fn assert_jit_accepted(
+    before: telomere::runtime::jit::JitCacheStats,
+    after: telomere::runtime::jit::JitCacheStats,
+) {
+    assert!(
+        after.compiled_functions > before.compiled_functions,
+        "expected JIT cache to accept a function, before={before:?} after={after:?}"
+    );
+    assert_eq!(
+        after.rejected_functions, before.rejected_functions,
+        "expected no JIT compile rejection, before={before:?} after={after:?}"
+    );
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 trait VmResultMap<T> {
     fn map<U>(self, f: impl FnOnce(T) -> U) -> VMResult<U>;
 }
@@ -1383,6 +1405,148 @@ async fn jit_memory_load_traps_on_out_of_bounds() {
     )
 ))]
 #[tokio::test]
+async fn jit_i64_store_trap_does_not_partially_write() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "store") (param i32 i64)
+            local.get 0
+            local.get 1
+            i64.store align=4)
+          (func (export "load") (param i32) (result i32)
+            local.get 0
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let store_result = telomere::run_module_function(
+        &instance,
+        &store,
+        "store",
+        &ResultValue::new(vec![WasmValue::I32(65532), WasmValue::I64(-1)]),
+    )
+    .await;
+    let after_store = store.jit_cache_stats();
+    let load_result = telomere::run_module_function(
+        &instance,
+        &store,
+        "load",
+        &ResultValue::new(vec![WasmValue::I32(65532)]),
+    )
+    .await;
+    let after_load = store.jit_cache_stats();
+
+    assert!(matches!(store_result, VMResult::MemoryIndexOutOfRange));
+    assert_success_i32(load_result, 0);
+    assert_jit_accepted(before, after_store);
+    assert_jit_accepted(after_store, after_load);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_br_if_preserves_vm_stack_value_after_continuation_bridge() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            (block (result i32)
+              v128.const i8x16 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+              i8x16.extract_lane_s 0
+              local.get 0
+              br_if 0
+              drop
+              i32.const 11)))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let fallthrough = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    let after_fallthrough = store.jit_cache_stats();
+    let taken = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(1)]),
+    )
+    .await;
+    let after_taken = store.jit_cache_stats();
+
+    assert_success_i32(fallthrough, 11);
+    assert_success_i32(taken, 7);
+    assert_jit_accepted(before, after_fallthrough);
+    assert_eq!(
+        after_taken.rejected_functions, after_fallthrough.rejected_functions,
+        "expected no JIT compile rejection, before={after_fallthrough:?} after={after_taken:?}"
+    );
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_nested_br_if_value_preserves_fallthrough_branch_value() {
+    let result = invoke_jit(
+        r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            (i32.add
+              (i32.const 1)
+              (block (result i32)
+                (drop (i32.const 2))
+                (drop (br_if 0
+                  (block (result i32)
+                    (drop (br_if 1 (i32.const 8) (local.get 0)))
+                    (i32.const 4))
+                  (i32.const 1)))
+                (i32.const 16)))))
+        "#,
+        "run",
+        vec![WasmValue::I32(0)],
+    )
+    .await;
+
+    assert_success_i32(result, 5);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
 async fn jit_executes_bulk_memory_runtime_stubs() {
     let result = invoke_jit(
         r#"
@@ -1491,6 +1655,124 @@ async fn jit_executes_atomic_runtime_stubs() {
     .await;
 
     assert_success_i32(result, 1);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_accepts_runtime_stub_without_compile_reject() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (memory 1)
+          (data $d "abcd")
+          (func (export "run") (result i32)
+            i32.const 0
+            i32.const 0
+            i32.const 4
+            memory.init $d
+            data.drop $d
+            i32.const 0
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    let after = store.jit_cache_stats();
+
+    assert_success_i32(result, 0x64636261);
+    assert_jit_accepted(before, after);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_accepts_runtime_continuation_stub_without_compile_reject() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (func (export "run") (result i32)
+            v128.const i8x16 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+            v128.const i8x16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+            i8x16.shuffle 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+            i8x16.extract_lane_s 0))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    let after = store.jit_cache_stats();
+
+    assert_success_i32(result, 17);
+    assert_jit_accepted(before, after);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_accepts_current_op_continuation_bridge_without_compile_reject() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (memory 1 1 shared)
+          (func (export "run") (result i32 i32)
+            i32.const 0
+            i32.const 5
+            i32.atomic.store
+            i32.const 0
+            i32.const 3
+            i32.atomic.rmw.add
+            i32.const 0
+            i32.atomic.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    let after = store.jit_cache_stats();
+
+    assert_success_values(
+        result,
+        ResultValue::new(vec![WasmValue::I32(5), WasmValue::I32(8)]),
+    );
+    assert_jit_accepted(before, after);
 }
 
 #[cfg(all(

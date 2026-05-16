@@ -373,7 +373,8 @@ unsafe fn finish_jit_wasm_call(
     crate::runtime::jit::profile::count_exit(exit.kind);
     let returned_to_continuation = exit.kind == crate::runtime::jit::JitNativeExit::DONE
         || (exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR
-            && exit.value == continuation as u64);
+            && exit.value == continuation as u64)
+        || (exit.kind == crate::runtime::jit::JitNativeExit::PENDING && ctx.cont == continuation);
     if !is_return_call && returned_to_continuation {
         crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
     } else if !is_return_call
@@ -518,6 +519,9 @@ unsafe fn op_call_jit_lazy_inner(
     if ctx.effect.get_pending_count() != 0 {
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
+    }
+    if is_return_call && crate::runtime::jit::interpreter_stop_active() {
+        return unsafe { op_return_call(tail_code, ctx) };
     }
     let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };
     if !matches!(recipe.target, CallDispatchTarget::Wasm { .. }) {

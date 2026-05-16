@@ -1712,6 +1712,11 @@ impl Store {
     }
 
     #[cfg(feature = "jit")]
+    pub fn jit_cache_stats(&self) -> crate::runtime::jit::JitCacheStats {
+        self.jit_cache.stats()
+    }
+
+    #[cfg(feature = "jit")]
     pub(crate) fn jit_cache(&self) -> &StoreJitCache {
         &self.jit_cache
     }

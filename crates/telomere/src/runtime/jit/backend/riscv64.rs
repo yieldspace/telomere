@@ -27,13 +27,14 @@ use crate::runtime::jit::stubs::{
     i64_trunc_f64 as jit_i64_trunc_f64, indirect_call as jit_indirect_call,
     memory_copy as jit_memory_copy, memory_fill as jit_memory_fill, memory_grow as jit_memory_grow,
     memory_size as jit_memory_size, ref_func as jit_ref_func,
-    wasm_direct_call_fast as jit_wasm_direct_call_fast,
+    runtime_continuation_op as jit_runtime_continuation_op,
+    runtime_stack_op as jit_runtime_stack_op, wasm_direct_call_fast as jit_wasm_direct_call_fast,
 };
 
 use super::ops::{
     decode_baseline_op, BaselineOp, FloatBinaryOp, FloatCompareOp, FloatUnaryOp, FloatWidth,
     I32BinaryOp, I32CompareOp, I32UnaryOp, I64BinaryOp, I64CompareOp, I64UnaryOp, SearchCompare,
-    SelectBitStep4,
+    SelectBitStep4, RUNTIME_CONT_CURRENT_VM_HANDLER,
 };
 use telomere_jit_codegen::arch::riscv64::{
     patch_branch as patch_a64_branch, BranchKind, Cond, Riscv64BaselineMasm as A64BaselineMasm,
@@ -470,16 +471,20 @@ impl BaselineOpEmitter<'_, '_> {
                 self.emit_i32_const_binop(kind, lhs, rhs)?;
             }
             BaselineOp::I32ConstBinopBrIf { kind, rhs, target } => {
-                if self.stack_depth == 0 {
-                    return Err(());
+                if self.stack_depth > 1 {
+                    let reload_slots = self.stack_depth.checked_sub(1).ok_or(())?;
+                    self.call_runtime_continuation_op_reloading_stack(
+                        cursor,
+                        RUNTIME_CONT_CURRENT_VM_HANDLER,
+                        reload_slots,
+                    )?;
+                    return Ok(EmitControl::Continue);
                 }
+                self.ensure_stack_slots(1)?;
                 let value = self.pop_reg()?;
                 self.emit_i32_const_binop(kind, value, rhs)?;
-                if self.stack_depth == 0 {
-                    self.branch_to(target, FixupKind::CbnzW(value));
-                } else {
-                    return Err(());
-                }
+                self.flush_stack()?;
+                self.branch_to(target, FixupKind::CbnzW(value));
             }
             BaselineOp::I32ConstBinopWrite4 {
                 kind,
@@ -512,16 +517,20 @@ impl BaselineOpEmitter<'_, '_> {
                 }
             }
             BaselineOp::I32ConstCmpBrIf { kind, rhs, target } => {
-                if self.stack_depth == 0 {
-                    return Err(());
+                if self.stack_depth > 1 {
+                    let reload_slots = self.stack_depth.checked_sub(1).ok_or(())?;
+                    self.call_runtime_continuation_op_reloading_stack(
+                        cursor,
+                        RUNTIME_CONT_CURRENT_VM_HANDLER,
+                        reload_slots,
+                    )?;
+                    return Ok(EmitControl::Continue);
                 }
+                self.ensure_stack_slots(1)?;
                 let value = self.pop_reg()?;
                 self.emit_i32_const_cmp(kind, value, rhs)?;
-                if self.stack_depth == 0 || target > cursor {
-                    self.branch_to(target, FixupKind::CbnzW(value));
-                } else {
-                    return Err(());
-                }
+                self.flush_stack()?;
+                self.branch_to(target, FixupKind::CbnzW(value));
             }
             BaselineOp::LocalBinop32Write4 {
                 kind,
@@ -545,6 +554,9 @@ impl BaselineOpEmitter<'_, '_> {
                 rhs,
                 target,
             } => {
+                if self.stack_depth > 0 {
+                    self.flush_stack()?;
+                }
                 let result = self.push_reg()?;
                 self.emit_local_binop32(kind, lhs, rhs, result)?;
                 let result = self.pop_reg()?;
@@ -599,6 +611,9 @@ impl BaselineOpEmitter<'_, '_> {
                 rhs,
                 target,
             } => {
+                if self.stack_depth > 0 {
+                    self.flush_stack()?;
+                }
                 let result = self.push_reg()?;
                 self.emit_local_cmp32(kind, lhs, rhs, result)?;
                 let result = self.pop_reg()?;
@@ -626,6 +641,9 @@ impl BaselineOpEmitter<'_, '_> {
                 rhs,
                 target,
             } => {
+                if self.stack_depth > 0 {
+                    self.flush_stack()?;
+                }
                 let result = self.push_reg()?;
                 self.emit_local_cmp64(kind, lhs, rhs, result)?;
                 let result = self.pop_reg()?;
@@ -750,10 +768,12 @@ impl BaselineOpEmitter<'_, '_> {
                 }
             }
             BaselineOp::GlobalSet4 { index } => {
+                self.ensure_stack_slots(1)?;
                 let value = self.pop_reg()?;
                 self.inline_global_set4(index, 0, value)?;
             }
             BaselineOp::GlobalSetSlots { index, slots } => {
+                self.ensure_stack_slots(slots)?;
                 for lane in (0..slots).rev() {
                     let value = self.pop_reg()?;
                     self.inline_global_set4(index, u32::try_from(lane).map_err(|_| ())?, value)?;
@@ -1501,6 +1521,7 @@ impl BaselineOpEmitter<'_, '_> {
                 let low = self.pop_reg()?;
                 let addr = self.pop_reg()?;
                 if width == 8 {
+                    self.checked_memory_start(9, 10, addr, memarg.offset, 8)?;
                     self.inline_i32_store(addr, memarg.offset, 4, low)?;
                     self.add_imm_u32(addr, addr, 4)?;
                     self.inline_i32_store(addr, memarg.offset, 4, high)?;
@@ -1514,10 +1535,12 @@ impl BaselineOpEmitter<'_, '_> {
                 memarg,
                 width,
             } => {
+                self.ensure_stack_slots(2)?;
                 let high = self.pop_reg()?;
                 let low = self.pop_reg()?;
                 self.load_local_base_addr_to_reg(16, base_local, delta)?;
                 if width == 8 {
+                    self.checked_memory_start(9, 10, 16, memarg.offset, 8)?;
                     self.inline_i32_store(16, memarg.offset, 4, low)?;
                     self.add_imm_u32(16, 16, 4)?;
                     self.inline_i32_store(16, memarg.offset, 4, high)?;
@@ -1530,9 +1553,11 @@ impl BaselineOpEmitter<'_, '_> {
                 delta,
                 memarg,
             } => {
+                self.ensure_stack_slots(2)?;
                 let high = self.pop_reg()?;
                 let low = self.pop_reg()?;
                 self.load_local_base_addr_to_reg(16, base_local, delta)?;
+                self.checked_memory_start(9, 10, 16, memarg.offset, 8)?;
                 self.inline_i32_store(16, memarg.offset, 4, low)?;
                 self.add_imm_u32(16, 16, 4)?;
                 self.inline_i32_store(16, memarg.offset, 4, high)?;
@@ -1808,6 +1833,7 @@ impl BaselineOpEmitter<'_, '_> {
                 self.mov_w(result, 0);
             }
             BaselineOp::MemoryGrow { shared } => {
+                self.ensure_stack_slots(1)?;
                 let delta = self.pop_reg()?;
                 self.mov_x(0, 19);
                 self.mov_w(1, delta);
@@ -1824,30 +1850,32 @@ impl BaselineOpEmitter<'_, '_> {
                 if self.stack_depth == 0 {
                     self.inline_pop_i32(16)?;
                     self.branch_to(target, FixupKind::CbnzW(16));
-                    return Ok(EmitControl::Continue);
-                }
-                if self.stack_depth > 1 {
-                    if target <= cursor {
-                        return Err(());
-                    }
+                } else if self.stack_depth > 1 {
+                    let reload_slots = self.stack_depth.checked_sub(1).ok_or(())?;
+                    self.call_runtime_continuation_op_reloading_stack(
+                        cursor,
+                        RUNTIME_CONT_CURRENT_VM_HANDLER,
+                        reload_slots,
+                    )?;
+                } else {
                     let cond = self.pop_reg()?;
+                    if self.stack_depth > 0 {
+                        self.flush_stack()?;
+                    }
                     self.branch_to(target, FixupKind::CbnzW(cond));
-                    return Ok(EmitControl::Continue);
                 }
-                let cond = self.pop_reg()?;
-                self.flush_stack()?;
-                self.branch_to(target, FixupKind::CbnzW(cond));
             }
             BaselineOp::LocalGet4BrIf { local, target } => {
                 if self.stack_depth > 0 {
-                    return Err(());
+                    self.flush_stack()?;
                 }
                 self.load_local4_to_reg(16, local)?;
-                self.branch_to(target, FixupKind::CbnzW(16));
+                self.cmp_w_imm(16, 0)?;
+                self.branch_to(target, FixupKind::BCond(Cond::Ne));
             }
             BaselineOp::LocalGet4I32ConstAddBrIf { local, imm, target } => {
                 if self.stack_depth > 0 {
-                    return Err(());
+                    self.flush_stack()?;
                 }
                 self.load_local4_to_reg(16, local)?;
                 self.add_imm_u32(16, 16, imm)?;
@@ -2004,7 +2032,7 @@ impl BaselineOpEmitter<'_, '_> {
                 targets,
             } => {
                 if self.stack_depth > 0 {
-                    return Err(());
+                    self.flush_stack()?;
                 }
                 self.load_local4_to_reg(16, local)?;
                 if addend != 0 {
@@ -2015,11 +2043,12 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::BrTable { targets } => {
                 if self.stack_depth != 1 {
-                    return Err(());
+                    self.call_runtime_continuation_op(cursor, RUNTIME_CONT_CURRENT_VM_HANDLER)?;
+                } else {
+                    let index = self.pop_reg()?;
+                    self.branch_table(index, &targets)?;
+                    return Ok(EmitControl::SkipNextOp);
                 }
-                let index = self.pop_reg()?;
-                self.branch_table(index, &targets)?;
-                return Ok(EmitControl::SkipNextOp);
             }
             BaselineOp::If { else_target } => {
                 self.ensure_stack_slots(1)?;
@@ -2154,6 +2183,11 @@ impl BaselineOpEmitter<'_, '_> {
                 continuation_index,
                 is_return_call,
             } => {
+                if is_return_call {
+                    self.call_runtime_continuation_op(cursor, RUNTIME_CONT_CURRENT_VM_HANDLER)?;
+                    self.branch_to_epilogue();
+                    return Ok(EmitControl::Continue);
+                }
                 let recipe = self.call_recipe_for_operand(operand_index)?;
                 let flushed_size =
                     u32::try_from(self.stack_depth.checked_mul(4).ok_or(())?).map_err(|_| ())?;
@@ -2174,7 +2208,11 @@ impl BaselineOpEmitter<'_, '_> {
                         recipe.param_size,
                         recipe.return_size,
                     );
-                    return Err(());
+                    self.call_runtime_continuation_op(cursor, RUNTIME_CONT_CURRENT_VM_HANDLER)?;
+                    if is_return_call {
+                        self.branch_to_epilogue();
+                    }
+                    return Ok(EmitControl::Continue);
                 }
                 let expected_layout = pack_call_stack_sizes(recipe);
                 let use_wasm_fast_path =
@@ -2204,13 +2242,18 @@ impl BaselineOpEmitter<'_, '_> {
                     }
                     return Err(());
                 }
-                return Ok(EmitControl::Stop);
+                return Ok(EmitControl::Continue);
             }
             BaselineOp::IndirectCall {
                 operand_index,
                 continuation_index,
                 is_return_call,
             } => {
+                if is_return_call {
+                    self.call_runtime_continuation_op(cursor, RUNTIME_CONT_CURRENT_VM_HANDLER)?;
+                    self.branch_to_epilogue();
+                    return Ok(EmitControl::Continue);
+                }
                 let (param_size, return_size) =
                     self.indirect_call_layout_for_operand(operand_index)?;
                 let flushed_size =
@@ -2226,7 +2269,11 @@ impl BaselineOpEmitter<'_, '_> {
                 };
                 let reload_slots = usize::try_from(reload_size / 4).map_err(|_| ())?;
                 if reload_size % 4 != 0 || reload_slots > STACK_REGS.len() {
-                    return Err(());
+                    self.call_runtime_continuation_op(cursor, RUNTIME_CONT_CURRENT_VM_HANDLER)?;
+                    if is_return_call {
+                        self.branch_to_epilogue();
+                    }
+                    return Ok(EmitControl::Continue);
                 }
                 let expected_layout = (u64::from(param_size) << 32) | u64::from(return_size);
                 profile::count(Counter::EmitIndirectCallHelper);
@@ -2244,7 +2291,7 @@ impl BaselineOpEmitter<'_, '_> {
                     }
                     return Err(());
                 }
-                return Ok(EmitControl::Stop);
+                return Ok(EmitControl::Continue);
             }
             BaselineOp::AtomicFence { shared } => {
                 self.mov_x(0, 19);
@@ -2277,14 +2324,11 @@ impl BaselineOpEmitter<'_, '_> {
                 pop_slots,
                 push_slots,
             } => {
-                let _ = (pc_index, kind, pop_slots, push_slots);
-                profile::count(Counter::CompileRejectRuntimeStub);
-                return Err(());
+                let _ = pop_slots;
+                self.call_runtime_stack_op(pc_index, kind, push_slots)?;
             }
             BaselineOp::RuntimeContinuationStub { pc_index, kind } => {
-                let _ = (pc_index, kind);
-                profile::count(Counter::CompileRejectRuntimeContinuationStub);
-                return Err(());
+                self.call_runtime_continuation_op(pc_index, kind)?;
             }
         }
         Ok(EmitControl::Continue)
@@ -2296,24 +2340,33 @@ impl<'a> Emitter<'a> {
         let epilogue = self.offset();
         self.restore_and_ret();
         for fixup in &self.fixups {
-            if fixup.target_index != usize::MAX
-                && self
-                    .labels
-                    .get(fixup.target_index)
-                    .is_some_and(Option::is_none)
+            if fixup.target_index != usize::MAX && self.resolve_label(fixup.target_index).is_none()
             {
+                trace_compile_message(format_args!(
+                    "compile_reject_missing_label target_index={}",
+                    fixup.target_index
+                ));
                 return Err(());
             }
         }
-        for fixup in self.fixups {
-            let target = self
-                .labels
-                .get(fixup.target_index)
-                .and_then(|label| *label)
-                .unwrap_or(epilogue);
+        let fixups = std::mem::take(&mut self.fixups);
+        for fixup in fixups {
+            let target = self.resolve_label(fixup.target_index).unwrap_or(epilogue);
             patch_branch(self.masm.as_mut_bytes(), fixup.at, target, fixup.kind)?;
         }
         Ok(self.masm.into_bytes())
+    }
+
+    fn resolve_label(&self, target_index: usize) -> Option<usize> {
+        self.labels
+            .get(target_index)
+            .and_then(|label| *label)
+            .or_else(|| {
+                self.labels
+                    .iter()
+                    .skip(target_index.saturating_add(1))
+                    .find_map(|label| *label)
+            })
     }
 
     fn offset(&self) -> usize {
@@ -2804,6 +2857,59 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    fn call_runtime_stack_op(
+        &mut self,
+        pc_index: usize,
+        kind: u32,
+        push_slots: usize,
+    ) -> Result<(), ()> {
+        self.flush_stack()?;
+        self.mov_x(0, 19);
+        self.load_code_ptr_operand(1, pc_index);
+        self.mov_imm_u32(2, kind);
+        self.call_ptr(jit_runtime_stack_op as *const () as usize);
+        self.return_if_exit();
+        self.reload_stack_slots(push_slots)
+    }
+
+    fn call_runtime_continuation_op(&mut self, pc_index: usize, kind: u32) -> Result<(), ()> {
+        self.flush_stack()?;
+        self.mov_x(0, 19);
+        self.load_code_ptr_operand(1, pc_index);
+        self.load_code_ptr_operand(2, self.next_pc_index(pc_index)?);
+        self.mov_imm_u32(3, kind);
+        self.call_ptr(jit_runtime_continuation_op as *const () as usize);
+        self.return_if_exit();
+        Ok(())
+    }
+
+    fn call_runtime_continuation_op_reloading_stack(
+        &mut self,
+        pc_index: usize,
+        kind: u32,
+        reload_slots: usize,
+    ) -> Result<(), ()> {
+        self.flush_stack()?;
+        self.mov_x(0, 19);
+        self.load_code_ptr_operand(1, pc_index);
+        self.load_code_ptr_operand(2, self.next_pc_index(pc_index)?);
+        self.mov_imm_u32(3, kind);
+        self.call_ptr(jit_runtime_continuation_op as *const () as usize);
+        self.return_if_exit();
+        self.reload_stack_slots(reload_slots)
+    }
+
+    fn next_pc_index(&self, pc_index: usize) -> Result<usize, ()> {
+        let mut cursor = 0usize;
+        for len in self.op_lens.iter().copied() {
+            if cursor == pc_index {
+                return cursor.checked_add(usize::from(len)).ok_or(());
+            }
+            cursor = cursor.checked_add(usize::from(len)).ok_or(())?;
+        }
+        Err(())
+    }
+
     fn emit_search_loop(&mut self, plan: SearchLoopPlan) -> Result<(), ()> {
         if plan.field_width != 1 && plan.field_width != 2 {
             return Err(());
@@ -3102,11 +3208,24 @@ impl<'a> Emitter<'a> {
 
     fn branch_to(&mut self, target_index: usize, kind: FixupKind) {
         let at = self.branch_placeholder(kind);
+        let target_index = self.skip_end_target_index(target_index);
         self.fixups.push(Fixup {
             at,
             target_index,
             kind,
         });
+    }
+
+    fn skip_end_target_index(&self, mut target_index: usize) -> usize {
+        while target_index < self.wasm.len()
+            && std::ptr::fn_addr_eq(
+                unsafe { self.wasm[target_index].op },
+                crate::runtime::vm::op_end as crate::common::Op,
+            )
+        {
+            target_index += 1;
+        }
+        target_index
     }
 
     fn branch_to_offset(&mut self, target_offset: usize, kind: FixupKind) -> Result<(), ()> {
@@ -3240,10 +3359,34 @@ impl<'a> Emitter<'a> {
                 self.mov_imm_u32(17, rhs & 31);
                 self.rorv_w(lhs, lhs, 17);
             }
-            LocalBinop32Op::F32Add
-            | LocalBinop32Op::F32Sub
-            | LocalBinop32Op::F32Mul
-            | LocalBinop32Op::F32Div => return Err(()),
+            LocalBinop32Op::F32Add => {
+                self.mov_imm_u32(17, rhs);
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, 17);
+                self.fadd_s(0, 0, 1);
+                self.fmov_w_from_s(lhs, 0);
+            }
+            LocalBinop32Op::F32Sub => {
+                self.mov_imm_u32(17, rhs);
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, 17);
+                self.fsub_s(0, 0, 1);
+                self.fmov_w_from_s(lhs, 0);
+            }
+            LocalBinop32Op::F32Mul => {
+                self.mov_imm_u32(17, rhs);
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, 17);
+                self.fmul_s(0, 0, 1);
+                self.fmov_w_from_s(lhs, 0);
+            }
+            LocalBinop32Op::F32Div => {
+                self.mov_imm_u32(17, rhs);
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, 17);
+                self.fdiv_s(0, 0, 1);
+                self.fmov_w_from_s(lhs, 0);
+            }
         }
         Ok(())
     }
@@ -3305,10 +3448,30 @@ impl<'a> Emitter<'a> {
                 self.rorv_w(lhs, lhs, 17);
             }
             LocalBinop32Op::I32Rotr => self.rorv_w(lhs, lhs, rhs),
-            LocalBinop32Op::F32Add
-            | LocalBinop32Op::F32Sub
-            | LocalBinop32Op::F32Mul
-            | LocalBinop32Op::F32Div => return Err(()),
+            LocalBinop32Op::F32Add => {
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, rhs);
+                self.fadd_s(0, 0, 1);
+                self.fmov_w_from_s(lhs, 0);
+            }
+            LocalBinop32Op::F32Sub => {
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, rhs);
+                self.fsub_s(0, 0, 1);
+                self.fmov_w_from_s(lhs, 0);
+            }
+            LocalBinop32Op::F32Mul => {
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, rhs);
+                self.fmul_s(0, 0, 1);
+                self.fmov_w_from_s(lhs, 0);
+            }
+            LocalBinop32Op::F32Div => {
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, rhs);
+                self.fdiv_s(0, 0, 1);
+                self.fmov_w_from_s(lhs, 0);
+            }
         }
         Ok(())
     }
@@ -3394,14 +3557,42 @@ impl<'a> Emitter<'a> {
             return Err(());
         };
         self.load_local4_to_reg(result, lhs)?;
-        match rhs_shape {
-            LocalFastRhsShape::Local => {
-                self.load_local4_to_reg(17, rhs)?;
-                self.cmp_w(result, 17);
+        match op {
+            LocalCmp32Op::I32Eq
+            | LocalCmp32Op::I32Ne
+            | LocalCmp32Op::I32LtS
+            | LocalCmp32Op::I32LtU
+            | LocalCmp32Op::I32GtS
+            | LocalCmp32Op::I32GtU
+            | LocalCmp32Op::I32LeS
+            | LocalCmp32Op::I32LeU
+            | LocalCmp32Op::I32GeS
+            | LocalCmp32Op::I32GeU => {
+                match rhs_shape {
+                    LocalFastRhsShape::Local => {
+                        self.load_local4_to_reg(17, rhs)?;
+                        self.cmp_w(result, 17);
+                    }
+                    LocalFastRhsShape::Const => self.cmp_w_u32(result, rhs),
+                }
+                self.cset_w(result, i32_cmp_cond(op)?);
             }
-            LocalFastRhsShape::Const => self.cmp_w_u32(result, rhs),
+            LocalCmp32Op::F32Eq
+            | LocalCmp32Op::F32Ne
+            | LocalCmp32Op::F32Lt
+            | LocalCmp32Op::F32Gt
+            | LocalCmp32Op::F32Le
+            | LocalCmp32Op::F32Ge => {
+                match rhs_shape {
+                    LocalFastRhsShape::Local => self.load_local4_to_reg(17, rhs)?,
+                    LocalFastRhsShape::Const => self.mov_imm_u32(17, rhs),
+                }
+                self.fmov_s_from_w(0, result);
+                self.fmov_s_from_w(1, 17);
+                self.fcmp_s(0, 1);
+                self.cset_w(result, f32_cmp_cond(op)?);
+            }
         }
-        self.cset_w(result, i32_cmp_cond(op)?);
         Ok(())
     }
 
@@ -3543,6 +3734,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f32_compare(&mut self, op: FloatCompareOp) -> Result<(), ()> {
+        self.ensure_stack_slots(2)?;
         let rhs = self.pop_reg()?;
         let lhs = self.pop_reg()?;
         self.fmov_s_from_w(0, lhs);
@@ -3554,6 +3746,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f64_compare(&mut self, op: FloatCompareOp) -> Result<(), ()> {
+        self.ensure_stack_slots(4)?;
         let rhs_high = self.pop_reg()?;
         let rhs_low = self.pop_reg()?;
         let lhs_high = self.pop_reg()?;
@@ -3569,6 +3762,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f64_binary(&mut self, op: FloatBinaryOp) -> Result<(), ()> {
+        self.ensure_stack_slots(4)?;
         let rhs_high = self.pop_reg()?;
         let rhs_low = self.pop_reg()?;
         let lhs_high = self.pop_reg()?;
@@ -3626,6 +3820,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f32_binary(&mut self, op: FloatBinaryOp) -> Result<(), ()> {
+        self.ensure_stack_slots(2)?;
         let rhs = self.pop_reg()?;
         let lhs = self.pop_reg()?;
         match op {
@@ -3681,6 +3876,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f32_unary(&mut self, op: FloatUnaryOp) -> Result<(), ()> {
+        self.ensure_stack_slots(1)?;
         let value = self.peek_reg()?;
         self.fmov_s_from_w(0, value);
         match op {
@@ -3697,6 +3893,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f64_unary(&mut self, op: FloatUnaryOp) -> Result<(), ()> {
+        self.ensure_stack_slots(2)?;
         let high = self.pop_reg()?;
         let low = self.pop_reg()?;
         self.pack_i64_slots_to_x(16, low, high, 9)?;
@@ -3716,6 +3913,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f32_convert_i32(&mut self, signed: bool) -> Result<(), ()> {
+        self.ensure_stack_slots(1)?;
         let value = self.pop_reg()?;
         self.cvtf_s_from_w(0, value, signed);
         let result = self.push_reg()?;
@@ -3724,6 +3922,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f32_convert_i64(&mut self, signed: bool) -> Result<(), ()> {
+        self.ensure_stack_slots(2)?;
         let high = self.pop_reg()?;
         let low = self.pop_reg()?;
         self.pack_i64_slots_to_x(16, low, high, 9)?;
@@ -3734,6 +3933,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f32_demote_f64(&mut self) -> Result<(), ()> {
+        self.ensure_stack_slots(2)?;
         let high = self.pop_reg()?;
         let low = self.pop_reg()?;
         self.pack_i64_slots_to_x(16, low, high, 9)?;
@@ -3745,6 +3945,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f64_convert_i32(&mut self, signed: bool) -> Result<(), ()> {
+        self.ensure_stack_slots(1)?;
         let value = self.pop_reg()?;
         self.cvtf_d_from_w(0, value, signed);
         self.fmov_x_from_d(16, 0);
@@ -3753,6 +3954,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f64_convert_i64(&mut self, signed: bool) -> Result<(), ()> {
+        self.ensure_stack_slots(2)?;
         let high = self.pop_reg()?;
         let low = self.pop_reg()?;
         self.pack_i64_slots_to_x(16, low, high, 9)?;
@@ -3763,6 +3965,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_f64_promote_f32(&mut self) -> Result<(), ()> {
+        self.ensure_stack_slots(1)?;
         let value = self.pop_reg()?;
         self.fmov_s_from_w(0, value);
         self.fcvt_d_from_s(0, 0);
@@ -3772,6 +3975,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_i32_trunc_float(&mut self, source: FloatWidth, signed: bool) -> Result<(), ()> {
+        self.ensure_stack_slots(float_width_slots(source))?;
         match source {
             FloatWidth::F32 => {
                 let value = self.pop_reg()?;
@@ -3799,6 +4003,7 @@ impl<'a> Emitter<'a> {
         signed: bool,
         saturating: bool,
     ) -> Result<(), ()> {
+        self.ensure_stack_slots(float_width_slots(source))?;
         match source {
             FloatWidth::F32 => {
                 let value = self.pop_reg()?;
@@ -3822,6 +4027,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_i32_trunc_sat_float(&mut self, source: FloatWidth, signed: bool) -> Result<(), ()> {
+        self.ensure_stack_slots(float_width_slots(source))?;
         match source {
             FloatWidth::F32 => {
                 let value = self.pop_reg()?;
@@ -3908,10 +4114,30 @@ impl<'a> Emitter<'a> {
                 self.rorv_x(lhs, lhs, 9);
             }
             LocalBinop64Op::I64Rotr => self.rorv_x(lhs, lhs, rhs),
-            LocalBinop64Op::F64Add
-            | LocalBinop64Op::F64Sub
-            | LocalBinop64Op::F64Mul
-            | LocalBinop64Op::F64Div => return Err(()),
+            LocalBinop64Op::F64Add => {
+                self.fmov_d_from_x(0, lhs);
+                self.fmov_d_from_x(1, rhs);
+                self.fadd_d(0, 0, 1);
+                self.fmov_x_from_d(lhs, 0);
+            }
+            LocalBinop64Op::F64Sub => {
+                self.fmov_d_from_x(0, lhs);
+                self.fmov_d_from_x(1, rhs);
+                self.fsub_d(0, 0, 1);
+                self.fmov_x_from_d(lhs, 0);
+            }
+            LocalBinop64Op::F64Mul => {
+                self.fmov_d_from_x(0, lhs);
+                self.fmov_d_from_x(1, rhs);
+                self.fmul_d(0, 0, 1);
+                self.fmov_x_from_d(lhs, 0);
+            }
+            LocalBinop64Op::F64Div => {
+                self.fmov_d_from_x(0, lhs);
+                self.fmov_d_from_x(1, rhs);
+                self.fdiv_d(0, 0, 1);
+                self.fmov_x_from_d(lhs, 0);
+            }
         }
         Ok(())
     }
@@ -3954,6 +4180,27 @@ fn i32_cmp_cond(op: LocalCmp32Op) -> Result<Cond, ()> {
         | LocalCmp32Op::F32Gt
         | LocalCmp32Op::F32Le
         | LocalCmp32Op::F32Ge => Err(()),
+    }
+}
+
+fn f32_cmp_cond(op: LocalCmp32Op) -> Result<Cond, ()> {
+    match op {
+        LocalCmp32Op::F32Eq => Ok(Cond::Eq),
+        LocalCmp32Op::F32Ne => Ok(Cond::Ne),
+        LocalCmp32Op::F32Lt => Ok(Cond::Lo),
+        LocalCmp32Op::F32Gt => Ok(Cond::Gt),
+        LocalCmp32Op::F32Le => Ok(Cond::Ls),
+        LocalCmp32Op::F32Ge => Ok(Cond::Ge),
+        LocalCmp32Op::I32Eq
+        | LocalCmp32Op::I32Ne
+        | LocalCmp32Op::I32LtS
+        | LocalCmp32Op::I32LtU
+        | LocalCmp32Op::I32GtS
+        | LocalCmp32Op::I32GtU
+        | LocalCmp32Op::I32LeS
+        | LocalCmp32Op::I32LeU
+        | LocalCmp32Op::I32GeS
+        | LocalCmp32Op::I32GeU => Err(()),
     }
 }
 
@@ -4032,6 +4279,13 @@ fn scalar_store_kind(kind: u32) -> Option<u32> {
         1 => Some(1),
         2 => Some(2),
         _ => None,
+    }
+}
+
+fn float_width_slots(width: FloatWidth) -> usize {
+    match width {
+        FloatWidth::F32 => 1,
+        FloatWidth::F64 => 2,
     }
 }
 

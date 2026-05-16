@@ -138,7 +138,7 @@ use crate::runtime::vm::simd::{
     i32x4_replace_lane, i32x4_shl, i32x4_shr, i64x2_replace_lane, i64x2_shl, i64x2_shr,
     i8x16_replace_lane, i8x16_shl, i8x16_shr, i8x16_shuffle, i8x16_swizzle,
     op_i8x16_extract_lane_s, op_v128_bitselect, op_v128_load, op_v128_load_indexed_local,
-    op_v128_load_indexed_shared, op_v128_load_shared,
+    op_v128_load_indexed_shared, op_v128_load_shared, v128_const,
 };
 #[cfg(feature = "threads")]
 use crate::runtime::vm::{
@@ -3050,6 +3050,13 @@ const OP_SPECS: &[OpSpec] = &[
     },
     #[cfg(feature = "simd")]
     OpSpec {
+        op: v128_const as Op,
+        decode: |code, cursor| {
+            decode_runtime_continuation_stub(code, cursor, RUNTIME_CONT_SIMD_V128_CONST)
+        },
+    },
+    #[cfg(feature = "simd")]
+    OpSpec {
         op: op_i8x16_extract_lane_s as Op,
         decode: decode_i8x16_extract_lane_s,
     },
@@ -3462,7 +3469,7 @@ pub(super) fn decode_baseline_op(code: &[Instr], cursor: usize) -> Result<Baseli
     {
         return (spec.decode)(code, cursor);
     }
-    Err(())
+    decode_runtime_continuation_stub(code, cursor, RUNTIME_CONT_CURRENT_VM_HANDLER)
 }
 
 const RUNTIME_STUB_DATA_DROP: u32 = 0;
@@ -3507,6 +3514,7 @@ const RUNTIME_STUB_ATOMIC_WAIT64_SHARED: u32 = 38;
 const RUNTIME_STUB_ATOMIC_WAIT64_INDEXED_LOCAL: u32 = 39;
 const RUNTIME_STUB_ATOMIC_WAIT64_INDEXED_SHARED: u32 = 40;
 
+pub(super) const RUNTIME_CONT_CURRENT_VM_HANDLER: u32 = 0;
 const RUNTIME_CONT_I32_GUARDED_LOAD8_UPDATE_BR_IF_FALSE_BR_TABLE: u32 = 1;
 const RUNTIME_CONT_I32_GUARDED_LOAD8_UPDATE_BR_IF_TAKEN_CONST_CMP_BR_TABLE: u32 = 2;
 const RUNTIME_CONT_I32_GUARDED_LOAD8_UPDATE_BR_IF_TAKEN_BR_TABLE: u32 = 3;
@@ -3561,6 +3569,7 @@ const RUNTIME_CONT_SIMD_V128_LOAD: u32 = 56;
 const RUNTIME_CONT_SIMD_V128_LOAD_INDEXED_LOCAL: u32 = 57;
 const RUNTIME_CONT_SIMD_V128_LOAD_INDEXED_SHARED: u32 = 58;
 const RUNTIME_CONT_SIMD_V128_LOAD_SHARED: u32 = 59;
+const RUNTIME_CONT_SIMD_V128_CONST: u32 = 60;
 
 fn decode_runtime_stub(
     cursor: usize,

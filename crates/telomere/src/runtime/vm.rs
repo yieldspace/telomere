@@ -1405,6 +1405,11 @@ enum CallOutcome {
 /// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
 #[inline(always)]
 pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    #[cfg(feature = "jit")]
+    if crate::runtime::jit::should_stop_interpreter_at(tail_code) {
+        ctx.cont = tail_code;
+        return VMResult::Success(());
+    }
     #[cfg(feature = "vm-diagnostics")]
     vm_try!(check_dispatch_budget(tail_code, ctx));
     ctx.cont = tail_code;

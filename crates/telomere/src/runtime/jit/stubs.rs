@@ -57,6 +57,7 @@ const RUNTIME_STUB_ATOMIC_WAIT64_SHARED: u32 = 38;
 const RUNTIME_STUB_ATOMIC_WAIT64_INDEXED_LOCAL: u32 = 39;
 const RUNTIME_STUB_ATOMIC_WAIT64_INDEXED_SHARED: u32 = 40;
 
+const RUNTIME_CONT_CURRENT_VM_HANDLER: u32 = 0;
 const RUNTIME_CONT_I32_GUARDED_LOAD8_UPDATE_BR_IF_FALSE_BR_TABLE: u32 = 1;
 const RUNTIME_CONT_I32_GUARDED_LOAD8_UPDATE_BR_IF_TAKEN_CONST_CMP_BR_TABLE: u32 = 2;
 const RUNTIME_CONT_I32_GUARDED_LOAD8_UPDATE_BR_IF_TAKEN_BR_TABLE: u32 = 3;
@@ -116,6 +117,7 @@ const RUNTIME_CONT_SIMD_V128_LOAD: u32 = 56;
 const RUNTIME_CONT_SIMD_V128_LOAD_INDEXED_LOCAL: u32 = 57;
 const RUNTIME_CONT_SIMD_V128_LOAD_INDEXED_SHARED: u32 = 58;
 const RUNTIME_CONT_SIMD_V128_LOAD_SHARED: u32 = 59;
+const RUNTIME_CONT_SIMD_V128_CONST: u32 = 60;
 
 #[allow(dead_code)]
 pub(crate) extern "C" fn push_i32(ctx: *mut ExecuteContext<'_>, value: u32) -> JitNativeExit {
@@ -490,12 +492,21 @@ pub(crate) extern "C" fn runtime_stack_op(
 pub(crate) extern "C" fn runtime_continuation_op(
     ctx: *mut ExecuteContext<'_>,
     pc: *const Instr,
+    stop_pc: *const Instr,
     kind: u32,
 ) -> JitNativeExit {
     profile::count(Counter::RuntimeDirectCallFast);
     let ctx = unsafe { &mut *ctx };
     let tail_code = unsafe { pc.add(1) };
+    let _guard = super::JitInterpreterStopGuard::new(stop_pc);
     let result = match kind {
+        RUNTIME_CONT_CURRENT_VM_HANDLER
+            if std::ptr::fn_addr_eq(
+                unsafe { (*pc).op },
+                vm::op_return_call_jit_lazy as crate::common::Op,
+            ) =>
+        unsafe { vm::op_return_call(tail_code, ctx) },
+        RUNTIME_CONT_CURRENT_VM_HANDLER => unsafe { ((*pc).op)(tail_code, ctx) },
         RUNTIME_CONT_I32_GUARDED_LOAD8_UPDATE_BR_IF_FALSE_BR_TABLE => unsafe {
             vm::op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_false_local_get4_br_table(
                 tail_code, ctx,
@@ -683,9 +694,12 @@ pub(crate) extern "C" fn runtime_continuation_op(
         RUNTIME_CONT_SIMD_V128_LOAD_SHARED => unsafe {
             vm::simd::op_v128_load_shared(tail_code, ctx)
         },
+        #[cfg(feature = "simd")]
+        RUNTIME_CONT_SIMD_V128_CONST => unsafe { vm::simd::v128_const(tail_code, ctx) },
         _ => VMResult::Unimplemented,
     };
     match result {
+        VMResult::Success(()) if ctx.cont == stop_pc => JitNativeExit::keep_going(),
         VMResult::Success(()) if ctx.cont.is_null() => JitNativeExit::done(),
         VMResult::Success(()) => JitNativeExit::pending(),
         other => JitNativeExit::trap(other),

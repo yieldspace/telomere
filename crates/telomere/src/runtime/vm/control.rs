@@ -305,6 +305,11 @@ pub unsafe fn special_function_return(
     match tail_code {
         Some(tail_code) => {
             #[cfg(feature = "jit")]
+            if crate::runtime::jit::interpreter_stop_active() {
+                ctx.cont = tail_code;
+                return VMResult::Success(());
+            }
+            #[cfg(feature = "jit")]
             if crate::runtime::jit::should_stop_interpreter_at(tail_code) {
                 ctx.cont = tail_code;
                 return VMResult::Success(());
