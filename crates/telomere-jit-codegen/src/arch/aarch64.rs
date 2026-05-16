@@ -89,10 +89,16 @@ mod enc {
     pub(super) const FRINTM_D: u32 = 0x1e65_4000;
     pub(super) const FRINTZ_S: u32 = 0x1e25_c000;
     pub(super) const FRINTZ_D: u32 = 0x1e65_c000;
+    pub(super) const SCVTF_S_FROM_W: u32 = 0x1e22_0000;
+    pub(super) const UCVTF_S_FROM_W: u32 = 0x1e23_0000;
     pub(super) const SCVTF_D_FROM_W: u32 = 0x1e62_0000;
     pub(super) const UCVTF_D_FROM_W: u32 = 0x1e63_0000;
+    pub(super) const SCVTF_S_FROM_X: u32 = 0x9e22_0000;
+    pub(super) const UCVTF_S_FROM_X: u32 = 0x9e23_0000;
     pub(super) const SCVTF_D_FROM_X: u32 = 0x9e62_0000;
     pub(super) const UCVTF_D_FROM_X: u32 = 0x9e63_0000;
+    pub(super) const FCVT_S_FROM_D: u32 = 0x1e62_4000;
+    pub(super) const FCVT_D_FROM_S: u32 = 0x1e22_c000;
     pub(super) const FCVTZS_W_FROM_S: u32 = 0x1e38_0000;
     pub(super) const FCVTZU_W_FROM_S: u32 = 0x1e39_0000;
     pub(super) const FCVTZS_W_FROM_D: u32 = 0x1e78_0000;
@@ -708,6 +714,15 @@ impl A64Masm {
         self.insn(base | (rn.bits() << 5) | vd.bits());
     }
 
+    pub fn cvtf_s_from_w(&mut self, vd: VReg, rn: WReg, signed: bool) {
+        let base = if signed {
+            enc::SCVTF_S_FROM_W
+        } else {
+            enc::UCVTF_S_FROM_W
+        };
+        self.insn(base | (rn.bits() << 5) | vd.bits());
+    }
+
     pub fn cvtf_d_from_x(&mut self, vd: VReg, rn: XReg, signed: bool) {
         let base = if signed {
             enc::SCVTF_D_FROM_X
@@ -715,6 +730,23 @@ impl A64Masm {
             enc::UCVTF_D_FROM_X
         };
         self.insn(base | (rn.bits() << 5) | vd.bits());
+    }
+
+    pub fn cvtf_s_from_x(&mut self, vd: VReg, rn: XReg, signed: bool) {
+        let base = if signed {
+            enc::SCVTF_S_FROM_X
+        } else {
+            enc::UCVTF_S_FROM_X
+        };
+        self.insn(base | (rn.bits() << 5) | vd.bits());
+    }
+
+    pub fn fcvt_s_from_d(&mut self, vd: VReg, vn: VReg) {
+        self.insn(enc::FCVT_S_FROM_D | (vn.bits() << 5) | vd.bits());
+    }
+
+    pub fn fcvt_d_from_s(&mut self, vd: VReg, vn: VReg) {
+        self.insn(enc::FCVT_D_FROM_S | (vn.bits() << 5) | vd.bits());
     }
 
     pub fn fcvt_w_from_s(&mut self, rd: WReg, vn: VReg, signed: bool) {
@@ -1236,8 +1268,24 @@ impl A64BaselineMasm {
         self.inner.cvtf_d_from_w(Self::v(vd), Self::w(rn), signed);
     }
 
+    pub fn cvtf_s_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
+        self.inner.cvtf_s_from_w(Self::v(vd), Self::w(rn), signed);
+    }
+
     pub fn cvtf_d_from_x(&mut self, vd: u8, rn: u8, signed: bool) {
         self.inner.cvtf_d_from_x(Self::v(vd), Self::x(rn), signed);
+    }
+
+    pub fn cvtf_s_from_x(&mut self, vd: u8, rn: u8, signed: bool) {
+        self.inner.cvtf_s_from_x(Self::v(vd), Self::x(rn), signed);
+    }
+
+    pub fn fcvt_s_from_d(&mut self, vd: u8, vn: u8) {
+        self.inner.fcvt_s_from_d(Self::v(vd), Self::v(vn));
+    }
+
+    pub fn fcvt_d_from_s(&mut self, vd: u8, vn: u8) {
+        self.inner.fcvt_d_from_s(Self::v(vd), Self::v(vn));
     }
 
     pub fn fcvt_w_from_s(&mut self, rd: u8, vn: u8, signed: bool) {
@@ -1335,6 +1383,10 @@ impl A64BaselineMasm {
 
     pub fn str_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
         self.inner.str_x_imm(Self::x(rt), Self::x(rn), offset)
+    }
+
+    pub fn str_w_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        self.inner.str_w_imm(Self::w(rt), Self::x(rn), offset)
     }
 
     pub fn str_w_unscaled_imm(&mut self, rt: u8, rn: u8, offset: u32) -> AsmResult {

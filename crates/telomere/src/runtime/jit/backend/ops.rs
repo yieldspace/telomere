@@ -835,6 +835,16 @@ pub(super) enum BaselineOp {
         branch_local: u32,
         true_target: usize,
     },
+    I32Load8UpdateBrIf {
+        ptr_local: u32,
+        load_delta: u32,
+        memarg: MemArg,
+        byte_dst: u32,
+        next_src: u32,
+        ptr_dst: u32,
+        branch_local: u32,
+        target: usize,
+    },
     LocalAddSetLoad8EqzBrIf {
         add_src: u32,
         imm: u32,
@@ -2152,43 +2162,19 @@ const OP_SPECS: &[OpSpec] = &[
     },
     OpSpec {
         op: op_i32_load8_u_local_base_tee4_local_get4 as Op,
-        decode: |code, cursor| {
-            decode_runtime_continuation_stub(
-                code,
-                cursor,
-                RUNTIME_CONT_I32_LOAD8_U_LOCAL_BASE_TEE4_LOCAL_GET4,
-            )
-        },
+        decode: decode_i32_load8_u_local_base_tee4_local_get4,
     },
     OpSpec {
         op: op_i32_load8_s_local_base_tee4_local_get4 as Op,
-        decode: |code, cursor| {
-            decode_runtime_continuation_stub(
-                code,
-                cursor,
-                RUNTIME_CONT_I32_LOAD8_S_LOCAL_BASE_TEE4_LOCAL_GET4,
-            )
-        },
+        decode: decode_i32_load8_s_local_base_tee4_local_get4,
     },
     OpSpec {
         op: op_i32_load16_u_local_base_tee4_local_get4 as Op,
-        decode: |code, cursor| {
-            decode_runtime_continuation_stub(
-                code,
-                cursor,
-                RUNTIME_CONT_I32_LOAD16_U_LOCAL_BASE_TEE4_LOCAL_GET4,
-            )
-        },
+        decode: decode_i32_load16_u_local_base_tee4_local_get4,
     },
     OpSpec {
         op: op_i32_load16_s_local_base_tee4_local_get4 as Op,
-        decode: |code, cursor| {
-            decode_runtime_continuation_stub(
-                code,
-                cursor,
-                RUNTIME_CONT_I32_LOAD16_S_LOCAL_BASE_TEE4_LOCAL_GET4,
-            )
-        },
+        decode: decode_i32_load16_s_local_base_tee4_local_get4,
     },
     OpSpec {
         op: op_i32_load_local_base_set4_i32_load_local_base as Op,
@@ -2942,9 +2928,7 @@ const OP_SPECS: &[OpSpec] = &[
     },
     OpSpec {
         op: op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if as Op,
-        decode: |code, cursor| {
-            decode_runtime_continuation_stub(code, cursor, RUNTIME_CONT_I32_LOAD8_UPDATE_BR_IF)
-        },
+        decode: decode_i32_load8_update_br_if,
     },
     OpSpec {
         op: op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_fallthrough_local_get4 as Op,
@@ -3531,7 +3515,6 @@ const RUNTIME_CONT_I32_LOAD16_S_DOT4_LOOP: u32 = 5;
 const RUNTIME_CONT_I32_LOAD16_S_MUL_ADD_DELTA_LOOP: u32 = 6;
 const RUNTIME_CONT_I32_LOAD16_S_MUL_ADD_LOOP: u32 = 7;
 const RUNTIME_CONT_I32_LOAD16_U_BITMIX_DELTA_LOOP: u32 = 8;
-const RUNTIME_CONT_I32_LOAD8_UPDATE_BR_IF: u32 = 9;
 const RUNTIME_CONT_I32_LOAD8_UPDATE_BR_IF_FALLTHROUGH_LOCAL_GET4: u32 = 10;
 const RUNTIME_CONT_I32_LOAD8_UPDATE_BR_IF_TAKEN_LOCAL_GET4: u32 = 11;
 const RUNTIME_CONT_I32_LOAD_MASKED_COMPARE_BR_IF: u32 = 12;
@@ -3539,10 +3522,6 @@ const RUNTIME_CONT_I32_MATRIX_I16_CRC_SUMMARY: u32 = 13;
 const RUNTIME_CONT_I32_SUM_CLIP_LOOP: u32 = 14;
 const RUNTIME_CONT_START_FUNCTION_CALL: u32 = 15;
 const RUNTIME_CONT_START_JIT_FUNCTION_CALL: u32 = 16;
-const RUNTIME_CONT_I32_LOAD8_U_LOCAL_BASE_TEE4_LOCAL_GET4: u32 = 17;
-const RUNTIME_CONT_I32_LOAD8_S_LOCAL_BASE_TEE4_LOCAL_GET4: u32 = 18;
-const RUNTIME_CONT_I32_LOAD16_U_LOCAL_BASE_TEE4_LOCAL_GET4: u32 = 19;
-const RUNTIME_CONT_I32_LOAD16_S_LOCAL_BASE_TEE4_LOCAL_GET4: u32 = 20;
 const RUNTIME_CONT_I32_LOAD_LOCAL_BASE_SET4_I32_LOAD_LOCAL_BASE_LOCAL_EQ_BR_IF: u32 = 21;
 const RUNTIME_CONT_I32_LOAD_LOCAL_BASE_SET4_I32_LOAD8_S_LOCAL_BASE_LOCAL_EQ_BR_IF: u32 = 22;
 const RUNTIME_CONT_I32_LOAD_LOCAL_BASE_SET4_I32_LOAD16_U_LOCAL_BASE_LOCAL_EQ_BR_IF: u32 = 23;
@@ -5892,12 +5871,49 @@ fn decode_i32_load_local_base_tee4_local_get4(
     code: &[Instr],
     cursor: usize,
 ) -> Result<BaselineOp, ()> {
+    decode_i32_load_local_base_tee4_local_get4_width(code, cursor, 4, false)
+}
+
+fn decode_i32_load8_u_local_base_tee4_local_get4(
+    code: &[Instr],
+    cursor: usize,
+) -> Result<BaselineOp, ()> {
+    decode_i32_load_local_base_tee4_local_get4_width(code, cursor, 1, false)
+}
+
+fn decode_i32_load8_s_local_base_tee4_local_get4(
+    code: &[Instr],
+    cursor: usize,
+) -> Result<BaselineOp, ()> {
+    decode_i32_load_local_base_tee4_local_get4_width(code, cursor, 1, true)
+}
+
+fn decode_i32_load16_u_local_base_tee4_local_get4(
+    code: &[Instr],
+    cursor: usize,
+) -> Result<BaselineOp, ()> {
+    decode_i32_load_local_base_tee4_local_get4_width(code, cursor, 2, false)
+}
+
+fn decode_i32_load16_s_local_base_tee4_local_get4(
+    code: &[Instr],
+    cursor: usize,
+) -> Result<BaselineOp, ()> {
+    decode_i32_load_local_base_tee4_local_get4_width(code, cursor, 2, true)
+}
+
+fn decode_i32_load_local_base_tee4_local_get4_width(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+    signed: bool,
+) -> Result<BaselineOp, ()> {
     Ok(BaselineOp::I32LoadLocalBaseLocalGet4 {
         local: operand_local(code, cursor, 1)?,
         delta: operand_i32(code, cursor, 2)? as u32,
         memarg: operand_memarg(code, cursor, 3)?,
-        width: 4,
-        signed: false,
+        width,
+        signed,
         dst: Some(operand_local(code, cursor, 4)?),
         preserved: operand_local(code, cursor, 5)?,
     })
@@ -6601,6 +6617,19 @@ fn decode_i32_guarded_load8_update_br_if(code: &[Instr], cursor: usize) -> Resul
         ptr_dst: operand_local(code, cursor, 13)?,
         branch_local: operand_local(code, cursor, 14)?,
         true_target: skip_end_ops(code, operand_jump_addr(code, cursor, 15)?),
+    })
+}
+
+fn decode_i32_load8_update_br_if(code: &[Instr], cursor: usize) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I32Load8UpdateBrIf {
+        ptr_local: operand_local(code, cursor, 1)?,
+        load_delta: operand_i32(code, cursor, 2)? as u32,
+        memarg: operand_memarg(code, cursor, 3)?,
+        byte_dst: operand_local(code, cursor, 4)?,
+        next_src: operand_local(code, cursor, 5)?,
+        ptr_dst: operand_local(code, cursor, 6)?,
+        branch_local: operand_local(code, cursor, 7)?,
+        target: skip_end_ops(code, operand_jump_addr(code, cursor, 8)?),
     })
 }
 

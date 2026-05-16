@@ -188,7 +188,11 @@ pub(crate) unsafe fn jit_call_direct(
 }
 
 #[cfg(feature = "jit")]
-/// Fast JIT helper for direct calls whose callee is known to be a Wasm function.
+/// Telomere runtime helper for fast JIT direct calls whose callee is known to be a Wasm function.
+///
+/// Stack effect: prepares the WebAssembly `call` callee frame and returns a JIT continuation exit.
+/// Traps: returns a JIT trap exit for the same frame preparation failures as the generic direct
+/// call helper.
 ///
 /// # Safety
 /// - `continuation` must point to the instruction immediately after the active callsite.

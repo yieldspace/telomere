@@ -1052,8 +1052,12 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
+    // Read by JIT-generated code via offset_of!; the Rust dead_code lint cannot see that use.
+    #[allow(dead_code)]
     pub(crate) stack_memory_ptr: *mut u8,
+    #[allow(dead_code)]
     pub(crate) stack_memory_len: usize,
+    #[allow(dead_code)]
     pub(crate) stack_top_ptr: *mut usize,
     pub local_reference: LocalReference,
     pub(crate) local_base_ptr: *mut u8,

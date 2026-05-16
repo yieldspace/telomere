@@ -170,11 +170,6 @@ pub(crate) extern "C" fn f32_max_bits(lhs: u32, rhs: u32) -> u32 {
     }
 }
 
-pub(crate) extern "C" fn f32_copysign_bits(lhs: u32, rhs: u32) -> u32 {
-    profile::count(Counter::RuntimeFloatHelper);
-    f32::from_bits(lhs).copysign(f32::from_bits(rhs)).to_bits()
-}
-
 pub(crate) extern "C" fn f64_min_bits(lhs: u64, rhs: u64) -> u64 {
     profile::count(Counter::RuntimeFloatHelper);
     let lhs = f64::from_bits(lhs);
@@ -199,39 +194,6 @@ pub(crate) extern "C" fn f64_max_bits(lhs: u64, rhs: u64) -> u64 {
     } else {
         lhs.max(rhs).to_bits()
     }
-}
-
-pub(crate) extern "C" fn f64_copysign_bits(lhs: u64, rhs: u64) -> u64 {
-    profile::count(Counter::RuntimeFloatHelper);
-    f64::from_bits(lhs).copysign(f64::from_bits(rhs)).to_bits()
-}
-
-pub(crate) extern "C" fn f32_convert_i32_bits(value: u32, signed: u32) -> u32 {
-    profile::count(Counter::RuntimeFloatHelper);
-    if signed != 0 {
-        (value as i32 as f32).to_bits()
-    } else {
-        (value as f32).to_bits()
-    }
-}
-
-pub(crate) extern "C" fn f32_convert_i64_bits(value: u64, signed: u32) -> u32 {
-    profile::count(Counter::RuntimeFloatHelper);
-    if signed != 0 {
-        (value as i64 as f32).to_bits()
-    } else {
-        (value as f32).to_bits()
-    }
-}
-
-pub(crate) extern "C" fn f32_demote_f64_bits(value: u64) -> u32 {
-    profile::count(Counter::RuntimeFloatHelper);
-    (f64::from_bits(value) as f32).to_bits()
-}
-
-pub(crate) extern "C" fn f64_promote_f32_bits(value: u32) -> u64 {
-    profile::count(Counter::RuntimeFloatHelper);
-    f64::from(f32::from_bits(value)).to_bits()
 }
 
 fn value_exit(value: u64) -> JitNativeExit {

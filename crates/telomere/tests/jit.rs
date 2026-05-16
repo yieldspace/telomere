@@ -812,7 +812,7 @@ async fn jit_executes_native_float_helpers_and_conversions() {
     let result = invoke_jit(
         r#"
         (module
-          (func (export "run") (result f32 f64 i32 i64 f32 f64)
+          (func (export "run") (result f32 f64 i32 i64 f32 f32 f32 f32 f32 f32 f64)
             f32.const -0.0
             f32.const 0.0
             f32.min
@@ -825,6 +825,17 @@ async fn jit_executes_native_float_helpers_and_conversions() {
             i64.trunc_f64_u
             i32.const -7
             f32.convert_i32_s
+            i32.const 7
+            f32.convert_i32_u
+            f32.const 3.25
+            f32.const -0.0
+            f32.copysign
+            i64.const -9
+            f32.convert_i64_s
+            i64.const 11
+            f32.convert_i64_u
+            f64.const 6.75
+            f32.demote_f64
             f32.const 1.5
             f64.promote_f32))
         "#,
@@ -841,6 +852,11 @@ async fn jit_executes_native_float_helpers_and_conversions() {
             WasmValue::I32(42),
             WasmValue::I64(123),
             WasmValue::F32(-7.0),
+            WasmValue::F32(7.0),
+            WasmValue::F32(-3.25),
+            WasmValue::F32(-9.0),
+            WasmValue::F32(11.0),
+            WasmValue::F32(6.75),
             WasmValue::F64(1.5),
         ]),
     );

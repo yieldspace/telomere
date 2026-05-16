@@ -12,12 +12,9 @@ use crate::runtime::jit::stubs::{
     atomic_fence as jit_atomic_fence, block_return as jit_block_return,
     call_i32_crc16_update16 as jit_call_i32_crc16_update16,
     call_i32_list_crc_summary as jit_call_i32_list_crc_summary, direct_call as jit_direct_call,
-    f32_convert_i32_bits as jit_f32_convert_i32_bits,
-    f32_convert_i64_bits as jit_f32_convert_i64_bits, f32_copysign_bits as jit_f32_copysign_bits,
-    f32_demote_f64_bits as jit_f32_demote_f64_bits, f32_max_bits as jit_f32_max_bits,
-    f32_min_bits as jit_f32_min_bits, f64_copysign_bits as jit_f64_copysign_bits,
+    f32_max_bits as jit_f32_max_bits, f32_min_bits as jit_f32_min_bits,
     f64_max_bits as jit_f64_max_bits, f64_min_bits as jit_f64_min_bits,
-    f64_promote_f32_bits as jit_f64_promote_f32_bits, function_return as jit_function_return,
+    function_return as jit_function_return,
     i32_core_state_benchmark as jit_i32_core_state_benchmark,
     i32_crc16_update16 as jit_i32_crc16_update16,
     i32_list_crc_pair_loop as jit_i32_list_crc_pair_loop,
@@ -520,7 +517,7 @@ impl BaselineOpEmitter<'_, '_> {
                 }
                 let value = self.pop_reg()?;
                 self.emit_i32_const_cmp(kind, value, rhs)?;
-                if self.stack_depth == 0 {
+                if self.stack_depth == 0 || target > cursor {
                     self.branch_to(target, FixupKind::CbnzW(value));
                 } else {
                     return Err(());
@@ -1744,6 +1741,27 @@ impl BaselineOpEmitter<'_, '_> {
                 self.branch_to(true_target, FixupKind::CbnzW(16));
                 self.branch_to(false_target, FixupKind::B);
             }
+            BaselineOp::I32Load8UpdateBrIf {
+                ptr_local,
+                load_delta,
+                memarg,
+                byte_dst,
+                next_src,
+                ptr_dst,
+                branch_local,
+                target,
+            } => {
+                if self.stack_depth > 0 {
+                    return Err(());
+                }
+                self.load_local_base_addr_to_reg(16, ptr_local, load_delta)?;
+                self.inline_i32_load(16, memarg.offset, 1, false)?;
+                self.store_local4_from_reg(byte_dst, 16)?;
+                self.load_local4_to_reg(17, next_src)?;
+                self.store_local4_from_reg(ptr_dst, 17)?;
+                self.load_local4_to_reg(16, branch_local)?;
+                self.branch_to(target, FixupKind::CbnzW(16));
+            }
             BaselineOp::LocalAddSetLoad8EqzBrIf {
                 add_src,
                 imm,
@@ -2378,37 +2396,18 @@ impl<'a> Emitter<'a> {
     fn flush_stack(&mut self) -> Result<(), ()> {
         profile::count(Counter::EmitStackFlush);
         profile::add(Counter::EmitStackFlushSlot, self.stack_depth as u64);
-        for reg in STACK_REGS.iter().take(self.stack_depth).copied() {
-            self.inline_push_i32(reg)?;
+        let slots = self.stack_depth;
+        if slots == 0 {
+            return Ok(());
         }
-        self.stack_depth = 0;
-        Ok(())
-    }
-
-    fn reload_stack_slots(&mut self, slots: usize) -> Result<(), ()> {
-        if slots > STACK_REGS.len() {
-            return Err(());
-        }
-        profile::count(Counter::EmitStackReload);
-        profile::add(Counter::EmitStackReloadSlot, slots as u64);
-        let mut regs = Vec::with_capacity(slots);
-        for _ in 0..slots {
-            regs.push(self.push_reg()?);
-        }
-        for reg in regs.into_iter().rev() {
-            self.inline_pop_i32(reg)?;
-        }
-        Ok(())
-    }
-
-    fn inline_push_i32(&mut self, value: u8) -> Result<(), ()> {
+        let byte_len = u64::try_from(slots.checked_mul(4).ok_or(())?).map_err(|_| ())?;
         self.ldr_x_imm(
             9,
             19,
             std::mem::offset_of!(ExecuteContext<'_>, stack_top_ptr),
         )?;
         self.ldr_x_imm(10, 9, 0)?;
-        self.add_imm_u64(11, 10, 4)?;
+        self.add_imm_u64(11, 10, byte_len)?;
         self.ldr_x_imm(
             12,
             19,
@@ -2430,8 +2429,53 @@ impl<'a> Emitter<'a> {
             std::mem::offset_of!(ExecuteContext<'_>, stack_memory_ptr),
         )?;
         self.add_x(12, 12, 10);
-        self.str_w(value, 12);
+        for (slot, reg) in STACK_REGS.iter().take(slots).copied().enumerate() {
+            self.str_w_imm(reg, 12, slot * 4)?;
+        }
         self.str_x_imm(11, 9, 0)?;
+        self.stack_depth = 0;
+        Ok(())
+    }
+
+    fn reload_stack_slots(&mut self, slots: usize) -> Result<(), ()> {
+        if slots > STACK_REGS.len() {
+            return Err(());
+        }
+        profile::count(Counter::EmitStackReload);
+        profile::add(Counter::EmitStackReloadSlot, slots as u64);
+        if slots == 0 {
+            return Ok(());
+        }
+        if self.stack_depth == 0 {
+            let byte_len = u64::try_from(slots.checked_mul(4).ok_or(())?).map_err(|_| ())?;
+            self.ldr_x_imm(
+                9,
+                19,
+                std::mem::offset_of!(ExecuteContext<'_>, stack_top_ptr),
+            )?;
+            self.ldr_x_imm(10, 9, 0)?;
+            self.mov_imm_u64(11, byte_len);
+            self.sub_x(10, 10, 11);
+            self.ldr_x_imm(
+                12,
+                19,
+                std::mem::offset_of!(ExecuteContext<'_>, stack_memory_ptr),
+            )?;
+            self.add_x(12, 12, 10);
+            for (slot, reg) in STACK_REGS.iter().take(slots).copied().enumerate() {
+                self.ldr_w_imm(reg, 12, slot * 4)?;
+            }
+            self.str_x_imm(10, 9, 0)?;
+            self.stack_depth = slots;
+            return Ok(());
+        }
+        let mut regs = Vec::with_capacity(slots);
+        for _ in 0..slots {
+            regs.push(self.push_reg()?);
+        }
+        for reg in regs.into_iter().rev() {
+            self.inline_pop_i32(reg)?;
+        }
         Ok(())
     }
 
@@ -3531,13 +3575,27 @@ impl<'a> Emitter<'a> {
         let lhs_low = self.pop_reg()?;
         self.pack_i64_slots_to_x(16, lhs_low, lhs_high, 9)?;
         self.pack_i64_slots_to_x(17, rhs_low, rhs_high, 9)?;
-        self.fmov_d_from_x(0, 16);
-        self.fmov_d_from_x(1, 17);
         match op {
-            FloatBinaryOp::Add => self.fadd_d(0, 0, 1),
-            FloatBinaryOp::Sub => self.fsub_d(0, 0, 1),
-            FloatBinaryOp::Mul => self.fmul_d(0, 0, 1),
-            FloatBinaryOp::Div => self.fdiv_d(0, 0, 1),
+            FloatBinaryOp::Add => {
+                self.fmov_d_from_x(0, 16);
+                self.fmov_d_from_x(1, 17);
+                self.fadd_d(0, 0, 1);
+            }
+            FloatBinaryOp::Sub => {
+                self.fmov_d_from_x(0, 16);
+                self.fmov_d_from_x(1, 17);
+                self.fsub_d(0, 0, 1);
+            }
+            FloatBinaryOp::Mul => {
+                self.fmov_d_from_x(0, 16);
+                self.fmov_d_from_x(1, 17);
+                self.fmul_d(0, 0, 1);
+            }
+            FloatBinaryOp::Div => {
+                self.fmov_d_from_x(0, 16);
+                self.fmov_d_from_x(1, 17);
+                self.fdiv_d(0, 0, 1);
+            }
             FloatBinaryOp::Min => {
                 self.mov_x(0, 16);
                 self.mov_x(1, 17);
@@ -3553,10 +3611,12 @@ impl<'a> Emitter<'a> {
                 return Ok(());
             }
             FloatBinaryOp::Copysign => {
-                self.mov_x(0, 16);
-                self.mov_x(1, 17);
-                self.call_ptr(jit_f64_copysign_bits as *const () as usize);
-                self.push_x_as_i64_slots(0)?;
+                self.mov_imm_u64(9, 0x7fff_ffff_ffff_ffff);
+                self.and_x(16, 16, 9);
+                self.mov_imm_u64(9, 0x8000_0000_0000_0000);
+                self.and_x(17, 17, 9);
+                self.orr_x(16, 16, 17);
+                self.push_x_as_i64_slots(16)?;
                 return Ok(());
             }
         }
@@ -3568,13 +3628,27 @@ impl<'a> Emitter<'a> {
     fn emit_f32_binary(&mut self, op: FloatBinaryOp) -> Result<(), ()> {
         let rhs = self.pop_reg()?;
         let lhs = self.pop_reg()?;
-        self.fmov_s_from_w(0, lhs);
-        self.fmov_s_from_w(1, rhs);
         match op {
-            FloatBinaryOp::Add => self.fadd_s(0, 0, 1),
-            FloatBinaryOp::Sub => self.fsub_s(0, 0, 1),
-            FloatBinaryOp::Mul => self.fmul_s(0, 0, 1),
-            FloatBinaryOp::Div => self.fdiv_s(0, 0, 1),
+            FloatBinaryOp::Add => {
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, rhs);
+                self.fadd_s(0, 0, 1);
+            }
+            FloatBinaryOp::Sub => {
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, rhs);
+                self.fsub_s(0, 0, 1);
+            }
+            FloatBinaryOp::Mul => {
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, rhs);
+                self.fmul_s(0, 0, 1);
+            }
+            FloatBinaryOp::Div => {
+                self.fmov_s_from_w(0, lhs);
+                self.fmov_s_from_w(1, rhs);
+                self.fdiv_s(0, 0, 1);
+            }
             FloatBinaryOp::Min => {
                 self.mov_w(0, lhs);
                 self.mov_w(1, rhs);
@@ -3592,11 +3666,12 @@ impl<'a> Emitter<'a> {
                 return Ok(());
             }
             FloatBinaryOp::Copysign => {
-                self.mov_w(0, lhs);
-                self.mov_w(1, rhs);
-                self.call_ptr(jit_f32_copysign_bits as *const () as usize);
                 let result = self.push_reg()?;
-                self.mov_w(result, 0);
+                self.mov_imm_u32(16, 0x7fff_ffff);
+                self.and_w(result, lhs, 16);
+                self.mov_imm_u32(16, 0x8000_0000);
+                self.and_w(rhs, rhs, 16);
+                self.orr_w(result, result, rhs);
                 return Ok(());
             }
         }
@@ -3642,32 +3717,30 @@ impl<'a> Emitter<'a> {
 
     fn emit_f32_convert_i32(&mut self, signed: bool) -> Result<(), ()> {
         let value = self.pop_reg()?;
-        self.mov_w(0, value);
-        self.mov_imm_u32(1, u32::from(signed));
-        self.call_ptr(jit_f32_convert_i32_bits as *const () as usize);
+        self.cvtf_s_from_w(0, value, signed);
         let result = self.push_reg()?;
-        self.mov_w(result, 0);
+        self.fmov_w_from_s(result, 0);
         Ok(())
     }
 
     fn emit_f32_convert_i64(&mut self, signed: bool) -> Result<(), ()> {
         let high = self.pop_reg()?;
         let low = self.pop_reg()?;
-        self.pack_i64_slots_to_x(0, low, high, 9)?;
-        self.mov_imm_u32(1, u32::from(signed));
-        self.call_ptr(jit_f32_convert_i64_bits as *const () as usize);
+        self.pack_i64_slots_to_x(16, low, high, 9)?;
+        self.cvtf_s_from_x(0, 16, signed);
         let result = self.push_reg()?;
-        self.mov_w(result, 0);
+        self.fmov_w_from_s(result, 0);
         Ok(())
     }
 
     fn emit_f32_demote_f64(&mut self) -> Result<(), ()> {
         let high = self.pop_reg()?;
         let low = self.pop_reg()?;
-        self.pack_i64_slots_to_x(0, low, high, 9)?;
-        self.call_ptr(jit_f32_demote_f64_bits as *const () as usize);
+        self.pack_i64_slots_to_x(16, low, high, 9)?;
+        self.fmov_d_from_x(0, 16);
+        self.fcvt_s_from_d(0, 0);
         let result = self.push_reg()?;
-        self.mov_w(result, 0);
+        self.fmov_w_from_s(result, 0);
         Ok(())
     }
 
@@ -3691,9 +3764,10 @@ impl<'a> Emitter<'a> {
 
     fn emit_f64_promote_f32(&mut self) -> Result<(), ()> {
         let value = self.pop_reg()?;
-        self.mov_w(0, value);
-        self.call_ptr(jit_f64_promote_f32_bits as *const () as usize);
-        self.push_x_as_i64_slots(0)?;
+        self.fmov_s_from_w(0, value);
+        self.fcvt_d_from_s(0, 0);
+        self.fmov_x_from_d(16, 0);
+        self.push_x_as_i64_slots(16)?;
         Ok(())
     }
 
