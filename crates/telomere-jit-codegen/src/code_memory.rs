@@ -60,7 +60,8 @@ impl ExecutableCode {
 
     #[doc(hidden)]
     pub fn test_stub(len: usize) -> Self {
-        let map = MmapOptions::new(MmapOptions::page_size())
+        let page_size = MmapOptions::page_size();
+        let map = MmapOptions::new(page_size)
             .expect("test mapping options")
             .map_mut()
             .expect("test mapping")
@@ -69,7 +70,7 @@ impl ExecutableCode {
             .expect("test executable mapping");
         Self {
             ptr: map.as_ptr().cast_mut(),
-            len,
+            len: len.min(page_size),
             _map: map,
         }
     }
@@ -144,6 +145,12 @@ mod tests {
 
         assert!(code.len() >= MmapOptions::page_size());
         assert_eq!(unsafe { entry() }, 7);
+    }
+
+    #[test]
+    fn test_stub_len_never_exceeds_backing_mapping() {
+        let code = ExecutableCode::test_stub(MmapOptions::page_size() * 2);
+        assert_eq!(code.len(), MmapOptions::page_size());
     }
 
     #[test]

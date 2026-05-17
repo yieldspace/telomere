@@ -133,7 +133,7 @@ async fn run_exported_core_function(
 ) -> anyhow::Result<ResultValue> {
     if jit && !telomere::jit_supported() {
         anyhow::bail!(
-            "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux riscv64gc"
+            "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux-gnu riscv64gc"
         );
     }
     let store = if jit {

@@ -9,6 +9,8 @@ use super::{
 #[cfg(feature = "jit")]
 use crate::runtime::jit::{CompiledFunction, StoreJitCache};
 use parking_lot::{Mutex, MutexGuard};
+#[cfg(feature = "jit")]
+use std::sync::atomic::AtomicBool;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -16,7 +18,7 @@ use std::{
     num::NonZeroU32,
     ops::{Deref, DerefMut},
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicU32, Ordering},
         Arc, Weak,
     },
 };
@@ -245,6 +247,8 @@ impl FunctionInstanceData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JitConfig {
+    /// Enables the core JIT only when Telomere is compiled with the `jit`
+    /// Cargo feature and the current target is supported.
     pub enabled: bool,
     pub code_cache_max_bytes: u32,
 }
@@ -376,6 +380,7 @@ pub struct StoreInner {
     instances: Vec<InstanceData>,
     funcs: Vec<FunctionInstanceData>,
     call_recipes: Vec<Option<CallRecipe>>,
+    #[cfg(feature = "jit")]
     jit_rejected_funcs: Vec<AtomicBool>,
     #[cfg(feature = "jit")]
     jit_compiled_funcs: Vec<RefCell<Weak<CompiledFunction>>>,
@@ -621,6 +626,7 @@ impl StoreInner {
         let id = FuncId::from_index(self.funcs.len());
         self.funcs.push(func);
         self.call_recipes.push(None);
+        #[cfg(feature = "jit")]
         self.jit_rejected_funcs.push(AtomicBool::new(false));
         #[cfg(feature = "jit")]
         self.jit_compiled_funcs.push(RefCell::new(Weak::new()));
@@ -663,17 +669,16 @@ impl StoreInner {
             .expect("call recipe slot exceeds u32::MAX")
     }
 
+    #[cfg(feature = "jit")]
     pub(crate) fn jit_rejected_func(&self, addr: ObjectRef) -> bool {
         self.jit_rejected_funcs[self.call_recipe_slot_for_func_addr(addr)].load(Ordering::Relaxed)
     }
 
+    #[cfg(feature = "jit")]
     pub(crate) fn mark_jit_rejected_func(&self, addr: ObjectRef) {
         let slot = self.call_recipe_slot_for_func_addr(addr);
         self.jit_rejected_funcs[slot].store(true, Ordering::Relaxed);
-        #[cfg(feature = "jit")]
-        {
-            *self.jit_compiled_funcs[slot].borrow_mut() = Weak::new();
-        }
+        *self.jit_compiled_funcs[slot].borrow_mut() = Weak::new();
     }
 
     #[cfg(feature = "jit")]
@@ -1163,13 +1168,20 @@ impl StoreInner {
         [0; 4096]
     }
 
+    fn copy_cursor_u32(offset: usize) -> VMResult<u32> {
+        match u32::try_from(offset) {
+            Ok(offset) => VMResult::Success(offset),
+            Err(_) => VMResult::MemoryIndexOutOfRange,
+        }
+    }
+
     #[inline(never)]
     pub(crate) fn copy_memory_local_to_local(
         &mut self,
         dst: LocalMemoryId,
         src: LocalMemoryId,
-        mut dst_offset: u32,
-        mut src_offset: u32,
+        dst_offset: u32,
+        src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
         if dst == src {
@@ -1177,15 +1189,21 @@ impl StoreInner {
         }
         vm_try!(self.check_local_memory_range(src, src_offset, len));
         vm_try!(self.check_local_memory_range(dst, dst_offset, len));
+        let mut src_cursor = src_offset as usize;
+        let mut dst_cursor = dst_offset as usize;
         let mut remaining = len as usize;
         let mut chunk = Self::copy_chunk_buffer();
         while remaining != 0 {
             let size = Self::copy_chunk_size(remaining);
             let slice = &mut chunk[..size];
-            vm_try!(self.local_read_bytes_into(src, src_offset, slice));
-            vm_try!(self.local_write_bytes(dst, dst_offset as usize, slice));
-            src_offset += size as u32;
-            dst_offset += size as u32;
+            vm_try!(self.local_read_bytes_into(
+                src,
+                vm_try!(Self::copy_cursor_u32(src_cursor)),
+                slice
+            ));
+            vm_try!(self.local_write_bytes(dst, dst_cursor, slice));
+            src_cursor += size;
+            dst_cursor += size;
             remaining -= size;
         }
         VMResult::Success(())
@@ -1196,21 +1214,27 @@ impl StoreInner {
         &mut self,
         dst: SharedMemoryId,
         src: LocalMemoryId,
-        mut dst_offset: u32,
-        mut src_offset: u32,
+        dst_offset: u32,
+        src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
         vm_try!(self.check_local_memory_range(src, src_offset, len));
         vm_try!(self.check_shared_memory_range(dst, dst_offset, len));
+        let mut src_cursor = src_offset as usize;
+        let mut dst_cursor = dst_offset as usize;
         let mut remaining = len as usize;
         let mut chunk = Self::copy_chunk_buffer();
         while remaining != 0 {
             let size = Self::copy_chunk_size(remaining);
             let slice = &mut chunk[..size];
-            vm_try!(self.local_read_bytes_into(src, src_offset, slice));
-            vm_try!(self.shared_write_bytes(dst, dst_offset as usize, slice));
-            src_offset += size as u32;
-            dst_offset += size as u32;
+            vm_try!(self.local_read_bytes_into(
+                src,
+                vm_try!(Self::copy_cursor_u32(src_cursor)),
+                slice
+            ));
+            vm_try!(self.shared_write_bytes(dst, dst_cursor, slice));
+            src_cursor += size;
+            dst_cursor += size;
             remaining -= size;
         }
         VMResult::Success(())
@@ -1221,21 +1245,27 @@ impl StoreInner {
         &mut self,
         dst: LocalMemoryId,
         src: SharedMemoryId,
-        mut dst_offset: u32,
-        mut src_offset: u32,
+        dst_offset: u32,
+        src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
         vm_try!(self.check_shared_memory_range(src, src_offset, len));
         vm_try!(self.check_local_memory_range(dst, dst_offset, len));
+        let mut src_cursor = src_offset as usize;
+        let mut dst_cursor = dst_offset as usize;
         let mut remaining = len as usize;
         let mut chunk = Self::copy_chunk_buffer();
         while remaining != 0 {
             let size = Self::copy_chunk_size(remaining);
             let slice = &mut chunk[..size];
-            vm_try!(self.shared_read_bytes_into(src, src_offset, slice));
-            vm_try!(self.local_write_bytes(dst, dst_offset as usize, slice));
-            src_offset += size as u32;
-            dst_offset += size as u32;
+            vm_try!(self.shared_read_bytes_into(
+                src,
+                vm_try!(Self::copy_cursor_u32(src_cursor)),
+                slice
+            ));
+            vm_try!(self.local_write_bytes(dst, dst_cursor, slice));
+            src_cursor += size;
+            dst_cursor += size;
             remaining -= size;
         }
         VMResult::Success(())
@@ -1246,8 +1276,8 @@ impl StoreInner {
         &mut self,
         dst: SharedMemoryId,
         src: SharedMemoryId,
-        mut dst_offset: u32,
-        mut src_offset: u32,
+        dst_offset: u32,
+        src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
         if dst == src {
@@ -1255,15 +1285,21 @@ impl StoreInner {
         }
         vm_try!(self.check_shared_memory_range(src, src_offset, len));
         vm_try!(self.check_shared_memory_range(dst, dst_offset, len));
+        let mut src_cursor = src_offset as usize;
+        let mut dst_cursor = dst_offset as usize;
         let mut remaining = len as usize;
         let mut chunk = Self::copy_chunk_buffer();
         while remaining != 0 {
             let size = Self::copy_chunk_size(remaining);
             let slice = &mut chunk[..size];
-            vm_try!(self.shared_read_bytes_into(src, src_offset, slice));
-            vm_try!(self.shared_write_bytes(dst, dst_offset as usize, slice));
-            src_offset += size as u32;
-            dst_offset += size as u32;
+            vm_try!(self.shared_read_bytes_into(
+                src,
+                vm_try!(Self::copy_cursor_u32(src_cursor)),
+                slice
+            ));
+            vm_try!(self.shared_write_bytes(dst, dst_cursor, slice));
+            src_cursor += size;
+            dst_cursor += size;
             remaining -= size;
         }
         VMResult::Success(())

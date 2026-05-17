@@ -65,7 +65,7 @@ the `jit` Cargo feature and enable it at runtime with `--jit` or
       return-call paths.
 - [x] Runtime exits for done, trap, direct call, pending async work,
       continuation bridges, and callee-level interpreter execution when a
-      called function is not JIT accepted.
+      called function is not JIT-accepted.
 - [x] Native emission for the scalar baseline subset: i32/i64 integer
       arithmetic and comparisons, f32/f64 arithmetic/comparisons/rounding,
       numeric conversions, globals, locals, select, references, direct and
@@ -93,9 +93,10 @@ the `jit` Cargo feature and enable it at runtime with `--jit` or
 - [ ] Broader cross-platform executable memory policy and cache tuning beyond
       the currently supported Unix-like targets.
 
-Local Apple Silicon CoreMark check using
-`/Users/sizumita/Workspace/wasm3/wasm-coremark/coremark.wasm`
-(`ITERATIONS=30000`, Clang 11 `-O3`, `STATIC` memory), with CoreMark-specific
-function recognizers disabled: `--features jit` without runtime JIT measured
-`2010.184129` iterations/sec, and `--features jit -- --jit` measured
-`2027.199476` iterations/sec.
+Local Apple Silicon CoreMark sanity check using a standard `wasm-coremark`
+`coremark.wasm` build (`ITERATIONS=30000`, Clang 11 `-O3`, `STATIC` memory),
+with CoreMark-specific function recognizers disabled: `--features jit` without
+runtime JIT measured `2010.184129` iterations/sec, and `--features jit -- --jit`
+measured `2027.199476` iterations/sec. This run is retained as a correctness and
+overhead signal; the current numbers are close enough that they should not be
+read as a material CoreMark speedup claim.

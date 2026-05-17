@@ -270,7 +270,7 @@ impl CompiledTiers {
 impl CompiledFunction {
     fn from_bytes(bytes: &[u8], arena: &CodeArena) -> Result<Self, ()> {
         let code = arena.allocate(bytes).map_err(|_| ())?;
-        let entry = unsafe { std::mem::transmute::<*mut u8, JitEntry>(code.ptr()) };
+        let entry = unsafe { std::mem::transmute::<usize, JitEntry>(code.ptr() as usize) };
         Ok(Self {
             entry,
             code_size: code.len(),

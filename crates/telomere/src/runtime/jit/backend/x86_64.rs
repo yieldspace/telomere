@@ -408,8 +408,7 @@ impl BaselineOpEmitter<'_, '_> {
                     }
                     I64BinaryOp::RemS => {
                         self.trap_if_i64_divisor_zero(17)?;
-                        self.sdiv_x(9, 16, 17);
-                        self.msub_x(16, 9, 17, 16);
+                        self.emit_i64_rem_s(16, 17)?;
                     }
                     I64BinaryOp::RemU => {
                         self.trap_if_i64_divisor_zero(17)?;
@@ -935,8 +934,7 @@ impl BaselineOpEmitter<'_, '_> {
                     }
                     I32BinaryOp::RemS => {
                         self.trap_if_i32_divisor_zero(rhs)?;
-                        self.sdiv_w(17, lhs, rhs);
-                        self.msub_w(lhs, 17, rhs, lhs);
+                        self.emit_i32_rem_s(lhs, rhs)?;
                     }
                     I32BinaryOp::RemU => {
                         self.trap_if_i32_divisor_zero(rhs)?;
@@ -3629,6 +3627,41 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    fn emit_i32_rem_s(&mut self, lhs: u8, rhs: u8) -> Result<(), ()> {
+        self.mov_imm_u32(17, 0x8000_0000);
+        self.cmp_w(lhs, 17);
+        let lhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
+        self.cmp_w_u32(rhs, u32::MAX);
+        let rhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
+        self.mov_imm_u32(lhs, 0);
+        let done_branch = self.branch_placeholder(FixupKind::B);
+
+        let normal_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            lhs_ok_branch,
+            normal_target,
+            FixupKind::BCond(Cond::Ne),
+        )?;
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            rhs_ok_branch,
+            normal_target,
+            FixupKind::BCond(Cond::Ne),
+        )?;
+        self.sdiv_w(17, lhs, rhs);
+        self.msub_w(lhs, 17, rhs, lhs);
+
+        let done_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            done_branch,
+            done_target,
+            FixupKind::B,
+        )?;
+        Ok(())
+    }
+
     fn trap_if_i64_divisor_zero(&mut self, rhs: u8) -> Result<(), ()> {
         self.mov_imm_u64(9, 0);
         self.cmp_x(rhs, 9);
@@ -3664,6 +3697,42 @@ impl<'a> Emitter<'a> {
             rhs_ok_branch,
             ok_target,
             FixupKind::BCond(Cond::Ne),
+        )?;
+        Ok(())
+    }
+
+    fn emit_i64_rem_s(&mut self, lhs: u8, rhs: u8) -> Result<(), ()> {
+        self.mov_imm_u64(9, 0x8000_0000_0000_0000);
+        self.cmp_x(lhs, 9);
+        let lhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
+        self.mov_imm_u64(9, u64::MAX);
+        self.cmp_x(rhs, 9);
+        let rhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
+        self.mov_imm_u64(lhs, 0);
+        let done_branch = self.branch_placeholder(FixupKind::B);
+
+        let normal_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            lhs_ok_branch,
+            normal_target,
+            FixupKind::BCond(Cond::Ne),
+        )?;
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            rhs_ok_branch,
+            normal_target,
+            FixupKind::BCond(Cond::Ne),
+        )?;
+        self.sdiv_x(9, lhs, rhs);
+        self.msub_x(lhs, 9, rhs, lhs);
+
+        let done_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            done_branch,
+            done_target,
+            FixupKind::B,
         )?;
         Ok(())
     }

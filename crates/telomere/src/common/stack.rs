@@ -4,7 +4,6 @@
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::VMResult;
-use std::fmt::Debug;
 
 use super::{
     memory::trusted_copy_from_slice,
@@ -15,6 +14,21 @@ use super::{
     },
     Instr, StablePc, StoreInner,
 };
+use std::{
+    fmt::{self, Debug},
+    sync::OnceLock,
+};
+
+fn stack_trace_overflow_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some())
+}
+
+fn trace_stack_overflow(args: fmt::Arguments<'_>) {
+    if stack_trace_overflow_enabled() {
+        eprintln!("[telomere-stack] {args}");
+    }
+}
 #[inline(always)]
 fn trusted_write_u32(dst: &mut [u8], value: u32) {
     debug_assert_eq!(dst.len(), 4);
@@ -267,12 +281,10 @@ impl Stack {
     }
     fn add_top(&mut self, n: usize) -> VMResult<()> {
         self.top = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
-            if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
-                eprintln!(
-                    "[telomere-stack] checked_add overflow top={} add={n}",
-                    self.top
-                );
-            }
+            trace_stack_overflow(format_args!(
+                "checked_add overflow top={} add={n}",
+                self.top
+            ));
             VMResult::StackOverflow
         }));
         VMResult::Success(())
@@ -288,12 +300,10 @@ impl Stack {
         VMResult::Success(vm_try!(VMResult::from_option(
             self.memory.get_mut(self.top..last),
             || {
-                if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
-                    eprintln!(
-                        "[telomere-stack] memory range overflow top={} last={last} len={}",
-                        self.top, memory_len
-                    );
-                }
+                trace_stack_overflow(format_args!(
+                    "memory range overflow top={} last={last} len={}",
+                    self.top, memory_len
+                ));
                 VMResult::StackOverflow
             }
         )))
@@ -904,24 +914,20 @@ impl Stack {
             || VMResult::StackOverflow
         ));
         if new_top > self.memory.len() {
-            if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
-                eprintln!(
-                    "[telomere-stack] frame overflow local_top={local_top} param_size={param_size} local_size={local_size} info_top={info_top} new_top={new_top} len={}",
-                    self.memory.len()
-                );
-            }
+            trace_stack_overflow(format_args!(
+                "frame overflow local_top={local_top} param_size={param_size} local_size={local_size} info_top={info_top} new_top={new_top} len={}",
+                self.memory.len()
+            ));
             return VMResult::StackOverflow;
         }
         VMResult::Success(new_top)
     }
     fn copy_top_bytes_to(&mut self, dst: usize, size: usize) -> VMResult<()> {
         let src = vm_try!(VMResult::from_option(self.top.checked_sub(size), || {
-            if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
-                eprintln!(
-                    "[telomere-stack] copy_top underflow top={} size={size} dst={dst}",
-                    self.top
-                );
-            }
+            trace_stack_overflow(format_args!(
+                "copy_top underflow top={} size={size} dst={dst}",
+                self.top
+            ));
             VMResult::StackOverflow
         }));
         if size == 0 || src == dst {
@@ -1008,12 +1014,10 @@ impl Stack {
         let local_top = vm_try!(VMResult::from_option(
             self.top.checked_sub(param_size),
             || {
-                if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
-                    eprintln!(
-                        "[telomere-stack] function_call underflow top={} param_size={param_size} local_size={local_size}",
-                        self.top
-                    );
-                }
+                trace_stack_overflow(format_args!(
+                    "function_call underflow top={} param_size={param_size} local_size={local_size}",
+                    self.top
+                ));
                 VMResult::StackOverflow
             }
         ));

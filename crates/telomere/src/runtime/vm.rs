@@ -18,7 +18,7 @@ mod tables;
 #[cfg(feature = "vm-diagnostics")]
 use crate::common::Op;
 use crate::{
-    common::store::{CallDispatchCache, CallDispatchTarget},
+    common::store::{CallDispatchCache, CallDispatchTarget, FunctionInstanceData},
     common::{
         execute_elem_init_const_expr, CallFrameCache, ElemInit, ExecuteContext, ExportDesc,
         InstanceHandle, Instr, LocalReference, MemArg, ObjectRef, ResultType, ResultValue,
@@ -1221,7 +1221,7 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
         op_i32_load_local_base_set4_i32_load16_s_local_base_local_eq_br_if,
         "op_i32_load_local_base_set4_i32_load16_s_local_base_local_eq_br_if"
     );
-    label!(op_mem_fill_local, "op_mem_fill");
+    label!(op_mem_fill_local, "op_mem_fill_local");
     "unknown"
 }
 
@@ -1705,6 +1705,13 @@ pub(crate) fn wasm_entry_pc(_store: &Store) -> StablePc {
     StablePc::from_relative_index(0)
 }
 
+pub(crate) fn function_entry_pc(store: &Store, funcinst: &FunctionInstanceData) -> StablePc {
+    if funcinst.is_host_func() {
+        return StablePc::from_stable_ptr(START_HOST_FUNCTION_PROGRAM.as_ptr());
+    }
+    wasm_entry_pc(store)
+}
+
 pub async fn run_module_function(
     instance: &InstanceHandle,
     store: &Store,
@@ -1745,6 +1752,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
                 || { VMResult::Unlinkable }
             ));
             let funcinst = gc.get_func(code_addr);
+            let entry_pc = function_entry_pc(store, funcinst);
             let func_instance = gc.instance(funcinst.instance);
             let frame = CallFrameCache::from_parts(
                 code_addr,
@@ -1785,7 +1793,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
             ));
 
             scheduler.push(Task {
-                fp: wasm_entry_pc(store),
+                fp: entry_pc,
                 task_id: 0,
                 stack,
                 local_reference,
@@ -1829,6 +1837,7 @@ pub(crate) fn run_module_function_sync_with_gc(
                 None => return Ok(VMResult::Unlinkable),
             };
             let funcinst = gc.get_func(code_addr);
+            let entry_pc = function_entry_pc(store, funcinst);
             let func_instance = gc.instance(funcinst.instance);
             let frame = CallFrameCache::from_parts(
                 code_addr,
@@ -1874,7 +1883,7 @@ pub(crate) fn run_module_function_sync_with_gc(
             };
 
             scheduler.push(Task {
-                fp: wasm_entry_pc(store),
+                fp: entry_pc,
                 task_id: 0,
                 stack,
                 local_reference,

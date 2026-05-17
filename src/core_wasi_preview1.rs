@@ -248,7 +248,7 @@ pub(crate) async fn run(
     validate_preview1_module(&module)?;
     if jit && !telomere::jit_supported() {
         bail!(
-            "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux riscv64gc"
+            "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux-gnu riscv64gc"
         );
     }
 

@@ -54,6 +54,12 @@ Component compile/runtime:
 
 - `LoweredOp.operands` remains `Vec<LoweredOperand>`. It is part of the long-lived canonical lowered artifact, and many lowered ops have no operands. A direct `SmallVec<[LoweredOperand; 2]>` would enlarge every `LoweredOp` record; the better future direction is a flat operand side table or packed encoding tied to the kernel-op registry.
 - `Func.expr` / `Func.op_lens`, `LoweredFunction.code`, `materialized_preview`, and runtime `Arc<[Instr]>` are not fully unified. Parser and optimizer still need lowered code as the canonical artifact while fail-closed and diagnostics need exact materialized fallback. This pass removes eager duplicate materialization and shrinks fallback capacity without changing verifier semantics.
+- `GlobalValue` uses a fixed 16-byte payload plus length so the JIT can address
+  globals through one stable slot layout. This is a tradeoff: small scalar
+  globals take more per-global storage than the previous width-specific enum,
+  while native global get/set avoids a per-width layout side table. A future
+  JIT layout descriptor could recover the scalar-global footprint without
+  changing public semantics.
 - `ComponentProgram.bytes` is retained for public API/debugging compatibility even though instantiate/call do not rescan bytes.
 - relation stores stay as `HashMap<GlobalIdx<T>, Relation<T>>`. Dense tables need a stricter global-index density contract across nested components and aliases. That is a larger semantic refactor and should be done with dedicated validation tests.
 - public `ComponentValue` keeps `String` / `Vec` forms for API compatibility. Borrowed views or `SmallVec` fields would be breaking and are documented as future candidates only.

@@ -266,6 +266,38 @@ async fn jit_executes_i32_locals_and_arithmetic() {
     )
 ))]
 #[tokio::test]
+async fn jit_signed_remainder_overflow_returns_zero() {
+    let result = invoke_jit(
+        r#"
+        (module
+          (func (export "run") (result i32 i64)
+            i32.const -2147483648
+            i32.const -1
+            i32.rem_s
+            i64.const -9223372036854775808
+            i64.const -1
+            i64.rem_s))
+        "#,
+        "run",
+        vec![],
+    )
+    .await;
+
+    assert_success_values(
+        result,
+        ResultValue::new(vec![WasmValue::I32(0), WasmValue::I64(0)]),
+    );
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
 async fn jit_direct_call_enters_callee() {
     let result = invoke_jit(
         r#"
@@ -736,6 +768,51 @@ async fn jit_import_direct_call_uses_runtime_helper() {
     .await;
 
     assert_success_i32(result, 44);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_exported_host_function_uses_host_start_trampoline() {
+    let store = jit_store();
+    let mut registry = Registry::new();
+    let host = instantiate_jit_wat(
+        r#"
+        (module
+          (func (export "add_one") (param i32) (result i32)
+            local.get 0))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    link_host_function_with_function_idx(&host, 0, host_add_one, &store);
+    registry.register("host", host);
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (import "host" "add_one" (func $add_one (param i32) (result i32)))
+          (export "run" (func $add_one)))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    let result = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(41)]),
+    )
+    .await;
+
+    assert_success_i32(result, 42);
 }
 
 #[cfg(all(

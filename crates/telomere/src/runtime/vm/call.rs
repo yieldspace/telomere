@@ -5,6 +5,26 @@ fn ensure_call_recipe(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDisp
     ctx.gc.ensure_call_recipe_for_func(funcaddr)
 }
 
+#[cfg(feature = "jit")]
+fn jit_exit_from_call_outcome(
+    result: VMResult<CallOutcome>,
+    continuation: *const Instr,
+    recipe: CallDispatchCache,
+    is_return_call: bool,
+) -> crate::runtime::jit::JitNativeExit {
+    match result {
+        VMResult::Success(CallOutcome::Immediate(ptr)) => {
+            if !is_return_call && ptr == continuation {
+                crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+            } else {
+                crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
+            }
+        }
+        VMResult::Success(CallOutcome::Pending) => crate::runtime::jit::JitNativeExit::pending(),
+        other => crate::runtime::jit::JitNativeExit::trap(other),
+    }
+}
+
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
@@ -145,46 +165,12 @@ pub(crate) unsafe fn jit_call_direct(
             other => crate::runtime::jit::JitNativeExit::trap(other),
         };
     }
-    match unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) } {
-        VMResult::Success(CallOutcome::Immediate(ptr)) => {
-            if !is_return_call && ptr == tail_code.offset(1) {
-                crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
-            } else {
-                crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
-            }
-        }
-        VMResult::Success(CallOutcome::Pending) => crate::runtime::jit::JitNativeExit::pending(),
-        VMResult::Unreachable => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unreachable)
-        }
-        VMResult::StackOverflow => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::StackOverflow)
-        }
-        VMResult::MemoryIndexOutOfRange => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::MemoryIndexOutOfRange)
-        }
-        VMResult::TableIndexOutOfRange => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableIndexOutOfRange)
-        }
-        VMResult::CallIndirectInvalidType => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::CallIndirectInvalidType)
-        }
-        VMResult::TableUninitialized => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableUninitialized)
-        }
-        VMResult::Unlinkable => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unlinkable)
-        }
-        VMResult::InvalidOperand => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand)
-        }
-        VMResult::UnalignedAtomic => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::UnalignedAtomic)
-        }
-        VMResult::Unimplemented => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unimplemented)
-        }
-    }
+    jit_exit_from_call_outcome(
+        unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) },
+        unsafe { tail_code.offset(1) },
+        recipe,
+        is_return_call,
+    )
 }
 
 #[cfg(feature = "jit")]
@@ -289,46 +275,12 @@ pub(crate) unsafe fn jit_call_indirect(
             other => crate::runtime::jit::JitNativeExit::trap(other),
         };
     }
-    match unsafe { internal_op_call(tail_code.offset(2), recipe, ctx, is_return_call) } {
-        VMResult::Success(CallOutcome::Immediate(ptr)) => {
-            if !is_return_call && ptr == unsafe { tail_code.offset(2) } {
-                crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
-            } else {
-                crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
-            }
-        }
-        VMResult::Success(CallOutcome::Pending) => crate::runtime::jit::JitNativeExit::pending(),
-        VMResult::Unreachable => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unreachable)
-        }
-        VMResult::StackOverflow => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::StackOverflow)
-        }
-        VMResult::MemoryIndexOutOfRange => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::MemoryIndexOutOfRange)
-        }
-        VMResult::TableIndexOutOfRange => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableIndexOutOfRange)
-        }
-        VMResult::CallIndirectInvalidType => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::CallIndirectInvalidType)
-        }
-        VMResult::TableUninitialized => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableUninitialized)
-        }
-        VMResult::Unlinkable => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unlinkable)
-        }
-        VMResult::InvalidOperand => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand)
-        }
-        VMResult::UnalignedAtomic => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::UnalignedAtomic)
-        }
-        VMResult::Unimplemented => {
-            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unimplemented)
-        }
-    }
+    jit_exit_from_call_outcome(
+        unsafe { internal_op_call(tail_code.offset(2), recipe, ctx, is_return_call) },
+        unsafe { tail_code.offset(2) },
+        recipe,
+        is_return_call,
+    )
 }
 
 #[cfg(feature = "jit")]

@@ -94,6 +94,10 @@ pub(crate) fn vm_result_code<T>(result: VMResult<T>) -> u64 {
 
 pub(crate) fn vm_result_from_code(code: u64) -> VMResult<()> {
     match code {
+        0 => {
+            debug_assert_ne!(code, 0, "JIT trap exit cannot carry Success code 0");
+            VMResult::InvalidOperand
+        }
         1 => VMResult::Unreachable,
         2 => VMResult::StackOverflow,
         3 => VMResult::MemoryIndexOutOfRange,
