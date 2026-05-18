@@ -1,0 +1,11 @@
+[package]
+name = "telomere-jit-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+keywords.workspace = true
+publish.workspace = true
+
+[dependencies]
+mmap-rs.workspace = true

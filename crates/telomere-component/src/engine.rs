@@ -54,9 +54,15 @@ impl ComponentEngine {
                 }
             }
         }
+        imports.shrink_to_fit();
+        callable_imports.shrink_to_fit();
+        exports.shrink_to_fit();
+        callable_exports.shrink_to_fit();
+        ops.shrink_to_fit();
 
         let types = validator.snapshot_types();
-        let type_infos = build_type_infos(types.as_ref())?;
+        let mut type_infos = build_type_infos(types.as_ref())?;
+        type_infos.shrink_to_fit();
 
         Ok(ComponentProgram {
             type_infos,

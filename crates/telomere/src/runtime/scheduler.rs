@@ -23,6 +23,7 @@ fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::TableUninitialized => VMResult::TableUninitialized,
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
+        VMResult::Unimplemented => VMResult::Unimplemented,
     }
 }
 
@@ -317,7 +318,16 @@ impl<'a> Scheduler<'a> {
                 } else {
                     CallFrameCache::dummy()
                 };
+                let stack_memory_ptr = stack.jit_memory_ptr();
+                let stack_memory_len = stack.jit_memory_len();
+                let stack_top_ptr = stack.jit_top_ptr();
                 let local_base_ptr = unsafe { stack.local_area_mut_ptr(&local_reference) };
+                let current_instance_globals_ptr = if current_frame.code_addr.is_null() {
+                    std::ptr::null()
+                } else {
+                    gc.jit_instance_global_addrs_ptr(current_frame.instance)
+                };
+                let global_values_ptr = gc.jit_global_values_ptr();
                 let default_local_memory_ptr = match current_frame.memory0_kind {
                     CachedMemoryKind::Local => {
                         gc.local_memory_mut(unsafe {
@@ -331,9 +341,14 @@ impl<'a> Scheduler<'a> {
                 };
                 let mut ec = ExecuteContext {
                     gc,
+                    stack_memory_ptr,
+                    stack_memory_len,
+                    stack_top_ptr,
                     local_reference,
                     local_base_ptr,
                     default_local_memory_ptr,
+                    current_instance_globals_ptr,
+                    global_values_ptr,
                     current_frame,
                     stack: &mut stack,
                     store: self.store,

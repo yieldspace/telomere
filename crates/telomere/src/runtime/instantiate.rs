@@ -1,13 +1,13 @@
 use crate::{
     common::{
-        decode_local_binop32_kind, execute_elem_init_const_expr,
-        store::FunctionBody as RuntimeFunctionBody, AsyncHostFunction, AsyncHostFunctionDefinition,
-        AsyncNativeModule, CallFrameCache, CodeSection, ConstExpr, DataMode, DataSection, ElemInit,
-        ElemMode, ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx,
-        FunctionBody, FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition,
-        ImportDesc, ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalBinop32Op,
-        LocalFastRhsShape, LocalReference, MemIdx, ModuleInstance, NativeModule, ObjectRef,
-        StablePc, StoreInner, TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
+        execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
+        AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
+        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
+        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
+        FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
+        ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
+        ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
+        TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
@@ -15,6 +15,10 @@ use crate::{
     },
     Instance, Module, Registry, Stack, Store, VMResult,
 };
+use std::sync::Arc;
+
+#[cfg(test)]
+use crate::common::{decode_local_binop32_kind, LocalBinop32Op, LocalFastRhsShape};
 
 pub(crate) fn init_global(
     gc: &mut StoreInner,
@@ -387,12 +391,12 @@ pub async fn instantiate(
 
             let func_addr = match func {
                 FunctionBody::Wasm(code) => {
-                    let materialized = code.lowered.materialize();
                     let func_addr = gc.new_func(&FunctionInstanceData {
                         instance: inst_id,
                         body: RuntimeFunctionBody::Wasm {
                             locals: code.locals,
-                            code: materialized.instrs.into(),
+                            code: Arc::<[Instr]>::from([]),
+                            op_lens: Arc::<[u16]>::from([]),
                             lowered: code.lowered.clone(),
                         },
                         funcidx,
@@ -409,6 +413,53 @@ pub async fn instantiate(
 
             funcs.push(func_addr);
             tracing::trace!("linking: {funcidx} => {func_addr:?}");
+        }
+
+        let recipe_slots = funcs
+            .iter()
+            .map(|&funcaddr| gc.call_recipe_slot_for_func(funcaddr))
+            .collect::<Vec<_>>();
+        #[cfg(feature = "jit")]
+        let jit_local_wasm_recipe_slots = local_wasm_funcs
+            .iter()
+            .map(|&func_addr| gc.call_recipe_slot_for_func(func_addr))
+            .collect::<Vec<_>>();
+        let mut materialized_local_wasm_funcs = Vec::with_capacity(local_wasm_funcs.len());
+        for &func_addr in &local_wasm_funcs {
+            let materialized = match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { lowered, .. } => {
+                    lowered.materialize_with_recipe_slots(&recipe_slots)
+                }
+                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
+            };
+            #[cfg(feature = "jit")]
+            let mut materialized = materialized;
+            #[cfg(feature = "jit")]
+            if crate::runtime::jit::supported() && store.runtime_config().jit.enabled {
+                rewrite_direct_wasm_calls_for_jit(
+                    &mut materialized.instrs,
+                    &materialized.op_lens,
+                    &jit_local_wasm_recipe_slots,
+                );
+            }
+            #[cfg(feature = "vm-diagnostics")]
+            dump_materialized_function_if_requested(
+                funcs
+                    .iter()
+                    .position(|&addr| addr == func_addr)
+                    .expect("local wasm function must belong to instance") as u32,
+                &materialized.instrs,
+                &materialized.op_lens,
+            );
+            materialized_local_wasm_funcs.push((func_addr, materialized));
+        }
+        for (func_addr, materialized) in materialized_local_wasm_funcs {
+            let func = gc.get_func_mut(func_addr);
+            let RuntimeFunctionBody::Wasm { code, op_lens, .. } = &mut func.body else {
+                unreachable!("materialized local wasm function must remain wasm")
+            };
+            *op_lens = materialized.op_lens.into();
+            *code = materialized.instrs.into();
         }
 
         for init in &global_init {
@@ -481,116 +532,6 @@ pub async fn instantiate(
             gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
-        let recipe_slots = instance
-            .funcs
-            .iter()
-            .map(|&funcaddr| gc.call_recipe_slot_for_func(funcaddr))
-            .collect::<Vec<_>>();
-        let numeric_transition_recipe_slots = local_wasm_funcs
-            .iter()
-            .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
-                RuntimeFunctionBody::Wasm { lowered, .. }
-                    if lowered_starts_with_numeric_transition(lowered) =>
-                {
-                    Some(gc.call_recipe_slot_for_func(func_addr))
-                }
-                RuntimeFunctionBody::Wasm { .. }
-                | RuntimeFunctionBody::Host(_)
-                | RuntimeFunctionBody::AsyncHost(_) => None,
-            })
-            .collect::<Vec<_>>();
-        let crc16_update_recipe_slots = local_wasm_funcs
-            .iter()
-            .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
-                RuntimeFunctionBody::Wasm { lowered, .. }
-                    if lowered_starts_with_crc16_update(lowered) =>
-                {
-                    Some(gc.call_recipe_slot_for_func(func_addr))
-                }
-                RuntimeFunctionBody::Wasm { .. }
-                | RuntimeFunctionBody::Host(_)
-                | RuntimeFunctionBody::AsyncHost(_) => None,
-            })
-            .collect::<Vec<_>>();
-        let crc16_update_masked_recipe_slots = local_wasm_funcs
-            .iter()
-            .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
-                RuntimeFunctionBody::Wasm { lowered, .. } => {
-                    let mut materialized = lowered.materialize_with_recipe_slots(&recipe_slots);
-                    rewrite_direct_calls_for_slots(
-                        &mut materialized.instrs,
-                        &materialized.op_lens,
-                        &crc16_update_recipe_slots,
-                        vm::op_call_i32_crc16_update16,
-                    );
-                    crc16_update_masked_wrapper_shape(&materialized.instrs, &materialized.op_lens)
-                        .map(|_| gc.call_recipe_slot_for_func(func_addr))
-                }
-                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => None,
-            })
-            .collect::<Vec<_>>();
-        let cached_u16_low7_guard_recipe_slots = local_wasm_funcs
-            .iter()
-            .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
-                RuntimeFunctionBody::Wasm { lowered, .. } => {
-                    let materialized = lowered.materialize_with_recipe_slots(&recipe_slots);
-                    materialized_starts_with_cached_u16_low7_guard(
-                        &materialized.instrs,
-                        &materialized.op_lens,
-                    )
-                    .then(|| gc.call_recipe_slot_for_func(func_addr))
-                }
-                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => None,
-            })
-            .collect::<Vec<_>>();
-        for func_addr in local_wasm_funcs {
-            let mut materialized = match &gc.get_func(func_addr).body {
-                RuntimeFunctionBody::Wasm { lowered, .. } => {
-                    lowered.materialize_with_recipe_slots(&recipe_slots)
-                }
-                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
-            };
-            rewrite_direct_calls_for_slots(
-                &mut materialized.instrs,
-                &materialized.op_lens,
-                &numeric_transition_recipe_slots,
-                vm::op_call_i32_numeric_token_state_transition,
-            );
-            rewrite_direct_calls_for_slots(
-                &mut materialized.instrs,
-                &materialized.op_lens,
-                &crc16_update_recipe_slots,
-                vm::op_call_i32_crc16_update16,
-            );
-            rewrite_direct_calls_for_slots(
-                &mut materialized.instrs,
-                &materialized.op_lens,
-                &crc16_update_masked_recipe_slots,
-                vm::op_call_i32_crc16_update16_masked,
-            );
-            rewrite_direct_calls_for_slots(
-                &mut materialized.instrs,
-                &materialized.op_lens,
-                &cached_u16_low7_guard_recipe_slots,
-                vm::op_call_cached_u16_low7_guard,
-            );
-            rewrite_crc16_update_masked_wrapper(&mut materialized.instrs, &materialized.op_lens);
-            #[cfg(feature = "vm-diagnostics")]
-            dump_materialized_function_if_requested(
-                instance
-                    .funcs
-                    .iter()
-                    .position(|&addr| addr == func_addr)
-                    .expect("local wasm function must belong to instance") as u32,
-                &materialized.instrs,
-                &materialized.op_lens,
-            );
-            let func = gc.get_func_mut(func_addr);
-            let RuntimeFunctionBody::Wasm { code, .. } = &mut func.body else {
-                unreachable!("materialized local wasm function must remain wasm")
-            };
-            *code = materialized.instrs.into();
-        }
         for &funcaddr in &instance.funcs {
             let recipe = gc.build_call_recipe(funcaddr);
             gc.set_call_recipe_for_func(funcaddr, recipe);
@@ -655,7 +596,7 @@ pub async fn instantiate(
                 ));
 
                 scheduler.push(Task {
-                    fp: StablePc::from_relative_index(0),
+                    fp: vm::wasm_entry_pc(store),
                     task_id: 0,
                     stack,
                     local_reference,
@@ -895,21 +836,7 @@ pub fn link_async_host_function_with_export_name(
     link_async_host_function_with_function_idx(addr, func_idx, f, store);
 }
 
-fn lowered_starts_with_numeric_transition(lowered: &crate::common::LoweredFunction) -> bool {
-    lowered.code.first().is_some_and(|op| {
-        std::ptr::fn_addr_eq(
-            op.op,
-            vm::op_i32_numeric_token_state_transition as crate::common::Op,
-        )
-    })
-}
-
-fn lowered_starts_with_crc16_update(lowered: &crate::common::LoweredFunction) -> bool {
-    lowered.code.first().is_some_and(|op| {
-        std::ptr::fn_addr_eq(op.op, vm::op_i32_crc16_update16 as crate::common::Op)
-    })
-}
-
+#[cfg(test)]
 fn rewrite_direct_calls_for_slots(
     instrs: &mut [Instr],
     op_lens: &[u16],
@@ -937,6 +864,41 @@ fn rewrite_direct_calls_for_slots(
     debug_assert_eq!(cursor, instrs.len());
 }
 
+#[cfg(feature = "jit")]
+fn rewrite_direct_wasm_calls_for_jit(
+    instrs: &mut [Instr],
+    op_lens: &[u16],
+    local_wasm_recipe_slots: &[u32],
+) {
+    if local_wasm_recipe_slots.is_empty() {
+        return;
+    }
+
+    let mut cursor = 0usize;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        let replacement = if std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op) {
+            Some(vm::op_call_jit_lazy as crate::common::Op)
+        } else if std::ptr::fn_addr_eq(op, vm::op_return_call as crate::common::Op) {
+            Some(vm::op_return_call_jit_lazy as crate::common::Op)
+        } else {
+            None
+        };
+        if let Some(replacement) = replacement {
+            let target = unsafe { instrs[cursor + 1].operand.call_recipe_ref };
+            if target
+                .resolved_recipe_slot()
+                .is_some_and(|slot| local_wasm_recipe_slots.contains(&slot))
+            {
+                instrs[cursor] = Instr { op: replacement };
+            }
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+}
+
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct Crc16UpdateMaskedWrapperShape {
     data_local: u32,
@@ -944,6 +906,7 @@ struct Crc16UpdateMaskedWrapperShape {
     return_addr: usize,
 }
 
+#[cfg(test)]
 fn crc16_update_masked_wrapper_shape(
     instrs: &[Instr],
     op_lens: &[u16],
@@ -991,6 +954,7 @@ fn crc16_update_masked_wrapper_shape(
     })
 }
 
+#[cfg(test)]
 fn materialized_starts_with_cached_u16_low7_guard(instrs: &[Instr], op_lens: &[u16]) -> bool {
     const EXPECTED_LENS: [u16; 5] = [5, 3, 2, 4, 2];
 
@@ -1050,6 +1014,7 @@ fn materialized_starts_with_cached_u16_low7_guard(instrs: &[Instr], op_lens: &[u
         && return_rhs == 0x7f
 }
 
+#[cfg(test)]
 fn rewrite_crc16_update_masked_wrapper(instrs: &mut [Instr], op_lens: &[u16]) {
     let Some(shape) = crc16_update_masked_wrapper_shape(instrs, op_lens) else {
         return;
@@ -1367,15 +1332,22 @@ fn op_eq(instrs: &[Instr], pc: usize, op: crate::common::Op) -> bool {
 
 #[cfg(feature = "vm-diagnostics")]
 fn dump_materialized_function_if_requested(funcidx: u32, instrs: &[Instr], op_lens: &[u16]) {
-    let Some(requested) = std::env::var("TELOMERE_VM_DUMP_FUNC")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-    else {
+    let Some(requested) = std::env::var("TELOMERE_VM_DUMP_FUNC").ok() else {
         return;
     };
-    if requested != funcidx {
+    let dump_all = requested == "all";
+    let requested = requested.parse::<u32>().ok();
+    if !dump_all && requested != Some(funcidx) {
         return;
     }
+    let pc_start = std::env::var("TELOMERE_VM_DUMP_PC_START")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let pc_end = std::env::var("TELOMERE_VM_DUMP_PC_END")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(usize::MAX);
 
     eprintln!(
         "[telomere-vm-diagnostics] materialized_func funcidx={funcidx} ops={} instrs={}",
@@ -1384,12 +1356,54 @@ fn dump_materialized_function_if_requested(funcidx: u32, instrs: &[Instr], op_le
     );
     let mut cursor = 0usize;
     for len in op_lens {
+        if cursor < pc_start || cursor > pc_end {
+            cursor += usize::from(*len);
+            continue;
+        }
         let op = unsafe { instrs[cursor].op };
         eprintln!(
-            "[telomere-vm-diagnostics] materialized_op funcidx={funcidx} pc={cursor} len={} op={}",
+            "[telomere-vm-diagnostics] materialized_op funcidx={funcidx} pc={cursor} len={} op={} op_addr=0x{:x}",
             len,
-            vm::diagnostic_op_label(op)
+            vm::diagnostic_op_label(op),
+            op as usize
         );
+        if *len > 1 {
+            for operand_offset in 1..usize::from(*len) {
+                let operand = unsafe { instrs[cursor + operand_offset].operand };
+                eprintln!(
+                    "[telomere-vm-diagnostics] materialized_operand funcidx={funcidx} pc={cursor} offset={operand_offset} encoded={:02x?} u32={} i32={} jump={}",
+                    unsafe { operand.encoded },
+                    unsafe { operand.u32 },
+                    unsafe { operand.i32 },
+                    unsafe { operand.jump_addr }
+                );
+            }
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_br as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br_if as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_if as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_else as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return as crate::common::Op)
+        {
+            let jump_addr = unsafe { instrs[cursor + 1].operand.jump_addr };
+            eprintln!(
+                "[telomere-vm-diagnostics] materialized_jump funcidx={funcidx} pc={cursor} target={jump_addr}"
+            );
+        }
+        if std::ptr::fn_addr_eq(op, vm::special_block_return as crate::common::Op) {
+            let block_return = unsafe { instrs[cursor + 1].operand.block_return };
+            eprintln!(
+                "[telomere-vm-diagnostics] materialized_block_return funcidx={funcidx} pc={cursor} stack_top={} return_size={}",
+                block_return.stack_top,
+                block_return.return_size
+            );
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_select as crate::common::Op) {
+            let select_size = unsafe { instrs[cursor + 1].operand.select };
+            eprintln!(
+                "[telomere-vm-diagnostics] materialized_select funcidx={funcidx} pc={cursor} size={select_size}"
+            );
+        }
         cursor += usize::from(*len);
     }
 }
@@ -1498,6 +1512,41 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             unsafe { instrs[0].op },
             vm::op_call as crate::common::Op
+        ));
+    }
+
+    #[cfg(feature = "jit")]
+    #[test]
+    fn rewrite_direct_wasm_calls_for_jit_preserves_specialized_call_opcodes() {
+        let mut instrs = vec![
+            Instr {
+                op: vm::op_call_i32_crc16_update16,
+            },
+            Instr {
+                operand: crate::common::Operand {
+                    call_recipe_ref: crate::common::CallRecipeRef::from_funcidx(1)
+                        .with_recipe_slot(13),
+                },
+            },
+            Instr { op: vm::op_call },
+            Instr {
+                operand: crate::common::Operand {
+                    call_recipe_ref: crate::common::CallRecipeRef::from_funcidx(2)
+                        .with_recipe_slot(13),
+                },
+            },
+            Instr { op: vm::op_end },
+        ];
+
+        rewrite_direct_wasm_calls_for_jit(&mut instrs, &[2, 2, 1], &[13]);
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { instrs[0].op },
+            vm::op_call_i32_crc16_update16 as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { instrs[2].op },
+            vm::op_call_jit_lazy as crate::common::Op
         ));
     }
 

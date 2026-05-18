@@ -16,7 +16,7 @@ use telomere::{
         Memory, NativeModule, StoreState, VMResult, ValType,
     },
     runtime::instantiate_native_module,
-    Module, Registry, ResultValue, Store,
+    JitConfig, Module, Registry, ResultValue, RuntimeConfig, Store,
 };
 
 pub(crate) const PREVIEW1_MODULE: &str = "wasi_snapshot_preview1";
@@ -242,13 +242,27 @@ pub(crate) async fn run(
     path: &Path,
     guest_argv: &[String],
     stdio: StdioMode,
+    jit: bool,
+    jit_code_cache_mib: u32,
 ) -> anyhow::Result<ExitCode> {
     validate_preview1_module(&module)?;
+    if jit && !telomere::jit_supported() {
+        bail!(
+            "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux-gnu riscv64gc"
+        );
+    }
 
     let state = Box::new(CoreWasiPreview1State::new(path, guest_argv, stdio));
-    let store = Store::new_with_state(unsafe {
-        StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State)
-    });
+    let state_ptr = unsafe { StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State) };
+    let store = Store::new_with_state_and_runtime_config(
+        state_ptr,
+        RuntimeConfig {
+            jit: JitConfig {
+                enabled: jit,
+                code_cache_max_bytes: jit_code_cache_mib.saturating_mul(1024 * 1024),
+            },
+        },
+    );
     let mut registry = Registry::new();
     let host = vm_result_to_anyhow(
         instantiate_native_module(build_preview1_native_module(), &store, &registry).await,
@@ -502,6 +516,7 @@ fn describe_vm_result<T>(result: &VMResult<T>) -> &'static str {
         VMResult::Unlinkable => "unlinkable",
         VMResult::InvalidOperand => "invalid operand",
         VMResult::UnalignedAtomic => "unaligned atomic",
+        VMResult::Unimplemented => "unimplemented",
     }
 }
 
@@ -839,6 +854,8 @@ mod tests {
             Path::new("guest.wasm"),
             &[],
             StdioMode::Capture(captured.clone()),
+            false,
+            4,
         )
         .await
         .expect("preview1 run should succeed");

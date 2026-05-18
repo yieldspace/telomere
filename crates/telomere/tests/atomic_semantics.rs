@@ -36,6 +36,7 @@ async fn call_i32(
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+        VMResult::Unimplemented => VMResult::Unimplemented,
     }
 }
 
@@ -59,6 +60,7 @@ async fn call_i64(
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+        VMResult::Unimplemented => VMResult::Unimplemented,
     }
 }
 

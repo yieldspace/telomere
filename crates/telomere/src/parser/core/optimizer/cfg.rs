@@ -5,6 +5,7 @@ use crate::{
     parser::core::type_checker::StackSnapshot,
     runtime::vm,
 };
+use smallvec::SmallVec;
 
 #[derive(Debug, Clone)]
 pub(crate) struct InstructionMeta {
@@ -20,7 +21,7 @@ pub(crate) struct InstructionMeta {
 pub(crate) struct DecodedInstr {
     pub(crate) old_start: usize,
     pub(crate) op: Op,
-    pub(crate) operands: Vec<Operand>,
+    pub(crate) operands: SmallVec<[Operand; 2]>,
     pub(crate) stack_before: StackSnapshot,
     pub(crate) stack_after: StackSnapshot,
     pub(crate) preserved_prefix_len: usize,
@@ -119,7 +120,7 @@ pub(crate) fn build_program(
             return None;
         }
         let op = unsafe { instrs[meta.start].op };
-        let mut operands = Vec::with_capacity(meta.len.saturating_sub(1));
+        let mut operands = SmallVec::with_capacity(meta.len.saturating_sub(1));
         for operand_idx in 1..meta.len {
             operands.push(unsafe { instrs[meta.start + operand_idx].operand });
         }

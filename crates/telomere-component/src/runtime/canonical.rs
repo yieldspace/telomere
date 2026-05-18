@@ -398,7 +398,6 @@ fn lower_string(
     let encoding = options
         .string_encoding
         .unwrap_or(CanonicalStringEncoding::Utf8);
-    let bytes = encode_string(string, encoding);
     let align = if matches!(
         encoding,
         CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16
@@ -407,8 +406,16 @@ fn lower_string(
     } else {
         1
     };
+    let utf16;
+    let bytes = match encoding {
+        CanonicalStringEncoding::Utf8 => string.as_bytes(),
+        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => {
+            utf16 = encode_string_utf16(string);
+            &utf16
+        }
+    };
     let ptr = call_realloc(realloc, store, 0, 0, align, bytes.len() as i32)? as u32;
-    write_memory(store, &memory, ptr, &bytes)?;
+    write_memory(store, &memory, ptr, bytes)?;
     let len = match encoding {
         CanonicalStringEncoding::Utf8 => bytes.len() as u32,
         CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => {
@@ -418,14 +425,11 @@ fn lower_string(
     Ok(vec![WasmValue::I32(ptr as i32), WasmValue::I32(len as i32)])
 }
 
-fn encode_string(value: &str, encoding: CanonicalStringEncoding) -> Vec<u8> {
-    match encoding {
-        CanonicalStringEncoding::Utf8 => value.as_bytes().to_vec(),
-        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => value
-            .encode_utf16()
-            .flat_map(|unit| unit.to_le_bytes())
-            .collect(),
-    }
+fn encode_string_utf16(value: &str) -> Vec<u8> {
+    value
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -861,16 +865,12 @@ fn read_primitive_from_memory(
         PrimValType::U32 => ComponentValue::U32(read_i32_from_memory(store, memory, ptr)? as u32),
         PrimValType::S64 => ComponentValue::S64(read_i64_from_memory(store, memory, ptr)?),
         PrimValType::U64 => ComponentValue::U64(read_i64_from_memory(store, memory, ptr)? as u64),
-        PrimValType::F32 => ComponentValue::F32(f32::from_le_bytes(
-            read_memory(store, memory, ptr, 4)?
-                .try_into()
-                .expect("f32 bytes"),
-        )),
-        PrimValType::F64 => ComponentValue::F64(f64::from_le_bytes(
-            read_memory(store, memory, ptr, 8)?
-                .try_into()
-                .expect("f64 bytes"),
-        )),
+        PrimValType::F32 => ComponentValue::F32(f32::from_le_bytes(read_memory_array::<4>(
+            store, memory, ptr,
+        )?)),
+        PrimValType::F64 => ComponentValue::F64(f64::from_le_bytes(read_memory_array::<8>(
+            store, memory, ptr,
+        )?)),
         PrimValType::Char => ComponentValue::Char(
             char::from_u32(read_i32_from_memory(store, memory, ptr)? as u32)
                 .ok_or_else(|| ComponentError::Trap("invalid char scalar".to_owned()))?,
@@ -1290,7 +1290,7 @@ fn read_u8_from_memory(
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<u8, ComponentError> {
-    Ok(read_memory(store, memory, ptr, 1)?[0])
+    Ok(read_memory_array::<1>(store, memory, ptr)?[0])
 }
 
 fn read_u16_from_memory(
@@ -1298,11 +1298,9 @@ fn read_u16_from_memory(
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<u16, ComponentError> {
-    Ok(u16::from_le_bytes(
-        read_memory(store, memory, ptr, 2)?
-            .try_into()
-            .expect("u16 bytes"),
-    ))
+    Ok(u16::from_le_bytes(read_memory_array::<2>(
+        store, memory, ptr,
+    )?))
 }
 
 fn read_i32_from_memory(
@@ -1310,11 +1308,9 @@ fn read_i32_from_memory(
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<i32, ComponentError> {
-    Ok(i32::from_le_bytes(
-        read_memory(store, memory, ptr, 4)?
-            .try_into()
-            .expect("i32 bytes"),
-    ))
+    Ok(i32::from_le_bytes(read_memory_array::<4>(
+        store, memory, ptr,
+    )?))
 }
 
 fn read_i64_from_memory(
@@ -1322,11 +1318,9 @@ fn read_i64_from_memory(
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<i64, ComponentError> {
-    Ok(i64::from_le_bytes(
-        read_memory(store, memory, ptr, 8)?
-            .try_into()
-            .expect("i64 bytes"),
-    ))
+    Ok(i64::from_le_bytes(read_memory_array::<8>(
+        store, memory, ptr,
+    )?))
 }
 
 fn align_to(value: u32, align: u32) -> u32 {
@@ -1859,6 +1853,16 @@ fn read_memory(
 ) -> Result<Vec<u8>, ComponentError> {
     let memory = memory_addr(store, memory)?;
     crate::support::common::read_memory(store, &memory, ptr, len)
+        .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))
+}
+
+fn read_memory_array<const N: usize>(
+    store: &Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<[u8; N], ComponentError> {
+    let memory = memory_addr(store, memory)?;
+    crate::support::common::read_memory_array::<N>(store, &memory, ptr)
         .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))
 }
 

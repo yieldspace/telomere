@@ -137,6 +137,48 @@ pub mod common {
             })
     }
 
+    pub fn read_memory_array<const N: usize>(
+        store: &crate::common::Store,
+        memory: &CoreMemoryHandle,
+        ptr: u32,
+    ) -> Option<[u8; N]> {
+        let len = u32::try_from(N).ok()?;
+        let end = ptr.checked_add(len)? as usize;
+        let mut out = [0u8; N];
+        store
+            .with_active_runtime(|gc| match *memory {
+                crate::common::MemoryHandle::Local(id) => {
+                    let bytes = gc.local_memory(id).memory().get(ptr as usize..end)?;
+                    out.copy_from_slice(bytes);
+                    Some(out)
+                }
+                crate::common::MemoryHandle::Shared(id) => {
+                    gc.shared_memory(id).with_memory(|memory| {
+                        let bytes = memory.get(ptr as usize..end)?;
+                        out.copy_from_slice(bytes);
+                        Some(out)
+                    })
+                }
+            })
+            .unwrap_or_else(|| {
+                let gc = store.lock_gc();
+                match *memory {
+                    crate::common::MemoryHandle::Local(id) => {
+                        let bytes = gc.local_memory(id).memory().get(ptr as usize..end)?;
+                        out.copy_from_slice(bytes);
+                        Some(out)
+                    }
+                    crate::common::MemoryHandle::Shared(id) => {
+                        gc.shared_memory(id).with_memory(|memory| {
+                            let bytes = memory.get(ptr as usize..end)?;
+                            out.copy_from_slice(bytes);
+                            Some(out)
+                        })
+                    }
+                }
+            })
+    }
+
     pub fn write_memory(
         store: &crate::common::Store,
         memory: &CoreMemoryHandle,

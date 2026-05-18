@@ -95,7 +95,9 @@ impl<T, R> ValueStore<T, R> {
     where
         R: Clone,
     {
-        self.map.clone()
+        let mut map = self.map.clone();
+        map.shrink_to_fit();
+        map
     }
 }
 

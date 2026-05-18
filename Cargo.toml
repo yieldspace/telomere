@@ -10,6 +10,7 @@ publish.workspace = true
 [features]
 default = ["full"]
 full = ["telomere/full"]
+jit = ["telomere/jit"]
 vm-profile = ["telomere/vm-profile"]
 vm-diagnostics = ["telomere/vm-diagnostics"]
 
@@ -29,6 +30,7 @@ wat = "1.243.0"
 resolver = "2"
 members = [
     "crates/telomere",
+    "crates/telomere-jit-codegen",
     "crates/telomere-component",
     "crates/telomere-component-bindgen",
     "crates/telomere-component-wasi",
@@ -47,6 +49,7 @@ keywords = ["webassembly", "runtime"]
 
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }
+telomere-jit-codegen = { path = "crates/telomere-jit-codegen" }
 telomere-component = { path = "crates/telomere-component" }
 telomere-component-bindgen = { path = "crates/telomere-component-bindgen" }
 union-find = {path = "crates/union-find"}
@@ -54,6 +57,8 @@ telomere-macros = { path = "crates/telomere-macros" }
 tokio = { version = "1.0", features = ["full"] }
 getrandom = "0.3.3"
 libc = "0.2.175"
+mmap-rs = "0.7.0"
+smallvec = "1.14.0"
 
 regex = "1.11.1"
 

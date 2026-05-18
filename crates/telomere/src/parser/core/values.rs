@@ -43,7 +43,7 @@ where
     let (len_len, len) = parse_u32(r)?;
     trace!("parse_vec: {len_len} {len}");
     read_bytes += len_len;
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(len as usize);
     for _i in 0..len {
         let (len, v) = f(env)?;
         result.push(v);

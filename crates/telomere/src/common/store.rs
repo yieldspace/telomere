@@ -6,7 +6,11 @@ use super::{
     AsyncHostFunction, CallFrameCache, Data, Elem, ExportSection, FuncType, GlobalType,
     HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
 };
+#[cfg(feature = "jit")]
+use crate::runtime::jit::{CompiledFunction, StoreJitCache};
 use parking_lot::{Mutex, MutexGuard};
+#[cfg(feature = "jit")]
+use std::sync::atomic::AtomicBool;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -133,6 +137,7 @@ pub(crate) enum FunctionBody {
     Wasm {
         locals: LocalsData,
         code: Arc<[Instr]>,
+        op_lens: Arc<[u16]>,
         lowered: Arc<crate::common::LoweredFunction>,
     },
     Host(HostFunction),
@@ -151,6 +156,7 @@ pub(crate) struct CallRecipe {
     pub(crate) frame: CallFrameCache,
     pub(crate) param_size: u32,
     pub(crate) local_size: u32,
+    pub(crate) return_size: u32,
     pub(crate) return_arity: u32,
     pub(crate) target: CallDispatchTarget,
 }
@@ -239,34 +245,80 @@ impl FunctionInstanceData {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitConfig {
+    /// Enables the core JIT only when Telomere is compiled with the `jit`
+    /// Cargo feature and the current target is supported.
+    pub enabled: bool,
+    pub code_cache_max_bytes: u32,
+}
+
+impl Default for JitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            code_cache_max_bytes: 4 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuntimeConfig {
+    pub jit: JitConfig,
+}
+
+#[repr(C, align(4))]
 #[derive(Debug, Clone)]
-pub(crate) enum GlobalValue {
-    Bytes4([u8; 4]),
-    Bytes8([u8; 8]),
-    Bytes16([u8; 16]),
-    Ref(u32),
+pub(crate) struct GlobalValue {
+    bytes: [u8; 16],
+    len: u8,
 }
 
 impl GlobalValue {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        match self {
-            Self::Bytes4(bytes) => bytes,
-            Self::Bytes8(bytes) => bytes,
-            Self::Bytes16(bytes) => bytes,
-            Self::Ref(raw) => unsafe {
-                std::slice::from_raw_parts(raw as *const u32 as *const u8, 4)
-            },
+    fn from_bytes(bytes: &[u8]) -> Self {
+        debug_assert!(bytes.len() <= 16);
+        let mut data = [0u8; 16];
+        data[..bytes.len()].copy_from_slice(bytes);
+        Self {
+            bytes: data,
+            len: bytes.len() as u8,
         }
     }
 
+    fn bytes4(bytes: [u8; 4]) -> Self {
+        Self::from_bytes(&bytes)
+    }
+
+    fn bytes8(bytes: [u8; 8]) -> Self {
+        Self::from_bytes(&bytes)
+    }
+
+    fn bytes16(bytes: [u8; 16]) -> Self {
+        Self::from_bytes(&bytes)
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+
     pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
-        match self {
-            Self::Bytes4(bytes) => bytes,
-            Self::Bytes8(bytes) => bytes,
-            Self::Bytes16(bytes) => bytes,
-            Self::Ref(raw) => unsafe {
-                std::slice::from_raw_parts_mut(raw as *mut u32 as *mut u8, 4)
-            },
+        &mut self.bytes[..self.len as usize]
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[cfg(feature = "jit")]
+pub(crate) struct GlobalValueJitLayout {
+    pub(crate) bytes: usize,
+    pub(crate) size: usize,
+}
+
+#[cfg(feature = "jit")]
+impl GlobalValueJitLayout {
+    pub(crate) fn get() -> Self {
+        Self {
+            bytes: std::mem::offset_of!(GlobalValue, bytes),
+            size: std::mem::size_of::<GlobalValue>(),
         }
     }
 }
@@ -328,6 +380,10 @@ pub struct StoreInner {
     instances: Vec<InstanceData>,
     funcs: Vec<FunctionInstanceData>,
     call_recipes: Vec<Option<CallRecipe>>,
+    #[cfg(feature = "jit")]
+    jit_rejected_funcs: Vec<AtomicBool>,
+    #[cfg(feature = "jit")]
+    jit_compiled_funcs: Vec<RefCell<Weak<CompiledFunction>>>,
     tables: Vec<super::TableInstance>,
     globals: Vec<GlobalValue>,
     local_memories: Vec<LocalMemoryObject>,
@@ -570,6 +626,10 @@ impl StoreInner {
         let id = FuncId::from_index(self.funcs.len());
         self.funcs.push(func);
         self.call_recipes.push(None);
+        #[cfg(feature = "jit")]
+        self.jit_rejected_funcs.push(AtomicBool::new(false));
+        #[cfg(feature = "jit")]
+        self.jit_compiled_funcs.push(RefCell::new(Weak::new()));
         id
     }
 
@@ -609,6 +669,37 @@ impl StoreInner {
             .expect("call recipe slot exceeds u32::MAX")
     }
 
+    #[cfg(feature = "jit")]
+    pub(crate) fn jit_rejected_func(&self, addr: ObjectRef) -> bool {
+        self.jit_rejected_funcs[self.call_recipe_slot_for_func_addr(addr)].load(Ordering::Relaxed)
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn mark_jit_rejected_func(&self, addr: ObjectRef) {
+        let slot = self.call_recipe_slot_for_func_addr(addr);
+        self.jit_rejected_funcs[slot].store(true, Ordering::Relaxed);
+        *self.jit_compiled_funcs[slot].borrow_mut() = Weak::new();
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn jit_cached_compiled_func(
+        &self,
+        addr: ObjectRef,
+    ) -> Option<Arc<CompiledFunction>> {
+        let slot = self.call_recipe_slot_for_func_addr(addr);
+        self.jit_compiled_funcs[slot].borrow().upgrade()
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn set_jit_cached_compiled_func(
+        &self,
+        addr: ObjectRef,
+        compiled: &Arc<CompiledFunction>,
+    ) {
+        let slot = self.call_recipe_slot_for_func_addr(addr);
+        *self.jit_compiled_funcs[slot].borrow_mut() = Arc::downgrade(compiled);
+    }
+
     pub(crate) fn call_recipe(&self, slot: u32) -> Option<CallRecipe> {
         self.call_recipes.get(slot as usize).copied().flatten()
     }
@@ -643,6 +734,7 @@ impl StoreInner {
         let typeidx = module.functions[funcinst.funcidx as usize];
         let functype = &module.function_types[typeidx.0 as usize];
         let param_size = functype.0.iter().map(|ty| ty.stack_size().u32()).sum();
+        let return_size = functype.1.iter().map(|ty| ty.stack_size().u32()).sum();
         let return_arity = u32::try_from(functype.1 .0.len()).expect("return arity exceeds u32");
         CallRecipe {
             frame: CallFrameCache::from_cached_parts(
@@ -653,6 +745,7 @@ impl StoreInner {
             ),
             param_size,
             local_size,
+            return_size,
             return_arity,
             target,
         }
@@ -703,23 +796,31 @@ impl StoreInner {
         &self.globals[id.index()]
     }
 
+    pub(crate) fn jit_global_values_ptr(&mut self) -> *mut GlobalValue {
+        self.globals.as_mut_ptr()
+    }
+
+    pub(crate) fn jit_instance_global_addrs_ptr(&self, instance: InstanceId) -> *const ObjectRef {
+        self.instances[instance.index()].globals.as_ptr()
+    }
+
     pub(crate) fn new_global_ref(&mut self, global_ref: ObjectRef) -> ObjectRef {
-        let id = self.alloc_global(GlobalValue::Ref(global_ref.get()));
+        let id = self.alloc_global(GlobalValue::bytes4(global_ref.get().to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
     pub(crate) fn new_global_data4(&mut self, data: u32) -> ObjectRef {
-        let id = self.alloc_global(GlobalValue::Bytes4(data.to_le_bytes()));
+        let id = self.alloc_global(GlobalValue::bytes4(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
     pub(crate) fn new_global_data8(&mut self, data: u64) -> ObjectRef {
-        let id = self.alloc_global(GlobalValue::Bytes8(data.to_le_bytes()));
+        let id = self.alloc_global(GlobalValue::bytes8(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
     pub(crate) fn new_global_data16(&mut self, data: u128) -> ObjectRef {
-        let id = self.alloc_global(GlobalValue::Bytes16(data.to_le_bytes()));
+        let id = self.alloc_global(GlobalValue::bytes16(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
@@ -995,45 +1096,83 @@ impl StoreInner {
         self.shared_memory(id).fill(ptr, len, data)
     }
 
-    #[inline(never)]
-    fn local_read_bytes_to_vec(
-        &self,
-        id: LocalMemoryId,
-        offset: u32,
-        len: u32,
-    ) -> VMResult<Vec<u8>> {
+    fn checked_memory_range(offset: u32, len: u32) -> VMResult<(usize, usize)> {
         let start = offset as usize;
         let end = vm_try!(VMResult::from_option(
             start.checked_add(len as usize),
             || { VMResult::MemoryIndexOutOfRange }
         ));
+        VMResult::Success((start, end))
+    }
+
+    #[inline(never)]
+    fn check_local_memory_range(&self, id: LocalMemoryId, offset: u32, len: u32) -> VMResult<()> {
+        let (start, end) = vm_try!(Self::checked_memory_range(offset, len));
+        vm_try!(VMResult::from_option(
+            self.local_memory(id).memory().get(start..end),
+            || VMResult::MemoryIndexOutOfRange
+        ));
+        VMResult::Success(())
+    }
+
+    #[inline(never)]
+    fn check_shared_memory_range(&self, id: SharedMemoryId, offset: u32, len: u32) -> VMResult<()> {
+        let (start, end) = vm_try!(Self::checked_memory_range(offset, len));
+        self.shared_memory(id).with_memory(|memory| {
+            vm_try!(VMResult::from_option(memory.get(start..end), || {
+                VMResult::MemoryIndexOutOfRange
+            }));
+            VMResult::Success(())
+        })
+    }
+
+    #[inline(never)]
+    fn local_read_bytes_into(
+        &self,
+        id: LocalMemoryId,
+        offset: u32,
+        out: &mut [u8],
+    ) -> VMResult<()> {
+        let (start, end) = vm_try!(Self::checked_memory_range(offset, out.len() as u32));
         let bytes = vm_try!(VMResult::from_option(
             self.local_memory(id).memory().get(start..end),
             || VMResult::MemoryIndexOutOfRange
         ));
-        VMResult::Success(bytes.to_vec())
+        super::memory::trusted_copy_from_slice(out, bytes);
+        VMResult::Success(())
     }
 
     #[inline(never)]
-    fn shared_read_bytes_to_vec(
+    fn shared_read_bytes_into(
         &self,
         id: SharedMemoryId,
         offset: u32,
-        len: u32,
-    ) -> VMResult<Vec<u8>> {
-        let start = offset as usize;
-        let end = vm_try!(VMResult::from_option(
-            start.checked_add(len as usize),
-            || { VMResult::MemoryIndexOutOfRange }
-        ));
+        out: &mut [u8],
+    ) -> VMResult<()> {
+        let (start, end) = vm_try!(Self::checked_memory_range(offset, out.len() as u32));
         self.shared_memory(id).with_memory(|memory| {
-            VMResult::Success(
-                vm_try!(VMResult::from_option(memory.get(start..end), || {
-                    VMResult::MemoryIndexOutOfRange
-                }))
-                .to_vec(),
-            )
+            let bytes = vm_try!(VMResult::from_option(memory.get(start..end), || {
+                VMResult::MemoryIndexOutOfRange
+            }));
+            super::memory::trusted_copy_from_slice(out, bytes);
+            VMResult::Success(())
         })
+    }
+
+    fn copy_chunk_size(remaining: usize) -> usize {
+        const CHUNK_SIZE: usize = 4096;
+        remaining.min(CHUNK_SIZE)
+    }
+
+    fn copy_chunk_buffer() -> [u8; 4096] {
+        [0; 4096]
+    }
+
+    fn copy_cursor_u32(offset: usize) -> VMResult<u32> {
+        match u32::try_from(offset) {
+            Ok(offset) => VMResult::Success(offset),
+            Err(_) => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(never)]
@@ -1048,8 +1187,26 @@ impl StoreInner {
         if dst == src {
             return self.local_copy_memory(dst, dst_offset, src_offset, len);
         }
-        let bytes = vm_try!(self.local_read_bytes_to_vec(src, src_offset, len));
-        self.local_write_bytes(dst, dst_offset as usize, &bytes)
+        vm_try!(self.check_local_memory_range(src, src_offset, len));
+        vm_try!(self.check_local_memory_range(dst, dst_offset, len));
+        let mut src_cursor = src_offset as usize;
+        let mut dst_cursor = dst_offset as usize;
+        let mut remaining = len as usize;
+        let mut chunk = Self::copy_chunk_buffer();
+        while remaining != 0 {
+            let size = Self::copy_chunk_size(remaining);
+            let slice = &mut chunk[..size];
+            vm_try!(self.local_read_bytes_into(
+                src,
+                vm_try!(Self::copy_cursor_u32(src_cursor)),
+                slice
+            ));
+            vm_try!(self.local_write_bytes(dst, dst_cursor, slice));
+            src_cursor += size;
+            dst_cursor += size;
+            remaining -= size;
+        }
+        VMResult::Success(())
     }
 
     #[inline(never)]
@@ -1061,8 +1218,26 @@ impl StoreInner {
         src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
-        let bytes = vm_try!(self.local_read_bytes_to_vec(src, src_offset, len));
-        self.shared_write_bytes(dst, dst_offset as usize, &bytes)
+        vm_try!(self.check_local_memory_range(src, src_offset, len));
+        vm_try!(self.check_shared_memory_range(dst, dst_offset, len));
+        let mut src_cursor = src_offset as usize;
+        let mut dst_cursor = dst_offset as usize;
+        let mut remaining = len as usize;
+        let mut chunk = Self::copy_chunk_buffer();
+        while remaining != 0 {
+            let size = Self::copy_chunk_size(remaining);
+            let slice = &mut chunk[..size];
+            vm_try!(self.local_read_bytes_into(
+                src,
+                vm_try!(Self::copy_cursor_u32(src_cursor)),
+                slice
+            ));
+            vm_try!(self.shared_write_bytes(dst, dst_cursor, slice));
+            src_cursor += size;
+            dst_cursor += size;
+            remaining -= size;
+        }
+        VMResult::Success(())
     }
 
     #[inline(never)]
@@ -1074,8 +1249,26 @@ impl StoreInner {
         src_offset: u32,
         len: u32,
     ) -> VMResult<()> {
-        let bytes = vm_try!(self.shared_read_bytes_to_vec(src, src_offset, len));
-        self.local_write_bytes(dst, dst_offset as usize, &bytes)
+        vm_try!(self.check_shared_memory_range(src, src_offset, len));
+        vm_try!(self.check_local_memory_range(dst, dst_offset, len));
+        let mut src_cursor = src_offset as usize;
+        let mut dst_cursor = dst_offset as usize;
+        let mut remaining = len as usize;
+        let mut chunk = Self::copy_chunk_buffer();
+        while remaining != 0 {
+            let size = Self::copy_chunk_size(remaining);
+            let slice = &mut chunk[..size];
+            vm_try!(self.shared_read_bytes_into(
+                src,
+                vm_try!(Self::copy_cursor_u32(src_cursor)),
+                slice
+            ));
+            vm_try!(self.local_write_bytes(dst, dst_cursor, slice));
+            src_cursor += size;
+            dst_cursor += size;
+            remaining -= size;
+        }
+        VMResult::Success(())
     }
 
     #[inline(never)]
@@ -1090,8 +1283,26 @@ impl StoreInner {
         if dst == src {
             return self.shared_copy_memory(dst, dst_offset, src_offset, len);
         }
-        let bytes = vm_try!(self.shared_read_bytes_to_vec(src, src_offset, len));
-        self.shared_write_bytes(dst, dst_offset as usize, &bytes)
+        vm_try!(self.check_shared_memory_range(src, src_offset, len));
+        vm_try!(self.check_shared_memory_range(dst, dst_offset, len));
+        let mut src_cursor = src_offset as usize;
+        let mut dst_cursor = dst_offset as usize;
+        let mut remaining = len as usize;
+        let mut chunk = Self::copy_chunk_buffer();
+        while remaining != 0 {
+            let size = Self::copy_chunk_size(remaining);
+            let slice = &mut chunk[..size];
+            vm_try!(self.shared_read_bytes_into(
+                src,
+                vm_try!(Self::copy_cursor_u32(src_cursor)),
+                slice
+            ));
+            vm_try!(self.shared_write_bytes(dst, dst_cursor, slice));
+            src_cursor += size;
+            dst_cursor += size;
+            remaining -= size;
+        }
+        VMResult::Success(())
     }
 
     #[inline(always)]
@@ -1597,6 +1808,9 @@ pub struct Store {
     identity: Arc<()>,
     segments: Mutex<StoreSegments>,
     next_instance_id: AtomicU32,
+    runtime_config: RuntimeConfig,
+    #[cfg(feature = "jit")]
+    jit_cache: StoreJitCache,
     pub state: StoreState,
 }
 
@@ -1612,13 +1826,41 @@ impl Store {
     }
 
     pub fn new_with_state(state: StoreState) -> Self {
+        Self::new_with_state_and_runtime_config(state, RuntimeConfig::default())
+    }
+
+    pub fn new_with_runtime_config(runtime_config: RuntimeConfig) -> Self {
+        Self::new_with_state_and_runtime_config(StoreState::default(), runtime_config)
+    }
+
+    pub fn new_with_state_and_runtime_config(
+        state: StoreState,
+        runtime_config: RuntimeConfig,
+    ) -> Self {
         Self {
             runtime: Arc::new(Mutex::new(StoreInner::new())),
             identity: Arc::new(()),
             segments: Mutex::new(StoreSegments::default()),
             next_instance_id: AtomicU32::new(1),
+            runtime_config,
+            #[cfg(feature = "jit")]
+            jit_cache: StoreJitCache::default(),
             state,
         }
+    }
+
+    pub fn runtime_config(&self) -> RuntimeConfig {
+        self.runtime_config
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn jit_cache_stats(&self) -> crate::runtime::jit::JitCacheStats {
+        self.jit_cache.stats()
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn jit_cache(&self) -> &StoreJitCache {
+        &self.jit_cache
     }
 
     pub(crate) fn lock_runtime_unchecked(&self) -> StoreRuntimeGuard<'_> {

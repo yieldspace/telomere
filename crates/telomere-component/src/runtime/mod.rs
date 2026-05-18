@@ -74,6 +74,11 @@ struct RuntimeEnv {
     parent: Option<Rc<RuntimeEnv>>,
     imports: HashMap<String, RuntimeImport>,
     shared: Rc<SharedState>,
+    caches: Rc<RuntimeCaches>,
+}
+
+#[derive(Default)]
+struct RuntimeCaches {
     components: RefCell<HashMap<GlobalIdx<Component>, RuntimeComponentDef>>,
     instances: RefCell<HashMap<GlobalIdx<Instance>, Rc<RuntimeComponentInstance>>>,
     funcs: RefCell<HashMap<GlobalIdx<Func>, Rc<ResolvedCallable>>>,

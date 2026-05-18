@@ -13,6 +13,12 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    #[arg(long = "jit", default_value_t = false)]
+    pub jit: bool,
+
+    #[arg(long = "jit-code-cache-mib", default_value_t = 4)]
+    pub jit_code_cache_mib: u32,
+
     pub name: Option<PathBuf>,
 
     #[arg(value_name = "ARG")]
@@ -46,6 +52,8 @@ pub struct CoreCommand {
     pub name: PathBuf,
     pub tail_args: Vec<String>,
     pub args_after_separator: bool,
+    pub jit: bool,
+    pub jit_code_cache_mib: u32,
 }
 
 impl Cli {
@@ -59,6 +67,8 @@ impl Cli {
             name,
             tail_args: self.args.clone(),
             args_after_separator: has_separator(raw_args),
+            jit: self.jit,
+            jit_code_cache_mib: self.jit_code_cache_mib,
         })
     }
 }
@@ -86,6 +96,7 @@ mod tests {
             .expect("legacy core command should build");
 
         assert!(cli.command.is_none());
+        assert!(!cli.jit);
         assert_eq!(cli.name, Some(PathBuf::from("examples/add.wasm")));
         assert_eq!(
             core,
@@ -93,8 +104,46 @@ mod tests {
                 name: PathBuf::from("examples/add.wasm"),
                 tail_args: vec!["main".to_owned(), "1".to_owned(), "2".to_owned()],
                 args_after_separator: false,
+                jit: false,
+                jit_code_cache_mib: 4,
             }
         );
+    }
+
+    #[test]
+    fn parses_core_jit_flag() {
+        let raw = vec![
+            OsString::from("telomere-cli"),
+            OsString::from("--jit"),
+            OsString::from("examples/add.wasm"),
+            OsString::from("main"),
+            OsString::from("1"),
+            OsString::from("2"),
+        ];
+        let cli = Cli::try_parse_from(raw.clone()).expect("jit flag should parse");
+        let core = cli.core_command(&raw).expect("core command should build");
+
+        assert!(cli.jit);
+        assert!(core.jit);
+        assert_eq!(core.jit_code_cache_mib, 4);
+        assert_eq!(core.name, PathBuf::from("examples/add.wasm"));
+    }
+
+    #[test]
+    fn parses_core_jit_code_cache_limit() {
+        let raw = vec![
+            OsString::from("telomere-cli"),
+            OsString::from("--jit"),
+            OsString::from("--jit-code-cache-mib"),
+            OsString::from("8"),
+            OsString::from("examples/add.wasm"),
+            OsString::from("main"),
+        ];
+        let cli = Cli::try_parse_from(raw.clone()).expect("jit cache flag should parse");
+        let core = cli.core_command(&raw).expect("core command should build");
+
+        assert!(core.jit);
+        assert_eq!(core.jit_code_cache_mib, 8);
     }
 
     #[test]
@@ -115,6 +164,8 @@ mod tests {
                 name: PathBuf::from("guest.wasm"),
                 tail_args: vec!["one".to_owned(), "-flag".to_owned()],
                 args_after_separator: true,
+                jit: false,
+                jit_code_cache_mib: 4,
             }
         );
     }

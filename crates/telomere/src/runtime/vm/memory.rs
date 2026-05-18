@@ -87,7 +87,12 @@ unsafe fn read_u8_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u8> {
 }
 
 #[inline(always)]
-unsafe fn read_u32_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u32> {
+/// Telomere internal helper that reads a little-endian `u32` from the active default local memory.
+///
+/// # Safety
+/// - `ctx` must reference the active validated frame and its default local memory.
+/// - Callers must not retain memory aliases across this access.
+pub(crate) unsafe fn read_u32_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u32> {
     let start = addr as usize;
     let Some(end) = start.checked_add(4) else {
         return VMResult::MemoryIndexOutOfRange;
@@ -102,7 +107,12 @@ unsafe fn read_u32_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u32> 
 }
 
 #[inline(always)]
-unsafe fn read_u16_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u16> {
+/// Telomere internal helper that reads a little-endian `u16` from the active default local memory.
+///
+/// # Safety
+/// - `ctx` must reference the active validated frame and its default local memory.
+/// - Callers must not retain memory aliases across this access.
+pub(crate) unsafe fn read_u16_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u16> {
     let start = addr as usize;
     let Some(end) = start.checked_add(2) else {
         return VMResult::MemoryIndexOutOfRange;
@@ -124,7 +134,16 @@ unsafe fn read_i16_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<i32> 
 }
 
 #[inline(always)]
-unsafe fn write_u32_linear(ctx: &mut ExecuteContext, addr: u32, value: u32) -> VMResult<()> {
+/// Telomere internal helper that writes a little-endian `u32` to the active default local memory.
+///
+/// # Safety
+/// - `ctx` must reference the active validated frame and its default local memory.
+/// - Callers must not retain memory aliases across this access.
+pub(crate) unsafe fn write_u32_linear(
+    ctx: &mut ExecuteContext,
+    addr: u32,
+    value: u32,
+) -> VMResult<()> {
     let start = addr as usize;
     let Some(end) = start.checked_add(4) else {
         return VMResult::MemoryIndexOutOfRange;
@@ -144,7 +163,16 @@ unsafe fn write_u32_linear(ctx: &mut ExecuteContext, addr: u32, value: u32) -> V
 }
 
 #[inline(always)]
-unsafe fn write_u16_linear(ctx: &mut ExecuteContext, addr: u32, value: u16) -> VMResult<()> {
+/// Telomere internal helper that writes a little-endian `u16` to the active default local memory.
+///
+/// # Safety
+/// - `ctx` must reference the active validated frame and its default local memory.
+/// - Callers must not retain memory aliases across this access.
+pub(crate) unsafe fn write_u16_linear(
+    ctx: &mut ExecuteContext,
+    addr: u32,
+    value: u16,
+) -> VMResult<()> {
     let start = addr as usize;
     let Some(end) = start.checked_add(2) else {
         return VMResult::MemoryIndexOutOfRange;
@@ -1893,7 +1921,12 @@ fn coremark_crc32_update(value: u32, crc: u32) -> u32 {
 }
 
 #[inline(always)]
-unsafe fn core_state_benchmark_crc(
+/// Telomere internal helper that runs the verified CoreMark state benchmark CRC summary over guest memory.
+///
+/// # Safety
+/// - `ctx` must reference the active validated frame and default local memory.
+/// - The caller must pass operands from a shape verified by the optimizer or JIT decoder.
+pub(crate) unsafe fn core_state_benchmark_crc(
     ctx: &mut ExecuteContext,
     data: u32,
     size: u32,
@@ -2211,7 +2244,7 @@ unsafe fn core_matrix_i16_crc_summary(
 }
 
 #[inline(always)]
-fn crc16_masked(value: u32, crc: u32) -> u32 {
+pub(crate) fn crc16_masked(value: u32, crc: u32) -> u32 {
     super::numeric::crc16_update16_bits(value & 0xffff, crc)
 }
 
@@ -7308,12 +7341,21 @@ mod tests {
             local_top: 0,
             local_size: 0,
         };
+        let stack_memory_ptr = stack.jit_memory_ptr();
+        let stack_memory_len = stack.jit_memory_len();
+        let stack_top_ptr = stack.jit_top_ptr();
         let local_base_ptr = unsafe { stack.local_area_mut_ptr(&local_reference) };
+        let global_values_ptr = gc.jit_global_values_ptr();
         ExecuteContext {
             stack,
+            stack_memory_ptr,
+            stack_memory_len,
+            stack_top_ptr,
             local_reference,
             local_base_ptr,
             default_local_memory_ptr: gc.local_memory_mut(memory_id).memory_mut() as *mut Memory,
+            current_instance_globals_ptr: std::ptr::null(),
+            global_values_ptr,
             current_frame: frame(CachedMemoryKind::Local, memory_id.raw()),
             store,
             gc,

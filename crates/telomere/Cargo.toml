@@ -20,6 +20,8 @@ futures = "0.3.31"
 tokio.workspace = true
 parking_lot = "0.12.5"
 libc.workspace = true
+smallvec.workspace = true
+telomere-jit-codegen = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures = "0.3.31"
@@ -48,6 +50,7 @@ simd = ["wide"]
 threads = []
 vm-profile = []
 vm-diagnostics = []
+jit = ["dep:telomere-jit-codegen"]
 full = [
     "simd",
     "threads",

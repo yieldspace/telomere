@@ -134,14 +134,10 @@ flowchart TD
     C --> F["parent env"]
     C --> G["imports"]
     C --> H["shared resource state"]
-    C --> I["components cache"]
-    C --> J["instances cache"]
-    C --> K["funcs cache"]
-    C --> L["core_modules cache"]
-    C --> M["core_instances cache"]
-    C --> N["core_funcs cache"]
-    C --> O["core_memories cache"]
-    C --> P["core_tables cache"]
+    C --> I["shared runtime caches"]
+    I --> J["components / instances / funcs"]
+    I --> K["core modules / instances / funcs"]
+    I --> L["core memories / tables"]
 ```
 
 `call(name, args)` の中では export 名を 1 回だけ引き、以降は relation 解決に落ちる。
@@ -347,9 +343,17 @@ relation 駆動の実利は、仕様上きれいだからではなく、軽量 r
 
 ### 8.3 実装上のトレードオフ
 
-現在の relation store と runtime cache は `HashMap<GlobalIdx<T>, ...>` を使っている。これは decode 時に index 空間を安全に固定しやすく、alias や nested component を実装するうえで単純だからである。
+現在の relation store は `HashMap<GlobalIdx<T>, ...>` を使っている。これは decode 時に index 空間を安全に固定しやすく、alias や nested component を実装するうえで単純だからである。
+
+runtime cache は kind ごとの `HashMap<GlobalIdx<T>, ...>` を `RuntimeCaches` にまとめ、`RuntimeEnv::clone_shallow` では `Rc` 共有する。nested component / import lookup のために environment は shallow clone されるが、cache 本体は clone しない。
+
+`ComponentProgram.bytes` は runtime の解決経路では使わない。ただし public API と debugging 用の参照互換性を維持するため、現時点では削除や feature gate にはしていない。
+
+compile snapshot の `HashMap` / `Vec` は `ComponentProgram` に固定する直前に capacity を縮める。これは relation graph の意味論を変えず、decode / validate 中の成長余地だけを落とすためである。
 
 一方で、将来さらにメモリ密度を上げるなら、`GlobalIdx` の採番規則を固定したうえで dense table へ圧縮する余地がある。現状ドキュメントの対象はそこではなく、いま実装されている relation 駆動の実行モデルである。
+
+canonical ABI では fixed-width scalar memory read を `[u8; N]` に直接読み、UTF-8 string lowering は `&str::as_bytes()` をそのまま core memory に書く。public `ComponentValue` は互換性のため `String` / `Vec` ベースの enum を維持し、内部 helper 側だけで一時 allocation を減らす。
 
 ## 9. 現在の境界
 

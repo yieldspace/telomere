@@ -101,12 +101,45 @@ async fn init_spectest(store: &Store, registry: &Registry) -> InstanceHandle {
 }
 #[allow(dead_code)]
 pub async fn run_wast(text: &str) {
-    let store = Store::new();
+    let store = wast_store();
     let mut registry = Registry::new();
     let st = init_spectest(&store, &registry).await;
     registry.register("spectest", st.clone());
     run_wast_with(text, &store, &mut registry).await;
+    assert_wast_jit_acceptance(&store);
 }
+
+fn wast_store() -> Store {
+    #[cfg(feature = "jit")]
+    if std::env::var_os("TELOMERE_WAST_JIT").is_some() && telomere::jit_supported() {
+        let code_cache_max_bytes = std::env::var("TELOMERE_WAST_JIT_CACHE_MAX_BYTES")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(64 * 1024 * 1024);
+        return Store::new_with_runtime_config(telomere::RuntimeConfig {
+            jit: telomere::JitConfig {
+                enabled: true,
+                code_cache_max_bytes,
+            },
+        });
+    }
+    Store::new()
+}
+
+fn assert_wast_jit_acceptance(store: &Store) {
+    let _ = store;
+    #[cfg(feature = "jit")]
+    if std::env::var_os("TELOMERE_WAST_JIT_REQUIRE_ACCEPT").is_some()
+        && store.runtime_config().jit.enabled
+    {
+        let stats = store.jit_cache_stats();
+        assert_eq!(
+            stats.rejected_functions, 0,
+            "wast fixture produced JIT compile rejection: {stats:?}"
+        );
+    }
+}
+
 pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();

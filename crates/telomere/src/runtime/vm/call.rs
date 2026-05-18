@@ -5,6 +5,26 @@ fn ensure_call_recipe(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDisp
     ctx.gc.ensure_call_recipe_for_func(funcaddr)
 }
 
+#[cfg(feature = "jit")]
+fn jit_exit_from_call_outcome(
+    result: VMResult<CallOutcome>,
+    continuation: *const Instr,
+    recipe: CallDispatchCache,
+    is_return_call: bool,
+) -> crate::runtime::jit::JitNativeExit {
+    match result {
+        VMResult::Success(CallOutcome::Immediate(ptr)) => {
+            if !is_return_call && ptr == continuation {
+                crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+            } else {
+                crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
+            }
+        }
+        VMResult::Success(CallOutcome::Pending) => crate::runtime::jit::JitNativeExit::pending(),
+        other => crate::runtime::jit::JitNativeExit::trap(other),
+    }
+}
+
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
@@ -108,6 +128,269 @@ unsafe fn internal_op_call(
     }
 }
 
+#[cfg(feature = "jit")]
+/// Telomere runtime helper for JIT direct `call` / `return_call` sites.
+///
+/// Stack effect: internal runtime call dispatch.
+/// Traps: returns a JIT trap exit for the same trap cases as `op_call` and `op_return_call`.
+/// Notes: This is the JIT-facing wrapper around the existing direct-threaded call helper, so the
+/// tail-call frame replacement contract remains owned by `internal_op_call`.
+///
+/// # Safety
+/// - `tail_code` must point to the call recipe operand in the active decoded instruction stream.
+/// - `ctx` must reference a live execution context whose stack and current frame match that stream.
+/// - The caller must return to the JIT/interpreter continuation indicated by the returned exit.
+pub(crate) unsafe fn jit_call_direct(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> crate::runtime::jit::JitNativeExit {
+    if ctx.effect.get_pending_count() != 0 {
+        return crate::runtime::jit::JitNativeExit::pending();
+    }
+    let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };
+    if let CallDispatchTarget::Wasm { local_size } = recipe.target {
+        return match unsafe {
+            prepare_jit_wasm_call(
+                tail_code.offset(1),
+                recipe,
+                local_size as usize,
+                ctx,
+                is_return_call,
+            )
+        } {
+            VMResult::Success(()) => unsafe {
+                finish_jit_wasm_call(tail_code.offset(1), recipe, ctx, is_return_call)
+            },
+            other => crate::runtime::jit::JitNativeExit::trap(other),
+        };
+    }
+    jit_exit_from_call_outcome(
+        unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) },
+        unsafe { tail_code.offset(1) },
+        recipe,
+        is_return_call,
+    )
+}
+
+#[cfg(feature = "jit")]
+/// Telomere runtime helper for fast JIT direct calls whose callee is known to be a Wasm function.
+///
+/// Stack effect: prepares the WebAssembly `call` callee frame and returns a JIT continuation exit.
+/// Traps: returns a JIT trap exit for the same frame preparation failures as the generic direct
+/// call helper.
+///
+/// # Safety
+/// - `continuation` must point to the instruction immediately after the active callsite.
+/// - `ctx` must still describe the caller frame when this helper is entered.
+/// - The caller must honor the returned JIT exit and resume through the indicated continuation.
+pub(crate) unsafe fn jit_call_direct_wasm_fast(
+    funcaddr: ObjectRef,
+    continuation: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> crate::runtime::jit::JitNativeExit {
+    if ctx.effect.get_pending_count() != 0 {
+        return crate::runtime::jit::JitNativeExit::pending();
+    }
+    let recipe = ensure_call_recipe(funcaddr, ctx);
+    let CallDispatchTarget::Wasm { local_size } = recipe.target else {
+        return jit_exit_from_call_outcome(
+            unsafe { internal_op_call(continuation, recipe, ctx, false) },
+            continuation,
+            recipe,
+            false,
+        );
+    };
+    match unsafe { prepare_jit_wasm_call(continuation, recipe, local_size as usize, ctx, false) } {
+        VMResult::Success(()) if ctx.gc.jit_rejected_func(funcaddr) => unsafe {
+            finish_rejected_direct_wasm_call(continuation, recipe, ctx)
+        },
+        VMResult::Success(()) => unsafe { finish_jit_wasm_call(continuation, recipe, ctx, false) },
+        other => crate::runtime::jit::JitNativeExit::trap(other),
+    }
+}
+
+#[cfg(feature = "jit")]
+/// Telomere runtime helper for JIT `call_indirect` / `return_call_indirect` sites.
+///
+/// Stack effect: pops the indirect table element index and dispatches to the resolved target.
+/// Traps: returns a JIT trap exit for the same table, type, and call failures as
+/// `op_call_indirect` and `op_return_call_indirect`.
+/// Notes: The helper resolves the callee through the active table and then reuses the direct-call
+/// JIT entry path for Wasm targets so nested JIT fallback remains tied to the callee frame.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded indirect call instruction in the active stream.
+/// - `ctx` must reference a live execution context whose stack contains the validated table index.
+/// - The caller must honor the returned JIT exit and resume through the indicated continuation.
+pub(crate) unsafe fn jit_call_indirect(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> crate::runtime::jit::JitNativeExit {
+    if ctx.effect.get_pending_count() != 0 {
+        return crate::runtime::jit::JitNativeExit::pending();
+    }
+    let i = ctx.stack.pop_u32();
+    let tableidx = unsafe { (*tail_code).operand.u32 as usize };
+    let table_addr = match ctx.instance().tables.as_slice().get(tableidx) {
+        Some(addr) => *addr,
+        None => {
+            return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableIndexOutOfRange);
+        }
+    };
+    let table = ctx.gc.get_table(table_addr);
+    let Some(func_addr) = table.1.get(i as usize).copied() else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableIndexOutOfRange);
+    };
+    if func_addr == TABLE_UNINITIALIZED {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableUninitialized);
+    }
+    let func_addr = ObjectRef(func_addr);
+    let funcinst = ctx.gc.get_func(func_addr);
+    let instance = ctx.gc.instance(funcinst.instance);
+    let module = ctx.gc.get_module(instance.module_addr);
+    let Some(actual_typeidx) = module.functions.get(funcinst.funcidx as usize) else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+    };
+    let Some(actual_ft) = module.function_types.get(actual_typeidx.0 as usize) else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+    };
+    let expected_typeidx = unsafe { (*tail_code.offset(1)).operand.u32 };
+    let Some(expected_ft) = ctx.module().function_types.get(expected_typeidx as usize) else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+    };
+    if actual_ft != expected_ft {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::CallIndirectInvalidType);
+    }
+    let recipe = ensure_indirect_call_recipe(func_addr, ctx);
+    if let CallDispatchTarget::Wasm { local_size } = recipe.target {
+        return match unsafe {
+            prepare_jit_wasm_call(
+                tail_code.offset(2),
+                recipe,
+                local_size as usize,
+                ctx,
+                is_return_call,
+            )
+        } {
+            VMResult::Success(()) => unsafe {
+                finish_jit_wasm_call(tail_code.offset(2), recipe, ctx, is_return_call)
+            },
+            other => crate::runtime::jit::JitNativeExit::trap(other),
+        };
+    }
+    jit_exit_from_call_outcome(
+        unsafe { internal_op_call(tail_code.offset(2), recipe, ctx, is_return_call) },
+        unsafe { tail_code.offset(2) },
+        recipe,
+        is_return_call,
+    )
+}
+
+#[cfg(feature = "jit")]
+unsafe fn prepare_jit_wasm_call(
+    return_addr: *const Instr,
+    recipe: CallDispatchCache,
+    local_size: usize,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<()> {
+    let param_size = recipe.param_size as usize;
+    if is_return_call {
+        let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+            &ctx.local_reference,
+            param_size,
+            local_size,
+            recipe.frame,
+        ));
+        ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+    } else {
+        let return_pc = cached_return_pc(return_addr, ctx);
+        let local_reference = vm_try!(ctx.stack.function_call_cached(
+            param_size,
+            local_size,
+            recipe.frame,
+            ctx.local_reference,
+            return_pc,
+        ));
+        ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+    }
+    VMResult::Success(())
+}
+
+#[cfg(feature = "jit")]
+unsafe fn finish_jit_wasm_call(
+    continuation: *const Instr,
+    recipe: CallDispatchCache,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> crate::runtime::jit::JitNativeExit {
+    let exit = unsafe { crate::runtime::jit::enter_current_frame_from_jit_call(ctx) };
+    let returned_to_continuation = exit.kind == crate::runtime::jit::JitNativeExit::DONE
+        || (exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR
+            && exit.value == continuation as u64)
+        || (exit.kind == crate::runtime::jit::JitNativeExit::PENDING && ctx.cont == continuation);
+    if !is_return_call && returned_to_continuation {
+        if exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR {
+            crate::runtime::jit::profile::count(
+                crate::runtime::jit::profile::Counter::ExitContinuePtrConsumed,
+            );
+        } else {
+            crate::runtime::jit::profile::count_exit(exit.kind);
+        }
+        crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+    } else if !is_return_call
+        && matches!(
+            exit.kind,
+            crate::runtime::jit::JitNativeExit::CONTINUE_PTR
+                | crate::runtime::jit::JitNativeExit::FALLBACK_PTR
+        )
+    {
+        crate::runtime::jit::profile::count_exit(exit.kind);
+        let continue_exit = unsafe {
+            crate::runtime::jit::run_interpreter_continue_from_jit_call(
+                exit.value as *const Instr,
+                continuation,
+                ctx,
+            )
+        };
+        if continue_exit.kind == crate::runtime::jit::JitNativeExit::DONE {
+            crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+        } else {
+            continue_exit
+        }
+    } else {
+        crate::runtime::jit::profile::count_exit(exit.kind);
+        exit
+    }
+}
+
+#[cfg(feature = "jit")]
+unsafe fn finish_rejected_direct_wasm_call(
+    continuation: *const Instr,
+    recipe: CallDispatchCache,
+    ctx: &mut ExecuteContext,
+) -> crate::runtime::jit::JitNativeExit {
+    crate::runtime::jit::profile::count(
+        crate::runtime::jit::profile::Counter::RuntimeRejectedWasmCallFast,
+    );
+    let exit = unsafe {
+        crate::runtime::jit::run_interpreter_continue_from_jit_call(ctx.code(), continuation, ctx)
+    };
+    if exit.kind == crate::runtime::jit::JitNativeExit::DONE {
+        crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+    } else {
+        exit
+    }
+}
+
+#[cfg(feature = "jit")]
+#[inline(always)]
+fn pack_call_stack_sizes(recipe: CallDispatchCache) -> u64 {
+    (u64::from(recipe.param_size) << 32) | u64::from(recipe.return_size)
+}
+
 #[inline(always)]
 fn cached_return_pc(return_addr: *const Instr, ctx: &ExecuteContext) -> StablePc {
     let code_base = ctx.code();
@@ -173,6 +456,50 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     let recipe = decode_direct_call_recipe(tail_code, ctx);
     match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, false)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[cfg(feature = "jit")]
+/// WebAssembly `call` quickened to the lazy baseline JIT entry path.
+///
+/// Stack effect: `[params] -> [results]`.
+/// Traps: propagates target traps or returns `Unimplemented` when the callee cannot be compiled.
+/// Notes: This handler is installed only for direct local Wasm callees when runtime JIT is enabled.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The recipe must describe a Wasm target prepared by instantiation-time callsite quickening.
+/// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+pub unsafe fn op_call_jit_lazy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    unsafe { op_call_jit_lazy_inner(tail_code, ctx, false) }
+}
+
+#[cfg(feature = "jit")]
+unsafe fn op_call_jit_lazy_inner(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<()> {
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    if is_return_call && crate::runtime::jit::interpreter_stop_active() {
+        return unsafe { op_return_call(tail_code, ctx) };
+    }
+    let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };
+    if !matches!(recipe.target, CallDispatchTarget::Wasm { .. }) {
+        return if is_return_call {
+            unsafe { op_return_call(tail_code, ctx) }
+        } else {
+            unsafe { op_call(tail_code, ctx) }
+        };
+    }
+    match vm_try!(unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) }) {
+        CallOutcome::Immediate(_ptr) => unsafe {
+            crate::runtime::jit::enter_current_frame_from_lazy_call(ctx, tail_code.offset(1))
+        },
         CallOutcome::Pending => VMResult::Success(()),
     }
 }
@@ -549,6 +876,25 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     }
 }
 
+#[cfg(feature = "jit")]
+/// WebAssembly `return_call` quickened to the lazy baseline JIT entry path.
+///
+/// Stack effect: tail-calls the target with the active frame replaced by the callee frame.
+/// Traps: propagates target traps or returns `Unimplemented` when the callee cannot be compiled.
+/// Notes: This keeps the interpreter tail-call helper unchanged while allowing JIT-enabled
+/// callsites to enter compiled code without a generic `call_code` JIT check.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The recipe must describe a Wasm target prepared by instantiation-time callsite quickening.
+/// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+pub unsafe fn op_return_call_jit_lazy(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    unsafe { op_call_jit_lazy_inner(tail_code, ctx, true) }
+}
+
 /// WebAssembly `return_call` for imported or otherwise generic direct callees.
 ///
 /// Related spec:
@@ -718,4 +1064,22 @@ pub unsafe fn special_start_function_call(
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
+}
+
+#[cfg(feature = "jit")]
+/// Telomere internal trampoline for starting a Wasm function through lazy baseline JIT.
+///
+/// Stack effect: internal runtime continuation.
+/// Traps: propagates target traps or returns `Unimplemented` when the current function cannot be compiled.
+/// Notes: Used for exported/start Wasm functions that do not have an interpreter caller opcode to quicken.
+///
+/// # Safety
+/// - `ctx` must already contain the target Wasm frame as the current frame.
+/// - The active store must have runtime JIT enabled and run on a supported target.
+/// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+pub unsafe fn special_start_jit_function_call(
+    _tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    unsafe { crate::runtime::jit::enter_current_frame(ctx) }
 }

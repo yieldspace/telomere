@@ -5,9 +5,10 @@ mod vm_result;
 use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
+use smallvec::SmallVec;
 
 pub use vm_result::VMResult;
-mod memory;
+pub(crate) mod memory;
 pub use memory::{
     AtomicRmwOp, LocalMemoryObject, MemArg, Memory, MemoryInitError, SharedMemoryObject,
 };
@@ -22,7 +23,7 @@ mod object_ref;
 pub(crate) mod store;
 pub use object_ref::ObjectRef;
 pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
-pub use store::{InstanceHandle, MemoryHandle, Store, StoreState};
+pub use store::{InstanceHandle, JitConfig, MemoryHandle, RuntimeConfig, Store, StoreState};
 use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};
 
 use crate::runtime::scheduler::EffectSupplier;
@@ -719,7 +720,9 @@ pub(crate) struct LoweredFunction {
 }
 
 impl LoweredFunction {
-    pub(crate) fn from_materialized(instrs: Vec<Instr>, op_lens: Vec<u16>) -> Self {
+    pub(crate) fn from_materialized(mut instrs: Vec<Instr>, mut op_lens: Vec<u16>) -> Self {
+        instrs.shrink_to_fit();
+        op_lens.shrink_to_fit();
         let mut code = Vec::with_capacity(op_lens.len());
         let mut cursor = 0usize;
         for len in &op_lens {
@@ -956,6 +959,22 @@ impl StablePc {
         }
     }
 
+    pub(crate) fn resolve_optional(
+        self,
+        runtime: &StoreInner,
+        stack: &Stack,
+        local_reference: LocalReference,
+    ) -> Option<*const Instr> {
+        match self.relative_index() {
+            Some(index) => {
+                let (base, len) = Self::current_frame_code_range(runtime, stack, local_reference)?;
+                debug_assert!(index < len);
+                Some(unsafe { base.add(index) })
+            }
+            None => Some(self.0 as *const Instr),
+        }
+    }
+
     fn relative_index(self) -> Option<usize> {
         (self.0 & Self::RELATIVE_TAG == Self::RELATIVE_TAG).then_some(self.0 >> 1)
     }
@@ -1036,9 +1055,18 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
+    // Read by JIT-generated code via offset_of!; the Rust dead_code lint cannot see that use.
+    #[allow(dead_code)]
+    pub(crate) stack_memory_ptr: *mut u8,
+    #[allow(dead_code)]
+    pub(crate) stack_memory_len: usize,
+    #[allow(dead_code)]
+    pub(crate) stack_top_ptr: *mut usize,
     pub local_reference: LocalReference,
     pub(crate) local_base_ptr: *mut u8,
     pub(crate) default_local_memory_ptr: *mut Memory,
+    pub(crate) current_instance_globals_ptr: *const ObjectRef,
+    pub(crate) global_values_ptr: *mut store::GlobalValue,
     pub(crate) current_frame: CallFrameCache,
     pub store: &'a Store,
     pub gc: &'a mut StoreInner,
@@ -1089,6 +1117,21 @@ impl ExecuteContext<'_> {
         };
     }
 
+    fn refresh_jit_global_ptrs(&mut self) {
+        self.current_instance_globals_ptr = if self.current_frame.code_addr.is_null() {
+            std::ptr::null()
+        } else {
+            self.gc
+                .jit_instance_global_addrs_ptr(self.current_frame.instance)
+        };
+        self.global_values_ptr = self.gc.jit_global_values_ptr();
+    }
+
+    fn refresh_frame_cached_ptrs(&mut self) {
+        self.refresh_default_local_memory_ptr();
+        self.refresh_jit_global_ptrs();
+    }
+
     pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
         let default_memory = snapshot_memory_kind(self.current_frame.memory0_kind);
         let caller_memory = self
@@ -1111,7 +1154,7 @@ impl ExecuteContext<'_> {
         {
             self.current_frame = self.stack.frame_cache(&local_reference);
         }
-        self.refresh_default_local_memory_ptr();
+        self.refresh_frame_cached_ptrs();
     }
 
     #[inline(always)]
@@ -1123,7 +1166,7 @@ impl ExecuteContext<'_> {
         self.local_reference = local_reference;
         self.local_base_ptr = unsafe { self.stack.local_area_mut_ptr(&local_reference) };
         self.current_frame = frame;
-        self.refresh_default_local_memory_ptr();
+        self.refresh_frame_cached_ptrs();
     }
 
     #[inline(always)]
@@ -1478,7 +1521,7 @@ pub const fn word_size<T>() -> usize {
     std::mem::size_of::<T>() / std::mem::size_of::<u32>()
 }
 #[derive(Debug)]
-pub(crate) struct LocalReassignTable(pub(crate) Vec<(u32, ValType, u32)>);
+pub(crate) struct LocalReassignTable(pub(crate) SmallVec<[(u32, ValType, u32); 8]>);
 #[derive(Default, Debug, Clone)]
 pub struct LocalsData {
     count_i32: u32,
@@ -1537,7 +1580,7 @@ impl LocalsData {
         let mut count_f64 = 0u32;
         let mut count_v128 = 0u32;
         let mut index = 0u32;
-        let mut res = vec![];
+        let mut res = SmallVec::with_capacity(locals.len());
         for Locals { n, t } in locals {
             index = index
                 .checked_add(*n)
