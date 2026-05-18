@@ -1283,6 +1283,59 @@ async fn jit_executes_native_float_helpers_and_conversions() {
     )
 ))]
 #[tokio::test]
+async fn jit_float_conversion_edge_cases_match_wasm_semantics() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (func (export "run") (result f32 f64 i32 i32 i32 i32)
+            i64.const -1
+            f32.convert_i64_u
+            i64.const -1
+            f64.convert_i64_u
+            f32.const -1.0
+            i32.trunc_sat_f32_u
+            f32.const inf
+            i32.trunc_sat_f32_s
+            f64.const 4294967296.0
+            i32.trunc_sat_f64_u
+            f64.const nan
+            i32.trunc_sat_f64_s))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    let after = store.jit_cache_stats();
+
+    assert_success_values(
+        result,
+        ResultValue::new(vec![
+            WasmValue::F32(u64::MAX as f32),
+            WasmValue::F64(u64::MAX as f64),
+            WasmValue::I32(0),
+            WasmValue::I32(i32::MAX),
+            WasmValue::I32(-1),
+            WasmValue::I32(0),
+        ]),
+    );
+    assert_jit_accepted(before, after);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
 async fn jit_executes_i32_compare_family() {
     let result = invoke_jit(
         r#"

@@ -1391,15 +1391,13 @@ fn validate_baseline_op_references(
             validate_operand_index(plan, *operand_index)?;
             validate_operand_index(plan, *continuation_index)?;
         }
-        BaselineOp::RuntimeStub { pc_index, .. } => {
-            if *pc_index != entry.pc_index {
-                return Err(BaselinePlanError::InvalidInstructionStart);
-            }
+        BaselineOp::RuntimeStub { pc_index, .. } if *pc_index != entry.pc_index => {
+            return Err(BaselinePlanError::InvalidInstructionStart);
         }
-        BaselineOp::RuntimeContinuationStub { pc_index, .. } => {
-            if *pc_index != entry.pc_index || plan.next_pc_index(*pc_index).is_none() {
-                return Err(BaselinePlanError::InvalidNextPc);
-            }
+        BaselineOp::RuntimeContinuationStub { pc_index, .. }
+            if *pc_index != entry.pc_index || plan.next_pc_index(*pc_index).is_none() =>
+        {
+            return Err(BaselinePlanError::InvalidNextPc);
         }
         _ => {}
     }

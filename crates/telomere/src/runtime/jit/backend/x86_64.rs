@@ -23,6 +23,7 @@ use crate::runtime::jit::stubs::{
     i32_popcnt_value as jit_i32_popcnt_value, i32_select_bit_step4 as jit_i32_select_bit_step4,
     i32_store_local_base_from_vm_stack as jit_i32_store_local_base_from_vm_stack,
     i32_trunc_f32 as jit_i32_trunc_f32, i32_trunc_f64 as jit_i32_trunc_f64,
+    i32_trunc_sat_f32 as jit_i32_trunc_sat_f32, i32_trunc_sat_f64 as jit_i32_trunc_sat_f64,
     i64_popcnt_value as jit_i64_popcnt_value, i64_trunc_f32 as jit_i64_trunc_f32,
     i64_trunc_f64 as jit_i64_trunc_f64, indirect_call as jit_indirect_call,
     memory_copy as jit_memory_copy, memory_fill as jit_memory_fill, memory_grow as jit_memory_grow,
@@ -4188,19 +4189,21 @@ impl<'a> Emitter<'a> {
         match source {
             FloatWidth::F32 => {
                 let value = self.pop_reg()?;
-                self.fmov_s_from_w(0, value);
-                let result = self.push_reg()?;
-                self.fcvt_w_from_s(result, 0, signed);
+                self.mov_w(0, value);
+                self.mov_imm_u32(1, u32::from(signed));
+                self.call_ptr(jit_i32_trunc_sat_f32 as *const () as usize);
             }
             FloatWidth::F64 => {
                 let high = self.pop_reg()?;
                 let low = self.pop_reg()?;
-                self.pack_i64_slots_to_x(16, low, high, 9)?;
-                self.fmov_d_from_x(0, 16);
-                let result = self.push_reg()?;
-                self.fcvt_w_from_d(result, 0, signed);
+                self.pack_i64_slots_to_x(0, low, high, 9)?;
+                self.mov_imm_u32(1, u32::from(signed));
+                self.call_ptr(jit_i32_trunc_sat_f64 as *const () as usize);
             }
         }
+        self.return_if_exit();
+        let result = self.push_reg()?;
+        self.mov_w(result, 1);
         Ok(())
     }
 

@@ -1185,18 +1185,59 @@ impl X64BaselineMasm {
     fn cvt_int_to_float(&mut self, vd: u8, rn: u8, to_f64: bool, from_i64: bool, signed: bool) {
         if from_i64 {
             self.load_slot64(RAX, rn).expect("virtual register fits");
+            if signed {
+                self.cvt_i64_reg_to_float(to_f64);
+            } else {
+                self.cvt_u64_reg_to_float(to_f64);
+            }
         } else if signed {
             let disp = Self::slot_disp(rn).expect("virtual register fits");
             self.emit_rex(true, RAX, RBP);
             self.emit(&[0x63]);
             self.modrm_rbp_disp32(RAX, disp);
+            self.cvt_i64_reg_to_float(to_f64);
         } else {
             self.load_slot32(RAX, rn).expect("virtual register fits");
+            self.cvt_i64_reg_to_float(to_f64);
         }
-        self.bytes.push(if to_f64 { 0xf2 } else { 0xf3 });
-        self.emit(&[0x48, 0x0f, 0x2a, 0xc0]);
         self.store_xmm_slot(0, vd, to_f64)
             .expect("virtual register fits");
+    }
+
+    fn cvt_i64_reg_to_float(&mut self, to_f64: bool) {
+        self.bytes.push(if to_f64 { 0xf2 } else { 0xf3 });
+        self.emit(&[0x48, 0x0f, 0x2a, 0xc0]);
+    }
+
+    fn cvt_u64_reg_to_float(&mut self, to_f64: bool) {
+        self.test_rr64(RAX, RAX);
+        let nonnegative = self.emit_jcc_placeholder(Cond::Ge);
+
+        self.emit_rex(true, RCX, RAX);
+        self.bytes.push(0x8b);
+        self.modrm_rr(RAX, RCX);
+        self.emit_rex(true, 5, RCX);
+        self.bytes.push(0xc1);
+        self.modrm_rr(RCX, 5);
+        self.bytes.push(1);
+        self.alu_imm32_wide(0x81, 4, RAX, 1);
+        self.alu_rm64(0x0b, RAX, RCX);
+        self.cvt_i64_reg_to_float(to_f64);
+        self.bytes.push(if to_f64 { 0xf2 } else { 0xf3 });
+        self.emit(&[0x0f, 0x58, 0xc0]);
+        let done = self.emit_jmp_placeholder();
+
+        let nonnegative_target = self.offset();
+        self.cvt_i64_reg_to_float(to_f64);
+        let done_target = self.offset();
+        patch_branch(
+            &mut self.bytes,
+            nonnegative,
+            nonnegative_target,
+            BranchKind::BCond(Cond::Ge),
+        )
+        .expect("local branch fits");
+        patch_branch(&mut self.bytes, done, done_target, BranchKind::B).expect("local branch fits");
     }
 
     fn fcvt_w(&mut self, rd: u8, vn: u8, f64: bool, signed: bool) {
@@ -1409,6 +1450,23 @@ mod tests {
                 .windows(5)
                 .any(|window| window == [0xf3, 0x48, 0x0f, 0x2a, 0xc0]),
             "signed i32 conversion must convert the sign-extended 64-bit value: {bytes:02x?}"
+        );
+    }
+
+    #[test]
+    fn unsigned_i64_to_float_handles_high_bit_values() {
+        let mut asm = X64BaselineMasm::with_capacity(128);
+        asm.cvtf_d_from_x(0, 1, false);
+        let bytes = asm.into_bytes();
+        assert!(
+            bytes.windows(2).any(|window| window == [0x0f, 0x8d]),
+            "unsigned i64 conversion must branch around the high-bit repair path: {bytes:02x?}"
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == [0xf2, 0x0f, 0x58, 0xc0]),
+            "unsigned i64 conversion must double the repaired half value: {bytes:02x?}"
         );
     }
 }

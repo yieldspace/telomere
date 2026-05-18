@@ -424,6 +424,7 @@ pub async fn instantiate(
             .iter()
             .map(|&func_addr| gc.call_recipe_slot_for_func(func_addr))
             .collect::<Vec<_>>();
+        let mut materialized_local_wasm_funcs = Vec::with_capacity(local_wasm_funcs.len());
         for &func_addr in &local_wasm_funcs {
             let materialized = match &gc.get_func(func_addr).body {
                 RuntimeFunctionBody::Wasm { lowered, .. } => {
@@ -450,6 +451,9 @@ pub async fn instantiate(
                 &materialized.instrs,
                 &materialized.op_lens,
             );
+            materialized_local_wasm_funcs.push((func_addr, materialized));
+        }
+        for (func_addr, materialized) in materialized_local_wasm_funcs {
             let func = gc.get_func_mut(func_addr);
             let RuntimeFunctionBody::Wasm { code, op_lens, .. } = &mut func.body else {
                 unreachable!("materialized local wasm function must remain wasm")

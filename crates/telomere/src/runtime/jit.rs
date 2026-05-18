@@ -145,6 +145,9 @@ pub(crate) fn should_stop_interpreter_at(pc: *const Instr) -> bool {
 
 #[cfg(feature = "jit")]
 pub(crate) fn interpreter_stop_active() -> bool {
+    // Return-call and function-return handlers must leave the interpreter loop
+    // whenever any bridge owns control. The loop then decides whether the
+    // observed continuation is the requested stop PC or another VM PC to resume.
     JIT_INTERPRETER_STOP_AT.with(|stop| !stop.get().is_null())
 }
 
@@ -228,6 +231,9 @@ struct JitInterpreterStopGuard {
 #[cfg(feature = "jit")]
 impl JitInterpreterStopGuard {
     fn new(stop_pc: *const Instr) -> Self {
+        // Continuation bridges can re-enter the interpreter while an outer bridge
+        // is already active. The innermost native caller owns the active stop PC;
+        // the previous target is restored when that bridge returns.
         let previous = JIT_INTERPRETER_STOP_AT.with(|stop| {
             let previous = stop.get();
             stop.set(stop_pc);
