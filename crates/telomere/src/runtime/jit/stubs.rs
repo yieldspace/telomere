@@ -198,6 +198,96 @@ pub(crate) extern "C" fn f64_max_bits(lhs: u64, rhs: u64) -> u64 {
     }
 }
 
+#[cfg(any(
+    test,
+    all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+))]
+#[derive(Clone, Copy)]
+enum FloatRoundOp {
+    Ceil,
+    Floor,
+    Trunc,
+    Nearest,
+}
+
+#[cfg(any(
+    test,
+    all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+))]
+fn f32_round_bits(value: u32, op: FloatRoundOp) -> u32 {
+    let value = f32::from_bits(value);
+    match op {
+        FloatRoundOp::Ceil => value.ceil(),
+        FloatRoundOp::Floor => value.floor(),
+        FloatRoundOp::Trunc => value.trunc(),
+        FloatRoundOp::Nearest => value.round_ties_even(),
+    }
+    .to_bits()
+}
+
+#[cfg(any(
+    test,
+    all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+))]
+fn f64_round_bits(value: u64, op: FloatRoundOp) -> u64 {
+    let value = f64::from_bits(value);
+    match op {
+        FloatRoundOp::Ceil => value.ceil(),
+        FloatRoundOp::Floor => value.floor(),
+        FloatRoundOp::Trunc => value.trunc(),
+        FloatRoundOp::Nearest => value.round_ties_even(),
+    }
+    .to_bits()
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+pub(crate) extern "C" fn f32_ceil_bits(value: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
+    f32_round_bits(value, FloatRoundOp::Ceil)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+pub(crate) extern "C" fn f32_floor_bits(value: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
+    f32_round_bits(value, FloatRoundOp::Floor)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+pub(crate) extern "C" fn f32_trunc_bits(value: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
+    f32_round_bits(value, FloatRoundOp::Trunc)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+pub(crate) extern "C" fn f32_nearest_bits(value: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
+    f32_round_bits(value, FloatRoundOp::Nearest)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+pub(crate) extern "C" fn f64_ceil_bits(value: u64) -> u64 {
+    profile::count(Counter::RuntimeFloatHelper);
+    f64_round_bits(value, FloatRoundOp::Ceil)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+pub(crate) extern "C" fn f64_floor_bits(value: u64) -> u64 {
+    profile::count(Counter::RuntimeFloatHelper);
+    f64_round_bits(value, FloatRoundOp::Floor)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+pub(crate) extern "C" fn f64_trunc_bits(value: u64) -> u64 {
+    profile::count(Counter::RuntimeFloatHelper);
+    f64_round_bits(value, FloatRoundOp::Trunc)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+pub(crate) extern "C" fn f64_nearest_bits(value: u64) -> u64 {
+    profile::count(Counter::RuntimeFloatHelper);
+    f64_round_bits(value, FloatRoundOp::Nearest)
+}
+
 fn value_exit(value: u64) -> JitNativeExit {
     JitNativeExit {
         kind: JitNativeExit::KEEP_GOING,
@@ -1883,5 +1973,54 @@ pub(crate) extern "C" fn i32_select_bit_step4(
             JitNativeExit::keep_going()
         }
         other => JitNativeExit::trap(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{f32_round_bits, f64_round_bits, FloatRoundOp};
+
+    #[test]
+    fn float_round_helpers_preserve_non_finite_values() {
+        assert_eq!(
+            f32_round_bits(f32::INFINITY.to_bits(), FloatRoundOp::Ceil),
+            f32::INFINITY.to_bits()
+        );
+        assert_eq!(
+            f32_round_bits(f32::NEG_INFINITY.to_bits(), FloatRoundOp::Floor),
+            f32::NEG_INFINITY.to_bits()
+        );
+        assert_eq!(
+            f64_round_bits(f64::INFINITY.to_bits(), FloatRoundOp::Trunc),
+            f64::INFINITY.to_bits()
+        );
+        assert_eq!(
+            f64_round_bits(f64::NEG_INFINITY.to_bits(), FloatRoundOp::Nearest),
+            f64::NEG_INFINITY.to_bits()
+        );
+        assert!(f32::from_bits(f32_round_bits(0x7fc0_1234, FloatRoundOp::Ceil)).is_nan());
+        assert!(
+            f64::from_bits(f64_round_bits(0x7ff8_0000_0000_1234, FloatRoundOp::Floor)).is_nan()
+        );
+    }
+
+    #[test]
+    fn float_round_helpers_match_wasm_nearest_ties_even() {
+        assert_eq!(
+            f32_round_bits(2.5f32.to_bits(), FloatRoundOp::Nearest),
+            2.0f32.to_bits()
+        );
+        assert_eq!(
+            f32_round_bits(3.5f32.to_bits(), FloatRoundOp::Nearest),
+            4.0f32.to_bits()
+        );
+        assert_eq!(
+            f64_round_bits(2.5f64.to_bits(), FloatRoundOp::Nearest),
+            2.0f64.to_bits()
+        );
+        assert_eq!(
+            f64_round_bits(3.5f64.to_bits(), FloatRoundOp::Nearest),
+            4.0f64.to_bits()
+        );
     }
 }

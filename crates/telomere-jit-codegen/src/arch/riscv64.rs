@@ -599,36 +599,36 @@ impl Riscv64BaselineMasm {
         self.float_unop(vd, vn, true, 0x2d, 0);
     }
 
-    pub fn frintn_s(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, false, 0);
+    pub fn frintn_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, false, 0)
     }
 
-    pub fn frintn_d(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, true, 0);
+    pub fn frintn_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, true, 0)
     }
 
-    pub fn frintp_s(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, false, 3);
+    pub fn frintp_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, false, 3)
     }
 
-    pub fn frintp_d(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, true, 3);
+    pub fn frintp_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, true, 3)
     }
 
-    pub fn frintm_s(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, false, 2);
+    pub fn frintm_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, false, 2)
     }
 
-    pub fn frintm_d(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, true, 2);
+    pub fn frintm_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, true, 2)
     }
 
-    pub fn frintz_s(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, false, 1);
+    pub fn frintz_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, false, 1)
     }
 
-    pub fn frintz_d(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, true, 1);
+    pub fn frintz_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, true, 1)
     }
 
     pub fn cvtf_d_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
@@ -1174,11 +1174,11 @@ impl Riscv64BaselineMasm {
         self.store_fslot(0, vd, f64).expect("virtual register fits");
     }
 
-    fn round(&mut self, vd: u8, vn: u8, f64: bool, rm: u32) {
-        self.load_fslot(0, vn, f64).expect("virtual register fits");
-        self.insn(encode_fp(if f64 { 0x61 } else { 0x60 }, rm, T0, 0, 2, 0, 0));
-        self.insn(encode_fp(if f64 { 0x69 } else { 0x68 }, 0, 0, T0, 2, 0, 0));
-        self.store_fslot(0, vd, f64).expect("virtual register fits");
+    fn round(&mut self, _vd: u8, _vn: u8, _f64: bool, _rm: u32) -> AsmResult {
+        // Base RISC-V F/D has no float-to-float rounding instruction. The
+        // previous fcvt.l round-trip changed NaNs, infinities, and large
+        // finite values, so callers must use a semantic helper instead.
+        Err(AsmError::UnsupportedFeature)
     }
 
     fn cvt_int_to_float(&mut self, vd: u8, rn: u8, to_f64: bool, from_i64: bool, signed: bool) {
@@ -1399,5 +1399,12 @@ mod tests {
             .windows(4)
             .any(|window| u32::from_le_bytes(window.try_into().unwrap())
                 == encode_fp(0x00, 0, 0, 0, 1, 0, 0)));
+    }
+
+    #[test]
+    fn rejects_integer_round_trip_float_rounding() {
+        let mut asm = Riscv64BaselineMasm::with_capacity(64);
+        assert_eq!(asm.frintp_s(0, 1), Err(AsmError::UnsupportedFeature));
+        assert!(asm.into_bytes().is_empty());
     }
 }

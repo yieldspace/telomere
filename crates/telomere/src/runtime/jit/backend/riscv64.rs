@@ -12,8 +12,12 @@ use crate::runtime::jit::profile::{self, Counter};
 use crate::runtime::jit::stubs::{
     atomic_fence as jit_atomic_fence, call_i32_crc16_update16 as jit_call_i32_crc16_update16,
     call_i32_list_crc_summary as jit_call_i32_list_crc_summary, direct_call as jit_direct_call,
+    f32_ceil_bits as jit_f32_ceil_bits, f32_floor_bits as jit_f32_floor_bits,
     f32_max_bits as jit_f32_max_bits, f32_min_bits as jit_f32_min_bits,
+    f32_nearest_bits as jit_f32_nearest_bits, f32_trunc_bits as jit_f32_trunc_bits,
+    f64_ceil_bits as jit_f64_ceil_bits, f64_floor_bits as jit_f64_floor_bits,
     f64_max_bits as jit_f64_max_bits, f64_min_bits as jit_f64_min_bits,
+    f64_nearest_bits as jit_f64_nearest_bits, f64_trunc_bits as jit_f64_trunc_bits,
     function_return as jit_function_return,
     i32_core_state_benchmark as jit_i32_core_state_benchmark,
     i32_crc16_update16 as jit_i32_crc16_update16,
@@ -3351,6 +3355,18 @@ impl<'a> Emitter<'a> {
         self.blr_x(16);
     }
 
+    fn emit_f32_rounding_helper(&mut self, value: u8, helper: usize) {
+        self.mov_w(0, value);
+        self.call_ptr(helper);
+        self.mov_w(value, 0);
+    }
+
+    fn emit_f64_rounding_helper(&mut self, value: u8, helper: usize) {
+        self.mov_x(0, value);
+        self.call_ptr(helper);
+        self.mov_x(value, 0);
+    }
+
     fn load_local4_to_reg(&mut self, rd: u8, local: u32) -> Result<(), ()> {
         self.load_store_local4(rd, local, true)
     }
@@ -3747,24 +3763,16 @@ impl<'a> Emitter<'a> {
                 self.fmov_w_from_s(result, 0);
             }
             LocalUnary32Op::F32Ceil => {
-                self.fmov_s_from_w(0, result);
-                self.frintp_s(0, 0);
-                self.fmov_w_from_s(result, 0);
+                self.emit_f32_rounding_helper(result, jit_f32_ceil_bits as *const () as usize)
             }
             LocalUnary32Op::F32Floor => {
-                self.fmov_s_from_w(0, result);
-                self.frintm_s(0, 0);
-                self.fmov_w_from_s(result, 0);
+                self.emit_f32_rounding_helper(result, jit_f32_floor_bits as *const () as usize)
             }
             LocalUnary32Op::F32Trunc => {
-                self.fmov_s_from_w(0, result);
-                self.frintz_s(0, 0);
-                self.fmov_w_from_s(result, 0);
+                self.emit_f32_rounding_helper(result, jit_f32_trunc_bits as *const () as usize)
             }
             LocalUnary32Op::F32Nearest => {
-                self.fmov_s_from_w(0, result);
-                self.frintn_s(0, 0);
-                self.fmov_w_from_s(result, 0);
+                self.emit_f32_rounding_helper(result, jit_f32_nearest_bits as *const () as usize)
             }
         }
         Ok(())
@@ -3798,24 +3806,16 @@ impl<'a> Emitter<'a> {
                 self.fmov_x_from_d(result, 0);
             }
             LocalUnary64Op::F64Ceil => {
-                self.fmov_d_from_x(0, result);
-                self.frintp_d(0, 0);
-                self.fmov_x_from_d(result, 0);
+                self.emit_f64_rounding_helper(result, jit_f64_ceil_bits as *const () as usize)
             }
             LocalUnary64Op::F64Floor => {
-                self.fmov_d_from_x(0, result);
-                self.frintm_d(0, 0);
-                self.fmov_x_from_d(result, 0);
+                self.emit_f64_rounding_helper(result, jit_f64_floor_bits as *const () as usize)
             }
             LocalUnary64Op::F64Trunc => {
-                self.fmov_d_from_x(0, result);
-                self.frintz_d(0, 0);
-                self.fmov_x_from_d(result, 0);
+                self.emit_f64_rounding_helper(result, jit_f64_trunc_bits as *const () as usize)
             }
             LocalUnary64Op::F64Nearest => {
-                self.fmov_d_from_x(0, result);
-                self.frintn_d(0, 0);
-                self.fmov_x_from_d(result, 0);
+                self.emit_f64_rounding_helper(result, jit_f64_nearest_bits as *const () as usize)
             }
         }
         Ok(())
@@ -3966,17 +3966,35 @@ impl<'a> Emitter<'a> {
     fn emit_f32_unary(&mut self, op: FloatUnaryOp) -> Result<(), ()> {
         self.ensure_stack_slots(1)?;
         let value = self.peek_reg()?;
-        self.fmov_s_from_w(0, value);
         match op {
-            FloatUnaryOp::Abs => self.fabs_s(0, 0),
-            FloatUnaryOp::Neg => self.fneg_s(0, 0),
-            FloatUnaryOp::Sqrt => self.fsqrt_s(0, 0),
-            FloatUnaryOp::Ceil => self.frintp_s(0, 0),
-            FloatUnaryOp::Floor => self.frintm_s(0, 0),
-            FloatUnaryOp::Trunc => self.frintz_s(0, 0),
-            FloatUnaryOp::Nearest => self.frintn_s(0, 0),
+            FloatUnaryOp::Abs => {
+                self.fmov_s_from_w(0, value);
+                self.fabs_s(0, 0);
+                self.fmov_w_from_s(value, 0);
+            }
+            FloatUnaryOp::Neg => {
+                self.fmov_s_from_w(0, value);
+                self.fneg_s(0, 0);
+                self.fmov_w_from_s(value, 0);
+            }
+            FloatUnaryOp::Sqrt => {
+                self.fmov_s_from_w(0, value);
+                self.fsqrt_s(0, 0);
+                self.fmov_w_from_s(value, 0);
+            }
+            FloatUnaryOp::Ceil => {
+                self.emit_f32_rounding_helper(value, jit_f32_ceil_bits as *const () as usize)
+            }
+            FloatUnaryOp::Floor => {
+                self.emit_f32_rounding_helper(value, jit_f32_floor_bits as *const () as usize)
+            }
+            FloatUnaryOp::Trunc => {
+                self.emit_f32_rounding_helper(value, jit_f32_trunc_bits as *const () as usize)
+            }
+            FloatUnaryOp::Nearest => {
+                self.emit_f32_rounding_helper(value, jit_f32_nearest_bits as *const () as usize)
+            }
         }
-        self.fmov_w_from_s(value, 0);
         Ok(())
     }
 
@@ -3985,17 +4003,35 @@ impl<'a> Emitter<'a> {
         let high = self.pop_reg()?;
         let low = self.pop_reg()?;
         self.pack_i64_slots_to_x(16, low, high, 9)?;
-        self.fmov_d_from_x(0, 16);
         match op {
-            FloatUnaryOp::Abs => self.fabs_d(0, 0),
-            FloatUnaryOp::Neg => self.fneg_d(0, 0),
-            FloatUnaryOp::Sqrt => self.fsqrt_d(0, 0),
-            FloatUnaryOp::Ceil => self.frintp_d(0, 0),
-            FloatUnaryOp::Floor => self.frintm_d(0, 0),
-            FloatUnaryOp::Trunc => self.frintz_d(0, 0),
-            FloatUnaryOp::Nearest => self.frintn_d(0, 0),
+            FloatUnaryOp::Abs => {
+                self.fmov_d_from_x(0, 16);
+                self.fabs_d(0, 0);
+                self.fmov_x_from_d(16, 0);
+            }
+            FloatUnaryOp::Neg => {
+                self.fmov_d_from_x(0, 16);
+                self.fneg_d(0, 0);
+                self.fmov_x_from_d(16, 0);
+            }
+            FloatUnaryOp::Sqrt => {
+                self.fmov_d_from_x(0, 16);
+                self.fsqrt_d(0, 0);
+                self.fmov_x_from_d(16, 0);
+            }
+            FloatUnaryOp::Ceil => {
+                self.emit_f64_rounding_helper(16, jit_f64_ceil_bits as *const () as usize)
+            }
+            FloatUnaryOp::Floor => {
+                self.emit_f64_rounding_helper(16, jit_f64_floor_bits as *const () as usize)
+            }
+            FloatUnaryOp::Trunc => {
+                self.emit_f64_rounding_helper(16, jit_f64_trunc_bits as *const () as usize)
+            }
+            FloatUnaryOp::Nearest => {
+                self.emit_f64_rounding_helper(16, jit_f64_nearest_bits as *const () as usize)
+            }
         }
-        self.fmov_x_from_d(16, 0);
         self.push_x_as_i64_slots(16)?;
         Ok(())
     }
