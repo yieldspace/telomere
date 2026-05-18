@@ -148,12 +148,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stub_len_never_exceeds_backing_mapping() {
-        let code = ExecutableCode::test_stub(MmapOptions::page_size() * 2);
-        assert_eq!(code.len(), MmapOptions::page_size());
-    }
-
-    #[test]
     fn code_arena_does_not_rewrite_live_executable_mapping() {
         let arena = CodeArena;
 
@@ -165,5 +159,71 @@ mod tests {
         assert_ne!(first.ptr, second.ptr);
         assert_eq!(unsafe { first_entry() }, 7);
         assert_eq!(unsafe { second_entry() }, 9);
+    }
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "macos", target_os = "linux"),
+    target_arch = "x86_64"
+))]
+mod x86_64_tests {
+    use super::*;
+
+    type TestEntry = unsafe extern "C" fn() -> u32;
+
+    fn mov_eax_ret(value: u32) -> [u8; 6] {
+        let mut bytes = [0u8; 6];
+        bytes[0] = 0xb8;
+        bytes[1..5].copy_from_slice(&value.to_le_bytes());
+        bytes[5] = 0xc3;
+        bytes
+    }
+
+    #[test]
+    fn code_arena_allocates_executable_code() {
+        let arena = CodeArena;
+        let code = arena.allocate(&mov_eax_ret(11)).expect("allocation");
+        let entry: TestEntry = unsafe { std::mem::transmute(code.ptr) };
+
+        assert!(code.len() >= MmapOptions::page_size());
+        assert_eq!(unsafe { entry() }, 11);
+    }
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+mod riscv64_tests {
+    use super::*;
+
+    type TestEntry = unsafe extern "C" fn() -> u64;
+
+    fn addi_a0_ret(value: u16) -> [u8; 8] {
+        let addi = (u32::from(value) << 20) | (10 << 7) | 0x13;
+        let ret = 0x0000_8067u32;
+        let mut bytes = [0u8; 8];
+        bytes[..4].copy_from_slice(&addi.to_le_bytes());
+        bytes[4..].copy_from_slice(&ret.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn code_arena_allocates_executable_code() {
+        let arena = CodeArena;
+        let code = arena.allocate(&addi_a0_ret(13)).expect("allocation");
+        let entry: TestEntry = unsafe { std::mem::transmute(code.ptr) };
+
+        assert!(code.len() >= MmapOptions::page_size());
+        assert_eq!(unsafe { entry() }, 13);
+    }
+}
+
+#[cfg(test)]
+mod test_stub_tests {
+    use super::*;
+
+    #[test]
+    fn test_stub_len_never_exceeds_backing_mapping() {
+        let code = ExecutableCode::test_stub(MmapOptions::page_size() * 2);
+        assert_eq!(code.len(), MmapOptions::page_size());
     }
 }

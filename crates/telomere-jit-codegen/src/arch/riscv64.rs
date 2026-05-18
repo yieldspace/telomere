@@ -653,7 +653,7 @@ impl Riscv64BaselineMasm {
 
     pub fn fcvt_s_from_d(&mut self, vd: u8, vn: u8) {
         self.load_fslot(0, vn, true).expect("virtual register fits");
-        self.insn(encode_fp(0x20, 0, 0, 0, 0, 1, 0));
+        self.insn(encode_fp(0x20, 0, 0, 0, 1, 1, 0));
         self.store_fslot(0, vd, false)
             .expect("virtual register fits");
     }
@@ -1408,6 +1408,17 @@ mod tests {
             .windows(4)
             .any(|window| u32::from_le_bytes(window.try_into().unwrap())
                 == encode_fp(0x00, 0, 0, 0, 1, 0, 0)));
+    }
+
+    #[test]
+    fn emits_fcvt_s_from_d_with_double_source_format() {
+        let mut asm = Riscv64BaselineMasm::with_capacity(64);
+        asm.fcvt_s_from_d(2, 1);
+        assert!(asm
+            .into_bytes()
+            .windows(4)
+            .any(|window| u32::from_le_bytes(window.try_into().unwrap())
+                == encode_fp(0x20, 0, 0, 0, 1, 1, 0)));
     }
 
     #[test]

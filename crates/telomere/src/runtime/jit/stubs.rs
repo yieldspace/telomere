@@ -329,7 +329,10 @@ pub(crate) extern "C" fn i32_trunc_f64(value: u64, signed: u32) -> JitNativeExit
     value_exit(u64::from(converted))
 }
 
-#[cfg(all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"))]
+#[cfg(any(
+    all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+))]
 pub(crate) extern "C" fn i32_trunc_sat_f32(value: u32, signed: u32) -> JitNativeExit {
     profile::count(Counter::RuntimeFloatHelper);
     let value = f32::from_bits(value).trunc();
@@ -341,7 +344,10 @@ pub(crate) extern "C" fn i32_trunc_sat_f32(value: u32, signed: u32) -> JitNative
     value_exit(u64::from(converted))
 }
 
-#[cfg(all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"))]
+#[cfg(any(
+    all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+))]
 pub(crate) extern "C" fn i32_trunc_sat_f64(value: u64, signed: u32) -> JitNativeExit {
     profile::count(Counter::RuntimeFloatHelper);
     let value = f64::from_bits(value).trunc();

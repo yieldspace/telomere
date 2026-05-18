@@ -1417,6 +1417,53 @@ async fn jit_float_conversion_edge_cases_match_wasm_semantics() {
     )
 ))]
 #[tokio::test]
+async fn jit_i32_trunc_sat_nan_returns_zero() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (func (export "run") (result i32 i32 i32 i32)
+            f32.const nan
+            i32.trunc_sat_f32_s
+            f32.const nan
+            i32.trunc_sat_f32_u
+            f64.const nan
+            i32.trunc_sat_f64_s
+            f64.const nan
+            i32.trunc_sat_f64_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    let after = store.jit_cache_stats();
+
+    assert_success_values(
+        result,
+        ResultValue::new(vec![
+            WasmValue::I32(0),
+            WasmValue::I32(0),
+            WasmValue::I32(0),
+            WasmValue::I32(0),
+        ]),
+    );
+    assert_jit_accepted(before, after);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
 async fn jit_executes_i32_compare_family() {
     let result = invoke_jit(
         r#"
@@ -1785,6 +1832,54 @@ async fn jit_i64_store_trap_does_not_partially_write() {
         &ResultValue::new(vec![WasmValue::I32(65532)]),
     )
     .await;
+    let after_load = store.jit_cache_stats();
+
+    assert!(matches!(store_result, VMResult::MemoryIndexOutOfRange));
+    assert_success_i32(load_result, 0);
+    assert_jit_accepted(before, after_store);
+    assert_jit_accepted(after_store, after_load);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_i64_store_const_base_trap_does_not_partially_write() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "store") (param i64)
+            i32.const 0
+            local.get 0
+            i64.store offset=65532 align=4)
+          (func (export "load") (result i32)
+            i32.const 65532
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let store_result = telomere::run_module_function(
+        &instance,
+        &store,
+        "store",
+        &ResultValue::new(vec![WasmValue::I64(-1)]),
+    )
+    .await;
+    let after_store = store.jit_cache_stats();
+    let load_result =
+        telomere::run_module_function(&instance, &store, "load", &ResultValue::new(vec![])).await;
     let after_load = store.jit_cache_stats();
 
     assert!(matches!(store_result, VMResult::MemoryIndexOutOfRange));

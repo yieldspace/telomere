@@ -75,7 +75,10 @@ pub fn target_info() -> TargetInfo {
     TargetInfo {
         arch: TargetArch::X86_64,
         os: target_os(),
-        baseline_supported: matches!(target_os(), TargetOs::Macos | TargetOs::Linux),
+        baseline_supported: cfg!(all(
+            any(target_os = "macos", target_os = "linux"),
+            target_arch = "x86_64"
+        )),
     }
 }
 
@@ -1384,6 +1387,17 @@ impl X64BaselineMasm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_info_matches_current_arch_gate() {
+        assert_eq!(
+            target_info().baseline_supported,
+            cfg!(all(
+                any(target_os = "macos", target_os = "linux"),
+                target_arch = "x86_64"
+            ))
+        );
+    }
 
     #[test]
     fn emits_prologue_once_from_aarch64_style_save() {

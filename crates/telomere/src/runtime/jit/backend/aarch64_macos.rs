@@ -1549,6 +1549,7 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::StoreConstBaseLocal8 { memarg, local } => {
                 self.mov_imm_u32(16, 0);
+                self.checked_memory_start(9, 10, 16, memarg.offset, 8)?;
                 self.load_local_i64_to_x(17, local, 9)?;
                 self.mov_w(12, 17);
                 self.inline_i32_store(16, memarg.offset, 4, 12)?;
