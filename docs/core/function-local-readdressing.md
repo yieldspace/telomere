@@ -1,5 +1,11 @@
 ## Local Readdressing in WASM
 
+> Status: historical design note. The current runtime memory and execution
+> contracts are documented in [runtime-memory.md](runtime-memory.md) and the
+> current optimizer boundary is documented in [optimizer.md](optimizer.md).
+> Use this file as background for earlier local-addressing ideas, not as the
+> current ABI or frame-layout contract.
+
 ### Overview
 
 `Local readdressing` とは、WASM モジュール内で定義されたローカル変数へのアクセス命令（例：`get_local`, `set_local`）におけるインデックス (`idx`) を、実行時に使用しやすいバイトオフセットに事前変換する最適化手法です。
@@ -53,4 +59,3 @@ pub struct FunctionInstanceData {
 
 - [Binaryen の ](https://github.com/WebAssembly/binaryen)[`merge-locals`](https://github.com/WebAssembly/binaryen)[ パス](https://github.com/WebAssembly/binaryen)
 - [WASM バイナリ仕様（locals group）](https://webassembly.github.io/spec/core/binary/modules.html#binary-local)
-
