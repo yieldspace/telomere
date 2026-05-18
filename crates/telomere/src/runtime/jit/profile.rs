@@ -38,6 +38,7 @@ jit_profile_counters! {
     CompileRejectTooLarge => "compile.reject.too_large",
     CompileRejectDisabledAfterEmit => "compile.reject.disabled_after_emit",
     CompileRejectFromBytes => "compile.reject.from_bytes",
+    CompileRejectVerify => "compile.reject.verify",
     CompileRejectRuntimeStub => "compile.reject.runtime_stub",
     CompileRejectRuntimeContinuationStub => "compile.reject.runtime_continuation_stub",
     CompileBytes => "compile.bytes",

@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[must_use]
 pub enum VMResult<V> {
     Success(V),

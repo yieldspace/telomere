@@ -102,7 +102,14 @@ impl StoreJitCache {
         };
         let bytes = match backend::emit_baseline_function(funcaddr, code, op_lens, gc) {
             Ok(bytes) => bytes,
-            Err(()) => {
+            Err(backend::EmitBaselineError::Verify) => {
+                profile::count(Counter::CompileRejectVerify);
+                trace_compile_reject("verify", 0, 0, max_bytes);
+                gc.mark_jit_rejected_func(funcaddr);
+                self.mark_rejected(funcaddr);
+                return VMResult::Unimplemented;
+            }
+            Err(backend::EmitBaselineError::Emit) => {
                 profile::count(Counter::CompileRejectEmit);
                 trace_compile_reject("emit", 0, 0, max_bytes);
                 gc.mark_jit_rejected_func(funcaddr);

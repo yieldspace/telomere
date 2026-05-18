@@ -49,6 +49,15 @@ only because no direct native shape exists. Direct native code remains the
 preferred path, but complex or not-yet-native handlers are accepted through a
 JIT ABI helper or continuation bridge.
 
+Before native bytes are placed in the store-local code cache, the JIT now builds
+a shared `BaselinePlan` from the materialized `Instr` stream and validates it
+fail-closed. The validation boundary checks that `op_lens` covers exactly the
+materialized code, decoded JIT ops start on instruction boundaries, branch/table
+targets land on instruction boundaries or the lexical end, call operand slots
+are in range, and continuation bridges have a well-defined next VM PC. This is a
+translation-validation guard for the accepted baseline plan; it is not a formal
+proof of target machine-code equivalence.
+
 The continuation bridge installs the existing JIT interpreter stop guard at the
 lexical next VM instruction. If the VM handler reaches that next instruction,
 control returns to the native baseline stream. If the handler branches, returns,
@@ -64,4 +73,3 @@ machine-code emission failures unrelated to opcode coverage.
 The JIT integration tests include store-local cache assertions that the runtime
 stub, explicit continuation stub, and current-op bridge cases compile into the
 JIT cache without adding rejected functions.
-

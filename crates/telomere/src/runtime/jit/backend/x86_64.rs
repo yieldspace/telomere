@@ -32,9 +32,9 @@ use crate::runtime::jit::stubs::{
 };
 
 use super::ops::{
-    decode_baseline_op, BaselineOp, FloatBinaryOp, FloatCompareOp, FloatUnaryOp, FloatWidth,
-    I32BinaryOp, I32CompareOp, I32UnaryOp, I64BinaryOp, I64CompareOp, I64UnaryOp, SearchCompare,
-    SelectBitStep4, RUNTIME_CONT_CURRENT_VM_HANDLER,
+    BaselineOp, BaselinePlan, FloatBinaryOp, FloatCompareOp, FloatUnaryOp, FloatWidth, I32BinaryOp,
+    I32CompareOp, I32UnaryOp, I64BinaryOp, I64CompareOp, I64UnaryOp, SearchCompare, SelectBitStep4,
+    RUNTIME_CONT_CURRENT_VM_HANDLER,
 };
 use telomere_jit_codegen::arch::x86_64::{
     patch_branch as patch_a64_branch, BranchKind, Cond, X64BaselineMasm as A64BaselineMasm,
@@ -45,8 +45,9 @@ pub(crate) fn emit_baseline_function(
     code: &[Instr],
     op_lens: &[u16],
     gc: &StoreInner,
+    plan: &BaselinePlan,
 ) -> Result<Vec<u8>, ()> {
-    let mut emitter = Emitter::new(funcaddr, code, op_lens, gc);
+    let mut emitter = Emitter::new(funcaddr, code, op_lens, gc, plan);
     emitter.emit()?;
     emitter.finish()
 }
@@ -137,7 +138,7 @@ struct UpdateStore16LoopPlan {
 struct Emitter<'a> {
     funcaddr: ObjectRef,
     wasm: &'a [Instr],
-    op_lens: &'a [u16],
+    plan: &'a BaselinePlan,
     gc: &'a StoreInner,
     masm: A64BaselineMasm,
     labels: Vec<Option<usize>>,
@@ -160,11 +161,17 @@ impl std::ops::DerefMut for Emitter<'_> {
 }
 
 impl<'a> Emitter<'a> {
-    fn new(funcaddr: ObjectRef, wasm: &'a [Instr], op_lens: &'a [u16], gc: &'a StoreInner) -> Self {
+    fn new(
+        funcaddr: ObjectRef,
+        wasm: &'a [Instr],
+        _op_lens: &[u16],
+        gc: &'a StoreInner,
+        plan: &'a BaselinePlan,
+    ) -> Self {
         Self {
             funcaddr,
             wasm,
-            op_lens,
+            plan,
             gc,
             masm: A64BaselineMasm::with_capacity(wasm.len() * 16),
             labels: vec![None; wasm.len().saturating_add(1)],
@@ -175,52 +182,23 @@ impl<'a> Emitter<'a> {
 
     fn emit(&mut self) -> Result<(), ()> {
         self.prologue();
-        let mut cursor = 0usize;
         let mut op_index = 0usize;
-        while let Some(&len) = self.op_lens.get(op_index) {
-            if cursor >= self.wasm.len() {
-                return Err(());
-            }
+        while let Some(entry) = self.plan.entries().get(op_index) {
+            let cursor = entry.pc_index;
             self.labels[cursor] = Some(self.offset());
-            let op = match decode_baseline_op(self.wasm, cursor) {
-                Ok(op) => op,
-                Err(()) => {
-                    if std::env::var_os("TELOMERE_JIT_TRACE_COMPILE").is_some() {
-                        let op = unsafe { self.wasm[cursor].op };
-                        #[cfg(feature = "vm-diagnostics")]
-                        let op_label = crate::runtime::vm::diagnostic_op_label(op);
-                        #[cfg(not(feature = "vm-diagnostics"))]
-                        let op_label = "unknown";
-                        eprintln!(
-                            "[telomere-jit] decode_stop pc={cursor} op={op_label} op_addr=0x{:x}",
-                            op as usize
-                        );
-                    }
-                    return Err(());
-                }
-            };
+            let op = entry.op.clone();
             match self.emit_op_or_runtime(cursor, op)? {
                 EmitControl::Continue => {
-                    cursor += usize::from(len);
                     op_index += 1;
                 }
                 EmitControl::SkipNextOp => {
-                    cursor += usize::from(len);
-                    op_index += 1;
-                    if let Some(&next_len) = self.op_lens.get(op_index) {
-                        cursor += usize::from(next_len);
-                        op_index += 1;
-                    }
+                    op_index = op_index.saturating_add(2).min(self.plan.entries().len());
                 }
                 EmitControl::SkipOps(count) => {
-                    cursor += usize::from(len);
-                    op_index += 1;
-                    for _ in 0..count {
-                        if let Some(&next_len) = self.op_lens.get(op_index) {
-                            cursor += usize::from(next_len);
-                            op_index += 1;
-                        }
-                    }
+                    op_index = op_index
+                        .saturating_add(1)
+                        .saturating_add(count)
+                        .min(self.plan.entries().len());
                 }
                 EmitControl::SkipInstrSlots(slots) => {
                     let target = match cursor
@@ -235,21 +213,22 @@ impl<'a> Emitter<'a> {
                             return Err(());
                         }
                     };
-                    cursor += usize::from(len);
                     op_index += 1;
-                    while cursor < target {
-                        let Some(&next_len) = self.op_lens.get(op_index) else {
-                            trace_compile_message(format_args!(
-                                "skip_slots_missing_len pc={cursor} target={target} slots={slots}"
-                            ));
-                            return Err(());
-                        };
-                        cursor += usize::from(next_len);
+                    while let Some(next_entry) = self.plan.entries().get(op_index) {
+                        if next_entry.pc_index >= target {
+                            break;
+                        }
                         op_index += 1;
                     }
-                    if cursor != target {
+                    let next_pc = self
+                        .plan
+                        .entries()
+                        .get(op_index)
+                        .map(|entry| entry.pc_index)
+                        .unwrap_or(self.wasm.len());
+                    if next_pc != target {
                         trace_compile_message(format_args!(
-                            "skip_slots_misaligned cursor={cursor} target={target} slots={slots}"
+                            "skip_slots_misaligned cursor={next_pc} target={target} slots={slots}"
                         ));
                         return Err(());
                     }
@@ -3014,14 +2993,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn next_pc_index(&self, pc_index: usize) -> Result<usize, ()> {
-        let mut cursor = 0usize;
-        for len in self.op_lens.iter().copied() {
-            if cursor == pc_index {
-                return cursor.checked_add(usize::from(len)).ok_or(());
-            }
-            cursor = cursor.checked_add(usize::from(len)).ok_or(())?;
-        }
-        Err(())
+        self.plan.next_pc_index(pc_index).ok_or(())
     }
 
     fn emit_search_loop(&mut self, plan: SearchLoopPlan) -> Result<(), ()> {

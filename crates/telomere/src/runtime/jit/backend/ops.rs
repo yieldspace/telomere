@@ -195,6 +195,7 @@ use crate::runtime::vm::{
     special_start_function_call, special_start_jit_function_call,
 };
 
+#[derive(Clone)]
 pub(super) enum BaselineOp {
     I32Const {
         value: u32,
@@ -1050,6 +1051,7 @@ pub(super) struct SelectBitStep4 {
     pub(super) dst_local: u32,
 }
 
+#[derive(Clone)]
 pub(super) struct ScalarCopyLane {
     pub(super) dst_delta: u32,
     pub(super) src_delta: u32,
@@ -1057,6 +1059,7 @@ pub(super) struct ScalarCopyLane {
     pub(super) store_memarg: MemArg,
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum I32BinaryOp {
     Add,
     Sub,
@@ -1108,6 +1111,7 @@ pub(super) enum I64CompareOp {
     GeU,
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum I32UnaryOp {
     Clz,
     Ctz,
@@ -1116,6 +1120,7 @@ pub(super) enum I32UnaryOp {
     Extend16S,
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum I32CompareOp {
     Eq,
     Ne,
@@ -1186,6 +1191,236 @@ struct OpSpec {
 }
 
 type DecodeFn = fn(&[Instr], usize) -> Result<BaselineOp, ()>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BaselinePlanError {
+    Decode,
+    EmptyOp,
+    OpLensOverflow,
+    OpLensPastEnd,
+    OpLensMismatch,
+    InvalidInstructionStart,
+    InvalidNextPc,
+    InvalidTarget,
+    InvalidOperandIndex,
+}
+
+#[derive(Clone)]
+pub(super) struct BaselinePlanEntry {
+    pub(super) pc_index: usize,
+    pub(super) len: u16,
+    pub(super) next_pc_index: usize,
+    pub(super) op: BaselineOp,
+}
+
+pub(super) struct BaselinePlan {
+    entries: Vec<BaselinePlanEntry>,
+    instruction_starts: Vec<bool>,
+    code_len: usize,
+}
+
+impl BaselinePlan {
+    pub(super) fn entries(&self) -> &[BaselinePlanEntry] {
+        &self.entries
+    }
+
+    pub(super) fn next_pc_index(&self, pc_index: usize) -> Option<usize> {
+        self.entries
+            .iter()
+            .find(|entry| entry.pc_index == pc_index)
+            .map(|entry| entry.next_pc_index)
+    }
+
+    fn is_instruction_boundary(&self, index: usize) -> bool {
+        self.instruction_starts.get(index).copied().unwrap_or(false)
+    }
+}
+
+pub(super) fn build_baseline_plan(
+    code: &[Instr],
+    op_lens: &[u16],
+) -> Result<BaselinePlan, BaselinePlanError> {
+    let mut entries = Vec::with_capacity(op_lens.len());
+    let mut instruction_starts = vec![false; code.len().saturating_add(1)];
+    let mut cursor = 0usize;
+
+    for len in op_lens.iter().copied() {
+        let width = usize::from(len);
+        if width == 0 {
+            return Err(BaselinePlanError::EmptyOp);
+        }
+        if cursor >= code.len() {
+            return Err(BaselinePlanError::OpLensPastEnd);
+        }
+        let next_pc_index = cursor
+            .checked_add(width)
+            .ok_or(BaselinePlanError::OpLensOverflow)?;
+        if next_pc_index > code.len() {
+            return Err(BaselinePlanError::OpLensPastEnd);
+        }
+        instruction_starts[cursor] = true;
+        let op = decode_baseline_op(code, cursor).map_err(|_| BaselinePlanError::Decode)?;
+        entries.push(BaselinePlanEntry {
+            pc_index: cursor,
+            len,
+            next_pc_index,
+            op,
+        });
+        cursor = next_pc_index;
+    }
+
+    if cursor != code.len() {
+        return Err(BaselinePlanError::OpLensMismatch);
+    }
+    instruction_starts[code.len()] = true;
+
+    let plan = BaselinePlan {
+        entries,
+        instruction_starts,
+        code_len: code.len(),
+    };
+    validate_baseline_plan(&plan)?;
+    Ok(plan)
+}
+
+pub(super) fn validate_baseline_plan(plan: &BaselinePlan) -> Result<(), BaselinePlanError> {
+    for entry in plan.entries() {
+        if !plan.is_instruction_boundary(entry.pc_index) {
+            return Err(BaselinePlanError::InvalidInstructionStart);
+        }
+        let expected_next = entry
+            .pc_index
+            .checked_add(usize::from(entry.len))
+            .ok_or(BaselinePlanError::OpLensOverflow)?;
+        if entry.next_pc_index != expected_next
+            || entry.next_pc_index > plan.code_len
+            || !plan.is_instruction_boundary(entry.next_pc_index)
+        {
+            return Err(BaselinePlanError::InvalidNextPc);
+        }
+        validate_baseline_op_references(plan, entry)?;
+    }
+    Ok(())
+}
+
+fn validate_baseline_op_references(
+    plan: &BaselinePlan,
+    entry: &BaselinePlanEntry,
+) -> Result<(), BaselinePlanError> {
+    match &entry.op {
+        BaselineOp::I32ConstBinopBrIf { target, .. }
+        | BaselineOp::I32ConstCmpBrIf { target, .. }
+        | BaselineOp::LocalBinop32BrIf { target, .. }
+        | BaselineOp::LocalCmp32BrIf { target, .. }
+        | BaselineOp::LocalCmp64BrIf { target, .. }
+        | BaselineOp::I32LoadLocalBaseSet4I32LoadLocalBaseEqBrIf { target, .. }
+        | BaselineOp::I32LoadLocalBaseLocalGet4I32LoadCmpBrIf { target, .. }
+        | BaselineOp::I32LoadLocalBaseTeeLoad8UTeeBrIf { target, .. }
+        | BaselineOp::I32LoadTee4BrIf { target, .. }
+        | BaselineOp::I32LoadLocalBaseTee4BrIf { target, .. }
+        | BaselineOp::I32Load8UpdateBrIf { target, .. }
+        | BaselineOp::LocalAddSetLoad8EqzBrIf { target, .. }
+        | BaselineOp::Branch { target }
+        | BaselineOp::BrIf { target }
+        | BaselineOp::LocalGet4BrIf { target, .. }
+        | BaselineOp::LocalGet4I32ConstAddBrIf { target, .. }
+        | BaselineOp::LocalGet4LocalGet4I32AddBrIf { target, .. }
+        | BaselineOp::LocalGet4I32EqzBrIf { target, .. }
+        | BaselineOp::LocalGet4I32ConstCompareBrIf { target, .. }
+        | BaselineOp::LocalGet4LocalGet4CompareBrIf { target, .. }
+        | BaselineOp::LocalGet4I32ConstAndBrIf { target, .. }
+        | BaselineOp::LocalGet4I32ConstAndI32ConstCompareBrIf { target, .. }
+        | BaselineOp::LocalGet4I32ConstAndTee4I32ConstEqBrIf { target, .. }
+        | BaselineOp::LocalGet4Set4LocalGet4I32ConstCompareBrIf { target, .. }
+        | BaselineOp::LocalGet4I32ConstAddI32ConstAndI32ConstCompareBrIf { target, .. }
+        | BaselineOp::LocalGet4I32ConstAddTee4BrIf { target, .. }
+        | BaselineOp::If {
+            else_target: target,
+        }
+        | BaselineOp::Else { target }
+        | BaselineOp::I32Crc16Update16 {
+            return_target: target,
+            ..
+        }
+        | BaselineOp::I32CoreStateBenchmark {
+            return_target: target,
+            ..
+        }
+        | BaselineOp::I32NumericTokenStateTransition {
+            return_target: target,
+            ..
+        }
+        | BaselineOp::I32ListCrcPairLoop { target, .. }
+        | BaselineOp::I32ListCrcSummary {
+            return_target: target,
+            ..
+        } => validate_target(plan, *target)?,
+        BaselineOp::I32LoadLocalBaseSet4SearchLoop {
+            match_target,
+            miss_target,
+            ..
+        } => {
+            validate_target(plan, *match_target)?;
+            if let Some(target) = miss_target {
+                validate_target(plan, *target)?;
+            }
+        }
+        BaselineOp::I32GuardedLoad8UpdateBrIf {
+            false_target,
+            true_target,
+            ..
+        } => {
+            validate_target(plan, *false_target)?;
+            validate_target(plan, *true_target)?;
+        }
+        BaselineOp::LocalGet4BrTable { targets, .. } | BaselineOp::BrTable { targets } => {
+            for target in targets {
+                validate_target(plan, *target)?;
+            }
+        }
+        BaselineOp::DirectCall {
+            operand_index,
+            continuation_index,
+            ..
+        }
+        | BaselineOp::IndirectCall {
+            operand_index,
+            continuation_index,
+            ..
+        } => {
+            validate_operand_index(plan, *operand_index)?;
+            validate_operand_index(plan, *continuation_index)?;
+        }
+        BaselineOp::RuntimeStub { pc_index, .. } => {
+            if *pc_index != entry.pc_index {
+                return Err(BaselinePlanError::InvalidInstructionStart);
+            }
+        }
+        BaselineOp::RuntimeContinuationStub { pc_index, .. } => {
+            if *pc_index != entry.pc_index || plan.next_pc_index(*pc_index).is_none() {
+                return Err(BaselinePlanError::InvalidNextPc);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_target(plan: &BaselinePlan, target: usize) -> Result<(), BaselinePlanError> {
+    if target <= plan.code_len && plan.is_instruction_boundary(target) {
+        Ok(())
+    } else {
+        Err(BaselinePlanError::InvalidTarget)
+    }
+}
+
+fn validate_operand_index(plan: &BaselinePlan, index: usize) -> Result<(), BaselinePlanError> {
+    if index < plan.code_len {
+        Ok(())
+    } else {
+        Err(BaselinePlanError::InvalidOperandIndex)
+    }
+}
 
 const OP_SPECS: &[OpSpec] = &[
     OpSpec {
@@ -7094,4 +7329,82 @@ fn operand_loop_param(code: &[Instr], cursor: usize, offset: usize) -> Result<Lo
 
 fn instr(code: &[Instr], index: usize) -> Result<&Instr, ()> {
     code.get(index).ok_or(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::{Op, Operand};
+
+    unsafe fn unknown_op(
+        _pc: *const Instr,
+        _ctx: &mut crate::common::ExecuteContext<'_>,
+    ) -> VMResult<()> {
+        VMResult::Success(())
+    }
+
+    fn op_instr(op: Op) -> Instr {
+        Instr { op }
+    }
+
+    fn i32_operand(value: i32) -> Instr {
+        Instr {
+            operand: Operand { i32: value },
+        }
+    }
+
+    fn jump_operand(target: usize) -> Instr {
+        Instr {
+            operand: Operand {
+                jump_addr: target as u32,
+            },
+        }
+    }
+
+    #[test]
+    fn baseline_plan_accepts_simple_decoded_op() {
+        let code = [op_instr(op_i32_const as Op), i32_operand(7)];
+        let plan = build_baseline_plan(&code, &[2]).expect("plan should validate");
+
+        assert_eq!(plan.entries().len(), 1);
+        assert_eq!(plan.entries()[0].pc_index, 0);
+        assert_eq!(plan.entries()[0].next_pc_index, 2);
+    }
+
+    #[test]
+    fn baseline_plan_rejects_zero_width_op() {
+        let code = [op_instr(op_i32_const as Op), i32_operand(7)];
+
+        match build_baseline_plan(&code, &[0]) {
+            Err(error) => assert_eq!(error, BaselinePlanError::EmptyOp),
+            Ok(_) => panic!("zero-width op should reject"),
+        }
+    }
+
+    #[test]
+    fn baseline_plan_rejects_misaligned_branch_target() {
+        let code = [
+            op_instr(op_br_if as Op),
+            jump_operand(1),
+            op_instr(op_i32_const as Op),
+            i32_operand(1),
+        ];
+
+        match build_baseline_plan(&code, &[2, 2]) {
+            Err(error) => assert_eq!(error, BaselinePlanError::InvalidTarget),
+            Ok(_) => panic!("misaligned branch target should reject"),
+        }
+    }
+
+    #[test]
+    fn baseline_plan_accepts_current_op_continuation_bridge() {
+        let code = [op_instr(unknown_op as Op)];
+        let plan = build_baseline_plan(&code, &[1]).expect("plan should validate");
+
+        assert!(matches!(
+            plan.entries()[0].op,
+            BaselineOp::RuntimeContinuationStub { .. }
+        ));
+        assert_eq!(plan.next_pc_index(0), Some(1));
+    }
 }
