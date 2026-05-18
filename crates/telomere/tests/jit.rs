@@ -147,6 +147,29 @@ fn host_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
         all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
     )
 ))]
+fn host_add_ten(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let value = i32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), 0, 4)
+            .try_into()
+            .unwrap(),
+    );
+    ctx.return_slot().write(&(value + 10).to_le_bytes());
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 fn assert_success_i32(result: VMResult<ResultValue>, expected: i32) {
     assert_success_values(result, ResultValue::new(vec![WasmValue::I32(expected)]));
 }
@@ -408,6 +431,64 @@ async fn jit_repeated_lazy_direct_call_keeps_cache_state_stable() {
     assert_eq!(
         after_second.rejected_functions, after_first.rejected_functions,
         "expected no JIT rejection on repeated lazy direct calls, first={after_first:?} second={after_second:?}"
+    );
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_wasm_fast_direct_call_falls_back_after_host_relink() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (func $target (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $target
+            i32.const 2
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let first = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(10)]),
+    )
+    .await;
+    let after_first = store.jit_cache_stats();
+    link_host_function_with_function_idx(&instance, 0, host_add_ten, &store);
+    let second = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(10)]),
+    )
+    .await;
+    let after_second = store.jit_cache_stats();
+
+    assert_success_i32(first, 13);
+    assert_success_i32(second, 22);
+    assert_jit_accepted(before, after_first);
+    assert_eq!(
+        after_second.rejected_functions, after_first.rejected_functions,
+        "relink fallback should not reject the already-compiled caller, first={after_first:?} second={after_second:?}"
     );
 }
 

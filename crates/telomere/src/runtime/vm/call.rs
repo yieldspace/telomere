@@ -194,7 +194,12 @@ pub(crate) unsafe fn jit_call_direct_wasm_fast(
     }
     let recipe = ensure_call_recipe(funcaddr, ctx);
     let CallDispatchTarget::Wasm { local_size } = recipe.target else {
-        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+        return jit_exit_from_call_outcome(
+            unsafe { internal_op_call(continuation, recipe, ctx, false) },
+            continuation,
+            recipe,
+            false,
+        );
     };
     match unsafe { prepare_jit_wasm_call(continuation, recipe, local_size as usize, ctx, false) } {
         VMResult::Success(()) if ctx.gc.jit_rejected_func(funcaddr) => unsafe {
