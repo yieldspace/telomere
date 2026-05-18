@@ -79,6 +79,20 @@ pub fn target_info() -> TargetInfo {
     }
 }
 
+pub fn sse41_rounding_supported() -> bool {
+    detect_sse41_rounding()
+}
+
+#[cfg(target_arch = "x86_64")]
+fn detect_sse41_rounding() -> bool {
+    std::arch::is_x86_feature_detected!("sse4.1")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn detect_sse41_rounding() -> bool {
+    false
+}
+
 const fn target_os() -> TargetOs {
     #[cfg(target_os = "macos")]
     {
@@ -609,36 +623,36 @@ impl X64BaselineMasm {
         self.float_unop(vd, vn, true, 0x51);
     }
 
-    pub fn frintn_s(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, false, 0);
+    pub fn frintn_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, false, 0)
     }
 
-    pub fn frintn_d(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, true, 0);
+    pub fn frintn_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, true, 0)
     }
 
-    pub fn frintp_s(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, false, 2);
+    pub fn frintp_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, false, 2)
     }
 
-    pub fn frintp_d(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, true, 2);
+    pub fn frintp_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, true, 2)
     }
 
-    pub fn frintm_s(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, false, 1);
+    pub fn frintm_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, false, 1)
     }
 
-    pub fn frintm_d(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, true, 1);
+    pub fn frintm_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, true, 1)
     }
 
-    pub fn frintz_s(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, false, 3);
+    pub fn frintz_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, false, 3)
     }
 
-    pub fn frintz_d(&mut self, vd: u8, vn: u8) {
-        self.round(vd, vn, true, 3);
+    pub fn frintz_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        self.round(vd, vn, true, 3)
     }
 
     pub fn cvtf_d_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
@@ -1173,13 +1187,15 @@ impl X64BaselineMasm {
             .expect("virtual register fits");
     }
 
-    fn round(&mut self, vd: u8, vn: u8, f64: bool, mode: u8) {
-        let disp = Self::slot_disp(vn).expect("virtual register fits");
+    fn round(&mut self, vd: u8, vn: u8, f64: bool, mode: u8) -> AsmResult {
+        if !sse41_rounding_supported() {
+            return Err(AsmError::UnsupportedFeature);
+        }
+        let disp = Self::slot_disp(vn)?;
         self.emit(&[0x66, 0x0f, 0x3a, if f64 { 0x0b } else { 0x0a }]);
         self.modrm_rbp_disp32(0, disp);
         self.bytes.push(mode);
         self.store_xmm_slot(0, vd, f64)
-            .expect("virtual register fits");
     }
 
     fn cvt_int_to_float(&mut self, vd: u8, rn: u8, to_f64: bool, from_i64: bool, signed: bool) {
@@ -1434,6 +1450,22 @@ mod tests {
             .into_bytes()
             .windows(3)
             .any(|window| window == [0xf3, 0x0f, 0x58]));
+    }
+
+    #[test]
+    fn sse41_rounding_is_cpu_feature_gated() {
+        let mut asm = X64BaselineMasm::with_capacity(64);
+        let result = asm.frintp_s(2, 1);
+        if sse41_rounding_supported() {
+            assert!(result.is_ok());
+            assert!(asm
+                .into_bytes()
+                .windows(4)
+                .any(|window| window == [0x66, 0x0f, 0x3a, 0x0a]));
+        } else {
+            assert_eq!(result, Err(crate::masm::AsmError::UnsupportedFeature));
+            assert!(asm.into_bytes().is_empty());
+        }
     }
 
     #[test]

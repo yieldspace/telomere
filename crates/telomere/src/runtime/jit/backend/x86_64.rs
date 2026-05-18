@@ -3816,26 +3816,10 @@ impl<'a> Emitter<'a> {
                 self.fsqrt_s(0, 0);
                 self.fmov_w_from_s(result, 0);
             }
-            LocalUnary32Op::F32Ceil => {
-                self.fmov_s_from_w(0, result);
-                self.frintp_s(0, 0);
-                self.fmov_w_from_s(result, 0);
-            }
-            LocalUnary32Op::F32Floor => {
-                self.fmov_s_from_w(0, result);
-                self.frintm_s(0, 0);
-                self.fmov_w_from_s(result, 0);
-            }
-            LocalUnary32Op::F32Trunc => {
-                self.fmov_s_from_w(0, result);
-                self.frintz_s(0, 0);
-                self.fmov_w_from_s(result, 0);
-            }
-            LocalUnary32Op::F32Nearest => {
-                self.fmov_s_from_w(0, result);
-                self.frintn_s(0, 0);
-                self.fmov_w_from_s(result, 0);
-            }
+            LocalUnary32Op::F32Ceil => self.emit_f32_rounding(result, FloatUnaryOp::Ceil)?,
+            LocalUnary32Op::F32Floor => self.emit_f32_rounding(result, FloatUnaryOp::Floor)?,
+            LocalUnary32Op::F32Trunc => self.emit_f32_rounding(result, FloatUnaryOp::Trunc)?,
+            LocalUnary32Op::F32Nearest => self.emit_f32_rounding(result, FloatUnaryOp::Nearest)?,
         }
         Ok(())
     }
@@ -3867,26 +3851,10 @@ impl<'a> Emitter<'a> {
                 self.fsqrt_d(0, 0);
                 self.fmov_x_from_d(result, 0);
             }
-            LocalUnary64Op::F64Ceil => {
-                self.fmov_d_from_x(0, result);
-                self.frintp_d(0, 0);
-                self.fmov_x_from_d(result, 0);
-            }
-            LocalUnary64Op::F64Floor => {
-                self.fmov_d_from_x(0, result);
-                self.frintm_d(0, 0);
-                self.fmov_x_from_d(result, 0);
-            }
-            LocalUnary64Op::F64Trunc => {
-                self.fmov_d_from_x(0, result);
-                self.frintz_d(0, 0);
-                self.fmov_x_from_d(result, 0);
-            }
-            LocalUnary64Op::F64Nearest => {
-                self.fmov_d_from_x(0, result);
-                self.frintn_d(0, 0);
-                self.fmov_x_from_d(result, 0);
-            }
+            LocalUnary64Op::F64Ceil => self.emit_f64_rounding(result, FloatUnaryOp::Ceil)?,
+            LocalUnary64Op::F64Floor => self.emit_f64_rounding(result, FloatUnaryOp::Floor)?,
+            LocalUnary64Op::F64Trunc => self.emit_f64_rounding(result, FloatUnaryOp::Trunc)?,
+            LocalUnary64Op::F64Nearest => self.emit_f64_rounding(result, FloatUnaryOp::Nearest)?,
         }
         Ok(())
     }
@@ -4041,10 +4009,10 @@ impl<'a> Emitter<'a> {
             FloatUnaryOp::Abs => self.fabs_s(0, 0),
             FloatUnaryOp::Neg => self.fneg_s(0, 0),
             FloatUnaryOp::Sqrt => self.fsqrt_s(0, 0),
-            FloatUnaryOp::Ceil => self.frintp_s(0, 0),
-            FloatUnaryOp::Floor => self.frintm_s(0, 0),
-            FloatUnaryOp::Trunc => self.frintz_s(0, 0),
-            FloatUnaryOp::Nearest => self.frintn_s(0, 0),
+            FloatUnaryOp::Ceil
+            | FloatUnaryOp::Floor
+            | FloatUnaryOp::Trunc
+            | FloatUnaryOp::Nearest => return self.emit_f32_rounding(value, op),
         }
         self.fmov_w_from_s(value, 0);
         Ok(())
@@ -4060,13 +4028,39 @@ impl<'a> Emitter<'a> {
             FloatUnaryOp::Abs => self.fabs_d(0, 0),
             FloatUnaryOp::Neg => self.fneg_d(0, 0),
             FloatUnaryOp::Sqrt => self.fsqrt_d(0, 0),
-            FloatUnaryOp::Ceil => self.frintp_d(0, 0),
-            FloatUnaryOp::Floor => self.frintm_d(0, 0),
-            FloatUnaryOp::Trunc => self.frintz_d(0, 0),
-            FloatUnaryOp::Nearest => self.frintn_d(0, 0),
+            FloatUnaryOp::Ceil
+            | FloatUnaryOp::Floor
+            | FloatUnaryOp::Trunc
+            | FloatUnaryOp::Nearest => self.emit_f64_rounding(16, op)?,
         }
         self.fmov_x_from_d(16, 0);
         self.push_x_as_i64_slots(16)?;
+        Ok(())
+    }
+
+    fn emit_f32_rounding(&mut self, value: u8, op: FloatUnaryOp) -> Result<(), ()> {
+        self.fmov_s_from_w(0, value);
+        match op {
+            FloatUnaryOp::Ceil => self.frintp_s(0, 0)?,
+            FloatUnaryOp::Floor => self.frintm_s(0, 0)?,
+            FloatUnaryOp::Trunc => self.frintz_s(0, 0)?,
+            FloatUnaryOp::Nearest => self.frintn_s(0, 0)?,
+            FloatUnaryOp::Abs | FloatUnaryOp::Neg | FloatUnaryOp::Sqrt => return Err(()),
+        }
+        self.fmov_w_from_s(value, 0);
+        Ok(())
+    }
+
+    fn emit_f64_rounding(&mut self, value: u8, op: FloatUnaryOp) -> Result<(), ()> {
+        self.fmov_d_from_x(0, value);
+        match op {
+            FloatUnaryOp::Ceil => self.frintp_d(0, 0)?,
+            FloatUnaryOp::Floor => self.frintm_d(0, 0)?,
+            FloatUnaryOp::Trunc => self.frintz_d(0, 0)?,
+            FloatUnaryOp::Nearest => self.frintn_d(0, 0)?,
+            FloatUnaryOp::Abs | FloatUnaryOp::Neg | FloatUnaryOp::Sqrt => return Err(()),
+        }
+        self.fmov_x_from_d(value, 0);
         Ok(())
     }
 

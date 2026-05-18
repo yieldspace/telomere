@@ -3,6 +3,7 @@ pub enum AsmError {
     InvalidRegister,
     InvalidImmediate,
     BranchOutOfRange,
+    UnsupportedFeature,
 }
 
 impl From<AsmError> for () {

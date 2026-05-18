@@ -551,7 +551,23 @@ impl RuntimeEnv {
             parent: self.parent.clone(),
             imports: self.imports.clone(),
             shared: self.shared.clone(),
-            caches: self.caches.clone(),
+            // Cached component defs own cloned envs, so sharing this Rc can
+            // make a cache retain itself through RuntimeComponentDef.
+            caches: Rc::new(self.clone_caches_detached()),
+        }
+    }
+
+    fn clone_caches_detached(&self) -> RuntimeCaches {
+        let caches = self.caches.as_ref();
+        RuntimeCaches {
+            components: RefCell::new(caches.components.borrow().clone()),
+            instances: RefCell::new(caches.instances.borrow().clone()),
+            funcs: RefCell::new(caches.funcs.borrow().clone()),
+            core_modules: RefCell::new(caches.core_modules.borrow().clone()),
+            core_instances: RefCell::new(caches.core_instances.borrow().clone()),
+            core_funcs: RefCell::new(caches.core_funcs.borrow().clone()),
+            core_memories: RefCell::new(caches.core_memories.borrow().clone()),
+            core_tables: RefCell::new(caches.core_tables.borrow().clone()),
         }
     }
 
@@ -716,5 +732,68 @@ impl RuntimeComponentInstance {
             .borrow_mut()
             .insert(name.to_owned(), export.clone());
         Ok(export)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_component() -> Component {
+        Component {
+            imports: HashMap::new(),
+            exports: HashMap::new(),
+        }
+    }
+
+    fn program_with_defined_component(component_idx: GlobalIdx<Component>) -> ComponentProgram {
+        ComponentProgram {
+            type_infos: Vec::new(),
+            imports: Vec::new(),
+            callable_imports: Vec::new(),
+            exports: Vec::new(),
+            callable_exports: Vec::new(),
+            ops: Vec::new(),
+            bytes: Vec::new(),
+            root: empty_component(),
+            types: Vec::new().into_boxed_slice(),
+            component_store: HashMap::from([(component_idx, Relation::Defined(empty_component()))]),
+            instance_store: HashMap::new(),
+            func_store: HashMap::new(),
+            core_module_store: HashMap::new(),
+            core_type_store: HashMap::new(),
+            core_instance_store: HashMap::new(),
+            core_func_store: HashMap::new(),
+            core_memory_store: HashMap::new(),
+            core_global_store: HashMap::new(),
+            core_table_store: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_component_cache_does_not_retain_root_cache() {
+        let component_idx = GlobalIdx::new();
+        let program = Rc::new(program_with_defined_component(component_idx));
+        let env = Rc::new(RuntimeEnv::new(
+            program,
+            ComponentLinker::new(),
+            None,
+            HashMap::new(),
+            Rc::new(SharedState::default()),
+        ));
+        let store = Store::new();
+
+        let component = env
+            .resolve_component(component_idx, &store)
+            .expect("defined component should resolve");
+
+        assert!(!Rc::ptr_eq(&env.caches, &component.env.caches));
+        assert_eq!(Rc::strong_count(&env.caches), 1);
+        assert_eq!(env.caches.components.borrow().len(), 1);
+
+        let root_caches = Rc::downgrade(&env.caches);
+        drop(env);
+
+        assert!(root_caches.upgrade().is_none());
     }
 }
