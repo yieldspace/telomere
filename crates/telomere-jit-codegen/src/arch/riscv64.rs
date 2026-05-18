@@ -86,6 +86,10 @@ impl Cond {
             Self::Le => Self::Gt,
         }
     }
+
+    const fn uses_signed_operands(self) -> bool {
+        matches!(self, Self::Ge | Self::Gt | Self::Le | Self::Lt)
+    }
 }
 
 pub fn target_info() -> TargetInfo {
@@ -1082,7 +1086,12 @@ impl Riscv64BaselineMasm {
         if let Some(float_width) = float {
             return self.emit_float_cmp_bool(dst, float_width, cond);
         }
-        if width == Width::W32 {
+        if width == Width::W32 && cond.uses_signed_operands() {
+            self.slli(T0, T0, 32);
+            self.srai(T0, T0, 32);
+            self.slli(T1, T1, 32);
+            self.srai(T1, T1, 32);
+        } else if width == Width::W32 {
             self.slli(T0, T0, 32);
             self.srli(T0, T0, 32);
             self.slli(T1, T1, 32);
@@ -1406,5 +1415,36 @@ mod tests {
         let mut asm = Riscv64BaselineMasm::with_capacity(64);
         assert_eq!(asm.frintp_s(0, 1), Err(AsmError::UnsupportedFeature));
         assert!(asm.into_bytes().is_empty());
+    }
+
+    #[test]
+    fn sign_extends_riscv32_signed_compare_operands() {
+        let mut asm = Riscv64BaselineMasm::with_capacity(128);
+        asm.emit_cmp_bool(
+            T2,
+            LastCmp::Int {
+                width: Width::W32,
+                lhs: 0,
+                rhs: Rhs::Reg(1),
+            },
+            Cond::Lt,
+        )
+        .unwrap();
+        let bytes = asm.into_bytes();
+
+        assert!(bytes.windows(4).any(|window| {
+            u32::from_le_bytes(window.try_into().unwrap())
+                == encode_i(0x13, 5, T0, T0, (0x20 << 5) | 32).unwrap()
+        }));
+        assert!(bytes.windows(4).any(|window| {
+            u32::from_le_bytes(window.try_into().unwrap())
+                == encode_i(0x13, 5, T1, T1, (0x20 << 5) | 32).unwrap()
+        }));
+        assert!(!bytes.windows(4).any(|window| {
+            u32::from_le_bytes(window.try_into().unwrap()) == encode_i(0x13, 5, T0, T0, 32).unwrap()
+        }));
+        assert!(!bytes.windows(4).any(|window| {
+            u32::from_le_bytes(window.try_into().unwrap()) == encode_i(0x13, 5, T1, T1, 32).unwrap()
+        }));
     }
 }

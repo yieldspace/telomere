@@ -1488,6 +1488,77 @@ async fn jit_executes_i32_compare_family() {
     .await;
 
     assert_success_i32(result, 206);
+
+    let signed_negative = invoke_jit(
+        r#"
+        (module
+          (func (export "run") (param $a i32) (param $b i32) (result i32)
+            local.get $a
+            local.get $b
+            i32.eq
+            i32.const 1
+            i32.mul
+            local.get $a
+            local.get $b
+            i32.ne
+            i32.const 2
+            i32.mul
+            i32.add
+            local.get $a
+            local.get $b
+            i32.lt_s
+            i32.const 4
+            i32.mul
+            i32.add
+            local.get $a
+            local.get $b
+            i32.lt_u
+            i32.const 8
+            i32.mul
+            i32.add
+            local.get $a
+            local.get $b
+            i32.gt_s
+            i32.const 16
+            i32.mul
+            i32.add
+            local.get $a
+            local.get $b
+            i32.gt_u
+            i32.const 32
+            i32.mul
+            i32.add
+            local.get $a
+            local.get $b
+            i32.le_s
+            i32.const 64
+            i32.mul
+            i32.add
+            local.get $a
+            local.get $b
+            i32.le_u
+            i32.const 128
+            i32.mul
+            i32.add
+            local.get $a
+            local.get $b
+            i32.ge_s
+            i32.const 256
+            i32.mul
+            i32.add
+            local.get $a
+            local.get $b
+            i32.ge_u
+            i32.const 512
+            i32.mul
+            i32.add))
+        "#,
+        "run",
+        vec![WasmValue::I32(-1), WasmValue::I32(0)],
+    )
+    .await;
+
+    assert_success_i32(signed_negative, 614);
 }
 
 #[cfg(all(
