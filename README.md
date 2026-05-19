@@ -1,102 +1,214 @@
 # telomere
 
-## CLI
+Telomere is a lightweight WebAssembly runtime written in Rust. The workspace
+contains a core Wasm parser/runtime, a WebAssembly Component Model decoder and
+runtime, a WASI component provider, a component bindgen macro, and the
+`telomere-cli` command-line runner.
 
-```shell
-> telomere-cli examples/add.wasm main 1 2
-3
-```
+The project is still pre-release and the workspace packages are not published
+to crates.io (`publish = false`). Treat the public APIs as implementation
+driven until the project reaches a tagged release.
 
-## Development
+## What is in this repository?
 
-After cloning, initialize the pinned test fixtures submodule before running the
-workspace tests:
+| Path | Purpose |
+| --- | --- |
+| `src/` | `telomere-cli`, including core module, preview1, and component runners. |
+| `crates/telomere` | Core Wasm binary parser, validator-facing optimizer, runtime, host linking, and optional JIT. |
+| `crates/telomere-component` | Component Model decoder, validator, IR, linker, and runtime. |
+| `crates/telomere-component-wasi` | WASI 0.2.6 component host provider used by the CLI and tests. |
+| `crates/telomere-component-bindgen` | Proc macro that generates component bindings from WIT. |
+| `crates/telomere-jit-codegen` | Low-level executable memory and target code-emission helpers for the core JIT. |
+| `crates/telomere-macros`, `crates/union-find` | Internal support crates. |
+| `docs/` | Architecture notes, audits, and design boundaries. |
+| `examples/` | Small runnable Wasm fixtures. |
+
+Start with [docs/README.md](docs/README.md) for the documentation map.
+
+## Requirements
+
+- Rust 1.86 or newer.
+- A Unix-like development environment for the current JIT executable-memory
+  backend tests. The non-JIT interpreter and component tests are the portable
+  baseline.
+- The upstream Wasm testsuite submodule when running the full workspace test
+  set.
+
+Initialize fixtures after cloning:
 
 ```shell
 git submodule update --init --recursive
 ```
 
-This repository's CI runs the following commands:
+## Quick start
+
+Run the sample core Wasm module:
+
+```shell
+cargo run -- examples/add.wasm main 1 2
+```
+
+Expected output:
+
+```text
+3
+```
+
+Run the same module through the experimental JIT on a supported target:
+
+```shell
+cargo run --features jit -- --jit examples/add.wasm main 1 2
+```
+
+Run a WASI preview1 command module by passing guest argv after `--`:
+
+```shell
+cargo run -- path/to/command.wasm -- arg1 arg2
+```
+
+Run a WASI 0.2 component command:
+
+```shell
+cargo run -- component path/to/component.wasm --env KEY=VALUE --dir host:guest -- arg1 arg2
+```
+
+## CLI usage
+
+The legacy core invocation form calls an exported function and parses remaining
+arguments as `i32` values:
+
+```shell
+telomere-cli [--jit] [--jit-code-cache-mib N] <module.wasm> <export> [i32...]
+```
+
+If a core module imports `wasi_snapshot_preview1` and exports `_start`, the CLI
+can run it as a command module. Use `--` before guest argv:
+
+```shell
+telomere-cli <command.wasm> -- [argv...]
+```
+
+The component subcommand runs components that export
+`wasi:cli/run@0.2.6.run`:
+
+```shell
+telomere-cli component <component.wasm> [--dir HOST[:GUEST]] [--env KEY=VALUE] [--no-inherit-env] -- [argv...]
+```
+
+## Cargo features
+
+The root CLI package enables `full` by default, which enables the core Wasm
+`simd` and `threads` proposal features in `crates/telomere`.
+
+| Feature | Scope | Notes |
+| --- | --- | --- |
+| `simd` | `telomere` | Enables core Wasm SIMD parsing/runtime support through `wide`. Enabled by default. |
+| `threads` | `telomere` | Enables shared-memory and atomic instruction support. Enabled by default. |
+| `jit` | root CLI and `telomere` | Builds the experimental function-local lazy baseline JIT. Runtime use still requires `--jit` or `RuntimeConfig`. |
+| `vm-profile` | root CLI and `telomere` | Enables VM profile counters used by runtime/JIT diagnostics. |
+| `vm-diagnostics` | root CLI and `telomere` | Enables additional runtime diagnostics. |
+
+Multi-memory, tail calls, and async runtime support are always enabled; they are
+not separate Cargo features.
+
+The component crate also contains gated Component Model proposal features such
+as `component-gated-feature-async` and
+`component-gated-feature-fixed-length-lists`. These are intentionally explicit
+because Component Model proposal stability differs from core Wasm proposal
+coverage.
+
+## Library entry points
+
+The core crate re-exports the common runtime entry points from `telomere`:
+
+```rust
+use telomere::{
+    instantiate, run_module_function, IoReadBinaryReader, Registry, ResultValue,
+    Store, WasmParser, WasmValue,
+};
+```
+
+The component crate exposes a compile/instantiate/call split:
+
+```rust
+use telomere_component::{ComponentEngine, ComponentLinker, ComponentValue};
+
+let engine = ComponentEngine::new();
+let program = engine.compile(bytes)?;
+let linker = ComponentLinker::new();
+let instance = engine.instantiate(&program, &store, &linker).await?;
+let results = instance.call(&store, "export-name", &[ComponentValue::S32(1)]).await?;
+```
+
+For WASI components, register the provider from `telomere-component-wasi`:
+
+```rust
+use telomere_component_wasi::{add_to_linker_sync, WasiState};
+```
+
+## JIT status
+
+The core JIT is experimental. It is a function-local lazy baseline JIT that is
+compiled with `--features jit` and enabled at runtime with `--jit` or
+`RuntimeConfig { jit: JitConfig { enabled: true, .. } }`.
+
+Supported native backends are:
+
+- macOS AArch64
+- macOS/Linux x86_64
+- Linux GNU riscv64 targets with standard riscv64gc F/D floating-point ISA
+  assumptions
+
+See [docs/core/jit.md](docs/core/jit.md) for the current status, boundaries,
+diagnostic environment variables, and known gaps.
+
+## WASI status
+
+Telomere has two WASI entry points:
+
+- core WASI preview1 command modules through `telomere-cli <command.wasm> -- ...`;
+- WASI 0.2.6 component commands through
+  `telomere-cli component <component.wasm> -- ...`.
+
+The preview1 runner is intentionally small. It currently supports command-style
+modules that import `wasi_snapshot_preview1`, export `_start`, and use the
+implemented host functions for argv, clocks, fd write/seek/stat/close, and
+`proc_exit`. The component WASI provider registers the generated WIT bindings
+for cli, io, clocks, random, filesystem, and sockets, with capability supplied
+through `WasiState`.
+
+## Development
+
+CI runs the following commands:
 
 ```shell
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --tests -- -D warnings
-cargo test --workspace --release
+cargo clippy --workspace --all-targets --tests --features jit -- -D warnings
+cargo test --verbose --release --workspace
 ```
 
-## Proposal Features
+Useful scoped commands while iterating:
 
-The `telomere` library crate exposes proposal-specific build features:
+```shell
+cargo test -p telomere --release
+cargo test -p telomere-component --release
+cargo test -p telomere-component-wasi --release
+cargo test -p telomere --release --features jit --test jit -- --nocapture
+```
 
-- `simd`
-- `threads`
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and PR
+checklist.
 
-`simd` and `threads` are enabled by default for the library crate.
+## Documentation
 
-Multi-memory, tail-call support, and the async runtime are always enabled; they
-are no longer separate Cargo features.
+- [docs/README.md](docs/README.md) - documentation map.
+- [docs/core/optimizer.md](docs/core/optimizer.md) - current core optimizer.
+- [docs/core/runtime-memory.md](docs/core/runtime-memory.md) - runtime memory model.
+- [docs/core/jit.md](docs/core/jit.md) - experimental core JIT.
+- [docs/core/coremark-benchmark.md](docs/core/coremark-benchmark.md) - local CoreMark comparison.
+- [docs/component-model/relation-driven-runtime.md](docs/component-model/relation-driven-runtime.md) - component runtime architecture.
+- [docs/memory-reduction-audit.md](docs/memory-reduction-audit.md) - memory reduction audit and tradeoffs.
 
-The root `telomere-cli` package builds with `full` by default, so ordinary
-workspace commands such as `cargo run` and `cargo test --workspace --release`
-exercise the CLI with both optional proposal features enabled.
+## License
 
-## Core JIT Status
-
-The core JIT is an experimental function-local lazy baseline JIT. Build it with
-the `jit` Cargo feature and enable it at runtime with `--jit` or
-`RuntimeConfig { jit: JitConfig { enabled: true, .. } }`.
-
-- [x] Function-level lazy compilation on first JIT-enabled wasm call.
-- [x] Single-pass direct native emitter written in Rust; LLVM and external code
-      generators are not used.
-- [x] Native baseline backends for macOS AArch64, macOS/Linux x86_64, and
-      Linux GNU riscv64 targets using the standard riscv64gc F/D floating-point
-      ISA assumptions.
-- [x] Store-local native code cache with a configurable byte cap
-      (`--jit-code-cache-mib`, default 4 MiB) and least-recently-used eviction.
-- [x] Tier-aware cache structure prepared for a future optimizing tier; the
-      active tier is currently always baseline.
-- [x] W^X executable memory through `mmap-rs`; each compiled function owns an
-      independent executable mapping that is never made writable again.
-- [x] Unsupported direct native op shapes are accepted through JIT ABI helper
-      calls or continuation bridges; opcode coverage alone does not
-      whole-function reject baseline compilation.
-- [x] Tail-call-threading integration through the existing direct call and
-      return-call paths.
-- [x] Runtime exits for done, trap, direct call, pending async work,
-      continuation bridges, and callee-level interpreter execution when a
-      called function is not JIT-accepted.
-- [x] Native emission for the scalar baseline subset: i32/i64 integer
-      arithmetic and comparisons, f32/f64 arithmetic/comparisons/rounding,
-      numeric conversions, globals, locals, select, references, direct and
-      indirect calls, control flow, memory.size/grow, and default-memory
-      8/16/32/64-bit load/store helpers.
-- [x] Native helper calls and continuation bridges cover complex VM operations
-      without `BaselineOp::RuntimeStub` /
-      `BaselineOp::RuntimeContinuationStub` compile rejection.
-- [x] Baseline acceptance coverage for enabled core Wasm SIMD (`v128`) and
-      threads/atomics through direct native paths where implemented and JIT ABI
-      helper/continuation bridges for the remaining handlers.
-- [ ] Full Wasm SIMD (`v128`) and threads/atomics coverage in direct native
-      code.
-- [ ] Direct native emission for remaining shape-general branch-heavy guarded
-      memory patterns that currently use continuation bridges.
-- [x] Benchmark-specific whole-function rewrites are intentionally not enabled;
-      JIT improvements should be reusable Wasm instruction patterns rather than
-      CoreMark-only recognizers.
-- [ ] Native import/host-call stubs; imported calls still rely on the existing
-      runtime call machinery rather than a dedicated native ABI path.
-- [ ] Register allocation beyond the current small fixed stack-register pool.
-- [ ] Hotness counters, tier-up policy, and an optimizing compiler.
-- [ ] Full trap maps, GC maps, source debug info, profiling metadata, and
-      deoptimization metadata.
-- [ ] Broader cross-platform executable memory policy and cache tuning beyond
-      the currently supported Unix-like targets.
-
-Local Apple Silicon CoreMark sanity check using a standard `wasm-coremark`
-`coremark.wasm` build (`ITERATIONS=30000`, Clang 11 `-O3`, `STATIC` memory),
-with CoreMark-specific function recognizers disabled: `--features jit` without
-runtime JIT measured `2010.184129` iterations/sec, and `--features jit -- --jit`
-measured `2027.199476` iterations/sec. This run is retained as a correctness and
-overhead signal; the current numbers are close enough that they should not be
-read as a material CoreMark speedup claim.
+This repository is licensed under the terms in [LICENSE](LICENSE).

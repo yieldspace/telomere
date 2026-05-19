@@ -6,7 +6,8 @@
 
 - component バイナリは `ComponentEngine::compile` で一度だけ decode / validate する。
 - `compile` の出力は `ComponentProgram` で、runtime はここに入っている relation snapshot を正本として解決する。
-- runtime は JIT やバイナリ再走査をしない。
+- component runtime は JIT / AOT やバイナリ再走査をしない。core Wasm module
+  の実行は `crates/telomere` 側の runtime に委ねる。
 - 実行境界は local async で、`Store` は caller task 上で await される。
 
 ## 1. 全体像

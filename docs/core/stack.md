@@ -1,5 +1,9 @@
 # Unified Stack における Call Frame 実装のまとめ
 
+> Status: historical design note. The current runtime memory and execution
+> contracts are documented in [runtime-memory.md](runtime-memory.md). Treat this
+> file as background for earlier stack-layout work, not as the current ABI.
+
 ## 概要
 
 本ドキュメントでは、Wasm 実装における Unified Stack（統合スタック）モデルの構造、利点、課題について記述する。
