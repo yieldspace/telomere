@@ -157,6 +157,47 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
 }
+
+fn const7(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let slot = ctx.return_slot();
+    slot.write(&7i32.to_le_bytes());
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
+}
+
+#[tokio::test]
+pub async fn test_zero_param_native_result() {
+    let store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_native_module(
+        NativeModule {
+            functions: vec![HostFunctionDefinition {
+                fp: const7,
+                name: Some("const7".to_string()),
+                signature: FuncType::new(vec![], vec![ValType::I32]),
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, const7, &store);
+
+    let wast = r#"
+    (module
+      (import "host" "const7" (func $const7 (result i32)))
+      (func (export "const7") (result i32) (call $const7))
+    )
+    (assert_return (invoke "const7") (i32.const 7))
+    "#;
+    run_wast_with(wast, &store, &mut registry).await;
+}
+
 #[tokio::test]
 pub async fn test_tail_call_native() {
     let store = Store::new();

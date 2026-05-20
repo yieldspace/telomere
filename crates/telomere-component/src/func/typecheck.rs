@@ -15,6 +15,8 @@ pub(super) enum TypeExpectation {
     F64,
     Char,
     String,
+    #[cfg(feature = "component-gated-feature-async")]
+    ErrorContext,
 }
 
 #[derive(Clone, Copy)]
@@ -49,22 +51,24 @@ fn type_matches(ty: &ValType, program: &ComponentProgram, expected: TypeExpectat
 }
 
 fn primitive_matches(prim: &PrimValType, expected: TypeExpectation) -> bool {
-    matches!(
-        (prim, expected),
+    match (prim, expected) {
         (PrimValType::Bool, TypeExpectation::Bool)
-            | (PrimValType::U8, TypeExpectation::U8)
-            | (PrimValType::S8, TypeExpectation::S8)
-            | (PrimValType::U16, TypeExpectation::U16)
-            | (PrimValType::S16, TypeExpectation::S16)
-            | (PrimValType::U32, TypeExpectation::U32)
-            | (PrimValType::S32, TypeExpectation::S32OrI32)
-            | (PrimValType::S64, TypeExpectation::S64OrI64)
-            | (PrimValType::U64, TypeExpectation::U64)
-            | (PrimValType::F32, TypeExpectation::F32)
-            | (PrimValType::F64, TypeExpectation::F64)
-            | (PrimValType::Char, TypeExpectation::Char)
-            | (PrimValType::String, TypeExpectation::String)
-    )
+        | (PrimValType::U8, TypeExpectation::U8)
+        | (PrimValType::S8, TypeExpectation::S8)
+        | (PrimValType::U16, TypeExpectation::U16)
+        | (PrimValType::S16, TypeExpectation::S16)
+        | (PrimValType::U32, TypeExpectation::U32)
+        | (PrimValType::S32, TypeExpectation::S32OrI32)
+        | (PrimValType::S64, TypeExpectation::S64OrI64)
+        | (PrimValType::U64, TypeExpectation::U64)
+        | (PrimValType::F32, TypeExpectation::F32)
+        | (PrimValType::F64, TypeExpectation::F64)
+        | (PrimValType::Char, TypeExpectation::Char)
+        | (PrimValType::String, TypeExpectation::String) => true,
+        #[cfg(feature = "component-gated-feature-async")]
+        (PrimValType::ErrorContext, TypeExpectation::ErrorContext) => true,
+        _ => false,
+    }
 }
 
 fn resolve_defined_type<'a>(
@@ -165,6 +169,32 @@ pub(super) fn extract_resource_handle_type(
         Type::DefVal(DefValType::Borrow(_)) => Ok(ResourceHandleKind::Borrow),
         _ => Err(ComponentError::Link(
             "typed component binding expects resource handle".to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+pub(super) fn extract_future_payload_type<'a>(
+    ty: &'a ValType,
+    program: &'a ComponentProgram,
+) -> Result<Option<&'a ValType>, ComponentError> {
+    match resolve_defined_type(ty, program)? {
+        Type::DefVal(DefValType::Future(payload)) => Ok(payload.as_ref()),
+        _ => Err(ComponentError::Link(
+            "typed component binding expects future".to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+pub(super) fn extract_stream_payload_type<'a>(
+    ty: &'a ValType,
+    program: &'a ComponentProgram,
+) -> Result<Option<&'a ValType>, ComponentError> {
+    match resolve_defined_type(ty, program)? {
+        Type::DefVal(DefValType::Stream(payload)) => Ok(payload.as_ref()),
+        _ => Err(ComponentError::Link(
+            "typed component binding expects stream".to_owned(),
         )),
     }
 }

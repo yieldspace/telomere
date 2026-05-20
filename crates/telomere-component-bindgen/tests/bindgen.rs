@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use telomere_component::{ComponentEngine, ComponentError, ComponentLinker, Store};
+use telomere_component::{
+    ComponentEngine, ComponentError, ComponentErrorContext, ComponentFuture, ComponentFutureHandle,
+    ComponentLinker, ComponentStreamHandle, Store,
+};
 
 telomere_component_bindgen::bindgen!({
     inline: r#"
@@ -36,6 +39,23 @@ telomere_component_bindgen::bindgen!({
     "#,
     world: "demo",
     module: "bindings"
+});
+
+telomere_component_bindgen::bindgen!({
+    inline: r#"
+        package ex:async-demo;
+
+        world demo {
+            import wait: async func(
+                input: future<u32>,
+                output: stream<string>,
+                context: error-context
+            ) -> future<u32>;
+        }
+    "#,
+    world: "demo",
+    module: "async_bindings",
+    host_mode: "async"
 });
 
 fn compile_component() -> Vec<u8> {
@@ -121,6 +141,23 @@ impl bindings::imports::math::Host for MathHost {
     }
 }
 
+struct AsyncRootHost;
+
+impl async_bindings::ImportsAsync for AsyncRootHost {
+    fn wait<'a>(
+        &'a self,
+        _store: &'a Store,
+        input: ComponentFutureHandle<u32>,
+        output: ComponentStreamHandle<String>,
+        context: ComponentErrorContext,
+    ) -> ComponentFuture<'a, Result<ComponentFutureHandle<u32>, ComponentError>> {
+        Box::pin(async move {
+            let _ = (output.handle(), context.handle());
+            Ok(ComponentFutureHandle::new(input.handle()))
+        })
+    }
+}
+
 #[tokio::test]
 async fn bindgen_supports_root_and_interface_bindings() {
     let bytes = compile_component();
@@ -157,4 +194,10 @@ async fn bindgen_supports_root_and_interface_bindings() {
         .await
         .expect("interface export should succeed");
     assert_eq!(doubled, 42);
+}
+
+#[test]
+fn bindgen_accepts_async_wit_functions_and_handle_types() {
+    let mut linker = ComponentLinker::new();
+    async_bindings::add_root_imports_to_linker_async(&mut linker, Rc::new(AsyncRootHost));
 }

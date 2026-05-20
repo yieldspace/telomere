@@ -42,7 +42,7 @@ pub(super) fn add_to_linker_async(linker: &mut ComponentLinker, host: Rc<WasiHos
 }
 
 impl WasiHost {
-    fn environment(&self) -> Vec<(String, String)> {
+    pub(super) fn environment(&self) -> Vec<(String, String)> {
         let inner = self.state.inner.borrow();
         let mut env = inner
             .env
@@ -53,11 +53,11 @@ impl WasiHost {
         env
     }
 
-    fn arguments(&self) -> Vec<String> {
+    pub(super) fn arguments(&self) -> Vec<String> {
         self.state.inner.borrow().args.clone()
     }
 
-    fn initial_cwd(&self) -> Option<String> {
+    pub(super) fn initial_cwd(&self) -> Option<String> {
         self.state
             .inner
             .borrow()
@@ -66,12 +66,12 @@ impl WasiHost {
             .map(|(_, guest_path)| guest_path.clone())
     }
 
-    fn exit(&self, code: u8) -> Result<(), ComponentError> {
+    pub(super) fn exit(&self, code: u8) -> Result<(), ComponentError> {
         self.state.inner.borrow_mut().exit_code = Some(code);
         Err(ComponentError::Trap(format!("wasi cli exit({code})")))
     }
 
-    fn input_stream_from_stdin(&self) -> WasiIoStreamsInputStream {
+    pub(super) fn input_stream_from_stdin(&self) -> WasiIoStreamsInputStream {
         let mut inner = self.state.inner.borrow_mut();
         let source = if inner.inherit_stdin {
             InputStreamSource::HostStdin
@@ -90,7 +90,7 @@ impl WasiHost {
         WasiIoStreamsInputStream::new(handle)
     }
 
-    fn output_stream(&self, kind: OutputStreamKind) -> WasiIoStreamsOutputStream {
+    pub(super) fn output_stream(&self, kind: OutputStreamKind) -> WasiIoStreamsOutputStream {
         let mut inner = self.state.inner.borrow_mut();
         let handle = next_handle(&mut inner.next_handle);
         inner.output_streams.insert(

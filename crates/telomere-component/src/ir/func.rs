@@ -1,4 +1,4 @@
-use crate::ir::types::CoreFuncType;
+use crate::ir::types::{CoreFuncType, CoreType};
 use crate::ir::{CoreFunc, CoreMemory, GlobalIdx, TypeId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,8 +14,14 @@ pub struct CanonicalOptions {
     pub memory: Option<GlobalIdx<CoreMemory>>,
     pub realloc: Option<GlobalIdx<CoreFunc>>,
     pub post_return: Option<GlobalIdx<CoreFunc>>,
+    pub async_: bool,
+    pub callback: Option<GlobalIdx<CoreFunc>>,
+    pub core_type: Option<GlobalIdx<CoreType>>,
+    pub gc: bool,
     pub realloc_signature: Option<CoreFuncType>,
     pub post_return_signature: Option<CoreFuncType>,
+    pub callback_signature: Option<CoreFuncType>,
+    pub core_type_signature: Option<CoreFuncType>,
 }
 
 #[derive(Clone, Debug)]

@@ -9,6 +9,9 @@
 - component runtime は JIT / AOT やバイナリ再走査をしない。core Wasm module
   の実行は `crates/telomere` 側の runtime に委ねる。
 - 実行境界は local async で、`Store` は caller task 上で await される。
+- WASI 0.3 / Preview 3 work must preserve this boundary. The pinned WIT
+  snapshot and support matrix live in
+  [wasi-0.3-preview3.md](wasi-0.3-preview3.md).
 
 ## 1. 全体像
 
@@ -232,6 +235,40 @@ sequenceDiagram
 - `own` / `borrow`
 
 flat 値数が `MAX_FLAT_PARAMS` / `MAX_FLAT_RESULTS` を超える場合は、type metadata に基づいて indirect area を確保し、memory + realloc 経由で受け渡す。
+
+async canonical option は IR/validator で decode され、`canon lower ... async`
+は core scheduler の async host trampoline に接続される。これにより host future
+が `Pending` を返した場合も caller task 上で suspend/resume され、完了時は
+async result area に値を書いて `RETURNED` state を返す。`canon lift ... async`
+は stackful guest export で `task.return` を使う runtime contract に接続され、
+guest 側が async lower を跨いで中断しても component future として再開できる。
+stackless async callback も relation snapshot に保存した callback core func を
+使って `EXIT` まで進める。`YIELD` は empty event で即 callback に戻し、`WAIT`
+は ready な local waitable event がある場合だけ delivery する。
+blocking waitable delivery、subtask cancellation、GC/core-type canonical
+ABI はまだ runtime 実装境界の外であり、実行解決に到達した場合は silent
+fallback せず `Unsupported` で fail-closed する。
+
+`future<T>` / `stream<T>` は relation snapshot 上の canonical built-in として
+handle lifecycle を解決し、ready な local payload transfer は canonical memory
+helper で読み書きする。not-ready の `async` read は `BLOCKED` を返し、sync
+read は trap するため、独自 event loop や one-shot sleep による疑似 async
+fallback は持たない。
+
+`async` read が `BLOCKED` を返した場合、runtime は caller の read buffer と
+canonical options を shared state に保持し、対応する writable end が完了した
+時点で buffer を埋めて waitable event を登録する。`waitable.join` と
+`waitable-set.poll` はこの ready event を delivery する。cancellable flag は
+同じ local ready-event path で受け付ける。blocking `waitable-set.wait` は event
+が既に ready の場合だけ返し、そうでなければ scheduler blocking が未実装で
+あることを fail-closed にする。
+
+`stream.cancel-{read,write}` / `future.cancel-{read,write}` は同じ shared state
+上の pending read / queued payload を取り消す local cancellation として実装する。
+`task.cancel` は cancellation request state を保持していない local task では
+no-op acknowledgement として扱う。`subtask.cancel` / `subtask.drop` は canonical
+signature で decode / validate するが、async lower が実体 subtask handle を生成
+していないため、runtime 実行では `Unsupported` に落とす。
 
 追加した typed API はこの canonical ABI 実装の薄い上位層である。
 

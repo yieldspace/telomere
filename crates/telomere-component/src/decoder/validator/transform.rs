@@ -463,6 +463,18 @@ impl<'a> Validator<'a> {
             DefValType::List(ty, len) => {
                 DefValType::List(self.instantiate_valtype(ty, context)?, *len)
             }
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) => DefValType::Stream(
+                ty.as_ref()
+                    .map(|ty| self.instantiate_valtype(ty, context))
+                    .transpose()?,
+            ),
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Future(ty) => DefValType::Future(
+                ty.as_ref()
+                    .map(|ty| self.instantiate_valtype(ty, context))
+                    .transpose()?,
+            ),
             DefValType::Own(type_id) => {
                 DefValType::Own(self.instantiate_type_id(*type_id, context)?)
             }
@@ -508,6 +520,18 @@ impl<'a> Validator<'a> {
             DefValType::List(ty, len) => {
                 DefValType::List(self.freshen_import_valtype(ty, context)?, *len)
             }
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) => DefValType::Stream(
+                ty.as_ref()
+                    .map(|ty| self.freshen_import_valtype(ty, context))
+                    .transpose()?,
+            ),
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Future(ty) => DefValType::Future(
+                ty.as_ref()
+                    .map(|ty| self.freshen_import_valtype(ty, context))
+                    .transpose()?,
+            ),
             DefValType::Own(type_id) => {
                 DefValType::Own(self.freshen_import_type_id_with_context(*type_id, context)?)
             }

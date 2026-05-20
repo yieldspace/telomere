@@ -8,15 +8,19 @@ use crate::ir::{
 use crate::linker::{ComponentLinkerInstance, LinkerBinding};
 use crate::support::common::InstanceHandle;
 use crate::support::common::{
-    ExecuteContext, FuncType as CoreFuncType, HostFunctionDefinition, Instr, NativeModule,
-    VMResult, ValType as CoreValType, WasmValue,
+    AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext,
+    FuncType as CoreFuncType, HostFunctionDefinition, Instr, NativeModule, ReturnSlot, VMResult,
+    ValType as CoreValType, WasmValue,
 };
-use crate::support::runtime::instantiate_native_module;
+use crate::support::runtime::{instantiate_native_async_module, instantiate_native_module};
 use crate::support::{aliasing, Module, Registry, ResultValue, Store, VMResult as CoreVMResult};
-use crate::{ComponentError, ComponentInstance, ComponentLinker, ComponentProgram, ComponentValue};
+use crate::{
+    ComponentError, ComponentFuture, ComponentInstance, ComponentLinker, ComponentProgram,
+    ComponentValue,
+};
 use futures::executor::block_on;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::pin;
 use std::rc::Rc;
@@ -94,6 +98,15 @@ struct SharedState {
     next_resource_handle: Cell<u32>,
     resources: RefCell<HashMap<ResourceId, HashMap<u32, ResourceRecord>>>,
     generic_resources: RefCell<HashMap<TypeId, ResourceId>>,
+    error_contexts: RefCell<HashMap<u32, String>>,
+    waitable_sets: RefCell<HashMap<u32, WaitableSet>>,
+    stream_future_handles: RefCell<HashMap<u32, StreamFutureHandle>>,
+    stream_payloads: RefCell<HashMap<u32, VecDeque<Option<ComponentValue>>>>,
+    future_payloads: RefCell<HashMap<u32, Vec<ComponentValue>>>,
+    waitable_events: RefCell<HashMap<u32, WaitableEvent>>,
+    pending_stream_reads: RefCell<HashMap<u32, PendingStreamRead>>,
+    pending_future_reads: RefCell<HashMap<u32, PendingFutureRead>>,
+    task_returns: RefCell<Vec<Option<Vec<ComponentValue>>>>,
 }
 
 #[derive(Clone)]
@@ -102,18 +115,80 @@ struct ResourceRecord {
     destructor: Option<RuntimeCoreFunc>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamFutureKind {
+    Stream,
+    Future,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamFutureEnd {
+    Readable,
+    Writable,
+}
+
+#[derive(Clone, Copy)]
+struct StreamFutureHandle {
+    type_id: TypeId,
+    kind: StreamFutureKind,
+    end: StreamFutureEnd,
+    peer: u32,
+    waitable_set: Option<u32>,
+}
+
+#[derive(Clone)]
+struct PendingStreamRead {
+    type_id: TypeId,
+    payload: Option<ValType>,
+    options: RuntimeCanonicalOptions,
+    program: Rc<ComponentProgram>,
+    ptr: u32,
+    count: u32,
+}
+
+#[derive(Clone)]
+struct PendingFutureRead {
+    type_id: TypeId,
+    payload: Option<ValType>,
+    options: RuntimeCanonicalOptions,
+    program: Rc<ComponentProgram>,
+    ptr: u32,
+}
+
+#[derive(Clone, Copy)]
+struct WaitableEvent {
+    code: WaitableEventCode,
+    index: u32,
+    payload: u32,
+}
+
+#[derive(Clone, Copy)]
+enum WaitableEventCode {
+    None = 0,
+    StreamRead = 2,
+    FutureRead = 4,
+}
+
+#[derive(Default)]
+struct WaitableSet {
+    members: Vec<u32>,
+}
+
 #[derive(Clone)]
 struct CoreExportRef {
     instance: InstanceHandle,
     export_name: String,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct RuntimeCanonicalOptions {
     string_encoding: Option<CanonicalStringEncoding>,
     memory: Option<CoreExportRef>,
     realloc: Option<RuntimeCoreFunc>,
     post_return: Option<RuntimeCoreFunc>,
+    callback: Option<RuntimeCoreFunc>,
+    async_: bool,
+    shared: Rc<SharedState>,
 }
 
 #[derive(Clone)]
@@ -159,6 +234,111 @@ enum HostBinding {
     },
     ResourceRep {
         resource: ResourceId,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    ErrorContextNew {
+        options: RuntimeCanonicalOptions,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    ErrorContextDebugMessage {
+        options: RuntimeCanonicalOptions,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    ErrorContextDrop {
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    TaskCancel {
+        signature: CoreFuncType,
+    },
+    SubtaskCancel {
+        signature: CoreFuncType,
+    },
+    SubtaskDrop {
+        signature: CoreFuncType,
+    },
+    WaitableSetNew {
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    WaitableSetWait {
+        memory: CoreExportRef,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    WaitableSetPoll {
+        memory: CoreExportRef,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    WaitableSetDrop {
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    WaitableJoin {
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    TaskReturn {
+        result_func_type: FuncType,
+        options: RuntimeCanonicalOptions,
+        program: Rc<ComponentProgram>,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    StreamFutureNew {
+        type_id: TypeId,
+        kind: StreamFutureKind,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    StreamRead {
+        type_id: TypeId,
+        payload: Option<ValType>,
+        options: RuntimeCanonicalOptions,
+        program: Rc<ComponentProgram>,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    StreamWrite {
+        type_id: TypeId,
+        payload: Option<ValType>,
+        options: RuntimeCanonicalOptions,
+        program: Rc<ComponentProgram>,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    StreamFutureCancel {
+        type_id: TypeId,
+        kind: StreamFutureKind,
+        end: StreamFutureEnd,
+        async_: bool,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    StreamFutureDrop {
+        type_id: TypeId,
+        kind: StreamFutureKind,
+        end: StreamFutureEnd,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    FutureRead {
+        type_id: TypeId,
+        payload: Option<ValType>,
+        options: RuntimeCanonicalOptions,
+        program: Rc<ComponentProgram>,
+        signature: CoreFuncType,
+        shared: Rc<SharedState>,
+    },
+    FutureWrite {
+        type_id: TypeId,
+        payload: Option<ValType>,
+        options: RuntimeCanonicalOptions,
+        program: Rc<ComponentProgram>,
         signature: CoreFuncType,
         shared: Rc<SharedState>,
     },

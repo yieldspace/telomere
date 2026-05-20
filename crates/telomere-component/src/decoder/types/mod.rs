@@ -12,7 +12,8 @@ mod variant;
 use crate::decoder::name::{is_kebab_label, parse_label_dash};
 use crate::decoder::parse_core_func_local_idx;
 use crate::decoder::types::instance::parse_instance_type;
-use crate::decoder::types::valtype::{parse_label_valtype, parse_valtype};
+use crate::decoder::types::valtype::parse_label_valtype;
+pub(crate) use crate::decoder::types::valtype::parse_valtype;
 use crate::decoder::{
     parse_option, parse_type_local_idx, parse_vec_range, ComponentParseError, ParseContext,
     ParseResult, SizedResult,
@@ -128,6 +129,10 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
             let (_, len) = parse_u32(ctx.reader)?;
             Type::DefVal(DefValType::List(valtype, Some(len as usize)))
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        DEFVALTYPE_STREAM => Type::DefVal(DefValType::Stream(parse_option(ctx, parse_valtype)?)),
+        #[cfg(feature = "component-gated-feature-async")]
+        DEFVALTYPE_FUTURE => Type::DefVal(DefValType::Future(parse_option(ctx, parse_valtype)?)),
         DEFVALTYPE_TUPLE => {
             let (_, types) = parse_vec(
                 ctx,
@@ -362,6 +367,12 @@ fn type_contains_borrow(ctx: &ParseContext<impl BinaryReader>, ty: &Type) -> Par
                 })?,
             DefValType::Flags(_) => false,
             DefValType::List(ty, _) => valtype_contains_borrow(ctx, ty)?,
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) | DefValType::Future(ty) => ty
+                .as_ref()
+                .map(|ty| valtype_contains_borrow(ctx, ty))
+                .transpose()?
+                .unwrap_or(false),
         },
         Type::Generic(_)
         | Type::Resource(_)

@@ -391,15 +391,33 @@ impl<'a> Validator<'a> {
         type_id: TypeId,
         visible: &[TypeId],
     ) -> ParseResult<bool> {
-        let Type::Resource(resource) = self.get_type(type_id)? else {
-            return Ok(false);
-        };
+        let ty = self.get_type(type_id)?;
 
         for candidate in visible {
-            if let Type::Resource(candidate_resource) = self.get_type(*candidate)? {
-                if candidate_resource == resource {
+            match (ty, self.get_type(*candidate)?) {
+                (Type::Resource(resource), Type::Resource(candidate_resource))
+                    if candidate_resource == resource =>
+                {
                     return Ok(true);
                 }
+                (Type::Generic(generic), Type::Generic(candidate_generic))
+                    if generic.id == candidate_generic.id =>
+                {
+                    return Ok(true);
+                }
+                (
+                    Type::Generic(Generic {
+                        bound: GenericBound::Sub,
+                        ..
+                    }),
+                    Type::Generic(Generic {
+                        bound: GenericBound::Sub,
+                        ..
+                    }),
+                ) => {
+                    return Ok(true);
+                }
+                _ => {}
             }
         }
 
@@ -426,6 +444,13 @@ impl<'a> Validator<'a> {
         }
         let result = match self.get_type(type_id)? {
             Type::Resource(_) => {
+                contains_type_id(visible, type_id)
+                    || self.resource_visible_by_identity(type_id, visible)?
+            }
+            Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            }) => {
                 contains_type_id(visible, type_id)
                     || self.resource_visible_by_identity(type_id, visible)?
             }
@@ -554,6 +579,14 @@ impl<'a> Validator<'a> {
             }
             DefValType::Flags(_) => Ok(()),
             DefValType::List(ty, _) => self.validate_nested_valtype_ref(ty, visible, seen),
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) | DefValType::Future(ty) => {
+                if let Some(ty) = ty {
+                    self.validate_nested_valtype_ref(ty, visible, seen)
+                } else {
+                    Ok(())
+                }
+            }
             DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
                 self.validate_type_ref(*type_id, visible, seen)
             }
@@ -588,6 +621,8 @@ impl<'a> Validator<'a> {
             DefValType::Variant(cases) => !self.variant_is_inline(cases),
             DefValType::Flags(_) => false,
             DefValType::List(_, _) => false,
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(_) | DefValType::Future(_) => false,
             DefValType::Own(_) | DefValType::Borrow(_) => false,
         }
     }
@@ -651,6 +686,12 @@ impl<'a> Validator<'a> {
             }
             DefValType::Flags(_) => Ok(true),
             DefValType::List(ty, _) => self.nested_valtype_requires_name(ty, visiting),
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) | DefValType::Future(ty) => ty
+                .as_ref()
+                .map(|ty| self.nested_valtype_requires_name(ty, visiting))
+                .transpose()
+                .map(|requires| requires.unwrap_or(false)),
             DefValType::Own(_) | DefValType::Borrow(_) => Ok(false),
         }
     }

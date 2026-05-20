@@ -9,6 +9,10 @@ pub enum DefValType {
     Variant(Vec<Case>),
     Flags(Vec<Label>),
     List(ValType, Option<usize>),
+    #[cfg(feature = "component-gated-feature-async")]
+    Stream(Option<ValType>),
+    #[cfg(feature = "component-gated-feature-async")]
+    Future(Option<ValType>),
     Own(TypeId),
     Borrow(TypeId),
 }
@@ -75,6 +79,19 @@ impl DefValType {
                     Err(ComponentParseError::TypeMismatch(
                         "list length mismatch".to_owned(),
                     ))?;
+                }
+                Ok(())
+            }
+            #[cfg(feature = "component-gated-feature-async")]
+            (Stream(ty), Stream(parent_ty)) | (Future(ty), Future(parent_ty)) => {
+                match (ty, parent_ty) {
+                    (Some(ty), Some(parent_ty)) => ty.assert_subtype_of(parent_ty, validator)?,
+                    (None, None) => {}
+                    _ => {
+                        Err(ComponentParseError::TypeMismatch(
+                            "async value payload mismatch".to_owned(),
+                        ))?;
+                    }
                 }
                 Ok(())
             }

@@ -13,5 +13,8 @@ use crate::{ComponentError, ComponentInstance, ComponentProgram, ComponentValue}
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-pub use traits::{Borrow, ComponentParams, ComponentReturn, LiftComponent, LowerComponent, Own};
+pub use traits::{
+    Borrow, ComponentErrorContext, ComponentFutureHandle, ComponentParams, ComponentReturn,
+    ComponentStreamHandle, LiftComponent, LowerComponent, Own,
+};
 pub use typed::{ComponentFunc, TypedComponentFunc};

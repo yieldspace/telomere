@@ -171,6 +171,32 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "component-gated-feature-async")]
+    #[test]
+    fn test_export_name_async_annotations() {
+        assert_eq!(
+            parse_plain_name_string("[async]fetch").unwrap(),
+            Some(PlainName::Async(
+                Label::new("fetch".to_owned()),
+                Label::new("fetch".to_owned())
+            ))
+        );
+        assert_eq!(
+            parse_plain_name_string("[async method]stream.read").unwrap(),
+            Some(PlainName::AsyncMethod(
+                Label::new("stream".to_owned()),
+                Label::new("read".to_owned())
+            ))
+        );
+        assert_eq!(
+            parse_plain_name_string("[async static]stream.new").unwrap(),
+            Some(PlainName::AsyncStatic(
+                Label::new("stream".to_owned()),
+                Label::new("new".to_owned())
+            ))
+        );
+    }
+
     #[test]
     fn test_export_name_interface() -> anyhow::Result<()> {
         let name = "foo:bar/baz@1.0.0";

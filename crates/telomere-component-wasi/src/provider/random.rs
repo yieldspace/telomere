@@ -28,7 +28,7 @@ impl WasiHost {
         })
     }
 
-    fn next_insecure_random_u64(&self) -> u64 {
+    pub(super) fn next_insecure_random_u64(&self) -> u64 {
         let mut inner = self.state.inner.borrow_mut();
         inner.random_seed = inner.random_seed.wrapping_add(0x9e3779b97f4a7c15);
         let mut value = inner.random_seed;
@@ -37,7 +37,7 @@ impl WasiHost {
         value ^ (value >> 31)
     }
 
-    fn insecure_random_bytes(&self, len: u64) -> Result<Vec<u8>, ComponentError> {
+    pub(super) fn insecure_random_bytes(&self, len: u64) -> Result<Vec<u8>, ComponentError> {
         let len = Self::requested_random_len(len)?;
         let mut bytes = Vec::with_capacity(len);
         while bytes.len() < len {
@@ -47,7 +47,7 @@ impl WasiHost {
         Ok(bytes)
     }
 
-    fn secure_random_bytes(&self, len: u64) -> Result<Vec<u8>, ComponentError> {
+    pub(super) fn secure_random_bytes(&self, len: u64) -> Result<Vec<u8>, ComponentError> {
         let len = Self::requested_random_len(len)?;
         let mut bytes = vec![0; len];
         fill_random(&mut bytes).map_err(|error| {
@@ -56,7 +56,7 @@ impl WasiHost {
         Ok(bytes)
     }
 
-    fn secure_random_u64(&self) -> Result<u64, ComponentError> {
+    pub(super) fn secure_random_u64(&self) -> Result<u64, ComponentError> {
         let mut bytes = [0_u8; 8];
         fill_random(&mut bytes).map_err(|error| {
             ComponentError::Trap(format!("failed to read secure random bytes: {error}"))

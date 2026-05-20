@@ -19,7 +19,7 @@ pub(super) fn add_to_linker_async(linker: &mut ComponentLinker, host: Rc<WasiHos
 }
 
 impl WasiHost {
-    fn wall_clock_now(&self) -> WasiClocksWallClockDatetime {
+    pub(super) fn wall_clock_now(&self) -> WasiClocksWallClockDatetime {
         let now = (self.state.inner.borrow().wall_clock)();
         let duration = now.duration_since(UNIX_EPOCH).unwrap_or_default();
         WasiClocksWallClockDatetime {
@@ -28,26 +28,26 @@ impl WasiHost {
         }
     }
 
-    fn wall_clock_resolution(&self) -> WasiClocksWallClockDatetime {
+    pub(super) fn wall_clock_resolution(&self) -> WasiClocksWallClockDatetime {
         WasiClocksWallClockDatetime {
             seconds: 0,
             nanoseconds: 1,
         }
     }
 
-    fn monotonic_now(&self) -> u64 {
+    pub(super) fn monotonic_now(&self) -> u64 {
         super::common::nanos_u64((self.state.inner.borrow().monotonic_clock)())
     }
 
-    fn monotonic_resolution(&self) -> u64 {
+    pub(super) fn monotonic_resolution(&self) -> u64 {
         1
     }
 
-    fn monotonic_subscribe_instant(&self, when: u64) -> WasiIoPollPollable {
+    pub(super) fn monotonic_subscribe_instant(&self, when: u64) -> WasiIoPollPollable {
         self.allocate_pollable(PollableEntry::MonotonicDeadline(Duration::from_nanos(when)))
     }
 
-    fn monotonic_subscribe_duration(&self, when: u64) -> WasiIoPollPollable {
+    pub(super) fn monotonic_subscribe_duration(&self, when: u64) -> WasiIoPollPollable {
         let deadline = (self.state.inner.borrow().monotonic_clock)() + Duration::from_nanos(when);
         self.allocate_pollable(PollableEntry::MonotonicDeadline(deadline))
     }

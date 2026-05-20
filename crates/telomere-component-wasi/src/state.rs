@@ -17,6 +17,7 @@ pub struct WasiState {
 pub(crate) struct PreopenDir {
     pub host_path: PathBuf,
     pub guest_path: String,
+    pub flags: WasiFilesystemTypesDescriptorFlags,
 }
 
 #[derive(Clone)]
@@ -68,6 +69,17 @@ pub(crate) struct DirectoryEntryStreamEntry {
     pub cursor: usize,
 }
 
+#[derive(Clone)]
+pub(crate) enum Preview3FutureEntry {
+    ReadyUnitResult,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Preview3SocketAddressFamily {
+    Ipv4,
+    Ipv6,
+}
+
 pub(crate) struct WasiStateInner {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
@@ -89,6 +101,9 @@ pub(crate) struct WasiStateInner {
     pub pollables: HashMap<u32, PollableEntry>,
     pub errors: HashMap<u32, ErrorEntry>,
     pub directory_entry_streams: HashMap<u32, DirectoryEntryStreamEntry>,
+    pub preview3_futures: HashMap<u32, Preview3FutureEntry>,
+    pub preview3_tcp_sockets: HashMap<u32, Preview3SocketAddressFamily>,
+    pub preview3_udp_sockets: HashMap<u32, Preview3SocketAddressFamily>,
 }
 
 pub struct WasiStateBuilder {
@@ -204,6 +219,20 @@ impl WasiStateBuilder {
         self.preopens.push(PreopenDir {
             host_path: host_path.as_ref().to_path_buf(),
             guest_path: guest_path.into(),
+            flags: read_only_descriptor_flags(),
+        });
+        self
+    }
+
+    pub fn preopen_dir_read_write(
+        mut self,
+        host_path: impl AsRef<Path>,
+        guest_path: impl Into<String>,
+    ) -> Self {
+        self.preopens.push(PreopenDir {
+            host_path: host_path.as_ref().to_path_buf(),
+            guest_path: guest_path.into(),
+            flags: read_write_descriptor_flags(),
         });
         self
     }
@@ -245,6 +274,9 @@ impl WasiStateBuilder {
             pollables: HashMap::new(),
             errors: HashMap::new(),
             directory_entry_streams: HashMap::new(),
+            preview3_futures: HashMap::new(),
+            preview3_tcp_sockets: HashMap::new(),
+            preview3_udp_sockets: HashMap::new(),
         };
 
         for preopen in inner.preopens.clone() {
@@ -258,7 +290,7 @@ impl WasiStateBuilder {
                 DescriptorEntry {
                     host_path: preopen.host_path,
                     descriptor_type: WasiFilesystemTypesDescriptorType::Directory,
-                    flags: read_only_descriptor_flags(),
+                    flags: preopen.flags,
                 },
             );
         }
@@ -266,6 +298,17 @@ impl WasiStateBuilder {
         WasiState {
             inner: Rc::new(RefCell::new(inner)),
         }
+    }
+}
+
+fn read_write_descriptor_flags() -> WasiFilesystemTypesDescriptorFlags {
+    WasiFilesystemTypesDescriptorFlags {
+        read: true,
+        write: true,
+        file_integrity_sync: false,
+        data_integrity_sync: false,
+        requested_write_sync: false,
+        mutate_directory: true,
     }
 }
 
