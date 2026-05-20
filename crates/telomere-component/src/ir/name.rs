@@ -189,45 +189,61 @@ pub enum PlainName {
     AsyncStatic(Label, Label),
 }
 
-impl PlainName {
-    fn flat(&self) -> String {
-        match self {
-            PlainName::Plain(label) => label.0.to_ascii_lowercase(),
-            PlainName::Constructor(label) => label.0.to_ascii_lowercase(),
-            PlainName::Method(x, y) => {
-                format!("{}.{}", x.0.to_ascii_lowercase(), y.0.to_ascii_lowercase())
-            }
-            PlainName::Static(x, y) => {
-                format!("{}.{}", x.0.to_ascii_lowercase(), y.0.to_ascii_lowercase())
-            }
-        }
-    }
-}
-
 impl StrongUnique<Self> for PlainName {
     /// 二つのPlainNameが「強く一意」の判定上で等しいかを判定します．
     fn weak_eq(&self, other: &Self) -> bool {
-        match self {
-            PlainName::Plain(plain) => match other {
-                PlainName::Plain(_) => self.flat() == other.flat(),
-                PlainName::Constructor(_) => false,
-                // If one name is l and the other name is [*]l.l (for the same label l and any annotation * with a dotted l.l name), they are not strongly-unique.
-                PlainName::Method(x, y) => plain.flat() == x.flat() && plain.flat() == y.flat(),
-                PlainName::Static(x, y) => plain.flat() == x.flat() && plain.flat() == y.flat(),
-            },
-            PlainName::Constructor(x) => match other {
-                PlainName::Plain(_) => false,
-                PlainName::Constructor(y) => x.flat() == y.flat(),
-                PlainName::Method(_, _) => false,
-                PlainName::Static(_, _) => false,
-            },
-            PlainName::Method(lhs, rhs) | PlainName::Static(lhs, rhs) => match other {
-                PlainName::Plain(p) => p.flat() == lhs.flat() && p.flat() == rhs.flat(),
-                PlainName::Constructor(_) => false,
-                PlainName::Method(x, y) => lhs.flat() == x.flat() && y.flat() == rhs.flat(),
-                PlainName::Static(x, y) => lhs.flat() == x.flat() && y.flat() == rhs.flat(),
-            },
+        fn plain_label(name: &PlainName) -> Option<&Label> {
+            match name {
+                PlainName::Plain(label) => Some(label),
+                #[cfg(feature = "component-gated-feature-async")]
+                PlainName::Async(_, label) => Some(label),
+                _ => None,
+            }
         }
+
+        fn constructor_label(name: &PlainName) -> Option<&Label> {
+            match name {
+                PlainName::Constructor(label) => Some(label),
+                _ => None,
+            }
+        }
+
+        fn dotted_labels(name: &PlainName) -> Option<(&Label, &Label)> {
+            match name {
+                PlainName::Method(left, right) | PlainName::Static(left, right) => {
+                    Some((left, right))
+                }
+                #[cfg(feature = "component-gated-feature-async")]
+                PlainName::AsyncMethod(left, right) | PlainName::AsyncStatic(left, right) => {
+                    Some((left, right))
+                }
+                _ => None,
+            }
+        }
+
+        if let (Some(lhs), Some(rhs)) = (constructor_label(self), constructor_label(other)) {
+            return lhs.flat() == rhs.flat();
+        }
+        if constructor_label(self).is_some() || constructor_label(other).is_some() {
+            return false;
+        }
+
+        if let (Some(lhs), Some(rhs)) = (plain_label(self), plain_label(other)) {
+            return lhs.flat() == rhs.flat();
+        }
+        if let (Some(plain), Some((left, right))) = (plain_label(self), dotted_labels(other)) {
+            return plain.flat() == left.flat() && plain.flat() == right.flat();
+        }
+        if let (Some((left, right)), Some(plain)) = (dotted_labels(self), plain_label(other)) {
+            return plain.flat() == left.flat() && plain.flat() == right.flat();
+        }
+        if let (Some((lhs_left, lhs_right)), Some((rhs_left, rhs_right))) =
+            (dotted_labels(self), dotted_labels(other))
+        {
+            return lhs_left.flat() == rhs_left.flat() && lhs_right.flat() == rhs_right.flat();
+        }
+
+        false
     }
 }
 
@@ -235,9 +251,15 @@ impl Display for PlainName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             PlainName::Plain(l) => write!(f, "{}", l),
+            #[cfg(feature = "component-gated-feature-async")]
+            PlainName::Async(_, l) => write!(f, "[async]{}", l),
             PlainName::Constructor(l) => write!(f, "[constructor]{}", l),
             PlainName::Method(l, r) => write!(f, "[method]{}.{}", l, r),
+            #[cfg(feature = "component-gated-feature-async")]
+            PlainName::AsyncMethod(l, r) => write!(f, "[async method]{}.{}", l, r),
             PlainName::Static(l, r) => write!(f, "[static]{}.{}", l, r),
+            #[cfg(feature = "component-gated-feature-async")]
+            PlainName::AsyncStatic(l, r) => write!(f, "[async static]{}.{}", l, r),
         }
     }
 }

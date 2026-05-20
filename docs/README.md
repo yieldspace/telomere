@@ -34,6 +34,7 @@ runtime or an older proposal.
 | --- | --- | --- |
 | [component-model/relation-driven-runtime.md](component-model/relation-driven-runtime.md) | Current | Relation-driven component compile/instantiate/call architecture. |
 | [component-model/new-component-runtime.md](component-model/new-component-runtime.md) | Current implementation plan | Public API, parity boundary, coverage, and verification commands. |
+| [component-model/wasi-0.3-preview3.md](component-model/wasi-0.3-preview3.md) | Current implementation target | WASI 0.3 / Preview 3 snapshot pin, support matrix, and fail-closed policy. |
 | [component-model/type-system.md](component-model/type-system.md) | Background note | Existential resource type reasoning and the current dense-arena strategy. |
 | [component-model/wasmtime-critical-analysis.md](component-model/wasmtime-critical-analysis.md) | Design rationale | Why Telomere keeps the component layer lightweight instead of adopting a Wasmtime-like engine shape. |
 

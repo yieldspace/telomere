@@ -83,19 +83,9 @@ impl RuntimeInstance {
         name: &str,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
-        self.call_path_sync(store, path, name, args)
-    }
-
-    fn call_path_sync(
-        &self,
-        store: &Store,
-        path: &[String],
-        name: &str,
-        args: &[ComponentValue],
-    ) -> Result<Vec<ComponentValue>, ComponentError> {
         let namespace = self.resolve_namespace(store, path)?;
         match namespace.resolve_export(name, store)? {
-            RuntimeExport::Func(callable) => callable.call_sync(store, args),
+            RuntimeExport::Func(callable) => callable.call(store, args).await,
             _ => Err(ComponentError::ExportNotFound(name.to_owned())),
         }
     }
@@ -255,7 +245,7 @@ impl RuntimeEnv {
             })) => {
                 let core = self.resolve_core_func(*core_func, store)?;
                 let func_type = program_func_type(&self.program, *type_id)?;
-                let options = self.resolve_runtime_options(options, store)?;
+                let options = self.resolve_runtime_options_for_lift(options, store)?;
                 Rc::new(ResolvedCallable::Lifted {
                     core,
                     func_type,
@@ -401,7 +391,7 @@ impl RuntimeEnv {
             })) => {
                 let callable = self.resolve_func(*func, store)?;
                 let func_type = program_func_type(&self.program, *type_id)?;
-                let options = self.resolve_runtime_options(options, store)?;
+                let options = self.resolve_runtime_options_for_lower(options, store)?;
                 RuntimeCoreFunc::Host(Rc::new(HostBinding::Lower {
                     callable,
                     func_type,
@@ -439,6 +429,253 @@ impl RuntimeEnv {
                     shared: self.shared.clone(),
                 }))
             }
+            Some(CoreRelation::Defined(CoreFunc::CanonErrorContextNew { options })) => {
+                let options = self.resolve_runtime_options_for_lift(options, store)?;
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::ErrorContextNew {
+                    options,
+                    signature: CoreFuncType::new(
+                        vec![CoreValType::I32, CoreValType::I32],
+                        vec![CoreValType::I32],
+                    ),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonErrorContextDebugMessage { options })) => {
+                let options = self.resolve_runtime_options_for_lift(options, store)?;
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::ErrorContextDebugMessage {
+                    options,
+                    signature: CoreFuncType::new(vec![CoreValType::I32, CoreValType::I32], vec![]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonErrorContextDrop)) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::ErrorContextDrop {
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonTaskCancel)) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::TaskCancel {
+                    signature: CoreFuncType::new(vec![], vec![]),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonSubtaskCancel { async_: _ })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::SubtaskCancel {
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonSubtaskDrop)) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::SubtaskDrop {
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonWaitableSetNew)) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::WaitableSetNew {
+                    signature: CoreFuncType::new(vec![], vec![CoreValType::I32]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonWaitableSetWait {
+                cancellable: _,
+                memory,
+            })) => RuntimeCoreFunc::Host(Rc::new(HostBinding::WaitableSetWait {
+                memory: self.resolve_core_memory(*memory, store)?,
+                signature: CoreFuncType::new(
+                    vec![CoreValType::I32, CoreValType::I32],
+                    vec![CoreValType::I32],
+                ),
+                shared: self.shared.clone(),
+            })),
+            Some(CoreRelation::Defined(CoreFunc::CanonWaitableSetPoll {
+                cancellable: _,
+                memory,
+            })) => RuntimeCoreFunc::Host(Rc::new(HostBinding::WaitableSetPoll {
+                memory: self.resolve_core_memory(*memory, store)?,
+                signature: CoreFuncType::new(
+                    vec![CoreValType::I32, CoreValType::I32],
+                    vec![CoreValType::I32],
+                ),
+                shared: self.shared.clone(),
+            })),
+            Some(CoreRelation::Defined(CoreFunc::CanonWaitableSetDrop)) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::WaitableSetDrop {
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonWaitableJoin)) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::WaitableJoin {
+                    signature: CoreFuncType::new(vec![CoreValType::I32, CoreValType::I32], vec![]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonTaskReturn {
+                result,
+                options,
+                signature,
+            })) => {
+                let options = self.resolve_runtime_options_for_task_return(options, store)?;
+                let result_func_type = FuncType {
+                    params: result.iter().cloned().collect(),
+                    param_names: Vec::new(),
+                    result: None,
+                };
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::TaskReturn {
+                    signature: signature.clone(),
+                    result_func_type,
+                    options,
+                    program: self.program.clone(),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonStreamNew { type_id })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureNew {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Stream,
+                    signature: CoreFuncType::new(vec![], vec![CoreValType::I64]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonStreamRead { type_id, options })) => {
+                let options = self.resolve_runtime_options_for_stream_future_io(options, store)?;
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamRead {
+                    type_id: *type_id,
+                    payload: self.stream_or_future_payload(*type_id, StreamFutureKind::Stream)?,
+                    options,
+                    program: self.program.clone(),
+                    signature: CoreFuncType::new(
+                        vec![CoreValType::I32, CoreValType::I32, CoreValType::I32],
+                        vec![CoreValType::I32],
+                    ),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonStreamWrite { type_id, options })) => {
+                let options = self.resolve_runtime_options_for_stream_future_io(options, store)?;
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamWrite {
+                    type_id: *type_id,
+                    payload: self.stream_or_future_payload(*type_id, StreamFutureKind::Stream)?,
+                    options,
+                    program: self.program.clone(),
+                    signature: CoreFuncType::new(
+                        vec![CoreValType::I32, CoreValType::I32, CoreValType::I32],
+                        vec![CoreValType::I32],
+                    ),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonStreamCancelRead { type_id, async_ })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureCancel {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Stream,
+                    end: StreamFutureEnd::Readable,
+                    async_: *async_,
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonStreamCancelWrite { type_id, async_ })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureCancel {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Stream,
+                    end: StreamFutureEnd::Writable,
+                    async_: *async_,
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonStreamDropReadable { type_id })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureDrop {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Stream,
+                    end: StreamFutureEnd::Readable,
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonStreamDropWritable { type_id })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureDrop {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Stream,
+                    end: StreamFutureEnd::Writable,
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonFutureNew { type_id })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureNew {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Future,
+                    signature: CoreFuncType::new(vec![], vec![CoreValType::I64]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonFutureRead { type_id, options })) => {
+                let options = self.resolve_runtime_options_for_stream_future_io(options, store)?;
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::FutureRead {
+                    type_id: *type_id,
+                    payload: self.stream_or_future_payload(*type_id, StreamFutureKind::Future)?,
+                    options,
+                    program: self.program.clone(),
+                    signature: CoreFuncType::new(
+                        vec![CoreValType::I32, CoreValType::I32],
+                        vec![CoreValType::I32],
+                    ),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonFutureWrite { type_id, options })) => {
+                let options = self.resolve_runtime_options_for_stream_future_io(options, store)?;
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::FutureWrite {
+                    type_id: *type_id,
+                    payload: self.stream_or_future_payload(*type_id, StreamFutureKind::Future)?,
+                    options,
+                    program: self.program.clone(),
+                    signature: CoreFuncType::new(
+                        vec![CoreValType::I32, CoreValType::I32],
+                        vec![CoreValType::I32],
+                    ),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonFutureCancelRead { type_id, async_ })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureCancel {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Future,
+                    end: StreamFutureEnd::Readable,
+                    async_: *async_,
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonFutureCancelWrite { type_id, async_ })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureCancel {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Future,
+                    end: StreamFutureEnd::Writable,
+                    async_: *async_,
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonFutureDropReadable { type_id })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureDrop {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Future,
+                    end: StreamFutureEnd::Readable,
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
+                    shared: self.shared.clone(),
+                }))
+            }
+            Some(CoreRelation::Defined(CoreFunc::CanonFutureDropWritable { type_id })) => {
+                RuntimeCoreFunc::Host(Rc::new(HostBinding::StreamFutureDrop {
+                    type_id: *type_id,
+                    kind: StreamFutureKind::Future,
+                    end: StreamFutureEnd::Writable,
+                    signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
+                    shared: self.shared.clone(),
+                }))
+            }
             Some(CoreRelation::FromCoreExport(instance_idx, name)) => {
                 let instance = self.resolve_core_instance(*instance_idx, store)?;
                 RuntimeCoreFunc::Export {
@@ -468,6 +705,36 @@ impl RuntimeEnv {
             .borrow_mut()
             .insert(idx, func.clone());
         Ok(func)
+    }
+
+    fn stream_or_future_payload(
+        &self,
+        type_id: TypeId,
+        kind: StreamFutureKind,
+    ) -> Result<Option<ValType>, ComponentError> {
+        #[cfg(not(feature = "component-gated-feature-async"))]
+        {
+            let _ = self;
+            let _ = type_id;
+            let _ = kind;
+            Err(ComponentError::Unsupported(
+                "stream/future canonical built-ins require the component-gated-feature-async feature"
+                    .to_owned(),
+            ))
+        }
+
+        #[cfg(feature = "component-gated-feature-async")]
+        {
+            match (kind, self.program.get_type(type_id)) {
+                (StreamFutureKind::Stream, Some(Type::DefVal(DefValType::Stream(payload))))
+                | (StreamFutureKind::Future, Some(Type::DefVal(DefValType::Future(payload)))) => {
+                    Ok(payload.clone())
+                }
+                _ => Err(ComponentError::Runtime(
+                    "stream/future canonical built-in used with the wrong type".to_owned(),
+                )),
+            }
+        }
     }
 
     pub(super) fn resolve_core_memory(
@@ -522,11 +789,16 @@ impl RuntimeEnv {
         Ok(table)
     }
 
-    fn resolve_runtime_options(
+    fn resolve_runtime_options_for_lift(
         &self,
         options: &CanonicalOptions,
         store: &Store,
     ) -> Result<RuntimeCanonicalOptions, ComponentError> {
+        if options.core_type.is_some() || options.gc {
+            return Err(ComponentError::Unsupported(
+                "canonical GC/core-type ABI execution is not implemented".to_owned(),
+            ));
+        }
         Ok(RuntimeCanonicalOptions {
             string_encoding: options.string_encoding,
             memory: match options.memory {
@@ -541,6 +813,109 @@ impl RuntimeEnv {
                 Some(post_return) => Some(self.resolve_core_func(post_return, store)?),
                 None => None,
             },
+            callback: match options.callback {
+                Some(callback) => Some(self.resolve_core_func(callback, store)?),
+                None => None,
+            },
+            async_: options.async_,
+            shared: self.shared.clone(),
+        })
+    }
+
+    fn resolve_runtime_options_for_lower(
+        &self,
+        options: &CanonicalOptions,
+        store: &Store,
+    ) -> Result<RuntimeCanonicalOptions, ComponentError> {
+        if options.callback.is_some() {
+            return Err(ComponentError::Unsupported(
+                "async canonical callbacks are not implemented".to_owned(),
+            ));
+        }
+        if options.core_type.is_some() || options.gc {
+            return Err(ComponentError::Unsupported(
+                "canonical GC/core-type ABI execution is not implemented".to_owned(),
+            ));
+        }
+        Ok(RuntimeCanonicalOptions {
+            string_encoding: options.string_encoding,
+            memory: match options.memory {
+                Some(memory) => Some(self.resolve_core_memory(memory, store)?),
+                None => None,
+            },
+            realloc: match options.realloc {
+                Some(realloc) => Some(self.resolve_core_func(realloc, store)?),
+                None => None,
+            },
+            post_return: match options.post_return {
+                Some(post_return) => Some(self.resolve_core_func(post_return, store)?),
+                None => None,
+            },
+            callback: None,
+            async_: options.async_,
+            shared: self.shared.clone(),
+        })
+    }
+
+    fn resolve_runtime_options_for_task_return(
+        &self,
+        options: &CanonicalOptions,
+        store: &Store,
+    ) -> Result<RuntimeCanonicalOptions, ComponentError> {
+        if options.realloc.is_some()
+            || options.post_return.is_some()
+            || options.async_
+            || options.callback.is_some()
+            || options.core_type.is_some()
+            || options.gc
+        {
+            return Err(ComponentError::Unsupported(
+                "canonical task.return only allows memory and string-encoding options".to_owned(),
+            ));
+        }
+        Ok(RuntimeCanonicalOptions {
+            string_encoding: options.string_encoding,
+            memory: match options.memory {
+                Some(memory) => Some(self.resolve_core_memory(memory, store)?),
+                None => None,
+            },
+            realloc: None,
+            post_return: None,
+            callback: None,
+            async_: false,
+            shared: self.shared.clone(),
+        })
+    }
+
+    fn resolve_runtime_options_for_stream_future_io(
+        &self,
+        options: &CanonicalOptions,
+        store: &Store,
+    ) -> Result<RuntimeCanonicalOptions, ComponentError> {
+        if options.callback.is_some()
+            || options.post_return.is_some()
+            || options.core_type.is_some()
+            || options.gc
+        {
+            return Err(ComponentError::Unsupported(
+                "canonical stream/future read/write only allow async, memory, realloc, and string-encoding options"
+                    .to_owned(),
+            ));
+        }
+        Ok(RuntimeCanonicalOptions {
+            string_encoding: options.string_encoding,
+            memory: match options.memory {
+                Some(memory) => Some(self.resolve_core_memory(memory, store)?),
+                None => None,
+            },
+            realloc: match options.realloc {
+                Some(realloc) => Some(self.resolve_core_func(realloc, store)?),
+                None => None,
+            },
+            post_return: None,
+            callback: None,
+            async_: options.async_,
+            shared: self.shared.clone(),
         })
     }
 

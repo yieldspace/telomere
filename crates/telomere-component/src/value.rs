@@ -31,6 +31,9 @@ pub enum ComponentValue {
     },
     Own(u32),
     Borrow(u32),
+    ErrorContext(u32),
+    Future(u32),
+    Stream(u32),
 }
 
 impl ComponentValue {
@@ -48,6 +51,9 @@ impl ComponentValue {
             Self::U32(v) => Some(*v),
             Self::Own(v) => Some(*v),
             Self::Borrow(v) => Some(*v),
+            Self::ErrorContext(v) => Some(*v),
+            Self::Future(v) => Some(*v),
+            Self::Stream(v) => Some(*v),
             _ => None,
         }
     }

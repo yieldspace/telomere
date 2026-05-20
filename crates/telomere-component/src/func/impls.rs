@@ -4,6 +4,8 @@ use super::typecheck::{
     extract_resource_handle_type, extract_result_payload_types, extract_tuple_types,
     ResourceHandleKind, TypeExpectation,
 };
+#[cfg(feature = "component-gated-feature-async")]
+use super::typecheck::{extract_future_payload_type, extract_stream_payload_type};
 use super::*;
 
 impl LowerComponent for ComponentValue {
@@ -346,6 +348,115 @@ impl<T> LiftComponent for Borrow<T> {
 
     fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
         <Self as LowerComponent>::matches_type(ty, program)
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+impl LowerComponent for ComponentErrorContext {
+    fn lower_component(self) -> Result<ComponentValue, ComponentError> {
+        Ok(ComponentValue::ErrorContext(self.handle()))
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        ensure_matches_type::<Self>(ty, program, TypeExpectation::ErrorContext)
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+impl LiftComponent for ComponentErrorContext {
+    fn lift_component(value: ComponentValue) -> Result<Self, ComponentError> {
+        match value {
+            ComponentValue::ErrorContext(handle) => Ok(Self::new(handle)),
+            other => Err(ComponentError::InvalidArgument(format!(
+                "expected error-context result, got {other:?}"
+            ))),
+        }
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        <Self as LowerComponent>::matches_type(ty, program)
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+impl<T> LowerComponent for ComponentFutureHandle<T>
+where
+    T: LowerComponent,
+{
+    fn lower_component(self) -> Result<ComponentValue, ComponentError> {
+        Ok(ComponentValue::Future(self.handle()))
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        let payload = extract_future_payload_type(ty, program)?;
+        match payload {
+            Some(payload) => T::matches_type(payload, program),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+impl<T> LiftComponent for ComponentFutureHandle<T>
+where
+    T: LiftComponent,
+{
+    fn lift_component(value: ComponentValue) -> Result<Self, ComponentError> {
+        match value {
+            ComponentValue::Future(handle) => Ok(Self::new(handle)),
+            other => Err(ComponentError::InvalidArgument(format!(
+                "expected future result, got {other:?}"
+            ))),
+        }
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        let payload = extract_future_payload_type(ty, program)?;
+        match payload {
+            Some(payload) => T::matches_type(payload, program),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+impl<T> LowerComponent for ComponentStreamHandle<T>
+where
+    T: LowerComponent,
+{
+    fn lower_component(self) -> Result<ComponentValue, ComponentError> {
+        Ok(ComponentValue::Stream(self.handle()))
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        let payload = extract_stream_payload_type(ty, program)?;
+        match payload {
+            Some(payload) => T::matches_type(payload, program),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+impl<T> LiftComponent for ComponentStreamHandle<T>
+where
+    T: LiftComponent,
+{
+    fn lift_component(value: ComponentValue) -> Result<Self, ComponentError> {
+        match value {
+            ComponentValue::Stream(handle) => Ok(Self::new(handle)),
+            other => Err(ComponentError::InvalidArgument(format!(
+                "expected stream result, got {other:?}"
+            ))),
+        }
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        let payload = extract_stream_payload_type(ty, program)?;
+        match payload {
+            Some(payload) => T::matches_type(payload, program),
+            None => Ok(()),
+        }
     }
 }
 

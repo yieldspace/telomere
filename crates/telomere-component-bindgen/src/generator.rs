@@ -566,11 +566,11 @@ impl Generator {
     }
 
     fn validate_function(&self, function: &Function) -> Result<()> {
-        if function.kind.is_async() {
+        if function.kind.is_async() && self.host_mode.includes_sync() {
             return Err(Error::new(
                 Span::call_site(),
                 format!(
-                    "async WIT function `{}` is not supported by telomere-component-bindgen yet",
+                    "async WIT function `{}` requires `host_mode: \"async\"`",
                     function.name
                 ),
             ));
@@ -578,8 +578,11 @@ impl Generator {
         if !matches!(
             function.kind,
             FunctionKind::Freestanding
+                | FunctionKind::AsyncFreestanding
                 | FunctionKind::Method(_)
+                | FunctionKind::AsyncMethod(_)
                 | FunctionKind::Static(_)
+                | FunctionKind::AsyncStatic(_)
                 | FunctionKind::Constructor(_)
         ) {
             return Err(Error::new(
@@ -648,7 +651,12 @@ impl Generator {
                             self.collect_type_use(Type::Id(resource))?;
                         }
                     },
-                    TypeDefKind::Map(_, _) | TypeDefKind::Future(_) | TypeDefKind::Stream(_) => {}
+                    TypeDefKind::Future(ty) | TypeDefKind::Stream(ty) => {
+                        if let Some(ty) = ty {
+                            self.collect_type_use(ty)?;
+                        }
+                    }
+                    TypeDefKind::Map(_, _) => {}
                     TypeDefKind::Unknown => {}
                 }
             }
@@ -664,13 +672,8 @@ impl Generator {
             | Type::F32
             | Type::F64
             | Type::Char
-            | Type::String => {}
-            Type::ErrorContext => {
-                return Err(Error::new(
-                    Span::call_site(),
-                    "`error-context` is not supported by telomere-component-bindgen yet",
-                ));
-            }
+            | Type::String
+            | Type::ErrorContext => {}
         }
         Ok(())
     }
@@ -1346,10 +1349,15 @@ impl Generator {
                 let ty = self.render_named_handle_type(*handle, false)?;
                 Ok(quote!(pub type #ident = #ty;))
             }
-            TypeDefKind::Map(_, _)
-            | TypeDefKind::Future(_)
-            | TypeDefKind::Stream(_)
-            | TypeDefKind::Unknown => Err(Error::new(
+            TypeDefKind::Future(payload) => {
+                let ty = self.render_optional_internal_type(*payload)?;
+                Ok(quote!(pub type #ident = #runtime::ComponentFutureHandle<#ty>;))
+            }
+            TypeDefKind::Stream(payload) => {
+                let ty = self.render_optional_internal_type(*payload)?;
+                Ok(quote!(pub type #ident = #runtime::ComponentStreamHandle<#ty>;))
+            }
+            TypeDefKind::Map(_, _) | TypeDefKind::Unknown => Err(Error::new(
                 Span::call_site(),
                 format!(
                     "type kind `{}` is not supported by telomere-component-bindgen yet",
@@ -1360,6 +1368,7 @@ impl Generator {
     }
 
     fn render_internal_type(&self, ty: Type) -> Result<TokenStream2> {
+        let runtime = &self.runtime_path;
         match ty {
             Type::Bool => Ok(quote!(bool)),
             Type::U8 => Ok(quote!(u8)),
@@ -1374,10 +1383,7 @@ impl Generator {
             Type::F64 => Ok(quote!(f64)),
             Type::Char => Ok(quote!(char)),
             Type::String => Ok(quote!(String)),
-            Type::ErrorContext => Err(Error::new(
-                Span::call_site(),
-                "`error-context` is not supported by telomere-component-bindgen yet",
-            )),
+            Type::ErrorContext => Ok(quote!(#runtime::ComponentErrorContext)),
             Type::Id(id) => {
                 let typedef = &self.resolve.types[id];
                 if typedef.name.is_some() {
@@ -1416,6 +1422,14 @@ impl Generator {
                         Ok(quote!(#ident))
                     }
                     TypeDefKind::Handle(handle) => self.render_named_handle_type(*handle, false),
+                    TypeDefKind::Future(payload) => {
+                        let ty = self.render_optional_internal_type(*payload)?;
+                        Ok(quote!(#runtime::ComponentFutureHandle<#ty>))
+                    }
+                    TypeDefKind::Stream(payload) => {
+                        let ty = self.render_optional_internal_type(*payload)?;
+                        Ok(quote!(#runtime::ComponentStreamHandle<#ty>))
+                    }
                     TypeDefKind::Record(_)
                     | TypeDefKind::Variant(_)
                     | TypeDefKind::Enum(_)
@@ -1423,10 +1437,7 @@ impl Generator {
                         Span::call_site(),
                         "anonymous composite type is not supported by telomere-component-bindgen",
                     )),
-                    TypeDefKind::Map(_, _)
-                    | TypeDefKind::Future(_)
-                    | TypeDefKind::Stream(_)
-                    | TypeDefKind::Unknown => Err(Error::new(
+                    TypeDefKind::Map(_, _) | TypeDefKind::Unknown => Err(Error::new(
                         Span::call_site(),
                         format!(
                             "type kind `{}` is not supported by telomere-component-bindgen yet",
@@ -1439,6 +1450,7 @@ impl Generator {
     }
 
     fn render_public_type(&self, ty: Type, depth: ScopeDepth) -> Result<TokenStream2> {
+        let runtime = &self.runtime_path;
         match ty {
             Type::Bool => Ok(quote!(bool)),
             Type::U8 => Ok(quote!(u8)),
@@ -1453,10 +1465,7 @@ impl Generator {
             Type::F64 => Ok(quote!(f64)),
             Type::Char => Ok(quote!(char)),
             Type::String => Ok(quote!(String)),
-            Type::ErrorContext => Err(Error::new(
-                Span::call_site(),
-                "`error-context` is not supported by telomere-component-bindgen yet",
-            )),
+            Type::ErrorContext => Ok(quote!(#runtime::ComponentErrorContext)),
             Type::Id(id) => {
                 let typedef = &self.resolve.types[id];
                 if typedef.name.is_some() {
@@ -1505,6 +1514,14 @@ impl Generator {
                     TypeDefKind::Handle(handle) => {
                         self.render_unnamed_handle_public_type(*handle, depth)
                     }
+                    TypeDefKind::Future(payload) => {
+                        let ty = self.render_optional_public_type(*payload, depth)?;
+                        Ok(quote!(#runtime::ComponentFutureHandle<#ty>))
+                    }
+                    TypeDefKind::Stream(payload) => {
+                        let ty = self.render_optional_public_type(*payload, depth)?;
+                        Ok(quote!(#runtime::ComponentStreamHandle<#ty>))
+                    }
                     TypeDefKind::Record(_)
                     | TypeDefKind::Variant(_)
                     | TypeDefKind::Enum(_)
@@ -1512,10 +1529,7 @@ impl Generator {
                         Span::call_site(),
                         "anonymous composite type is not supported by telomere-component-bindgen",
                     )),
-                    TypeDefKind::Map(_, _)
-                    | TypeDefKind::Future(_)
-                    | TypeDefKind::Stream(_)
-                    | TypeDefKind::Unknown => Err(Error::new(
+                    TypeDefKind::Map(_, _) | TypeDefKind::Unknown => Err(Error::new(
                         Span::call_site(),
                         format!(
                             "type kind `{}` is not supported by telomere-component-bindgen yet",
@@ -1671,7 +1685,25 @@ impl Generator {
         }
     }
 
+    fn render_optional_internal_type(&self, ty: Option<Type>) -> Result<TokenStream2> {
+        match ty {
+            Some(ty) => self.render_internal_type(ty),
+            None => Ok(quote!(())),
+        }
+    }
+
     fn render_result_branch_public_type(
+        &self,
+        ty: Option<Type>,
+        depth: ScopeDepth,
+    ) -> Result<TokenStream2> {
+        match ty {
+            Some(ty) => self.render_public_type(ty, depth),
+            None => Ok(quote!(())),
+        }
+    }
+
+    fn render_optional_public_type(
         &self,
         ty: Option<Type>,
         depth: ScopeDepth,

@@ -62,18 +62,19 @@ unsafe fn internal_op_call(
     let return_pc = cached_return_pc(return_addr, ctx);
     match recipe.target {
         CallDispatchTarget::Host(fp) => {
+            let local_size = host_result_slot_local_size(recipe) as usize;
             if is_return_call {
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                     &ctx.local_reference,
                     param_size,
-                    0,
+                    local_size,
                     recipe.frame,
                 ));
                 ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             } else {
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
-                    0,
+                    local_size,
                     recipe.frame,
                     ctx.local_reference,
                     return_pc,
@@ -83,18 +84,19 @@ unsafe fn internal_op_call(
             invoke_sync_host_function_with(return_addr, ctx, fp)
         }
         CallDispatchTarget::AsyncHost(fp) => {
+            let local_size = host_result_slot_local_size(recipe) as usize;
             if is_return_call {
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                     &ctx.local_reference,
                     param_size,
-                    0,
+                    local_size,
                     recipe.frame,
                 ));
                 ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             } else {
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
-                    0,
+                    local_size,
                     recipe.frame,
                     ctx.local_reference,
                     return_pc,
@@ -126,6 +128,11 @@ unsafe fn internal_op_call(
             VMResult::Success(CallOutcome::Immediate(recipe.frame.code_base))
         }
     }
+}
+
+#[inline]
+fn host_result_slot_local_size(recipe: CallDispatchCache) -> u32 {
+    recipe.return_size.saturating_sub(recipe.param_size)
 }
 
 #[cfg(feature = "jit")]

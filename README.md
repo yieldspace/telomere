@@ -16,7 +16,7 @@ driven until the project reaches a tagged release.
 | `src/` | `telomere-cli`, including core module, preview1, and component runners. |
 | `crates/telomere` | Core Wasm binary parser, validator-facing optimizer, runtime, host linking, and optional JIT. |
 | `crates/telomere-component` | Component Model decoder, validator, IR, linker, and runtime. |
-| `crates/telomere-component-wasi` | WASI 0.2.6 component host provider used by the CLI and tests. |
+| `crates/telomere-component-wasi` | WASI 0.2.6 component host provider plus the experimental WASI 0.3 / Preview 3 async provider. |
 | `crates/telomere-component-bindgen` | Proc macro that generates component bindings from WIT. |
 | `crates/telomere-jit-codegen` | Low-level executable memory and target code-emission helpers for the core JIT. |
 | `crates/telomere-macros`, `crates/union-find` | Internal support crates. |
@@ -177,6 +177,26 @@ implemented host functions for argv, clocks, fd write/seek/stat/close, and
 for cli, io, clocks, random, filesystem, and sockets, with capability supplied
 through `WasiState`.
 
+WASI 0.3 / Preview 3 work tracks the official `WebAssembly/WASI`
+`wit-0.3.0-draft` snapshot vendored under
+`crates/telomere-component-wasi/wit-preview3/` and pinned in
+[docs/component-model/wasi-0.3-preview3.md](docs/component-model/wasi-0.3-preview3.md).
+The initial `telomere_component_wasi::preview3::add_to_linker_async` surface
+registers the 0.3 RC CLI environment/exit/stdio, random, clocks, and
+filesystem/sockets paths, including the official P3 `wasi:sockets/types`
+resource shape and literal-IP `ip-name-lookup`. P2 and P3 share an internal
+WASI substrate for pollables, local streams, stdio handles, filesystem
+descriptors, and monotonic timer readiness; async poll/timer calls can now
+suspend on the caller task and resume through Telomere's existing async host
+call scheduler path. P3 stdio includes the official `read-via-stream` /
+`write-via-stream` stream/future handle shape for local stdio buffers.
+`wasi:io/{error,poll,streams}` is currently a `0.2.8` compatibility bridge
+because official P3 WIT uses Component Model `stream<T>` / `future<T>` handles
+instead of a separate `wasi:io@0.3` package.
+Remaining WASI 0.3 imports, unsupported mutating filesystem operations, and
+connected socket I/O are expected to fail closed rather than fall back to the
+0.2.6 provider.
+
 ## Development
 
 CI runs the following commands:
@@ -207,6 +227,7 @@ checklist.
 - [docs/core/jit.md](docs/core/jit.md) - experimental core JIT.
 - [docs/core/coremark-benchmark.md](docs/core/coremark-benchmark.md) - local CoreMark comparison.
 - [docs/component-model/relation-driven-runtime.md](docs/component-model/relation-driven-runtime.md) - component runtime architecture.
+- [docs/component-model/wasi-0.3-preview3.md](docs/component-model/wasi-0.3-preview3.md) - WASI 0.3 / Preview 3 snapshot pin and support matrix.
 - [docs/memory-reduction-audit.md](docs/memory-reduction-audit.md) - memory reduction audit and tradeoffs.
 
 ## License

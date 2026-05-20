@@ -64,6 +64,8 @@ fn validate_annotated_plain_name(
 
     match plain {
         PlainName::Plain(_) => Ok(()),
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::Async(_, _) => Ok(()),
         PlainName::Constructor(resource_name) => {
             let returned = constructor_resource_result(ctx, func_ty).ok_or_else(|| {
                 crate::decoder::ComponentParseError::TypeMismatch(if func_ty.result.is_none() {
@@ -85,46 +87,71 @@ fn validate_annotated_plain_name(
             ensure_same_resource(ctx, returned, expected, context)
         }
         PlainName::Method(resource_name, _) => {
-            let Some(first_param_name) = func_ty.param_names.first() else {
-                return Err(crate::decoder::ComponentParseError::TypeMismatch(
-                    "should have at least one argument".to_owned(),
-                ));
-            };
-            if first_param_name.0 != "self" {
-                return Err(crate::decoder::ComponentParseError::TypeMismatch(
-                    "should have a first argument called `self`".to_owned(),
-                ));
-            }
-            let Some(first_param) = func_ty.params.first() else {
-                return Err(crate::decoder::ComponentParseError::TypeMismatch(
-                    "should have at least one argument".to_owned(),
-                ));
-            };
-            let borrowed = borrow_resource_param(ctx, first_param).ok_or_else(|| {
-                crate::decoder::ComponentParseError::TypeMismatch(
-                    "should take a first argument of `(borrow $T)`".to_owned(),
-                )
-            })?;
-            let Some(expected) = direct_resource_name(ctx, context, resource_name.0.as_str())?
-            else {
-                return Err(missing_resource_name_error(ctx, context, original));
-            };
-            ensure_same_resource(ctx, borrowed, expected, context)
+            validate_method_annotation(ctx, context, original, func_ty, resource_name)
+        }
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::AsyncMethod(resource_name, _) => {
+            validate_method_annotation(ctx, context, original, func_ty, resource_name)
         }
         PlainName::Static(resource_name, _) => {
-            if direct_resource_name(ctx, context, resource_name.0.as_str())?.is_some() {
-                Ok(())
-            } else {
-                Err(match context {
-                    AnnotatedContext::Import => crate::decoder::ComponentParseError::TypeMismatch(
-                        "static resource name is not known in this context".to_owned(),
-                    ),
-                    AnnotatedContext::Export => crate::decoder::ComponentParseError::TypeMismatch(
-                        "resource used in function does not have a name in this context".to_owned(),
-                    ),
-                })
-            }
+            validate_static_annotation(ctx, context, resource_name)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::AsyncStatic(resource_name, _) => {
+            validate_static_annotation(ctx, context, resource_name)
+        }
+    }
+}
+
+fn validate_method_annotation(
+    ctx: &ParseContext<impl BinaryReader>,
+    context: AnnotatedContext,
+    original: &str,
+    func_ty: &crate::ir::types::FuncType,
+    resource_name: &crate::ir::Label,
+) -> ParseResult<()> {
+    let Some(first_param_name) = func_ty.param_names.first() else {
+        return Err(crate::decoder::ComponentParseError::TypeMismatch(
+            "should have at least one argument".to_owned(),
+        ));
+    };
+    if first_param_name.0 != "self" {
+        return Err(crate::decoder::ComponentParseError::TypeMismatch(
+            "should have a first argument called `self`".to_owned(),
+        ));
+    }
+    let Some(first_param) = func_ty.params.first() else {
+        return Err(crate::decoder::ComponentParseError::TypeMismatch(
+            "should have at least one argument".to_owned(),
+        ));
+    };
+    let borrowed = borrow_resource_param(ctx, first_param).ok_or_else(|| {
+        crate::decoder::ComponentParseError::TypeMismatch(
+            "should take a first argument of `(borrow $T)`".to_owned(),
+        )
+    })?;
+    let Some(expected) = direct_resource_name(ctx, context, resource_name.0.as_str())? else {
+        return Err(missing_resource_name_error(ctx, context, original));
+    };
+    ensure_same_resource(ctx, borrowed, expected, context)
+}
+
+fn validate_static_annotation(
+    ctx: &ParseContext<impl BinaryReader>,
+    context: AnnotatedContext,
+    resource_name: &crate::ir::Label,
+) -> ParseResult<()> {
+    if direct_resource_name(ctx, context, resource_name.0.as_str())?.is_some() {
+        Ok(())
+    } else {
+        Err(match context {
+            AnnotatedContext::Import => crate::decoder::ComponentParseError::TypeMismatch(
+                "static resource name is not known in this context".to_owned(),
+            ),
+            AnnotatedContext::Export => crate::decoder::ComponentParseError::TypeMismatch(
+                "resource used in function does not have a name in this context".to_owned(),
+            ),
+        })
     }
 }
 

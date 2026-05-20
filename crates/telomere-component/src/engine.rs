@@ -163,6 +163,14 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
                     fixed_length: None,
                 }
             }
+            #[cfg(feature = "component-gated-feature-async")]
+            PrimValType::ErrorContext => ComponentTypeInfo {
+                id: 0,
+                flat_len: 1,
+                indirect_size: 4,
+                indirect_align: 4,
+                fixed_length: None,
+            },
             PrimValType::S64 | PrimValType::U64 | PrimValType::F64 => ComponentTypeInfo {
                 id: 0,
                 flat_len: 1,
@@ -280,6 +288,16 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
                     indirect_size: 8,
                     indirect_align: 4,
                     fixed_length: fixed,
+                }
+            }
+            #[cfg(feature = "component-gated-feature-async")]
+            Type::DefVal(DefValType::Stream(_)) | Type::DefVal(DefValType::Future(_)) => {
+                ComponentTypeInfo {
+                    id: type_id.index(),
+                    flat_len: 1,
+                    indirect_size: 4,
+                    indirect_align: 4,
+                    fixed_length: None,
                 }
             }
             Type::DefVal(DefValType::Own(_))

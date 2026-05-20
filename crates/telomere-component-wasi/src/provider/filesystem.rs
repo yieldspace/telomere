@@ -15,7 +15,8 @@ use crate::bindings::types::{
 use crate::state::{
     DescriptorEntry, DirectoryEntryStreamEntry, InputStreamEntry, InputStreamSource,
 };
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::time::UNIX_EPOCH;
@@ -32,7 +33,7 @@ pub(super) fn add_to_linker_async(linker: &mut ComponentLinker, host: Rc<WasiHos
 }
 
 impl WasiHost {
-    fn filesystem_error_code(
+    pub(super) fn filesystem_error_code(
         &self,
         error: WasiIoErrorErrorBorrow,
     ) -> Result<Option<WasiFilesystemTypesErrorCode>, ComponentError> {
@@ -45,7 +46,7 @@ impl WasiHost {
             .ok_or_else(|| ComponentError::Trap(format!("unknown error handle {}", error.handle())))
     }
 
-    fn preopen_directories(&self) -> Vec<(WasiFilesystemTypesDescriptor, String)> {
+    pub(super) fn preopen_directories(&self) -> Vec<(WasiFilesystemTypesDescriptor, String)> {
         self.state
             .inner
             .borrow()
@@ -73,7 +74,7 @@ impl WasiHost {
             .ok_or(WasiFilesystemTypesErrorCode::BadDescriptor)
     }
 
-    fn descriptor_get_type(
+    pub(super) fn descriptor_get_type(
         &self,
         descriptor: WasiFilesystemTypesDescriptorBorrow,
     ) -> Result<
@@ -85,7 +86,7 @@ impl WasiHost {
             .map(|entry| entry.descriptor_type))
     }
 
-    fn descriptor_get_flags(
+    pub(super) fn descriptor_get_flags(
         &self,
         descriptor: WasiFilesystemTypesDescriptorBorrow,
     ) -> Result<
@@ -97,7 +98,7 @@ impl WasiHost {
             .map(|entry| entry.flags))
     }
 
-    fn descriptor_stat(
+    pub(super) fn descriptor_stat(
         &self,
         descriptor: WasiFilesystemTypesDescriptorBorrow,
     ) -> Result<
@@ -109,7 +110,7 @@ impl WasiHost {
             .and_then(|entry| stat_for_path(&entry.host_path, false)))
     }
 
-    fn descriptor_stat_at(
+    pub(super) fn descriptor_stat_at(
         &self,
         descriptor: WasiFilesystemTypesDescriptorBorrow,
         path_flags: WasiFilesystemTypesPathFlags,
@@ -123,7 +124,7 @@ impl WasiHost {
             .and_then(|path| stat_for_path(&path, path_flags.symlink_follow)))
     }
 
-    fn descriptor_open_at(
+    pub(super) fn descriptor_open_at(
         &self,
         descriptor: WasiFilesystemTypesDescriptorBorrow,
         path_flags: WasiFilesystemTypesPathFlags,
@@ -132,14 +133,19 @@ impl WasiHost {
         flags: WasiFilesystemTypesDescriptorFlags,
     ) -> Result<Result<WasiFilesystemTypesDescriptor, WasiFilesystemTypesErrorCode>, ComponentError>
     {
-        if open_flags.create || open_flags.exclusive || open_flags.truncate || flags.write {
-            return Ok(Err(WasiFilesystemTypesErrorCode::ReadOnly));
-        }
+        let requested_mutation = open_flags.create
+            || open_flags.exclusive
+            || open_flags.truncate
+            || flags.write
+            || flags.mutate_directory;
 
         let base = match self.descriptor_entry(descriptor.handle()) {
             Ok(base) => base,
             Err(error) => return Ok(Err(error)),
         };
+        if requested_mutation && !base.flags.mutate_directory {
+            return Ok(Err(WasiFilesystemTypesErrorCode::ReadOnly));
+        }
         if base.descriptor_type != WasiFilesystemTypesDescriptorType::Directory {
             return Ok(Err(WasiFilesystemTypesErrorCode::NotDirectory));
         }
@@ -149,11 +155,33 @@ impl WasiHost {
             Ok(host_path) => host_path,
             Err(error) => return Ok(Err(error)),
         };
-        let descriptor_type = match descriptor_type_for_path(&host_path, path_flags.symlink_follow)
-        {
-            Ok(descriptor_type) => descriptor_type,
-            Err(error) => return Ok(Err(error)),
+        let descriptor_type = if open_flags.create {
+            let mut options = OpenOptions::new();
+            options
+                .read(flags.read)
+                .write(flags.write)
+                .create(true)
+                .create_new(open_flags.exclusive)
+                .truncate(open_flags.truncate);
+            match options.open(&host_path) {
+                Ok(_) => WasiFilesystemTypesDescriptorType::RegularFile,
+                Err(error) => return Ok(Err(map_io_error(&error))),
+            }
+        } else {
+            match descriptor_type_for_path(&host_path, path_flags.symlink_follow) {
+                Ok(descriptor_type) => descriptor_type,
+                Err(error) => return Ok(Err(error)),
+            }
         };
+        if open_flags.truncate && !open_flags.create {
+            if let Err(error) = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&host_path)
+            {
+                return Ok(Err(map_io_error(&error)));
+            }
+        }
         if open_flags.directory && descriptor_type != WasiFilesystemTypesDescriptorType::Directory {
             return Ok(Err(WasiFilesystemTypesErrorCode::NotDirectory));
         }
@@ -171,7 +199,7 @@ impl WasiHost {
         Ok(Ok(WasiFilesystemTypesDescriptor::new(handle)))
     }
 
-    fn descriptor_read_via_stream(
+    pub(super) fn descriptor_read_via_stream(
         &self,
         descriptor: WasiFilesystemTypesDescriptorBorrow,
         offset: u64,
@@ -201,7 +229,7 @@ impl WasiHost {
         Ok(Ok(WasiIoStreamsInputStream::new(handle)))
     }
 
-    fn descriptor_read(
+    pub(super) fn descriptor_read(
         &self,
         descriptor: WasiFilesystemTypesDescriptorBorrow,
         length: u64,
@@ -220,7 +248,122 @@ impl WasiHost {
         Ok(read_file_range(&entry.host_path, offset, length))
     }
 
-    fn descriptor_read_directory(
+    pub(super) fn descriptor_write(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        buffer: Vec<u8>,
+        offset: u64,
+    ) -> Result<Result<u64, WasiFilesystemTypesErrorCode>, ComponentError> {
+        let entry = match self.descriptor_entry(descriptor.handle()) {
+            Ok(entry) => entry,
+            Err(error) => return Ok(Err(error)),
+        };
+        if !entry.flags.write {
+            return Ok(Err(WasiFilesystemTypesErrorCode::NotPermitted));
+        }
+        if entry.descriptor_type != WasiFilesystemTypesDescriptorType::RegularFile {
+            return Ok(Err(WasiFilesystemTypesErrorCode::BadDescriptor));
+        }
+        let result = OpenOptions::new()
+            .write(true)
+            .open(&entry.host_path)
+            .and_then(|mut file| {
+                file.seek(SeekFrom::Start(offset))?;
+                file.write_all(&buffer)?;
+                Ok(buffer.len() as u64)
+            })
+            .map_err(|error| map_io_error(&error));
+        Ok(result)
+    }
+
+    pub(super) fn descriptor_set_size(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        size: u64,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        let entry = match self.descriptor_entry(descriptor.handle()) {
+            Ok(entry) => entry,
+            Err(error) => return Ok(Err(error)),
+        };
+        if !entry.flags.write {
+            return Ok(Err(WasiFilesystemTypesErrorCode::NotPermitted));
+        }
+        if entry.descriptor_type != WasiFilesystemTypesDescriptorType::RegularFile {
+            return Ok(Err(WasiFilesystemTypesErrorCode::BadDescriptor));
+        }
+        Ok(OpenOptions::new()
+            .write(true)
+            .open(&entry.host_path)
+            .and_then(|file| file.set_len(size))
+            .map_err(|error| map_io_error(&error)))
+    }
+
+    pub(super) fn descriptor_create_directory_at(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        path: String,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        let host_path = match self.descriptor_mutating_child_path(descriptor.handle(), &path, false)
+        {
+            Ok(path) => path,
+            Err(error) => return Ok(Err(error)),
+        };
+        Ok(fs::create_dir(&host_path).map_err(|error| map_io_error(&error)))
+    }
+
+    pub(super) fn descriptor_remove_directory_at(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        path: String,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        let host_path = match self.descriptor_mutating_child_path(descriptor.handle(), &path, false)
+        {
+            Ok(path) => path,
+            Err(error) => return Ok(Err(error)),
+        };
+        Ok(fs::remove_dir(&host_path).map_err(|error| map_io_error(&error)))
+    }
+
+    pub(super) fn descriptor_unlink_file_at(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        path: String,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        let host_path = match self.descriptor_mutating_child_path(descriptor.handle(), &path, false)
+        {
+            Ok(path) => path,
+            Err(error) => return Ok(Err(error)),
+        };
+        if matches!(
+            descriptor_type_for_path(&host_path, false),
+            Ok(WasiFilesystemTypesDescriptorType::Directory)
+        ) {
+            return Ok(Err(WasiFilesystemTypesErrorCode::IsDirectory));
+        }
+        Ok(fs::remove_file(&host_path).map_err(|error| map_io_error(&error)))
+    }
+
+    pub(super) fn descriptor_rename_at(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        old_path: String,
+        new_descriptor: WasiFilesystemTypesDescriptorBorrow,
+        new_path: String,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        let old_host_path =
+            match self.descriptor_mutating_child_path(descriptor.handle(), &old_path, false) {
+                Ok(path) => path,
+                Err(error) => return Ok(Err(error)),
+            };
+        let new_host_path =
+            match self.descriptor_mutating_child_path(new_descriptor.handle(), &new_path, false) {
+                Ok(path) => path,
+                Err(error) => return Ok(Err(error)),
+            };
+        Ok(fs::rename(&old_host_path, &new_host_path).map_err(|error| map_io_error(&error)))
+    }
+
+    pub(super) fn descriptor_read_directory(
         &self,
         descriptor: WasiFilesystemTypesDescriptorBorrow,
     ) -> Result<
@@ -269,7 +412,7 @@ impl WasiHost {
         Ok(Ok(WasiFilesystemTypesDirectoryEntryStream::new(handle)))
     }
 
-    fn directory_entry_stream_read_directory_entry(
+    pub(super) fn directory_entry_stream_read_directory_entry(
         &self,
         stream: WasiFilesystemTypesDirectoryEntryStreamBorrow,
     ) -> Result<
@@ -301,6 +444,22 @@ impl WasiHost {
         follow_symlink: bool,
     ) -> Result<PathBuf, WasiFilesystemTypesErrorCode> {
         let entry = self.descriptor_entry(handle)?;
+        if entry.descriptor_type != WasiFilesystemTypesDescriptorType::Directory {
+            return Err(WasiFilesystemTypesErrorCode::NotDirectory);
+        }
+        resolve_guest_path(&entry.host_path, path, follow_symlink)
+    }
+
+    fn descriptor_mutating_child_path(
+        &self,
+        handle: u32,
+        path: &str,
+        follow_symlink: bool,
+    ) -> Result<PathBuf, WasiFilesystemTypesErrorCode> {
+        let entry = self.descriptor_entry(handle)?;
+        if !entry.flags.mutate_directory {
+            return Err(WasiFilesystemTypesErrorCode::ReadOnly);
+        }
         if entry.descriptor_type != WasiFilesystemTypesDescriptorType::Directory {
             return Err(WasiFilesystemTypesErrorCode::NotDirectory);
         }

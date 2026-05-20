@@ -3,6 +3,7 @@ mod clocks;
 mod common;
 mod filesystem;
 mod io;
+pub(crate) mod preview3;
 mod random;
 mod sockets;
 
@@ -10,6 +11,7 @@ mod sockets;
 mod tests;
 
 use crate::state::WasiState;
+use crate::substrate::WasiSubstrate;
 use std::rc::Rc;
 use telomere_component::{ComponentError, ComponentLinker};
 
@@ -21,6 +23,10 @@ struct WasiHost {
 impl WasiHost {
     fn new(state: WasiState) -> Self {
         Self { state }
+    }
+
+    pub(crate) fn substrate(&self) -> WasiSubstrate {
+        WasiSubstrate::new(self.state.clone())
     }
 }
 

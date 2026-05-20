@@ -306,6 +306,12 @@ mod tests {
                 DefValType::List(ty, _) => {
                     naive_val_contains_resource_handle(validator, ty, visiting)?
                 }
+                #[cfg(feature = "component-gated-feature-async")]
+                DefValType::Stream(ty) | DefValType::Future(ty) => ty
+                    .as_ref()
+                    .map(|ty| naive_val_contains_resource_handle(validator, ty, visiting))
+                    .transpose()?
+                    .unwrap_or(false),
                 DefValType::Own(_) | DefValType::Borrow(_) => true,
             },
             Type::Generic(Generic {
@@ -363,6 +369,12 @@ mod tests {
                 DefValType::List(ty, _) => {
                     naive_val_refs_foreign_resource(validator, ty, owner, visiting)?
                 }
+                #[cfg(feature = "component-gated-feature-async")]
+                DefValType::Stream(ty) | DefValType::Future(ty) => ty
+                    .as_ref()
+                    .map(|ty| naive_val_refs_foreign_resource(validator, ty, owner, visiting))
+                    .transpose()?
+                    .unwrap_or(false),
                 DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
                     naive_refs_foreign_resource(validator, *type_id, owner, visiting)?
                 }
@@ -546,6 +558,13 @@ mod tests {
                     Some(len) => saturating_mul(elem, *len as u64),
                     None => saturating_add(elem, 1),
                 })
+            }
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) | DefValType::Future(ty) => {
+                if let Some(ty) = ty {
+                    let _ = naive_val_size(validator, ty, visiting)?;
+                }
+                Ok(1)
             }
             DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
                 naive_effective_type_size(validator, *type_id, visiting)

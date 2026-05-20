@@ -281,7 +281,14 @@ fn validate_inline_name(name: &ExportName) -> ParseResult<()> {
         PlainName::Plain(label) | PlainName::Constructor(label) => {
             ensure_inline_label(&label.0, &name.original)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::Async(_, label) => ensure_inline_label(&label.0, &name.original),
         PlainName::Method(resource, method) | PlainName::Static(resource, method) => {
+            ensure_inline_label(&resource.0, &name.original)?;
+            ensure_inline_label(&method.0, &name.original)
+        }
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::AsyncMethod(resource, method) | PlainName::AsyncStatic(resource, method) => {
             ensure_inline_label(&resource.0, &name.original)?;
             ensure_inline_label(&method.0, &name.original)
         }

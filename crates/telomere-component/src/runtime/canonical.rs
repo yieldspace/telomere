@@ -1,5 +1,7 @@
 use super::*;
 
+const MAX_FLAT_ASYNC_PARAMS: usize = 4;
+
 pub(super) fn direct_wasm_to_component_value(
     value: WasmValue,
 ) -> Result<ComponentValue, ComponentError> {
@@ -40,6 +42,61 @@ pub(super) fn component_value_to_direct_wasm(
             )))
         }
     })
+}
+
+pub(super) fn lift_error_context_debug_message(
+    options: &RuntimeCanonicalOptions,
+    store: &Store,
+    ptr: u32,
+    len: u32,
+) -> Result<String, ComponentError> {
+    let memory = options.memory.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    read_string_from_memory(store, memory, ptr, len, options.string_encoding)
+}
+
+pub(super) fn lower_error_context_debug_message(
+    options: &RuntimeCanonicalOptions,
+    store: &Store,
+    message: &str,
+    ptr: u32,
+) -> Result<(), ComponentError> {
+    let memory = options.memory.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    let realloc = options.realloc.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `realloc` is required".to_owned())
+    })?;
+    let encoding = options
+        .string_encoding
+        .unwrap_or(CanonicalStringEncoding::Utf8);
+    let align = if matches!(
+        encoding,
+        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16
+    ) {
+        2
+    } else {
+        1
+    };
+    let utf16;
+    let bytes = match encoding {
+        CanonicalStringEncoding::Utf8 => message.as_bytes(),
+        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => {
+            utf16 = encode_string_utf16(message);
+            &utf16
+        }
+    };
+    let message_ptr = call_realloc(realloc, store, 0, 0, align, bytes.len() as i32)?;
+    write_memory(store, memory, message_ptr as u32, bytes)?;
+    let message_len = match encoding {
+        CanonicalStringEncoding::Utf8 => bytes.len() as i32,
+        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => {
+            (bytes.len() / 2) as i32
+        }
+    };
+    write_memory(store, memory, ptr, &message_ptr.to_le_bytes())?;
+    write_memory(store, memory, ptr + 4, &message_len.to_le_bytes())
 }
 
 pub(super) fn lower_component_args(
@@ -94,7 +151,12 @@ pub(super) fn lift_component_args(
     program: &ComponentProgram,
     store: &Store,
 ) -> Result<Vec<ComponentValue>, ComponentError> {
-    if function_params_flat_len(func_type, program)? > MAX_FLAT_PARAMS {
+    let max_flat_params = if options.async_ {
+        MAX_FLAT_ASYNC_PARAMS
+    } else {
+        MAX_FLAT_PARAMS
+    };
+    if function_params_flat_len(func_type, program)? > max_flat_params {
         let memory = options.memory.clone().ok_or_else(|| {
             ComponentError::Runtime("canonical option `memory` is required".to_owned())
         })?;
@@ -160,6 +222,27 @@ pub(super) fn lower_component_results(
     store: &Store,
     result_area: Option<u32>,
 ) -> Result<Vec<WasmValue>, ComponentError> {
+    if options.async_ {
+        let Some(result_ty) = &func_type.result else {
+            if results.is_empty() {
+                return Ok(vec![WasmValue::I32(SubtaskState::Returned as i32)]);
+            }
+            return Err(ComponentError::InvalidArgument(
+                "function does not return a value".to_owned(),
+            ));
+        };
+        let value = results.first().ok_or_else(|| {
+            ComponentError::InvalidArgument("function result is missing".to_owned())
+        })?;
+        let return_ptr = result_area
+            .ok_or_else(|| ComponentError::Runtime("async result area is missing".to_owned()))?;
+        options.memory.clone().ok_or_else(|| {
+            ComponentError::Runtime("canonical option `memory` is required".to_owned())
+        })?;
+        write_value_to_memory(value, result_ty, options, program, store, return_ptr)?;
+        return Ok(vec![WasmValue::I32(SubtaskState::Returned as i32)]);
+    }
+
     let Some(result_ty) = &func_type.result else {
         if results.is_empty() {
             return Ok(Vec::new());
@@ -188,12 +271,13 @@ pub(super) fn lower_component_results(
 pub(super) fn lowered_indirect_result_area(
     func_type: &FuncType,
     args: &[WasmValue],
+    options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
 ) -> Result<Option<u32>, ComponentError> {
     let Some(result_ty) = &func_type.result else {
         return Ok(None);
     };
-    if value_flat_len(result_ty, program)? <= MAX_FLAT_RESULTS {
+    if !options.async_ && value_flat_len(result_ty, program)? <= MAX_FLAT_RESULTS {
         return Ok(None);
     }
     match args.last() {
@@ -206,6 +290,14 @@ pub(super) fn lowered_indirect_result_area(
         )),
     }
 }
+
+#[derive(Clone, Copy)]
+enum SubtaskState {
+    Returned = 2,
+}
+
+pub(super) const COPY_COMPLETED: i32 = 0;
+pub(super) const COPY_BLOCKED: i32 = -1;
 
 fn lower_value(
     value: &ComponentValue,
@@ -252,6 +344,8 @@ fn lower_primitive(
         PrimValType::F32 => vec![WasmValue::F32(expect_f32(value)?)],
         PrimValType::F64 => vec![WasmValue::F64(expect_f64(value)?)],
         PrimValType::Char => vec![WasmValue::I32(expect_char(value)? as u32 as i32)],
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => vec![WasmValue::I32(expect_error_context(value)? as i32)],
         PrimValType::String => lower_string(value, options, program, store)?,
     })
 }
@@ -279,6 +373,14 @@ fn lower_defined_value(
         Type::DefVal(DefValType::Flags(labels)) => lower_flags_value(value, labels),
         Type::DefVal(DefValType::List(elem, maybe_len)) => {
             lower_list_value(value, elem, *maybe_len, options, program, store)
+        }
+        #[cfg(feature = "component-gated-feature-async")]
+        Type::DefVal(DefValType::Stream(_)) => {
+            Ok(vec![WasmValue::I32(expect_stream(value)? as i32)])
+        }
+        #[cfg(feature = "component-gated-feature-async")]
+        Type::DefVal(DefValType::Future(_)) => {
+            Ok(vec![WasmValue::I32(expect_future(value)? as i32)])
         }
         Type::DefVal(DefValType::Own(resource)) | Type::DefVal(DefValType::Borrow(resource)) => {
             validate_resource_type(program, *resource)?;
@@ -326,6 +428,14 @@ fn lift_defined_value(
         Type::DefVal(DefValType::List(elem, maybe_len)) => {
             lift_list_value(elem, *maybe_len, options, program, store, cursor)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        Type::DefVal(DefValType::Stream(_)) => {
+            Ok(ComponentValue::Stream(cursor.next_i32()? as u32))
+        }
+        #[cfg(feature = "component-gated-feature-async")]
+        Type::DefVal(DefValType::Future(_)) => {
+            Ok(ComponentValue::Future(cursor.next_i32()? as u32))
+        }
         Type::DefVal(DefValType::Own(resource)) => {
             validate_resource_type(program, *resource)?;
             Ok(ComponentValue::Own(cursor.next_i32()? as u32))
@@ -363,6 +473,8 @@ fn lift_primitive(
             char::from_u32(cursor.next_i32()? as u32)
                 .ok_or_else(|| ComponentError::Trap("invalid char scalar".to_owned()))?,
         ),
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => ComponentValue::ErrorContext(cursor.next_i32()? as u32),
         PrimValType::String => {
             let memory = options.memory.as_ref().ok_or_else(|| {
                 ComponentError::Runtime("canonical option `memory` is required".to_owned())
@@ -476,6 +588,8 @@ fn memory_abi_for_primitive(prim: &PrimValType) -> MemoryAbiInfo {
         PrimValType::S32 | PrimValType::U32 | PrimValType::Char | PrimValType::F32 => {
             MemoryAbiInfo { size: 4, align: 4 }
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => MemoryAbiInfo { size: 4, align: 4 },
         PrimValType::S64 | PrimValType::U64 | PrimValType::F64 => {
             MemoryAbiInfo { size: 8, align: 8 }
         }
@@ -523,7 +637,10 @@ fn value_area_layout(
     Ok((offsets, align_to(cursor, max_align)))
 }
 
-fn element_stride(elem: &ValType, program: &ComponentProgram) -> Result<u32, ComponentError> {
+pub(super) fn element_stride(
+    elem: &ValType,
+    program: &ComponentProgram,
+) -> Result<u32, ComponentError> {
     let abi = memory_abi_for_valtype(elem, program)?;
     Ok(align_to(abi.size, abi.align.max(1)))
 }
@@ -622,6 +739,8 @@ fn flat_types_for_defval(
             vec![CoreValType::I32; flat_len]
         }
         DefValType::List(_, _) => vec![CoreValType::I32, CoreValType::I32],
+        #[cfg(feature = "component-gated-feature-async")]
+        DefValType::Stream(_) | DefValType::Future(_) => vec![CoreValType::I32],
         DefValType::Own(_) | DefValType::Borrow(_) => vec![CoreValType::I32],
     })
 }
@@ -639,6 +758,8 @@ fn flat_types_for_primitive(prim: &PrimValType) -> Vec<CoreValType> {
         PrimValType::S64 | PrimValType::U64 => vec![CoreValType::I64],
         PrimValType::F32 => vec![CoreValType::F32],
         PrimValType::F64 => vec![CoreValType::F64],
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => vec![CoreValType::I32],
         PrimValType::String => vec![CoreValType::I32, CoreValType::I32],
     }
 }
@@ -656,7 +777,7 @@ fn join_component_flat_types(lhs: CoreValType, rhs: CoreValType) -> CoreValType 
     }
 }
 
-fn write_value_to_memory(
+pub(super) fn write_value_to_memory(
     value: &ComponentValue,
     ty: &ValType,
     options: &RuntimeCanonicalOptions,
@@ -674,7 +795,7 @@ fn write_value_to_memory(
     }
 }
 
-fn read_value_from_memory(
+pub(super) fn read_value_from_memory(
     ty: &ValType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
@@ -723,6 +844,20 @@ fn write_defined_value_to_memory(
             let flat = lower_list_value(value, elem, *maybe_len, options, program, store)?;
             write_flat_values(store, memory, ptr, &flat)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        Type::DefVal(DefValType::Stream(_)) => write_memory(
+            store,
+            memory,
+            ptr,
+            &(expect_stream(value)? as i32).to_le_bytes(),
+        ),
+        #[cfg(feature = "component-gated-feature-async")]
+        Type::DefVal(DefValType::Future(_)) => write_memory(
+            store,
+            memory,
+            ptr,
+            &(expect_future(value)? as i32).to_le_bytes(),
+        ),
         Type::DefVal(DefValType::Own(resource)) => {
             validate_resource_type(program, *resource)?;
             write_memory(
@@ -780,6 +915,14 @@ fn read_defined_value_from_memory(
         Type::DefVal(DefValType::List(elem, maybe_len)) => {
             read_list_value_from_memory(elem, *maybe_len, options, program, store, memory, ptr)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        Type::DefVal(DefValType::Stream(_)) => Ok(ComponentValue::Stream(read_i32_from_memory(
+            store, memory, ptr,
+        )? as u32)),
+        #[cfg(feature = "component-gated-feature-async")]
+        Type::DefVal(DefValType::Future(_)) => Ok(ComponentValue::Future(read_i32_from_memory(
+            store, memory, ptr,
+        )? as u32)),
         Type::DefVal(DefValType::Own(resource)) => {
             validate_resource_type(program, *resource)?;
             Ok(ComponentValue::Own(
@@ -840,6 +983,13 @@ fn write_primitive_to_memory(
             ptr,
             &(expect_char(value)? as u32).to_le_bytes(),
         ),
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => write_memory(
+            store,
+            memory,
+            ptr,
+            &(expect_error_context(value)? as i32).to_le_bytes(),
+        ),
         PrimValType::String => {
             let flat = lower_string(value, options, program, store)?;
             write_flat_values(store, memory, ptr, &flat)
@@ -875,6 +1025,10 @@ fn read_primitive_from_memory(
             char::from_u32(read_i32_from_memory(store, memory, ptr)? as u32)
                 .ok_or_else(|| ComponentError::Trap("invalid char scalar".to_owned()))?,
         ),
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => {
+            ComponentValue::ErrorContext(read_i32_from_memory(store, memory, ptr)? as u32)
+        }
         PrimValType::String => {
             let string_ptr = read_i32_from_memory(store, memory, ptr)? as u32;
             let len = read_i32_from_memory(store, memory, ptr + 4)? as u32;
@@ -1866,7 +2020,7 @@ fn read_memory_array<const N: usize>(
         .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))
 }
 
-fn write_memory(
+pub(super) fn write_memory(
     store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
@@ -2151,6 +2305,36 @@ fn expect_handle(value: &ComponentValue) -> Result<u32, ComponentError> {
         ComponentValue::Own(v) | ComponentValue::Borrow(v) | ComponentValue::U32(v) => Ok(*v),
         _ => Err(ComponentError::InvalidArgument(
             "expected resource handle".to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+fn expect_error_context(value: &ComponentValue) -> Result<u32, ComponentError> {
+    match value {
+        ComponentValue::ErrorContext(v) | ComponentValue::U32(v) => Ok(*v),
+        _ => Err(ComponentError::InvalidArgument(
+            "expected error-context handle".to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+fn expect_future(value: &ComponentValue) -> Result<u32, ComponentError> {
+    match value {
+        ComponentValue::Future(v) | ComponentValue::U32(v) => Ok(*v),
+        _ => Err(ComponentError::InvalidArgument(
+            "expected future handle".to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "component-gated-feature-async")]
+fn expect_stream(value: &ComponentValue) -> Result<u32, ComponentError> {
+    match value {
+        ComponentValue::Stream(v) | ComponentValue::U32(v) => Ok(*v),
+        _ => Err(ComponentError::InvalidArgument(
+            "expected stream handle".to_owned(),
         )),
     }
 }

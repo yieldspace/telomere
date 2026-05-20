@@ -86,7 +86,8 @@
 ## Non-goals
 - AOT/JIT
 - `Store` / `InstanceHandle` の `Send` 化
-- async component model proposal 群
+- unscoped async component model proposal work outside the pinned WASI 0.3 /
+  Preview 3 target in [wasi-0.3-preview3.md](wasi-0.3-preview3.md)
 - `CM_VALUES`
 - `CM_MAP`
 - `CM_GC`
@@ -156,7 +157,10 @@ Wasmtime の同期 component tests をそのまま vendoring すると async / h
 ## Current Limitation Boundary
 - 失敗判定は「compile/validate が通るべきものは通る」「invalid/malformed は適切な category の error を返す」を優先し、spec 文言との完全一致は要求しない。
 - `component_model_testsuite` は compile/validate 専用で、runtime directive は acceptance target に含めない。
-- current boundary は Wasmtime の同期 API 面を揃えることであり、async canonical ABI や proposal 拡張までは含めない。
+- current implemented boundary is Wasmtime の同期 API 面を揃えることであり、
+  async canonical ABI や WASI 0.3 / Preview 3 proposal 拡張は
+  [wasi-0.3-preview3.md](wasi-0.3-preview3.md) の snapshot / support matrix
+  に従って段階的に追加する。
 
 ## Validation Commands
 - `cargo test -p telomere-component --test component_model_wast -- --nocapture`

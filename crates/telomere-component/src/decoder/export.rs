@@ -219,7 +219,13 @@ fn ensure_concrete_surface_name(name: &crate::ir::ExportName) -> ParseResult<()>
 fn plain_labels(plain: &PlainName) -> Vec<&str> {
     match plain {
         PlainName::Plain(label) | PlainName::Constructor(label) => vec![label.0.as_str()],
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::Async(_, label) => vec![label.0.as_str()],
         PlainName::Method(resource, method) | PlainName::Static(resource, method) => {
+            vec![resource.0.as_str(), method.0.as_str()]
+        }
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::AsyncMethod(resource, method) | PlainName::AsyncStatic(resource, method) => {
             vec![resource.0.as_str(), method.0.as_str()]
         }
     }

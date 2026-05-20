@@ -5,9 +5,10 @@ pub(super) fn parse_plain_name_string(text: &str) -> ParseResult<Option<PlainNam
     trace!("parse_plain_name_string: {}", text);
     match text.as_bytes() {
         #[cfg(feature = "component-gated-feature-async")]
-        [b'[', b'a', b's', b'y', b'n', b'c', b']', ..] => Err(ComponentParseError::Unsupported(
-            "async plain names are not supported".to_owned(),
-        )),
+        [b'[', b'a', b's', b'y', b'n', b'c', b']', ..] => {
+            let label = parse_label(&text[7..]).map_err(ComponentParseError::InvalidExportName)?;
+            Ok(Some(PlainName::Async(label.clone(), label)))
+        }
         [b'[', b'c', b'o', b'n', b's', b't', b'r', b'u', b'c', b't', b'o', b'r', b']', ..] => {
             Ok(Some(PlainName::Constructor(
                 parse_label(&text[13..]).map_err(ComponentParseError::InvalidExportName)?,
@@ -28,9 +29,17 @@ pub(super) fn parse_plain_name_string(text: &str) -> ParseResult<Option<PlainNam
         }
         #[cfg(feature = "component-gated-feature-async")]
         [b'[', b'a', b's', b'y', b'n', b'c', b' ', b'm', b'e', b't', b'h', b'o', b'd', b']', ..] => {
-            Err(ComponentParseError::Unsupported(
-                "async method names are not supported".to_owned(),
-            ))
+            match *text[14..].split('.').collect::<Vec<_>>() {
+                [a, b] => {
+                    let a = parse_label(a).map_err(ComponentParseError::InvalidExportName)?;
+                    let b = parse_label(b).map_err(ComponentParseError::InvalidExportName)?;
+                    Ok(Some(PlainName::AsyncMethod(a, b)))
+                }
+                _ => Err(ComponentParseError::InvalidExportName(format!(
+                    "Invalid async method export name: {}",
+                    text
+                ))),
+            }
         }
         [b'[', b's', b't', b'a', b't', b'i', b'c', b']', ..] => {
             match *text[8..].split('.').collect::<Vec<_>>() {
@@ -47,9 +56,17 @@ pub(super) fn parse_plain_name_string(text: &str) -> ParseResult<Option<PlainNam
         }
         #[cfg(feature = "component-gated-feature-async")]
         [b'[', b'a', b's', b'y', b'n', b'c', b' ', b's', b't', b'a', b't', b'i', b'c', b']', ..] => {
-            Err(ComponentParseError::Unsupported(
-                "async static names are not supported".to_owned(),
-            ))
+            match *text[14..].split('.').collect::<Vec<_>>() {
+                [a, b] => {
+                    let a = parse_label(a).map_err(ComponentParseError::InvalidExportName)?;
+                    let b = parse_label(b).map_err(ComponentParseError::InvalidExportName)?;
+                    Ok(Some(PlainName::AsyncStatic(a, b)))
+                }
+                _ => Err(ComponentParseError::InvalidExportName(format!(
+                    "Invalid async static export name: {}",
+                    text
+                ))),
+            }
         }
         _ if is_general_label(text) => Ok(Some(PlainName::Plain(Label::new(text)))),
         _ => Ok(None),

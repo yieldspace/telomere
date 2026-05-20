@@ -11,10 +11,10 @@ build = "build.rs"
 getrandom.workspace = true
 libc.workspace = true
 telomere.workspace = true
-telomere-component.workspace = true
+telomere-component = { workspace = true, features = ["component-gated-feature-async"] }
 telomere-component-bindgen.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 anyhow = { version = "1.0.98", features = ["backtrace"] }
-tokio.workspace = true
 wat = "1.243.0"

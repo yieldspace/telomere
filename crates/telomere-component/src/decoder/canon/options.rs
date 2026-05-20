@@ -99,24 +99,98 @@ pub(super) fn parse_canonical_options(
                 options.post_return_signature = Some(ty);
             }
             0x06 => {
-                return Err(ComponentParseError::Unsupported(
-                    "async canonical ABI is not supported".to_owned(),
-                ));
+                #[cfg(not(feature = "component-gated-feature-async"))]
+                {
+                    return Err(ComponentParseError::Unsupported(
+                        "canonical option `async` requires the component-gated-feature-async feature"
+                            .to_owned(),
+                    ));
+                }
+                #[cfg(feature = "component-gated-feature-async")]
+                {
+                    if options.async_ {
+                        return Err(ComponentParseError::TypeMismatch(
+                            "canonical option `async` is specified more than once".to_owned(),
+                        ));
+                    }
+                    options.async_ = true;
+                }
             }
             0x07 => {
-                return Err(ComponentParseError::Unsupported(
-                    "canonical callback is not supported".to_owned(),
-                ));
+                let idx = parse_core_func_local_idx(ctx)?;
+                #[cfg(not(feature = "component-gated-feature-async"))]
+                {
+                    let _ = idx;
+                    return Err(ComponentParseError::Unsupported(
+                        "canonical option `callback` requires the component-gated-feature-async feature"
+                            .to_owned(),
+                    ));
+                }
+                #[cfg(feature = "component-gated-feature-async")]
+                {
+                    let func_gidx = ctx.state.scope().core_funcs.get(idx)?;
+                    let ty = ctx
+                        .validator
+                        .scope()
+                        .core_funcs
+                        .get(idx)
+                        .map_err(|_| {
+                            ComponentParseError::InvalidType(
+                                "core function index out of bounds".to_owned(),
+                            )
+                        })?
+                        .clone();
+                    if ty
+                        != CoreFuncType::new(
+                            vec![CoreValType::I32, CoreValType::I32, CoreValType::I32],
+                            vec![CoreValType::I32],
+                        )
+                    {
+                        return Err(ComponentParseError::TypeMismatch(
+                        "canonical option `callback` uses a core function with an incorrect signature"
+                            .to_owned(),
+                    ));
+                    }
+                    set_unique(
+                        &mut options.callback,
+                        func_gidx,
+                        "canonical option `callback` is specified more than once",
+                    )?;
+                    options.callback_signature = Some(ty);
+                }
             }
             0x08 => {
-                return Err(ComponentParseError::Unsupported(
-                    "canonical `core type` option is not supported".to_owned(),
-                ));
+                let idx = parse_core_type_local_idx(ctx)?;
+                let core_type_gidx = ctx.state.scope().core_types.get(idx)?;
+                let ty = ctx
+                    .validator
+                    .scope()
+                    .core_types
+                    .get(idx)
+                    .map_err(|_| {
+                        ComponentParseError::InvalidType("core type index out of bounds".to_owned())
+                    })?
+                    .clone();
+                let crate::ir::types::CoreType::Func(signature) = ty else {
+                    return Err(ComponentParseError::TypeMismatch(
+                        "canonical option `core type` must reference a core function type"
+                            .to_owned(),
+                    ));
+                };
+                set_unique(
+                    &mut options.core_type,
+                    core_type_gidx,
+                    "canonical option `core type` is specified more than once",
+                )?;
+                options.core_type_signature = Some(signature);
             }
             0x09 => {
-                return Err(ComponentParseError::Unsupported(
-                    "canonical GC ABI is not supported".to_owned(),
-                ));
+                if options.gc {
+                    return Err(ComponentParseError::TypeMismatch(
+                        "canonical option `gc` is specified more than once".to_owned(),
+                    ));
+                }
+                options.gc = true;
             }
             x => {
                 return Err(ComponentParseError::InvalidSignature(format!(
@@ -124,6 +198,26 @@ pub(super) fn parse_canonical_options(
                 )));
             }
         }
+    }
+    if options.callback.is_some() && !options.async_ {
+        return Err(ComponentParseError::TypeMismatch(
+            "cannot specify callback without async".to_owned(),
+        ));
+    }
+    if options.async_ && options.post_return.is_some() {
+        return Err(ComponentParseError::TypeMismatch(
+            "cannot specify post-return function in async".to_owned(),
+        ));
+    }
+    if options.core_type.is_some() && !options.gc {
+        return Err(ComponentParseError::TypeMismatch(
+            "cannot specify `core-type` without `gc`".to_owned(),
+        ));
+    }
+    if options.gc && options.core_type.is_none() {
+        return Err(ComponentParseError::TypeMismatch(
+            "cannot specify `gc` without also specifying a `core-type` for lowerings".to_owned(),
+        ));
     }
     Ok(options)
 }
@@ -152,10 +246,24 @@ pub(super) fn validate_required_options(
         .result
         .as_ref()
         .is_some_and(|result| type_needs_memory(result, ctx));
-    let params_indirect = direct_params.len() > MAX_FLAT_PARAMS;
-    let results_indirect = direct_results.len() > MAX_FLAT_RESULTS;
-    let needs_memory =
-        params_need_memory || params_indirect || results_need_memory || results_indirect;
+    let param_limit = if matches!(mode, CanonMode::Lower) && options.async_ {
+        super::flatten::MAX_FLAT_ASYNC_PARAMS
+    } else {
+        MAX_FLAT_PARAMS
+    };
+    let params_indirect = direct_params.len() > param_limit;
+    let async_lower_with_result =
+        matches!(mode, CanonMode::Lower) && options.async_ && !direct_results.is_empty();
+    let results_indirect = if matches!(mode, CanonMode::Lift) && options.async_ {
+        direct_results.len() > MAX_FLAT_PARAMS
+    } else {
+        direct_results.len() > MAX_FLAT_RESULTS
+    };
+    let needs_memory = params_need_memory
+        || params_indirect
+        || results_need_memory
+        || results_indirect
+        || async_lower_with_result;
     if needs_memory && options.memory.is_none() {
         return Err(ComponentParseError::TypeMismatch(
             "canonical option `memory` is required".to_owned(),
@@ -163,6 +271,7 @@ pub(super) fn validate_required_options(
     }
     let needs_realloc = match mode {
         CanonMode::Lift => params_need_memory || params_indirect,
+        CanonMode::Lower if options.async_ => false,
         CanonMode::Lower => results_need_memory,
     };
     if needs_realloc && options.realloc.is_none() {
@@ -175,10 +284,20 @@ pub(super) fn validate_required_options(
             "canonical option `memory` is required".to_owned(),
         ));
     }
+    if matches!(mode, CanonMode::Lower) && options.callback.is_some() {
+        return Err(ComponentParseError::TypeMismatch(
+            "canonical option `callback` cannot be specified for lowerings".to_owned(),
+        ));
+    }
+    if matches!(mode, CanonMode::Lift) && options.core_type.is_some() {
+        return Err(ComponentParseError::TypeMismatch(
+            "canonical option `core-type` is not allowed in `canon lift`".to_owned(),
+        ));
+    }
     Ok(())
 }
 
-fn type_needs_memory(ty: &ValType, ctx: &ParseContext<impl BinaryReader>) -> bool {
+pub(super) fn type_needs_memory(ty: &ValType, ctx: &ParseContext<impl BinaryReader>) -> bool {
     match ty {
         ValType::Primitive(PrimValType::String) => true,
         ValType::Primitive(_) => false,
@@ -209,6 +328,8 @@ fn defval_needs_memory(def: &DefValType, ctx: &ParseContext<impl BinaryReader>) 
             .any(|ty| type_needs_memory(ty, ctx)),
         DefValType::Flags(_) => false,
         DefValType::List(elem, maybe_len) => maybe_len.is_none() || type_needs_memory(elem, ctx),
+        #[cfg(feature = "component-gated-feature-async")]
+        DefValType::Stream(_) | DefValType::Future(_) => false,
         DefValType::Own(_) | DefValType::Borrow(_) => false,
     }
 }

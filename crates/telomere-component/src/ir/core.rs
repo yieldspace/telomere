@@ -1,4 +1,4 @@
-use crate::ir::types::{CoreFuncType, CoreType};
+use crate::ir::types::{CoreFuncType, CoreType, ValType};
 use crate::ir::{CanonicalOptions, Func, GlobalIdx, TypeId};
 use crate::support::Module;
 use std::collections::HashMap;
@@ -29,6 +29,84 @@ pub enum CoreFunc {
         type_id: TypeId,
     },
     CanonResourceRep {
+        type_id: TypeId,
+    },
+    CanonTaskCancel,
+    CanonSubtaskCancel {
+        async_: bool,
+    },
+    CanonSubtaskDrop,
+    CanonErrorContextNew {
+        options: Box<CanonicalOptions>,
+    },
+    CanonErrorContextDebugMessage {
+        options: Box<CanonicalOptions>,
+    },
+    CanonErrorContextDrop,
+    CanonWaitableSetNew,
+    CanonWaitableSetWait {
+        cancellable: bool,
+        memory: GlobalIdx<CoreMemory>,
+    },
+    CanonWaitableSetPoll {
+        cancellable: bool,
+        memory: GlobalIdx<CoreMemory>,
+    },
+    CanonWaitableSetDrop,
+    CanonWaitableJoin,
+    CanonTaskReturn {
+        result: Option<ValType>,
+        options: Box<CanonicalOptions>,
+        signature: CoreFuncType,
+    },
+    CanonStreamNew {
+        type_id: TypeId,
+    },
+    CanonStreamRead {
+        type_id: TypeId,
+        options: Box<CanonicalOptions>,
+    },
+    CanonStreamWrite {
+        type_id: TypeId,
+        options: Box<CanonicalOptions>,
+    },
+    CanonStreamCancelRead {
+        type_id: TypeId,
+        async_: bool,
+    },
+    CanonStreamCancelWrite {
+        type_id: TypeId,
+        async_: bool,
+    },
+    CanonStreamDropReadable {
+        type_id: TypeId,
+    },
+    CanonStreamDropWritable {
+        type_id: TypeId,
+    },
+    CanonFutureNew {
+        type_id: TypeId,
+    },
+    CanonFutureRead {
+        type_id: TypeId,
+        options: Box<CanonicalOptions>,
+    },
+    CanonFutureWrite {
+        type_id: TypeId,
+        options: Box<CanonicalOptions>,
+    },
+    CanonFutureCancelRead {
+        type_id: TypeId,
+        async_: bool,
+    },
+    CanonFutureCancelWrite {
+        type_id: TypeId,
+        async_: bool,
+    },
+    CanonFutureDropReadable {
+        type_id: TypeId,
+    },
+    CanonFutureDropWritable {
         type_id: TypeId,
     },
 }

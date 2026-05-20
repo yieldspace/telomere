@@ -1,12 +1,31 @@
 use super::*;
 
-pub(super) fn flatten_func_type(
+pub(super) const MAX_FLAT_ASYNC_PARAMS: usize = 4;
+
+pub(super) fn flatten_func_type_with_options(
     func_ty: &FuncType,
     ctx: &ParseContext<impl BinaryReader>,
     mode: CanonMode,
+    options: &CanonicalOptions,
 ) -> ParseResult<CoreFuncType> {
-    let mut params = abi_flatten_params(&flatten_param_types_ctx(func_ty, ctx)?);
-    let results = abi_flatten_results(&flatten_result_types_ctx(func_ty, ctx)?, mode, &mut params);
+    if options.gc {
+        if let Some(signature) = &options.core_type_signature {
+            return Ok(signature.clone());
+        }
+    }
+
+    let param_limit = if matches!(mode, CanonMode::Lower) && options.async_ {
+        MAX_FLAT_ASYNC_PARAMS
+    } else {
+        MAX_FLAT_PARAMS
+    };
+    let mut params = abi_flatten_params(&flatten_param_types_ctx(func_ty, ctx)?, param_limit);
+    let results = abi_flatten_results(
+        &flatten_result_types_ctx(func_ty, ctx)?,
+        mode,
+        &mut params,
+        options,
+    );
     Ok(CoreFuncType::new(params, results))
 }
 
@@ -32,8 +51,8 @@ pub(super) fn flatten_result_types_ctx(
     Ok(results)
 }
 
-fn abi_flatten_params(flat: &[CoreValType]) -> Vec<CoreValType> {
-    if flat.len() > MAX_FLAT_PARAMS {
+fn abi_flatten_params(flat: &[CoreValType], max_flat_params: usize) -> Vec<CoreValType> {
+    if flat.len() > max_flat_params {
         vec![CoreValType::I32]
     } else {
         flat.to_vec()
@@ -44,8 +63,25 @@ fn abi_flatten_results(
     flat: &[CoreValType],
     mode: CanonMode,
     params: &mut Vec<CoreValType>,
+    options: &CanonicalOptions,
 ) -> Vec<CoreValType> {
-    if flat.len() > MAX_FLAT_RESULTS {
+    if options.async_ {
+        match mode {
+            CanonMode::Lower => {
+                if !flat.is_empty() {
+                    params.push(CoreValType::I32);
+                }
+                vec![CoreValType::I32]
+            }
+            CanonMode::Lift => {
+                if options.callback.is_some() {
+                    vec![CoreValType::I32]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    } else if flat.len() > MAX_FLAT_RESULTS {
         match mode {
             CanonMode::Lift => vec![CoreValType::I32],
             CanonMode::Lower => {
@@ -135,6 +171,11 @@ fn flatten_defval(
             out.push(CoreValType::I32);
             Ok(())
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        DefValType::Stream(_) | DefValType::Future(_) => {
+            out.push(CoreValType::I32);
+            Ok(())
+        }
         DefValType::Own(_) | DefValType::Borrow(_) => {
             out.push(CoreValType::I32);
             Ok(())
@@ -168,6 +209,8 @@ fn flatten_primitive(prim: &PrimValType, out: &mut Vec<CoreValType>) {
         PrimValType::S64 | PrimValType::U64 => out.push(CoreValType::I64),
         PrimValType::F32 => out.push(CoreValType::F32),
         PrimValType::F64 => out.push(CoreValType::F64),
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => out.push(CoreValType::I32),
         PrimValType::String => {
             out.push(CoreValType::I32);
             out.push(CoreValType::I32);

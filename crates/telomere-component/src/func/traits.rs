@@ -38,6 +38,59 @@ impl<T> Borrow<T> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ComponentFutureHandle<T = ()> {
+    handle: u32,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T> ComponentFutureHandle<T> {
+    pub fn new(handle: u32) -> Self {
+        Self {
+            handle,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn handle(self) -> u32 {
+        self.handle
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ComponentStreamHandle<T = ()> {
+    handle: u32,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T> ComponentStreamHandle<T> {
+    pub fn new(handle: u32) -> Self {
+        Self {
+            handle,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn handle(self) -> u32 {
+        self.handle
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ComponentErrorContext {
+    handle: u32,
+}
+
+impl ComponentErrorContext {
+    pub fn new(handle: u32) -> Self {
+        Self { handle }
+    }
+
+    pub fn handle(self) -> u32 {
+        self.handle
+    }
+}
+
 pub trait LowerComponent: Sized {
     fn lower_component(self) -> Result<ComponentValue, ComponentError>;
 

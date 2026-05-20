@@ -104,6 +104,12 @@ impl<'a> Validator<'a> {
             }),
             DefValType::Flags(_) => Ok(false),
             DefValType::List(ty, _) => self.valtype_contains_resource_handle(ty, visiting),
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) | DefValType::Future(ty) => ty
+                .as_ref()
+                .map(|ty| self.valtype_contains_resource_handle(ty, visiting))
+                .transpose()
+                .map(|found| found.unwrap_or(false)),
             DefValType::Own(_) | DefValType::Borrow(_) => Ok(true),
         }
     }
@@ -222,6 +228,12 @@ impl<'a> Validator<'a> {
             }
             DefValType::Flags(_) => Ok(ResourceOwnerSummary::default()),
             DefValType::List(ty, _) => self.valtype_resource_owner_summary(ty, visiting),
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) | DefValType::Future(ty) => ty
+                .as_ref()
+                .map(|ty| self.valtype_resource_owner_summary(ty, visiting))
+                .transpose()
+                .map(|summary| summary.unwrap_or_default()),
             DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
                 self.resource_owner_summary(*type_id, visiting)
             }
@@ -420,6 +432,13 @@ impl<'a> Validator<'a> {
                     Some(len) => saturating_mul(elem, *len as u64),
                     None => saturating_add(elem, 1),
                 })
+            }
+            #[cfg(feature = "component-gated-feature-async")]
+            DefValType::Stream(ty) | DefValType::Future(ty) => {
+                if let Some(ty) = ty {
+                    let _ = self.compute_valtype_size(ty, visiting)?;
+                }
+                Ok(1)
             }
             DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
                 self.compute_effective_type_size(*type_id, visiting)

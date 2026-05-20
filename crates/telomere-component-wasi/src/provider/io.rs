@@ -13,41 +13,12 @@ use crate::state::{ErrorEntry, InputStreamSource, OutputStreamKind, PollableEntr
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::rc::Rc;
-use std::thread;
-use std::time::Duration;
 use telomere_component::{ComponentError, ComponentFuture, ComponentLinker, Store};
 
 #[cfg(unix)]
 const HOST_STDIN_FD: libc::c_int = libc::STDIN_FILENO;
 #[cfg(not(unix))]
 const HOST_STDIN_FD: i32 = 0;
-
-#[cfg(unix)]
-fn poll_fd(fd: libc::c_int, timeout_ms: libc::c_int) -> Result<bool, ComponentError> {
-    let mut descriptor = libc::pollfd {
-        fd,
-        events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
-        revents: 0,
-    };
-    loop {
-        let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
-        if ready >= 0 {
-            return Ok(ready > 0);
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::Interrupted {
-            continue;
-        }
-        return Err(ComponentError::Trap(format!(
-            "failed to poll fd {fd}: {error}"
-        )));
-    }
-}
-
-#[cfg(not(unix))]
-fn poll_fd(_fd: i32, _timeout_ms: i32) -> Result<bool, ComponentError> {
-    Ok(true)
-}
 
 #[cfg(unix)]
 fn read_fd(fd: libc::c_int, len: usize, blocking: bool) -> Result<Vec<u8>, std::io::Error> {
@@ -141,70 +112,33 @@ impl WasiHost {
         WasiIoPollPollable::new(handle)
     }
 
-    fn pollable_ready(&self, handle: u32) -> Result<bool, ComponentError> {
-        let entry = self
-            .state
-            .inner
-            .borrow()
-            .pollables
-            .get(&handle)
-            .cloned()
-            .ok_or_else(|| ComponentError::Trap(format!("unknown pollable handle {handle}")))?;
-        Ok(match entry {
-            PollableEntry::Ready => true,
-            PollableEntry::InputStream(stream) => self.input_stream_ready(stream)?,
-            PollableEntry::MonotonicDeadline(deadline) => {
-                (self.state.inner.borrow().monotonic_clock)() >= deadline
-            }
-        })
+    pub(super) fn pollable_ready(&self, handle: u32) -> Result<bool, ComponentError> {
+        self.substrate().pollable_ready(handle)
     }
 
-    fn pollable_block(&self, handle: u32) -> Result<(), ComponentError> {
-        loop {
-            if self.pollable_ready(handle)? {
-                return Ok(());
-            }
-            match self.state.inner.borrow().pollables.get(&handle).cloned() {
-                Some(PollableEntry::InputStream(stream)) => {
-                    self.block_input_stream(stream)?;
-                    return Ok(());
-                }
-                Some(PollableEntry::MonotonicDeadline(deadline)) => {
-                    let now = (self.state.inner.borrow().monotonic_clock)();
-                    let sleep = deadline.saturating_sub(now).min(Duration::from_millis(5));
-                    if !sleep.is_zero() {
-                        thread::sleep(sleep);
-                    }
-                }
-                Some(PollableEntry::Ready) => {}
-                None => {
-                    return Err(ComponentError::Trap(format!(
-                        "unknown pollable handle {handle}"
-                    )));
-                }
-            }
-        }
+    pub(super) fn pollable_block(&self, handle: u32) -> Result<(), ComponentError> {
+        self.substrate().pollable_block_ready_only(handle)
     }
 
-    fn poll(&self, pollables: Vec<WasiIoPollPollableBorrow>) -> Result<Vec<u32>, ComponentError> {
-        if pollables.is_empty() {
-            return Err(ComponentError::Trap(
-                "wasi:io/poll.poll requires at least one pollable".to_owned(),
-            ));
-        }
+    pub(super) fn poll(
+        &self,
+        pollables: Vec<WasiIoPollPollableBorrow>,
+    ) -> Result<Vec<u32>, ComponentError> {
+        self.substrate()
+            .poll_ready_only(&pollables_to_handles(&pollables))
+    }
 
-        loop {
-            let mut ready = Vec::new();
-            for (index, pollable) in pollables.iter().enumerate() {
-                if self.pollable_ready(pollable.handle())? {
-                    ready.push(index as u32);
-                }
-            }
-            if !ready.is_empty() {
-                return Ok(ready);
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
+    pub(super) async fn pollable_block_async(&self, handle: u32) -> Result<(), ComponentError> {
+        self.substrate().pollable_block(handle).await
+    }
+
+    pub(super) async fn poll_async(
+        &self,
+        pollables: Vec<WasiIoPollPollableBorrow>,
+    ) -> Result<Vec<u32>, ComponentError> {
+        self.substrate()
+            .poll(&pollables_to_handles(&pollables))
+            .await
     }
 
     fn allocate_error(
@@ -234,41 +168,7 @@ impl WasiHost {
         )
     }
 
-    fn input_stream_state(&self, handle: u32) -> Result<(InputStreamSource, bool), ComponentError> {
-        let inner = self.state.inner.borrow();
-        let entry = inner
-            .input_streams
-            .get(&handle)
-            .ok_or_else(|| ComponentError::Trap(format!("unknown input-stream handle {handle}")))?;
-        Ok((entry.source.clone(), entry.closed))
-    }
-
-    fn input_stream_ready(&self, handle: u32) -> Result<bool, ComponentError> {
-        let (source, closed) = self.input_stream_state(handle)?;
-        if closed {
-            return Ok(true);
-        }
-        match source {
-            InputStreamSource::Buffer(_) | InputStreamSource::File(_) => Ok(true),
-            InputStreamSource::HostStdin => poll_fd(HOST_STDIN_FD, 0),
-        }
-    }
-
-    fn block_input_stream(&self, handle: u32) -> Result<(), ComponentError> {
-        let (source, closed) = self.input_stream_state(handle)?;
-        if closed {
-            return Ok(());
-        }
-        match source {
-            InputStreamSource::Buffer(_) | InputStreamSource::File(_) => Ok(()),
-            InputStreamSource::HostStdin => {
-                poll_fd(HOST_STDIN_FD, -1)?;
-                Ok(())
-            }
-        }
-    }
-
-    fn input_stream_read(
+    pub(super) fn input_stream_read(
         &self,
         stream: WasiIoStreamsInputStreamBorrow,
         len: u64,
@@ -346,7 +246,7 @@ impl WasiHost {
         Ok(Ok(chunk))
     }
 
-    fn input_stream_skip(
+    pub(super) fn input_stream_skip(
         &self,
         stream: WasiIoStreamsInputStreamBorrow,
         len: u64,
@@ -355,7 +255,7 @@ impl WasiHost {
         Ok(read.map(|bytes| bytes.len() as u64))
     }
 
-    fn input_stream_blocking_read(
+    pub(super) fn input_stream_blocking_read(
         &self,
         stream: WasiIoStreamsInputStreamBorrow,
         len: u64,
@@ -363,7 +263,7 @@ impl WasiHost {
         self.input_stream_read_impl(stream, len, true)
     }
 
-    fn input_stream_blocking_skip(
+    pub(super) fn input_stream_blocking_skip(
         &self,
         stream: WasiIoStreamsInputStreamBorrow,
         len: u64,
@@ -372,7 +272,7 @@ impl WasiHost {
         Ok(read.map(|bytes| bytes.len() as u64))
     }
 
-    fn input_stream_subscribe(
+    pub(super) fn input_stream_subscribe(
         &self,
         stream: WasiIoStreamsInputStreamBorrow,
     ) -> Result<WasiIoPollPollable, ComponentError> {
@@ -387,7 +287,7 @@ impl WasiHost {
         Ok(self.allocate_pollable(PollableEntry::InputStream(stream.handle())))
     }
 
-    fn output_stream_check_write(
+    pub(super) fn output_stream_check_write(
         &self,
         stream: WasiIoStreamsOutputStreamBorrow,
     ) -> Result<Result<u64, WasiIoStreamsStreamError>, ComponentError> {
@@ -407,7 +307,7 @@ impl WasiHost {
         Ok(Ok(4096))
     }
 
-    fn output_stream_write_bytes(
+    pub(super) fn output_stream_write_bytes(
         &self,
         stream: WasiIoStreamsOutputStreamBorrow,
         bytes: &[u8],
@@ -453,7 +353,7 @@ impl WasiHost {
         Ok(Ok(()))
     }
 
-    fn output_stream_subscribe(
+    pub(super) fn output_stream_subscribe(
         &self,
         stream: WasiIoStreamsOutputStreamBorrow,
     ) -> Result<WasiIoPollPollable, ComponentError> {
@@ -468,7 +368,7 @@ impl WasiHost {
         Ok(self.allocate_pollable(PollableEntry::Ready))
     }
 
-    fn output_stream_splice(
+    pub(super) fn output_stream_splice(
         &self,
         stream: WasiIoStreamsOutputStreamBorrow,
         src: WasiIoStreamsInputStreamBorrow,
@@ -484,7 +384,7 @@ impl WasiHost {
         }
     }
 
-    fn error_to_debug_string(
+    pub(super) fn error_to_debug_string(
         &self,
         error: WasiIoErrorErrorBorrow,
     ) -> Result<String, ComponentError> {
@@ -496,6 +396,10 @@ impl WasiHost {
             .map(|entry| entry.debug_message.clone())
             .ok_or_else(|| ComponentError::Trap(format!("unknown error handle {}", error.handle())))
     }
+}
+
+fn pollables_to_handles(pollables: &[WasiIoPollPollableBorrow]) -> Vec<u32> {
+    pollables.iter().map(|pollable| pollable.handle()).collect()
 }
 
 impl io_error::Host for WasiHost {
@@ -558,7 +462,8 @@ impl io_poll::HostAsync for WasiHost {
         _store: &'a Store,
         self_: WasiIoPollPollableBorrow,
     ) -> ComponentFuture<'a, Result<(), ComponentError>> {
-        Box::pin(async move { self.pollable_block(self_.handle()) })
+        let handle = self_.handle();
+        Box::pin(async move { self.pollable_block_async(handle).await })
     }
 
     fn poll<'a>(
@@ -566,7 +471,7 @@ impl io_poll::HostAsync for WasiHost {
         _store: &'a Store,
         in_: Vec<WasiIoPollPollableBorrow>,
     ) -> ComponentFuture<'a, Result<Vec<u32>, ComponentError>> {
-        Box::pin(async move { self.poll(in_) })
+        Box::pin(async move { self.poll_async(in_).await })
     }
 }
 
@@ -858,7 +763,12 @@ impl io_streams::HostAsync for WasiHost {
 
 #[cfg(test)]
 mod tests {
-    use super::{poll_fd, read_fd};
+    use super::read_fd;
+    use crate::bindings::types::WasiIoPollPollableBorrow;
+    use crate::provider::WasiHost;
+    use crate::state::{PollableEntry, WasiState};
+    use crate::substrate::poll_fd;
+    use telomere_component::ComponentError;
 
     #[cfg(unix)]
     #[test]
@@ -907,5 +817,35 @@ mod tests {
             libc::close(read_fd_end);
             libc::close(write_fd_end);
         }
+    }
+
+    #[test]
+    fn async_poll_ready_only_reports_ready_entries() {
+        let host = WasiHost::new(WasiState::builder().build());
+        let ready = host.allocate_pollable(PollableEntry::Ready);
+
+        let result = host.poll(vec![WasiIoPollPollableBorrow::new(ready.handle())]);
+
+        assert_eq!(result.expect("ready poll should succeed"), vec![0]);
+    }
+
+    #[test]
+    fn poll_ready_only_rejects_non_ready_entries() {
+        let host = WasiHost::new(
+            WasiState::builder()
+                .monotonic_clock(|| std::time::Duration::from_nanos(0))
+                .build(),
+        );
+        let pending = host.allocate_pollable(PollableEntry::MonotonicDeadline(
+            std::time::Duration::from_nanos(1),
+        ));
+
+        let error = host
+            .poll(vec![WasiIoPollPollableBorrow::new(pending.handle())])
+            .expect_err("non-ready ready-only poll should fail closed");
+
+        assert!(
+            matches!(error, ComponentError::Unsupported(message) if message.contains("sync WASI execution"))
+        );
     }
 }
