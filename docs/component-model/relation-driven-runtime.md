@@ -1,5 +1,26 @@
 # Relation-Driven Component Runtime
 
+## Summary (English)
+
+Parts of this document are written in Japanese. It is the architecture note for
+`crates/telomere-component/src`, explaining with diagrams why the component
+runtime is "relation driven": the binary is decoded and validated exactly once
+by `ComponentEngine::compile`, and the resulting `ComponentProgram` - root
+component, dense type table, `type_infos`, and per-kind relation store
+snapshots keyed by `GlobalIdx` - becomes the single resolution path, so
+`instantiate` and `call` never re-read the original bytes. It describes the
+`Relation`/`CoreRelation` shapes, the uniform six-step `resolve_*` procedure
+with per-kind caches, and how that one mechanism covers nested components,
+inline instance exports, aliases, and `instantiate (with ...)`. It also
+documents the canonical ABI in both directions, the value types currently
+supported (including `own`/`borrow` and indirect passing through memory plus
+realloc when flat counts exceed the limits), and why resource tables live in
+runtime-wide shared state so that destructor dispatch stays correct across
+nested instances. A closing table marks the async canonical ABI and post-return,
+`CM_VALUES`/`CM_MAP`/`CM_GC`, `memory64`/`tags`, and Wasmtime-specific
+extensions as out of scope, followed by a suggested reading order over seven
+source files.
+
 このドキュメントは `crates/telomere-component/src` の実装を、relation 駆動の観点から図で説明する。
 
 前提は次のとおり。

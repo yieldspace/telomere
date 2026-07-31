@@ -5,6 +5,24 @@
 > current implementation plan/status is in
 > [new-component-runtime.md](new-component-runtime.md).
 
+## Summary (English)
+
+Parts of this document are written in Japanese. It is a background note on
+existential types in the Component Model. It contrasts two forms of
+`(export "r2" (type (resource ...)))`, one of which yields a type independent of
+instance state - suitable for describing something like an OS-managed resource -
+while the other makes the resource depend on instance state. For representing
+type parameters supplied at `instantiate`, it weighs giving each instance a type
+environment against substituting type parameters into type terms, and chooses
+substitution, because the environment approach would still require tracking
+which environment each parameter-dependent export belongs to. The final section
+records that the substitution semantics were kept while the implementation moved
+from repeatedly walking a `HashMap<TypeId, Type>` to a dense arena indexed by a
+compile-local `TypeId`, with memoised metadata, import/export surface comparison
+as a merge walk over sorted interned names, and per-substitution transform
+caches - the stated purpose being to hold down compile and validate cost on
+embedded Linux without reverting to the type-environment model.
+
 以下の2つの例は、2回`instantiate`されたときに各instanceに型が依存するかどうかが異なる。前者はinstanceの状態に依存しない、例えばOSが管理するリソースなどへのインターフェースをcomponentとして定義する場合に用いることができ、後者はinstanceの状態にリソースが依存する場合に用いる。
 ```wasm
   (export "r2" (type (resource (rep i32))))

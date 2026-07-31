@@ -1,5 +1,26 @@
 # Wasmtime 批判的分析（Telomere 新 Component Runtime 向け）
 
+## Summary (English)
+
+This body of this note is written in Japanese. It is a short critique of
+Wasmtime's embedding design, evaluated specifically for building a lightweight
+component runtime, prioritising "make it work first" and simple resident
+memory. It records five observations with links to Wasmtime documentation:
+long-lived `Store`s accumulate retained objects; the Cranelift-leaning default
+compilation strategy makes start-up cost and execution memory heavy; Pulley is
+portable but documented as much slower than native; the pooling allocator helps
+speed but hurts memory when its preset limits are chosen badly; and
+backend/target tier differences make broad embedded-Linux optimisation hard
+early on. The decisions taken for Telomere are: no JIT or AOT in the initial
+component implementation (the component layer is a lightweight interpreter),
+decode/validate separated from execution behind a small linear IR called
+`ComponentProgram`, a fresh API rather than carrying the old component API
+over, and async `instantiate`/`call` to match the already-async core runtime -
+awaited locally rather than through `tokio::spawn`, because `Store` is
+`Rc<RefCell<_>>` and therefore `!Send`. Explicitly not adopted at this stage:
+AOT/JIT backends, the async component ABI, multi-thread task dispatch assuming
+a `Send` `Store`, and GC/threads-linked features.
+
 ## 対象
 - Wasmtime の埋め込み設計を、軽量 component runtime を作る観点で評価する。
 - ここでは「まず動く」ことと、常駐メモリの単純性を優先する。

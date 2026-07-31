@@ -25,7 +25,7 @@ should improve reusable Wasm instruction patterns.
 | Date | 2026-05-19 |
 | Host | macOS Darwin 25.2.0, arm64 |
 | CPU | Apple M2 Pro |
-| Telomere branch | `docs/oss-documentation` |
+| Telomere commit | `60b45c929e861a36abb8452b863257689282e1f1` (the commit that recorded this run) |
 | CoreMark artifact | `https://wasm3.github.io/wasm-coremark/coremark.wasm` |
 | CoreMark compile info | Clang 11.0.0, `-O3`, `STATIC` memory |
 
