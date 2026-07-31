@@ -106,6 +106,48 @@ fn has_separator(raw_args: &[OsString]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn bare_invocation_shows_usage_instead_of_a_missing_module_error() {
+        let error = Cli::try_parse_from(["telomere-cli"])
+            .expect_err("a bare invocation must not parse into a runnable command");
+
+        // `arg_required_else_help` makes clap render the help text itself, so
+        // the CLI never reaches `core_command` and never reports
+        // `module path is required`.
+        assert_eq!(
+            error.kind(),
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            error.use_stderr(),
+            "the usage shown for a bare invocation goes to stderr, not stdout"
+        );
+
+        let rendered = error.render().to_string();
+        assert!(
+            rendered.contains("Usage: telomere-cli"),
+            "usage line missing from:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("module path is required"),
+            "the old missing-module error must not resurface:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn core_command_still_reports_a_missing_module_path() {
+        let cli = Cli::try_parse_from(["telomere-cli", "--jit"])
+            .expect("a flag-only invocation parses; the module check happens later");
+        let raw = vec![OsString::from("telomere-cli"), OsString::from("--jit")];
+
+        let error = cli
+            .core_command(&raw)
+            .expect_err("a core command without a module path must fail");
+        assert_eq!(error.to_string(), "module path is required");
+    }
 
     #[test]
     fn parses_legacy_core_module_invocation() {
