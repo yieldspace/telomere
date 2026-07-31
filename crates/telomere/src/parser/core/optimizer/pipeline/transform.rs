@@ -715,10 +715,9 @@ fn fold_i64_const_window(
     let rhs = raw_i64(binary[1].operands.first())?;
     let folded = if let Some(value) = eval_i64_binop(binary[2].op, lhs, rhs) {
         (vm::op_i64_const as Op, raw_i64_operand(value))
-    } else if let Some(value) = eval_i64_compare(binary[2].op, lhs, rhs) {
-        (vm::op_i32_const as Op, raw_i32_operand(value as i32))
     } else {
-        return None;
+        let value = eval_i64_compare(binary[2].op, lhs, rhs)?;
+        (vm::op_i32_const as Op, raw_i32_operand(value as i32))
     };
     Some((
         folded_const_inst(&binary[0], &binary[2], folded.0, folded.1),
