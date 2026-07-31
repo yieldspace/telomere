@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`src/` contains the `telomere-cli` entrypoint. The workspace crates live under `crates/`: `crates/telomere` is the core Wasm parser/runtime, `crates/telomere-component` covers component-model decoding and runtime support, `crates/telomere-macros` holds proc macros, and `crates/union-find` provides shared utilities. Keep design notes in `docs/`, runnable samples in `examples/`, and benchmark code in each crate's `benches/` directory. Large upstream fixtures live in `crates/telomere/tests/wasm-testsuite`, and the local component-model compile/validate suite lives in `crates/telomere-component/tests/component_model_testsuite`.
+`src/` contains the `telomere-cli` entrypoint. The workspace crates live under `crates/`: `crates/telomere` is the core Wasm parser/runtime, `crates/telomere-component` covers component-model decoding and runtime support, `crates/telomere-macros` holds proc macros, and `crates/union-find` provides shared utilities. Keep design notes in `docs/`, runnable samples in `examples/`, and benchmark code in each crate's `benches/` directory. `benches/` is for in-process Rust benchmarks, because `cargo bench` only picks up `.rs` targets; a measurement harness that drives a built binary from outside the process belongs in `tools/` at the repository root instead, with its method and results written up in `docs/`. Do not put executable measurement code under `docs/`. Large upstream fixtures live in `crates/telomere/tests/wasm-testsuite`, and the local component-model compile/validate suite lives in `crates/telomere-component/tests/component_model_testsuite`.
 
 ## Build, Test, and Development Commands
 Use the same commands that CI runs:

@@ -65,7 +65,8 @@ Observations:
 
 Peak RSS is the `maximum resident set size` line from `/usr/bin/time -l`, taken
 as the median of 5 runs. On Linux use `/usr/bin/time -v` and read
-`Maximum resident set size`. The measurement script below does both.
+`Maximum resident set size`. `tools/measure-cold-start.py` handles both platforms
+and reports this alongside cold start.
 
 ```shell
 /usr/bin/time -l target/release/telomere-cli examples/add.wasm main 1 2
@@ -91,10 +92,10 @@ parsing, instantiation, and the guest call. Two independent methods were used
 and agree.
 
 Method 1, median of 30 runs after 3 warm-up runs, driven by
-`docs/benchmarks/measure-cold-start.py`:
+`tools/measure-cold-start.py`:
 
 ```shell
-python3 docs/benchmarks/measure-cold-start.py
+python3 tools/measure-cold-start.py
 ```
 
 | Workload | Median | Min | Max |
@@ -170,19 +171,22 @@ The following are open and should not be inferred from the numbers above:
 ```shell
 git submodule update --init --recursive
 cargo build --release
-python3 docs/benchmarks/measure-cold-start.py
+python3 tools/measure-cold-start.py
 ```
 
-The script prints JSON and takes no arguments. It expects to be run from the
-repository root with `target/release/telomere-cli` already built. It includes
-the `--jit` row only when `TELOMERE_JIT_BIN` points at a binary built with
-`--features jit`:
+The script lives in `tools/` rather than in this directory because `docs/` holds
+prose, and because `cargo bench` only picks up `.rs` targets in a crate's
+`benches/`, so a Python harness there would never run. It prints JSON and takes
+no arguments. It expects to be run from the repository root with
+`target/release/telomere-cli` already built, and it aborts rather than reporting
+a number if any invocation exits non-zero. It includes the `--jit` row only when
+`TELOMERE_JIT_BIN` points at a binary built with `--features jit`:
 
 ```shell
 cargo build --release --features jit
 cp target/release/telomere-cli /tmp/telomere-cli-jit
 cargo build --release
-TELOMERE_JIT_BIN=/tmp/telomere-cli-jit python3 docs/benchmarks/measure-cold-start.py
+TELOMERE_JIT_BIN=/tmp/telomere-cli-jit python3 tools/measure-cold-start.py
 ```
 
 The tables above were filled in from a single run of that sequence.

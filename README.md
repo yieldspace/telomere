@@ -86,6 +86,7 @@ earlier local comparison in
 | `crates/telomere-macros`, `crates/union-find` | Internal support crates. |
 | `docs/` | Architecture notes, audits, and design boundaries. |
 | `examples/` | Small runnable Wasm fixtures with `.wat` sources; see [examples/README.md](examples/README.md). |
+| `tools/` | Out-of-process measurement scripts, such as the cold-start harness used by [docs/benchmarks/footprint.md](docs/benchmarks/footprint.md). |
 
 Start with [docs/README.md](docs/README.md) for the documentation map.
 

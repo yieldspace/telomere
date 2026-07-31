@@ -3,7 +3,7 @@
 
 Run from the repository root after `cargo build --release`:
 
-    python3 docs/benchmarks/measure-cold-start.py
+    python3 tools/measure-cold-start.py
 
 Cold start is whole-process wall time (exec through exit), reported as the
 median of `RUNS` runs after `WARMUP` warm-up runs. Peak RSS is read from
@@ -20,7 +20,7 @@ it:
 
     cargo build --release --features jit
     cp target/release/telomere-cli /tmp/telomere-cli-jit
-    TELOMERE_JIT_BIN=/tmp/telomere-cli-jit python3 docs/benchmarks/measure-cold-start.py
+    TELOMERE_JIT_BIN=/tmp/telomere-cli-jit python3 tools/measure-cold-start.py
 
 Output is JSON on stdout.
 """
