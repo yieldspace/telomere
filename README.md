@@ -46,7 +46,7 @@ come at all. Please do not read silence as a judgement of the contribution.
 
 | | Component Model | WASI 0.2 | JIT | Binary size | Peak RSS |
 | --- | --- | --- | --- | --- | --- |
-| **telomere** | Yes (own decoder, linker, and runtime) | Yes, partial (0.2.6 provider) | Yes, experimental baseline JIT | 3.98 MiB (measured, see note 1) | 3.4-4.9 MiB (measured, see note 1) |
+| **telomere** | Yes (own decoder, linker, and runtime) | Yes, partial (0.2.6 provider) | Yes, experimental baseline JIT | 3.98 MiB (measured, see note 1) | 3.3-4.8 MiB (measured, see note 1) |
 | wasmtime | Yes (Tier 1, note 2) | Yes (Tier 1, note 2) | Yes (Cranelift) | not measured here | not measured here |
 | WAMR | No (note 3) | No - preview1 only (note 3) | Yes | see note 3 | not measured here |
 

@@ -27,8 +27,8 @@ runtime is reported unless it was measured here or quoted with a source.
 | Host | macOS 26.5.2 (Darwin 25.5.0), arm64 |
 | CPU | Apple M2 Pro |
 | RAM | 32 GiB |
-| Rust | `rustc 1.95.0 (59807616e 2026-04-14)`, host `aarch64-apple-darwin` |
-| Telomere commit | `60b45c9` plus the example fixtures added on this branch |
+| Rust | `rustc 1.96.0 (ac68faa20 2026-05-25)`, host `aarch64-apple-darwin`, the version pinned by `rust-toolchain.toml` |
+| Telomere commit | `30f049a` on `docs/positioning-and-examples` |
 | Release profile | workspace default: `codegen-units = 1`, `lto = "thin"` |
 | `strip` | Apple `strip` from the active Xcode command line tools |
 
@@ -50,14 +50,14 @@ ls -l /tmp/telomere-cli-stripped
 
 | Build | Unstripped | Stripped |
 | --- | ---: | ---: |
-| `--release` (default features: `full`) | 4,174,816 B (3.98 MiB) | 3,435,280 B (3.28 MiB) |
-| `--release --no-default-features` | 4,174,848 B (3.98 MiB) | 3,435,272 B (3.28 MiB) |
-| `--release --features jit` | 4,693,968 B (4.48 MiB) | 3,870,344 B (3.69 MiB) |
+| `--release` (default features: `full`) | 4,175,008 B (3.98 MiB) | 3,435,352 B (3.28 MiB) |
+| `--release --no-default-features` | 4,174,928 B (3.98 MiB) | 3,435,288 B (3.28 MiB) |
+| `--release --features jit` | 4,694,160 B (4.48 MiB) | 3,870,408 B (3.69 MiB) |
 
 Observations:
 
 - Disabling the default `full` feature (core Wasm `simd` and `threads`) does not
-  measurably change the binary size on this target. The 32-byte difference is
+  measurably change the binary size on this target. The 80-byte difference is
   below any meaningful resolution.
 - The experimental JIT costs about 519 KB unstripped / 435 KB stripped.
 
@@ -78,12 +78,18 @@ and reports this alongside cold start.
 | Workload | Peak RSS (median of 5) |
 | --- | ---: |
 | `examples/add.wasm` core call, interpreter | 3,473,408 B (3,392 KiB) |
-| `examples/add.wasm` core call, `--jit` | 3,620,864 B (3,536 KiB) |
-| `examples/wasi-preview1-hello.wasm` preview1 command | 4,014,080 B (3,920 KiB) |
-| `examples/wasi-component-args.wasm` WASI 0.2 component | 4,997,120 B (4,880 KiB) |
+| `examples/add.wasm` core call, `--jit` | 3,571,712 B (3,488 KiB) |
+| `examples/wasi-preview1-hello.wasm` preview1 command | 4,325,376 B (4,224 KiB) |
+| `examples/wasi-component-args.wasm` WASI 0.2 component | 5,079,040 B (4,960 KiB) |
 
 `examples/add.wasm` declares a 16-page (1 MiB) linear memory, so part of the core
 row is the guest memory rather than runtime overhead.
+
+The preview1 row is about 300 KiB higher than it was when this note was first
+written. That is the fixture, not the runtime: `wasi-preview1-hello.wat` gained
+the argv-sizing, memory-growth, and error-reporting logic it needs to be
+correct, and the extra functions cost that much to parse, optimize, and
+instantiate.
 
 ## Cold start
 
@@ -100,10 +106,13 @@ python3 tools/measure-cold-start.py
 
 | Workload | Median | Min | Max |
 | --- | ---: | ---: | ---: |
-| `examples/add.wasm` core call, interpreter | 3.41 ms | 3.15 ms | 4.96 ms |
-| `examples/add.wasm` core call, `--jit` | 3.42 ms | 3.09 ms | 3.86 ms |
-| `examples/wasi-preview1-hello.wasm` preview1 command | 3.71 ms | 3.44 ms | 4.14 ms |
-| `examples/wasi-component-args.wasm` WASI 0.2 component | 3.90 ms | 3.65 ms | 4.14 ms |
+| `examples/add.wasm` core call, interpreter | 3.71 ms | 3.11 ms | 4.93 ms |
+| `examples/add.wasm` core call, `--jit` | 3.25 ms | 3.02 ms | 3.53 ms |
+| `examples/wasi-preview1-hello.wasm` preview1 command | 3.74 ms | 3.50 ms | 4.03 ms |
+| `examples/wasi-component-args.wasm` WASI 0.2 component | 3.68 ms | 3.37 ms | 4.21 ms |
+
+Repeating the whole sequence moves each median by roughly +/- 0.4 ms, so the
+four workloads are not distinguishable from one another at this resolution.
 
 Method 2, 100 sequential runs timed as a block and divided by 100, repeated
 three times:
@@ -115,8 +124,8 @@ three times:
 
 | Workload | Observed totals for 100 runs | Per run |
 | --- | --- | ---: |
-| `examples/add.wasm` core call | 0.36 s, 0.35 s, 0.32 s | ~3.2-3.6 ms |
-| `examples/wasi-component-args.wasm` component | 0.38 s, 0.38 s, 0.38 s | ~3.8 ms |
+| `examples/add.wasm` core call | 0.33 s, 0.28 s, 0.30 s | ~2.8-3.3 ms |
+| `examples/wasi-component-args.wasm` component | 0.34 s, 0.33 s, 0.33 s | ~3.3-3.4 ms |
 
 Both methods include the operating system's process creation cost, so they are
 an upper bound on the runtime's own start-up cost. They are not an in-process
