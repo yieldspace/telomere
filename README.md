@@ -91,7 +91,10 @@ Start with [docs/README.md](docs/README.md) for the documentation map.
 
 ## Requirements
 
-- Rust 1.86 or newer.
+- Rust 1.86.0 through 1.96.0. The repository pins 1.96.0 via
+  `rust-toolchain.toml`, so `cargo` picks the right toolchain automatically.
+  Rust 1.97.0 miscompiles the interpreter's dispatch loop — call-heavy modules
+  overflow the host stack in release builds — so it is not supported yet.
 - A Unix-like development environment for the current JIT executable-memory
   backend tests. The non-JIT interpreter and component tests are the portable
   baseline.
