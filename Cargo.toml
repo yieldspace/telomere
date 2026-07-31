@@ -1,5 +1,6 @@
 [package]
 name = "telomere-cli"
+description = "Command-line runner for the telomere WebAssembly runtime."
 version.workspace = true
 rust-version.workspace = true
 edition.workspace = true

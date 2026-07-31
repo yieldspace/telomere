@@ -1,3 +1,12 @@
+//! WASI 0.2 host provider for telomere's Component Model runtime.
+//!
+//! This crate implements the WASI 0.2.6 `cli`, `io`, `clocks`, `random`,
+//! `filesystem`, and `sockets` interfaces against bindings generated from the
+//! bundled WIT by `telomere-component-bindgen`. Host capability - arguments,
+//! environment, preopened directories, and the random seed - is described by
+//! [`WasiState`], and the interfaces are installed into a component linker with
+//! [`add_to_linker_sync`] or [`add_to_linker_async`].
+
 mod provider;
 mod state;
 

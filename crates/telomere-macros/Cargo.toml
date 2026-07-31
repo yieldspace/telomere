@@ -1,5 +1,6 @@
 [package]
 name = "telomere-macros"
+description = "Internal proc macros used by the telomere core runtime."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,5 +1,6 @@
 [package]
 name = "union-find"
+description = "Minimal union-find used by the telomere optimizer."
 version.workspace = true
 rust-version.workspace = true
 edition.workspace = true

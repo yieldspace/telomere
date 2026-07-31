@@ -1,5 +1,6 @@
 [package]
 name = "telomere-component"
+description = "WebAssembly Component Model decoder, IR, linker, and runtime for telomere."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

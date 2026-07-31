@@ -1,3 +1,9 @@
+//! Internal proc macros used by the telomere core runtime.
+//!
+//! These macros generate the repetitive instruction-dispatch and operand-shape
+//! code in the core interpreter. They are an implementation detail of the
+//! workspace and are not intended for use outside it.
+
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;

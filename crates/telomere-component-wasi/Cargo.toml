@@ -1,5 +1,6 @@
 [package]
 name = "telomere-component-wasi"
+description = "WASI 0.2 host provider for telomere's Component Model runtime."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
