@@ -36,6 +36,18 @@ one
 two
 ```
 
+Any number of arguments works, and so does argv larger than the module's one
+declared page of linear memory - the module reads `argc` and `argv_buf_size`
+from `args_sizes_get` and grows memory when it has to:
+
+```shell
+cargo run -- examples/wasi-preview1-hello.wasm -- $(python3 -c "print(' '.join('y'*100 for _ in range(1000)))") | wc -l
+```
+
+```text
+    1002
+```
+
 WASI 0.2 component command. This one reports its result through the process
 exit status rather than stdout, for the reason described below:
 
