@@ -7,8 +7,8 @@
 
 ## Summary (English)
 
-Parts of this document are written in Japanese. It is a background note on
-existential types in the Component Model. It contrasts two forms of
+Parts of this document are written in Japanese. The document is a background
+note on existential types in the Component Model. It contrasts two forms of
 `(export "r2" (type (resource ...)))`, one of which yields a type independent of
 instance state - suitable for describing something like an OS-managed resource -
 while the other makes the resource depend on instance state. For representing

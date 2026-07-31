@@ -2,7 +2,7 @@
 
 ## Summary (English)
 
-This body of this note is written in Japanese. It is a short critique of
+The body of this document is written in Japanese. It is a short critique of
 Wasmtime's embedding design, evaluated specifically for building a lightweight
 component runtime, prioritising "make it work first" and simple resident
 memory. It records five observations with links to Wasmtime documentation:
