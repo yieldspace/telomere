@@ -1,3 +1,11 @@
+//! `telomere-cli`, the command-line runner for the telomere runtime.
+//!
+//! It has three entry points: calling an exported function of a core Wasm
+//! module, running a core module as a WASI preview1 command, and running a WASI
+//! 0.2 component that exports `wasi:cli/run@0.2.6`. Argument parsing lives in
+//! [`cli`], the preview1 host functions in [`core_wasi_preview1`], and the
+//! component host setup in [`component_cli`].
+
 use anyhow::Context;
 use clap::Parser;
 use cli::{Cli, Command, CoreCommand};
@@ -96,7 +104,7 @@ fn legacy_core_invocation(
     let Some((func, arg_values)) = command.tail_args.split_first() else {
         if core_wasi_preview1::is_preview1_command_module(module) {
             anyhow::bail!(
-                "guest argv を渡す preview1 module は `-- ...` を使ってください: `{}`",
+                "use `-- ...` to pass guest argv to the preview1 module `{}`",
                 command.name.display()
             );
         }
