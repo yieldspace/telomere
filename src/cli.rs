@@ -5,44 +5,70 @@ use std::{ffi::OsString, path::PathBuf};
 #[derive(Parser, Debug)]
 #[command(
     version,
-    about,
-    long_about = None,
-    args_conflicts_with_subcommands = true
+    about = "Run WebAssembly core modules and WASI 0.2 components on the telomere runtime.",
+    long_about = "Run WebAssembly core modules and WASI 0.2 components on the telomere runtime.
+
+Without a subcommand, MODULE is a core Wasm module. Pass an export name followed \
+by i32 arguments to call that export, or pass `--` to run the module as a WASI \
+preview1 command with the following arguments as guest argv.
+
+Use the `component` subcommand for WASI 0.2 components that export \
+`wasi:cli/run@0.2.6`.",
+    args_conflicts_with_subcommands = true,
+    arg_required_else_help = true
 )]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    /// Execute the core module through the experimental baseline JIT.
+    ///
+    /// Requires a build with `--features jit` on a supported target.
     #[arg(long = "jit", default_value_t = false)]
     pub jit: bool,
 
-    #[arg(long = "jit-code-cache-mib", default_value_t = 4)]
+    /// Upper bound, in MiB, on the JIT code cache.
+    #[arg(long = "jit-code-cache-mib", value_name = "MIB", default_value_t = 4)]
     pub jit_code_cache_mib: u32,
 
+    /// Path to the core Wasm module to run.
+    #[arg(value_name = "MODULE")]
     pub name: Option<PathBuf>,
 
+    /// Export name and i32 arguments, or guest argv when placed after `--`.
     #[arg(value_name = "ARG")]
     pub args: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Run a WASI 0.2 component that exports `wasi:cli/run@0.2.6`.
     Component(ComponentCommand),
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct ComponentCommand {
+    /// Path to the component to run.
+    #[arg(value_name = "COMPONENT")]
     pub name: PathBuf,
 
+    /// Grant the guest a host directory, optionally under a different guest path.
+    ///
+    /// Repeatable. Without `:GUEST` the directory is preopened as `.`.
     #[arg(long = "dir", value_name = "HOST[:GUEST]")]
     pub preopens: Vec<String>,
 
+    /// Set an environment variable for the guest. Repeatable.
+    ///
+    /// Overrides an inherited variable with the same key.
     #[arg(long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
 
+    /// Do not pass the host environment through to the guest.
     #[arg(long = "no-inherit-env", default_value_t = false)]
     pub no_inherit_env: bool,
 
+    /// Guest argv, placed after `--`. `argv[0]` is the component file name.
     #[arg(value_name = "ARG")]
     pub args: Vec<String>,
 }
@@ -80,6 +106,48 @@ fn has_separator(raw_args: &[OsString]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn bare_invocation_shows_usage_instead_of_a_missing_module_error() {
+        let error = Cli::try_parse_from(["telomere-cli"])
+            .expect_err("a bare invocation must not parse into a runnable command");
+
+        // `arg_required_else_help` makes clap render the help text itself, so
+        // the CLI never reaches `core_command` and never reports
+        // `module path is required`.
+        assert_eq!(
+            error.kind(),
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            error.use_stderr(),
+            "the usage shown for a bare invocation goes to stderr, not stdout"
+        );
+
+        let rendered = error.render().to_string();
+        assert!(
+            rendered.contains("Usage: telomere-cli"),
+            "usage line missing from:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("module path is required"),
+            "the old missing-module error must not resurface:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn core_command_still_reports_a_missing_module_path() {
+        let cli = Cli::try_parse_from(["telomere-cli", "--jit"])
+            .expect("a flag-only invocation parses; the module check happens later");
+        let raw = vec![OsString::from("telomere-cli"), OsString::from("--jit")];
+
+        let error = cli
+            .core_command(&raw)
+            .expect_err("a core command without a module path must fail");
+        assert_eq!(error.to_string(), "module path is required");
+    }
 
     #[test]
     fn parses_legacy_core_module_invocation() {

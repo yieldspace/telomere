@@ -1,3 +1,13 @@
+//! Core WebAssembly engine for telomere.
+//!
+//! This crate owns everything below the Component Model: the binary parser, the
+//! validator-facing optimizer that lowers a parsed module into the runtime's
+//! instruction representation, the interpreter and its scheduler, host function
+//! linking through [`Registry`], and the optional function-local lazy baseline
+//! JIT behind the `jit` feature. It is written from scratch and does not depend
+//! on Cranelift or on the `wasmparser`/`wasmtime` crates. Embedders normally
+//! start from [`Store`], [`instantiate`], and [`run_module_function`].
+
 pub mod binary;
 #[macro_use]
 pub mod common;

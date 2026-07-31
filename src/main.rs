@@ -1,3 +1,11 @@
+//! `telomere-cli`, the command-line runner for the telomere runtime.
+//!
+//! It has three entry points: calling an exported function of a core Wasm
+//! module, running a core module as a WASI preview1 command, and running a WASI
+//! 0.2 component that exports `wasi:cli/run@0.2.6`. Argument parsing lives in
+//! [`cli`], the preview1 host functions in [`core_wasi_preview1`], and the
+//! component host setup in [`component_cli`].
+
 use anyhow::Context;
 use clap::Parser;
 use cli::{Cli, Command, CoreCommand};
@@ -96,7 +104,7 @@ fn legacy_core_invocation(
     let Some((func, arg_values)) = command.tail_args.split_first() else {
         if core_wasi_preview1::is_preview1_command_module(module) {
             anyhow::bail!(
-                "guest argv を渡す preview1 module は `-- ...` を使ってください: `{}`",
+                "use `-- ...` to pass guest argv to the preview1 module `{}`",
                 command.name.display()
             );
         }
@@ -213,11 +221,92 @@ mod tests {
         std::env::temp_dir().join(format!("telomere-cli-{stem}-{nonce}.wasm"))
     }
 
+    fn example_path(file: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join(file)
+    }
+
+    /// Run the committed preview1 example with `args` and return its stdout.
+    async fn run_preview1_hello(args: Vec<String>) -> String {
+        let path = example_path("wasi-preview1-hello.wasm");
+        let command = CoreCommand {
+            name: path,
+            tail_args: args,
+            args_after_separator: true,
+            jit: false,
+            jit_code_cache_mib: 4,
+        };
+        let captured = core_wasi_preview1::CapturedStdio::default();
+
+        let exit = run_core_module_with_stdio(
+            command,
+            core_wasi_preview1::StdioMode::Capture(captured.clone()),
+        )
+        .await
+        .expect("the preview1 example should run");
+        assert_eq!(exit, ExitCode::SUCCESS);
+
+        String::from_utf8(captured.stdout()).expect("the example only writes utf-8")
+    }
+
     fn write_wasm(stem: &str, wat: &str) -> std::path::PathBuf {
         let path = unique_temp_path(stem);
         let bytes = wat::parse_str(wat).expect("wat must parse");
         fs::write(&path, bytes).expect("wasm must be writable");
         path
+    }
+
+    const PREVIEW1_GREETING: &str = "hello from telomere (wasi preview1)";
+    const PREVIEW1_ARGV0: &str = "wasi-preview1-hello.wasm";
+
+    #[tokio::test]
+    async fn preview1_example_echoes_the_documented_argv() {
+        let stdout = run_preview1_hello(vec!["one".to_owned(), "two".to_owned()]).await;
+
+        assert_eq!(
+            stdout,
+            format!("{PREVIEW1_GREETING}\n{PREVIEW1_ARGV0}\none\ntwo\n")
+        );
+    }
+
+    /// The example used to place the argv pointer array at a fixed 64 and the
+    /// string buffer at a fixed 256, so 49 arguments made the pointer array run
+    /// into the strings. It now sizes both regions from `args_sizes_get`.
+    #[tokio::test]
+    async fn preview1_example_survives_a_pointer_array_longer_than_the_old_fixed_slot() {
+        let args: Vec<String> = (1..=64).map(|index| format!("a{index}")).collect();
+        let stdout = run_preview1_hello(args.clone()).await;
+
+        let mut expected = vec![PREVIEW1_GREETING.to_owned(), PREVIEW1_ARGV0.to_owned()];
+        expected.extend(args);
+        assert_eq!(stdout.lines().collect::<Vec<_>>(), expected);
+    }
+
+    /// The example used to hold argv strings in a fixed 768-byte window that sat
+    /// below the static newline at 1088, so ~832 bytes of arguments overwrote
+    /// the separator. The buffer is now sized by `argv_buf_size`, and the static
+    /// data all lives below the argv region.
+    #[tokio::test]
+    async fn preview1_example_survives_argv_longer_than_the_old_fixed_buffer() {
+        let args: Vec<String> = (0..11).map(|_| "x".repeat(80)).collect();
+        let stdout = run_preview1_hello(args.clone()).await;
+
+        let mut expected = vec![PREVIEW1_GREETING.to_owned(), PREVIEW1_ARGV0.to_owned()];
+        expected.extend(args);
+        assert_eq!(stdout.lines().collect::<Vec<_>>(), expected);
+    }
+
+    /// argv larger than the example's one declared page has to make the guest
+    /// grow linear memory rather than write out of bounds.
+    #[tokio::test]
+    async fn preview1_example_grows_memory_for_argv_larger_than_one_page() {
+        let args: Vec<String> = (0..900).map(|_| "y".repeat(100)).collect();
+        let stdout = run_preview1_hello(args.clone()).await;
+
+        let mut expected = vec![PREVIEW1_GREETING.to_owned(), PREVIEW1_ARGV0.to_owned()];
+        expected.extend(args);
+        assert_eq!(stdout.lines().collect::<Vec<_>>(), expected);
     }
 
     #[tokio::test]

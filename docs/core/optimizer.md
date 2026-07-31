@@ -1,5 +1,25 @@
 # Core Optimizer
 
+## Summary (English)
+
+The body of this document is written in Japanese. It is the reference for the
+core optimizer, which is now a single pipeline with `LoweredFunction` as the one
+canonical artifact; switching optimizer implementations through features or
+environment variables has been removed. It lists the seven stages - `ir`,
+`analysis`, `transform`, `select`, `versioning`, `lower`, `encode` - and what
+each one computes or applies, including GVN sites and loop-preheader hoist
+candidates in analysis, LICM/PRE and reachability pruning in transform,
+`FamilySpec`-registry kernel op selection, and bounded block cloning capped at
+one generic plus two specialised versions with unprovable edge facts falling
+back to generic. The runtime boundary section states that the parser always
+keeps a `LoweredFunction` in `Func.lowered`, that `Func.expr` and `Func.op_lens`
+are only a preview of `lowered.materialize()`, and that instantiate uses
+`lowered.materialize_with_recipe_slots(...)` instead of the parser preview.
+Status notes record that `optimize_function` is the sole entry point, that the
+older pass/sink/versioning/expr modules were removed with no path back, and that
+the runtime has no matcher and executes the optimizer-chosen op family through
+direct-threaded handlers. The document ends with the regression commands to run.
+
 core optimizer は、`LoweredFunction` を唯一の正本 artifact にした単一 pipeline である。外部 feature や環境変数で optimizer 実装を切り替える構成は廃止した。
 
 ## Pipeline

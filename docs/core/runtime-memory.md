@@ -1,5 +1,25 @@
 # Core Runtime Memory Model
 
+## Summary (English)
+
+The body of this document is written in Japanese. It defines the core runtime's
+memory model as of issue #106 and states that the old `MemoryPool` and
+compacting GC are no longer assumed. On ownership: `Store` holds module,
+instance, function, table, global, and memory metadata in a store-local
+append-only arena; `InstanceHandle` carries store identity plus instance
+index/id and does not rely on root-slot cleanup; and same-store execution is
+serialised single-flight, so a `Store` may be shared but running one `Store`
+concurrently is not a supported assumption. Linear memory is split into unshared
+`mmap`-backed `LocalMemoryObject` and store-independent
+`Arc<SharedMemoryObject>`, and `instantiate`, `run_module_function`,
+`get_global`, host linking, and aliasing all serialise under the same execution
+lease, with nested synchronous reentry allowed only through a reentry token
+passed from the component host trampoline. A compact-representation section
+lists the allocation-reduction rules in force, and the bulk-memory section
+records that same-memory `memory.copy` keeps memmove semantics while
+cross-memory copies validate ranges up front and copy through a fixed 4 KiB
+stack buffer rather than a temporary `Vec<u8>`.
+
 issue #106 以降の core runtime は、旧 `MemoryPool` / compacting GC を前提にしません。現在の設計上の正本は次の通りです。
 
 ## Ownership

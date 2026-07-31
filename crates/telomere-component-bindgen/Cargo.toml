@@ -1,5 +1,6 @@
 [package]
 name = "telomere-component-bindgen"
+description = "Proc macro that generates telomere component bindings from WIT."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

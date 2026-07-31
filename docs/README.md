@@ -12,6 +12,11 @@ Some files are historical design notes. Those files are useful context, but
 their current-status banner decides whether they describe the implemented
 runtime or an older proposal.
 
+Several design notes are written wholly or partly in Japanese. Those documents
+carry a `## Summary (English)` section at the top so that the decision recorded
+in them is readable without Japanese. The summaries are not translations; read
+the body for the details.
+
 ## Core Wasm Runtime
 
 | Document | Status | Use it for |
@@ -40,6 +45,13 @@ runtime or an older proposal.
 The component runtime intentionally does not JIT or AOT component execution. It
 uses the core Wasm runtime for embedded core modules and keeps component-level
 resolution in `ComponentProgram`.
+
+## Benchmarks
+
+| Document | Status | Use it for |
+| --- | --- | --- |
+| [benchmarks/footprint.md](benchmarks/footprint.md) | Local measurement | Measured `telomere-cli` binary size, peak RSS, and cold start, plus the reproduction script and the list of unmeasured targets. |
+| [core/coremark-benchmark.md](core/coremark-benchmark.md) | Local benchmark note | Serial CoreMark comparison against WAMR, wasm3, and WasmEdge. |
 
 ## Audits
 

@@ -1,5 +1,6 @@
 [package]
 name = "telomere-jit-codegen"
+description = "Executable memory and code emission helpers for the telomere baseline JIT."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

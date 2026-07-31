@@ -1,5 +1,6 @@
 [package]
 name = "telomere"
+description = "Core WebAssembly parser, optimizer, interpreter, and optional baseline JIT for the telomere runtime."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

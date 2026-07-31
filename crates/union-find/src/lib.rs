@@ -1,3 +1,9 @@
+//! Minimal union-find used by the telomere optimizer.
+//!
+//! A small disjoint-set structure over hashable keys, kept in its own crate so
+//! that the optimizer's equivalence tracking has no dependency on the rest of
+//! the core runtime.
+
 use std::collections::HashMap;
 use std::hash::Hash;
 
