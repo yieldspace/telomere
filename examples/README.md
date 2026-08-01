@@ -49,7 +49,7 @@ cargo run -- examples/wasi-preview1-hello.wasm -- $(python3 -c "print(' '.join('
 ```
 
 WASI 0.2 component command. This one reports its result through the process
-exit status rather than stdout, for the reason described below:
+exit status so that the fixture stays focused on argument passing:
 
 ```shell
 cargo run -- component examples/wasi-component-args.wasm -- one ; echo $?
@@ -103,7 +103,7 @@ The implemented host functions are `args_sizes_get`, `args_get`,
 `proc_exit` (see `src/core_wasi_preview1.rs`). `wasi-preview1-hello.wat` stays
 inside that set.
 
-### The component sample cannot come from `wasm32-wasip2`, and cannot print
+### The component sample cannot come from `wasm32-wasip2`
 
 Two separate issues:
 
@@ -121,26 +121,18 @@ Two separate issues:
    Telomere does not currently do semver-compatible interface matching on
    component exports.
 
-2. **Resource-returning host imports abort the process.** Any component that
-   lowers a WASI import whose result is an owned resource handle - for example
+2. **Host-provided resource destruction is still unavailable.** Components can
+   lower a WASI import whose result is an owned resource handle - for example
    `wasi:cli/stdout@0.2.6.get-stdout`, which returns
-   `own<wasi:io/streams.output-stream>` - aborts inside the core interpreter
-   instead of running or returning an error:
+   `own<wasi:io/streams.output-stream>` - and use that handle for stream
+   operations. However, calling `canon resource.drop` for a host-provided
+   resource is not supported yet. Keep fixtures that exercise this path free of
+   an explicit resource drop until lifecycle support lands.
 
-   ```text
-   thread 'main' panicked at crates/telomere/src/runtime/vm.rs:1416:14:
-   misaligned pointer dereference: address must be a multiple of 0x8 but is 0x2
-   thread caused non-unwinding panic. aborting.
-   ```
-
-   Imports with non-resource results work, including ones that need linear
-   memory and `realloc` such as `wasi:cli/environment@0.2.6.get-arguments`,
-   which is what `wasi-component-args.wat` uses. Unresolved imports are reported
-   cleanly (`export not found: ...`), so this is specific to calling a resolved
-   host import that returns a resource handle.
-
-   Because stdout, stderr, and the filesystem are all reached through resources,
-   a WASI 0.2 component cannot currently produce console output under telomere.
-   That is why this sample signals its result through the exit status.
+   Imports with non-resource results also continue to work, including ones that
+   need linear memory and `realloc` such as
+   `wasi:cli/environment@0.2.6.get-arguments`, which is what
+   `wasi-component-args.wat` uses. Unresolved imports are reported cleanly
+   (`export not found: ...`).
 
 Both points are reproducible from a clean checkout with the commands above.

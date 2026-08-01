@@ -44,6 +44,51 @@ fn compile_component() -> Vec<u8> {
     .expect("component wat must parse")
 }
 
+fn compile_stdout_component() -> Vec<u8> {
+    wat::parse_str(
+        r#"
+(component
+  (type $streams
+    (instance
+      (export "output-stream" (type (sub resource)))
+    )
+  )
+  (import "wasi:io/streams@0.2.6" (instance $streams-instance (type $streams)))
+  (alias export $streams-instance "output-stream" (type $output-stream))
+
+  (type $stdout
+    (instance
+      (alias outer 1 $output-stream (type $stdout-output-stream))
+      (export "output-stream" (type (eq $stdout-output-stream)))
+      (export "get-stdout" (func (result (own $stdout-output-stream))))
+    )
+  )
+  (import "wasi:cli/stdout@0.2.6" (instance $stdout-instance (type $stdout)))
+  (alias export $stdout-instance "get-stdout" (func $get-stdout))
+
+  (core func $get-stdout-lower (canon lower (func $get-stdout)))
+  (core module $caller
+    (import "" "get-stdout" (func $get-stdout (result i32)))
+    (func (export "get-stdout") (result i32)
+      (call $get-stdout)
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "get-stdout" (func $get-stdout-lower))
+      ))
+    )
+  )
+  (func (export "get-stdout") (result (own $output-stream))
+    (canon lift (core func $caller "get-stdout"))
+  )
+)
+"#,
+    )
+    .expect("stdout component wat must parse")
+}
+
 fn build_state() -> WasiState {
     WasiState::builder()
         .args(["guest", "one"])
@@ -168,4 +213,26 @@ async fn wasi_linker_sync_supports_environment_and_random() {
 #[tokio::test]
 async fn wasi_linker_async_supports_environment_and_random() {
     run_runtime(add_to_linker_async).await;
+}
+
+#[tokio::test]
+async fn wasi_linker_sync_lowers_get_stdout_owned_resource() {
+    let bytes = compile_stdout_component();
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut linker = ComponentLinker::new();
+    add_to_linker_sync(&mut linker, build_state())
+        .expect("wasi linker registration should succeed");
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "get-stdout", &[])
+        .await
+        .expect("get-stdout should succeed");
+
+    assert!(matches!(result.as_slice(), [ComponentValue::Own(_)]));
 }

@@ -70,7 +70,7 @@ fn provider_stdio_and_exit_are_recorded() {
 
     let stdout = <WasiHost as cli_stdout::Host>::get_stdout(&host, &store).unwrap();
     let stdout_borrow = WasiIoStreamsOutputStreamBorrow::new(stdout.handle());
-    <WasiHost as io_streams::Host>::output_stream_write(
+    <WasiHost as io_streams::Host>::output_stream_blocking_write_and_flush(
         &host,
         &store,
         stdout_borrow,

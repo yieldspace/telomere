@@ -6,9 +6,9 @@ use telomere::{
         ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, ObjectRef,
         StoreState, ValType,
     },
-    link_host_function_with_function_idx,
+    link_host_function_with_function_idx, run_module_function,
     runtime::instantiate_native_module,
-    vm_try, Registry, Store, VMResult,
+    vm_try, Registry, ResultValue, Store, VMResult, WasmValue,
 };
 
 fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
@@ -23,6 +23,157 @@ fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
     ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
+}
+
+fn return_42(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    ctx.return_slot().write(&42_i32.to_le_bytes());
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
+}
+
+fn return_i64_pair(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let mut bytes = [0; 16];
+    bytes[..8].copy_from_slice(&7_i64.to_le_bytes());
+    bytes[8..].copy_from_slice(&(-9_i64).to_le_bytes());
+    ctx.return_slot().write(&bytes);
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, bytes.len(), ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
+}
+
+#[tokio::test]
+async fn host_without_params_can_return_i32() {
+    let store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_native_module(
+        NativeModule {
+            functions: vec![HostFunctionDefinition {
+                fp: return_42,
+                name: Some("answer".to_string()),
+                signature: FuncType::new(vec![], vec![ValType::I32]),
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, return_42, &store);
+
+    let wast = r#"
+    (module
+      (import "host" "answer" (func $answer (result i32)))
+      (func (export "call") (result i32) (call $answer))
+    )
+    (assert_return (invoke "call") (i32.const 42))
+    "#;
+    run_wast_with(wast, &store, &mut registry).await;
+}
+
+#[tokio::test]
+async fn host_without_params_can_return_two_i64_values() {
+    let store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_native_module(
+        NativeModule {
+            functions: vec![HostFunctionDefinition {
+                fp: return_i64_pair,
+                name: Some("pair".to_string()),
+                signature: FuncType::new(vec![], vec![ValType::I64, ValType::I64]),
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, return_i64_pair, &store);
+
+    let wast = r#"
+    (module
+      (import "host" "pair" (func $pair (result i64 i64)))
+      (func (export "call") (result i64 i64) (call $pair))
+    )
+    (assert_return (invoke "call") (i64.const 7) (i64.const -9))
+    "#;
+    run_wast_with(wast, &store, &mut registry).await;
+}
+
+#[tokio::test]
+async fn top_level_host_without_params_can_return_i32() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let host = instantiate_native_module(
+        NativeModule {
+            functions: vec![HostFunctionDefinition {
+                fp: return_42,
+                name: Some("answer".to_string()),
+                signature: FuncType::new(vec![], vec![ValType::I32]),
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    link_host_function_with_function_idx(&host, 0, return_42, &store);
+
+    let result = run_module_function(&host, &store, "answer", &ResultValue::new(vec![])).await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+        }
+        other => panic!("top-level host call failed: {other:?}"),
+    }
+
+    let sync_result = telomere::component_support::runtime::run_core_export_sync_reentrant(
+        &host,
+        &store,
+        "answer",
+        &ResultValue::new(vec![]),
+    )
+    .expect("synchronous top-level host call should run");
+    match sync_result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+        }
+        other => panic!("synchronous top-level host call failed: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn top_level_wasm_function_keeps_declared_locals() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = common::instantiate_wat(
+        r#"
+        (module
+          (func (export "with_local") (result i32) (local i32)
+            i32.const 42
+            local.set 0
+            local.get 0)
+        )
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result =
+        run_module_function(&instance, &store, "with_local", &ResultValue::new(vec![])).await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+        }
+        other => panic!("top-level Wasm call failed: {other:?}"),
+    }
 }
 
 #[tokio::test]
