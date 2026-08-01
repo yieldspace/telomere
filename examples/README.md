@@ -67,9 +67,27 @@ cargo run -- component examples/wasi-component-args.wasm ; echo $?
 1
 ```
 
+### WASI 0.2 stdout component command
+
+This companion fixture calls `wasi:cli/stdout@0.2.6.get-stdout` and then
+`wasi:io/streams@0.2.6.[method]output-stream.blocking-write-and-flush` through
+the canonical ABI. It deliberately does not call `canon resource.drop`, because
+dropping a host-provided resource is still unsupported (see below).
+
+```shell
+wasm-tools parse examples/wasi-component-stdout.wat -o examples/wasi-component-stdout.wasm
+cargo run --release -- component examples/wasi-component-stdout.wasm
+```
+
+Expected output:
+
+```text
+hello from telomere (wasi 0.2 component)
+```
+
 ## Rebuilding the `.wat` sources
 
-The two WASI fixtures are hand-written WebAssembly text and are rebuilt with
+The WASI fixtures are committed as WebAssembly text and are rebuilt with
 [`wasm-tools`](https://github.com/bytecodealliance/wasm-tools):
 
 ```shell
@@ -77,12 +95,14 @@ cargo install wasm-tools
 wasm-tools parse examples/wasi-preview1-hello.wat -o examples/wasi-preview1-hello.wasm
 wasm-tools parse examples/wasi-component-args.wat -o examples/wasi-component-args.wasm
 wasm-tools validate --features all examples/wasi-component-args.wasm
+wasm-tools parse examples/wasi-component-stdout.wat -o examples/wasi-component-stdout.wasm
+wasm-tools validate --features all examples/wasi-component-stdout.wasm
 ```
 
-They are written by hand rather than generated from Rust because of the two
-toolchain gaps described next.
+They are committed as `.wat` sources rather than generated from Rust because of
+the two toolchain gaps described next.
 
-## Why these fixtures are hand-written
+## Why these fixtures use WAT sources
 
 ### The preview1 sample cannot come from `wasm32-wasip1`
 
@@ -125,9 +145,10 @@ Two separate issues:
    lower a WASI import whose result is an owned resource handle - for example
    `wasi:cli/stdout@0.2.6.get-stdout`, which returns
    `own<wasi:io/streams.output-stream>` - and use that handle for stream
-   operations. However, calling `canon resource.drop` for a host-provided
-   resource is not supported yet. Keep fixtures that exercise this path free of
-   an explicit resource drop until lifecycle support lands.
+   operations, as `wasi-component-stdout.wat` demonstrates. However, calling
+   `canon resource.drop` for a host-provided resource is not supported yet.
+   Keep fixtures that exercise this path free of an explicit resource drop until
+   lifecycle support lands.
 
    Imports with non-resource results also continue to work, including ones that
    need linear memory and `realloc` such as

@@ -9,7 +9,8 @@
 ;; This sample deliberately reports via its exit status so it stays focused on
 ;; argument lowering. Telomere can obtain and use a WASI `output-stream`, but
 ;; host-provided resources cannot yet be released with `canon resource.drop`.
-;; See examples/README.md for that lifecycle constraint.
+;; See `wasi-component-stdout.wat` for the runnable stdout path and
+;; examples/README.md for that lifecycle constraint.
 ;;
 ;; Build:
 ;;   wasm-tools parse examples/wasi-component-args.wat -o examples/wasi-component-args.wasm

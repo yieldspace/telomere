@@ -33,9 +33,11 @@ knowing before you evaluate the Component Model path: components produced by
 current Rust `wasm32-wasip2` export `wasi:cli/run@0.2.0` while the CLI looks up
 `wasi:cli/run@0.2.6` exactly, and canonical `resource.drop` is not yet available
 for host-provided resources. Components can call host imports that return owned
-resource handles, including `wasi:cli/stdout.get-stdout`; the remaining
-resource-lifecycle constraint is documented in
-[examples/README.md](examples/README.md). The bundled component sample reports
+resource handles, including `wasi:cli/stdout.get-stdout`, and call
+`output-stream.blocking-write-and-flush`; see the runnable
+[`wasi-component-stdout` fixture](examples/wasi-component-stdout.wat). The
+remaining resource-lifecycle constraint is documented in
+[examples/README.md](examples/README.md). The bundled arguments sample reports
 its result through the exit status so that it stays focused on argument passing.
 
 This is a personal project developed with heavy use of AI agents, and it is
@@ -168,10 +170,11 @@ Expected output:
 1
 ```
 
-The component sample reports through its exit status to keep the fixture focused
-on argument passing. See [examples/README.md](examples/README.md) for the
-fixtures, how to rebuild them from the committed `.wat` sources, and the
-remaining WASI constraints.
+The arguments component reports through its exit status to keep that fixture
+focused on argument passing. The companion stdout component writes a line via
+`get-stdout` and `blocking-write-and-flush`. See
+[examples/README.md](examples/README.md) for both fixtures, how to rebuild them
+from the committed `.wat` sources, and the remaining WASI constraints.
 
 ## CLI usage
 
