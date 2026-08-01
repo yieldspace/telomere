@@ -1101,12 +1101,20 @@ impl Stack {
     }
 
     /// Like `function_return` but assumes the return data is already written at `local_top`.
+    ///
+    /// The active frame must reserve enough local bytes for the in-place result
+    /// before its [`CallStackInfo`].
     pub fn function_return_in_place(
         &mut self,
         reference: &LocalReference,
         return_size: usize,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
+        debug_assert!(
+            return_size.saturating_add(std::mem::size_of::<CallStackInfo>())
+                <= reference.local_size as usize,
+            "in-place result must not overwrite call-stack metadata"
+        );
         let CallStackInfo {
             return_pc,
             prev_local_reference_top,

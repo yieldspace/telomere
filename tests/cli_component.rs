@@ -126,6 +126,26 @@ fn component_subcommand_runs_wasi_cli_command() {
 }
 
 #[test]
+fn component_subcommand_prints_with_wasi_stdout_fixture() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/wasi-component-stdout.wasm");
+    let output = Command::new(env!("CARGO_BIN_EXE_telomere-cli"))
+        .args(["component", path.to_str().unwrap()])
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "hello from telomere (wasi 0.2 component)\n"
+    );
+}
+
+#[test]
 fn component_subcommand_propagates_guest_failure_exit_code() {
     let path = temp_component_path("err");
     write_command_component(&path, 1);

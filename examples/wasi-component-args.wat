@@ -6,10 +6,11 @@
 ;; least one guest argument after argv[0], and `err` otherwise, so the outcome
 ;; is observable through the process exit status.
 ;;
-;; This sample deliberately does not write to stdout: doing so requires the
-;; `wasi:io/streams` `output-stream` resource, and telomere currently aborts
-;; when a host import returns an owned resource handle. See examples/README.md
-;; for the reproduction.
+;; This sample deliberately reports via its exit status so it stays focused on
+;; argument lowering. Telomere can obtain and use a WASI `output-stream`, but
+;; host-provided resources cannot yet be released with `canon resource.drop`.
+;; See `wasi-component-stdout.wat` for the runnable stdout path and
+;; examples/README.md for that lifecycle constraint.
 ;;
 ;; Build:
 ;;   wasm-tools parse examples/wasi-component-args.wat -o examples/wasi-component-args.wasm

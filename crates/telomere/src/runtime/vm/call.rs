@@ -59,6 +59,10 @@ unsafe fn internal_op_call(
         recipe.frame.code_addr
     );
     let param_size = recipe.param_size as usize;
+    // Host functions write their results directly at `local_top`. Reuse the
+    // parameter area first, then reserve any remaining result bytes before the
+    // call-stack record so an in-place result cannot overwrite the return PC.
+    let return_slot_slack = (recipe.return_size as usize).saturating_sub(param_size);
     let return_pc = cached_return_pc(return_addr, ctx);
     match recipe.target {
         CallDispatchTarget::Host(fp) => {
@@ -66,14 +70,14 @@ unsafe fn internal_op_call(
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                     &ctx.local_reference,
                     param_size,
-                    0,
+                    return_slot_slack,
                     recipe.frame,
                 ));
                 ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             } else {
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
-                    0,
+                    return_slot_slack,
                     recipe.frame,
                     ctx.local_reference,
                     return_pc,
@@ -87,14 +91,14 @@ unsafe fn internal_op_call(
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                     &ctx.local_reference,
                     param_size,
-                    0,
+                    return_slot_slack,
                     recipe.frame,
                 ));
                 ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             } else {
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
-                    0,
+                    return_slot_slack,
                     recipe.frame,
                     ctx.local_reference,
                     return_pc,

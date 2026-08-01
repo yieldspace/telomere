@@ -1775,8 +1775,11 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
             .clone();
             let param_size = result_type_size(&ft.0);
 
-            let locals_data = funcinst.locals();
-            let local_size = locals_data.byte_size();
+            let local_size = if funcinst.is_host_func() {
+                result_type_size(&ft.1).saturating_sub(param_size)
+            } else {
+                funcinst.locals().byte_size()
+            };
             vm_try!(push_result_values(&mut stack, &ft.0, args));
 
             tracing::trace!("run_module_function: {name} {local_size}");
@@ -1859,8 +1862,11 @@ pub(crate) fn run_module_function_sync_with_gc(
             };
             let param_size = result_type_size(&ft.0);
 
-            let locals_data = funcinst.locals();
-            let local_size = locals_data.byte_size();
+            let local_size = if funcinst.is_host_func() {
+                result_type_size(&ft.1).saturating_sub(param_size)
+            } else {
+                funcinst.locals().byte_size()
+            };
             let push_result = push_result_values(&mut stack, &ft.0, args);
             if !matches!(push_result, VMResult::Success(())) {
                 return Ok(vm_result_err_into_result_value(push_result));

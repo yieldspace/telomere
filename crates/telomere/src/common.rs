@@ -1462,6 +1462,11 @@ impl ExecuteContext<'_> {
         let addr = self.gc.object_ref_for_memory_handle(handle);
         Some(self.gc.with_memory_by_addr(addr, f))
     }
+    /// Returns the in-place result area at the start of the active frame.
+    ///
+    /// Its capacity is the larger of the parameter area and the result area;
+    /// host-call frame construction reserves any additional bytes needed before
+    /// the frame's call-stack metadata.
     pub fn return_slot(&mut self) -> ReturnSlot {
         let local_ref = self.local_reference();
         ReturnSlot(unsafe { self.stack.local_area_mut_ptr(&local_ref) })

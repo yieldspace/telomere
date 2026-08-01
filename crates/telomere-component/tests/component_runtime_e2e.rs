@@ -177,6 +177,59 @@ async fn component_runtime_can_lower_registered_core_imports_back_into_core() {
 }
 
 #[tokio::test]
+async fn component_runtime_lowers_host_owned_resource_without_params() {
+    let bytes = compile_component(
+        r#"
+(component
+  (import "output-stream" (type $resource (sub resource)))
+  (type $get-stdout (func (result (own $resource))))
+  (import "[static]output-stream.get-stdout" (func $get-stdout (type $get-stdout)))
+  (core func $get-stdout-lower
+    (canon lower (func $get-stdout))
+  )
+  (core module $caller
+    (import "" "get-stdout" (func $get-stdout (result i32)))
+    (func (export "call") (result i32)
+      (call $get-stdout)
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "get-stdout" (func $get-stdout-lower))
+      ))
+    )
+  )
+  (func (export "call") (result (own $resource))
+    (canon lift (core func $caller "call"))
+  )
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut linker = ComponentLinker::new();
+    linker.register_import("[static]output-stream.get-stdout", |_store, args| {
+        assert!(args.is_empty());
+        Ok(vec![ComponentValue::Own(42)])
+    });
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let result = instance
+        .call(&store, "call", &[])
+        .await
+        .expect("call should succeed");
+
+    assert_eq!(result, vec![ComponentValue::Own(42)]);
+}
+
+#[tokio::test]
 async fn component_runtime_nested_component_instantiation_succeeds() {
     let bytes = compile_component(
         r#"

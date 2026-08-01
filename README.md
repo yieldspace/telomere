@@ -31,11 +31,14 @@ driven until the project reaches a tagged release.
 The JIT is experimental. The WASI surfaces are partial, and two gaps are worth
 knowing before you evaluate the Component Model path: components produced by
 current Rust `wasm32-wasip2` export `wasi:cli/run@0.2.0` while the CLI looks up
-`wasi:cli/run@0.2.6` exactly, and a component that calls a WASI import returning
-an owned resource handle (such as `wasi:cli/stdout.get-stdout`) currently aborts
-the process. Both are reproduced in [examples/README.md](examples/README.md).
-That is also why the bundled component sample reports its result through the
-exit status instead of printing.
+`wasi:cli/run@0.2.6` exactly, and canonical `resource.drop` is not yet available
+for host-provided resources. Components can call host imports that return owned
+resource handles, including `wasi:cli/stdout.get-stdout`, and call
+`output-stream.blocking-write-and-flush`; see the runnable
+[`wasi-component-stdout` fixture](examples/wasi-component-stdout.wat). The
+remaining resource-lifecycle constraint is documented in
+[examples/README.md](examples/README.md). The bundled arguments sample reports
+its result through the exit status so that it stays focused on argument passing.
 
 This is a personal project developed with heavy use of AI agents, and it is
 maintained alongside other work. Issues and pull requests are welcome, but
@@ -167,10 +170,11 @@ Expected output:
 1
 ```
 
-The component sample does not print, because writing to stdout goes through a
-WASI resource handle and that path currently aborts. See
-[examples/README.md](examples/README.md) for the fixtures, how to rebuild them
-from the committed `.wat` sources, and the reproduction of both known gaps.
+The arguments component reports through its exit status to keep that fixture
+focused on argument passing. The companion stdout component writes a line via
+`get-stdout` and `blocking-write-and-flush`. See
+[examples/README.md](examples/README.md) for both fixtures, how to rebuild them
+from the committed `.wat` sources, and the remaining WASI constraints.
 
 ## CLI usage
 
@@ -281,8 +285,8 @@ Known gaps on these paths, with reproductions, are collected in
 [examples/README.md](examples/README.md): the preview1 runner does not implement
 `environ_get`/`environ_sizes_get` (so a stock `wasm32-wasip1` Rust binary will
 not run), component export lookup is exact-version rather than
-semver-compatible, and a WASI import returning an owned resource handle aborts
-the process.
+semver-compatible, and host-provided Component Model resources cannot yet be
+released through `resource.drop`.
 
 ## Security
 
