@@ -3312,7 +3312,20 @@ pub unsafe fn u32x4_extadd_pairwise_i16x8(
     call_next(tail_code, 0, ctx)
 }
 
-define_unary_simd_operation!(q15mulr_sat_s, [i16x8], |a, b| a.mul_scale_round(b));
+fn q15mulr_sat_s_lane(a: i16, b: i16) -> i16 {
+    let rounded = (a as i32 * b as i32 + 0x4000) >> 15;
+    rounded.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+
+define_unary_simd_operation!(q15mulr_sat_s, [i16x8], |a, b| {
+    let a = a.to_array();
+    let b = b.to_array();
+    let mut result = [0i16; 8];
+    for i in 0..8 {
+        result[i] = q15mulr_sat_s_lane(a[i], b[i]);
+    }
+    i16x8::from(result)
+});
 fn extend_low_i8x16_to_i16x8(input: i8x16) -> i16x8 {
     let arr = input.to_array();
     let mut extended = [0i16; 8];
@@ -3772,4 +3785,14 @@ pub unsafe fn i32x4_dot_i16x8(tail_code: *const Instr, ctx: &mut ExecuteContext)
         i32::wrapping_add(a[6] as i32 * b[6] as i32, a[7] as i32 * b[7] as i32)
     ])));
     call_next(tail_code, 0, ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn q15mulr_sat_s_saturates_min_times_min() {
+        assert_eq!(q15mulr_sat_s_lane(i16::MIN, i16::MIN), i16::MAX);
+    }
 }
