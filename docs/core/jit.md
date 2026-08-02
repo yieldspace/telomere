@@ -106,6 +106,10 @@ cargo test -p telomere --release --features jit --test jit -- --nocapture
 TELOMERE_WAST_JIT=1 TELOMERE_WAST_JIT_REQUIRE_ACCEPT=1 cargo test -p telomere --release --features jit --test wast -- --nocapture
 ```
 
+CI runs the full WAST suite with strict JIT acceptance on the three supported
+desktop targets (Linux x86_64, macOS x86_64, and macOS AArch64), and separately
+executes the riscv64 Linux GNU JIT and WAST suites under QEMU.
+
 See [jit-coverage-audit.md](jit-coverage-audit.md) for the handler-level audit.
 
 ## CoreMark Note

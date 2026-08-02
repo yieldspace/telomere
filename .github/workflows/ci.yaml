@@ -135,6 +135,12 @@ jobs:
             exit 1
           fi
 
+      - name: JIT wast conformance
+        env:
+          TELOMERE_WAST_JIT: "1"
+          TELOMERE_WAST_JIT_REQUIRE_ACCEPT: "1"
+        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test wast
+
   jit-cross-check:
     name: JIT cross-check (${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -165,6 +171,43 @@ jobs:
 
       - name: Check CLI JIT target
         run: cargo check -p telomere-cli --features jit --target ${{ matrix.target }}
+
+  jit-riscv64-qemu:
+    name: JIT riscv64 QEMU
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: riscv64gc-unknown-linux-gnu
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: jit-riscv64-qemu
+
+      - name: Install riscv64 QEMU dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc-riscv64-linux-gnu qemu-user-static
+
+      - name: JIT regression tests under QEMU
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64-static -L /usr/riscv64-linux-gnu
+        run: cargo test -p telomere --release --features jit --target riscv64gc-unknown-linux-gnu --test jit
+
+      - name: JIT wast conformance under QEMU
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64-static -L /usr/riscv64-linux-gnu
+          TELOMERE_WAST_JIT: "1"
+          TELOMERE_WAST_JIT_REQUIRE_ACCEPT: "1"
+        run: cargo test -p telomere --release --features jit --target riscv64gc-unknown-linux-gnu --test wast
 
   packaging:
     name: Packaging metadata

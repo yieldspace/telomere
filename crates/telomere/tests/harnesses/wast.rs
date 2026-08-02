@@ -11,7 +11,7 @@ use tokio::runtime::Builder;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::run_wast;
+use common::{assert_wast_jit_compiled_functions, reset_wast_jit_compiled_functions, run_wast};
 
 // `labels` / `names` are existing wast parser limitations.
 const ROOT_SKIP: &[&str] = &["labels", "names"];
@@ -60,8 +60,13 @@ struct Case {
 fn main() -> ExitCode {
     let mut args = Arguments::from_args();
     args.test_threads.get_or_insert(1);
+    reset_wast_jit_compiled_functions();
     let tests = collect_trials();
-    libtest_mimic::run(&args, tests).exit_code()
+    let conclusion = libtest_mimic::run(&args, tests);
+    if !conclusion.has_failed() {
+        assert_wast_jit_compiled_functions();
+    }
+    conclusion.exit_code()
 }
 
 fn collect_trials() -> Vec<Trial> {

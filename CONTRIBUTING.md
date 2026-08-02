@@ -56,6 +56,10 @@ cargo test -p telomere --release --features jit --test jit -- --nocapture
 TELOMERE_WAST_JIT=1 TELOMERE_WAST_JIT_REQUIRE_ACCEPT=1 cargo test -p telomere --release --features jit --test wast -- --nocapture
 ```
 
+With `TELOMERE_WAST_JIT_REQUIRE_ACCEPT=1`, WAST testing fails closed if the
+binary lacks the `jit` feature, the host is unsupported, runtime JIT is not
+enabled, or the completed WAST run compiles zero functions.
+
 ## Releases
 
 Git tags, not crates.io packages, are the current release artifacts. The
