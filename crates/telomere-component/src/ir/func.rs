@@ -5,6 +5,7 @@ use crate::ir::{CoreFunc, CoreMemory, GlobalIdx, TypeId};
 pub enum CanonicalStringEncoding {
     Utf8,
     Utf16,
+    /// Canonical ABI `string-encoding` opcode `0x02` (Latin-1 + UTF-16).
     CompactUtf16,
 }
 
