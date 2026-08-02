@@ -165,3 +165,23 @@ jobs:
 
       - name: Check CLI JIT target
         run: cargo check -p telomere-cli --features jit --target ${{ matrix.target }}
+
+  packaging:
+    name: Packaging metadata
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check packaging metadata
+        run: python3 tools/check-packaging.py

@@ -2,9 +2,10 @@
 
 ## Supported versions
 
-None. Telomere is pre-release, has no tagged release, and its workspace packages
-are not published to crates.io (`publish = false`). There is no supported
-version line and no backport branch. Fixes land on `main` only.
+None. Telomere is pre-release, has no stable release, and its workspace packages
+are not published to crates.io (`publish = false`). Pre-release tags carry no
+support commitment. There is no supported version line and no backport branch.
+Fixes land on `main` only.
 
 ## Reporting a vulnerability
 

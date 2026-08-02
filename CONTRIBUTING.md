@@ -36,6 +36,7 @@ Run the CI-equivalent checks before opening a PR:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --tests --features jit -- -D warnings
 cargo test --verbose --release --workspace
+python3 tools/check-packaging.py
 ```
 
 When iterating, use scoped commands first:
@@ -54,6 +55,14 @@ For JIT work, include focused JIT evidence:
 cargo test -p telomere --release --features jit --test jit -- --nocapture
 TELOMERE_WAST_JIT=1 TELOMERE_WAST_JIT_REQUIRE_ACCEPT=1 cargo test -p telomere --release --features jit --test wast -- --nocapture
 ```
+
+## Releases
+
+Git tags, not crates.io packages, are the current release artifacts. The
+workspace intentionally keeps `publish = false`; do not change it as part of
+ordinary release preparation or a feature change. Publishing is a separate
+maintainer decision. See [RELEASING.md](RELEASING.md) for the versioning policy,
+release gate, and release checklist.
 
 ## Documentation Expectations
 

@@ -26,7 +26,10 @@ WASI 0.2 components instead of native code.
 
 The project is still pre-release and the workspace packages are not published
 to crates.io (`publish = false`). Treat the public APIs as implementation
-driven until the project reaches a tagged release.
+driven until the project reaches a stable release. `publish = false` is
+intentional, and the CI packaging guard keeps that boundary in place. See
+[RELEASING.md](RELEASING.md) for the tag, version, changelog, and future
+publishing policy.
 
 The JIT is experimental. The WASI surfaces are partial, and two gaps are worth
 knowing before you evaluate the Component Model path: components produced by
