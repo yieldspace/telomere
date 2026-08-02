@@ -195,11 +195,17 @@ jobs:
       - name: Install riscv64 QEMU dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc-riscv64-linux-gnu qemu-user-static
 
+      - name: Non-JIT interpreter tests under QEMU
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64-static -L /usr/riscv64-linux-gnu
+        run: cargo test -p telomere --release --target riscv64gc-unknown-linux-gnu --test effect -- --test-threads 1 --nocapture
+
       - name: JIT regression tests under QEMU
         env:
           CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
           CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64-static -L /usr/riscv64-linux-gnu
-        run: cargo test -p telomere --release --features jit --target riscv64gc-unknown-linux-gnu --test jit
+        run: cargo test -p telomere --release --features jit --target riscv64gc-unknown-linux-gnu --test jit -- --test-threads 1 --nocapture
 
       - name: JIT wast conformance under QEMU
         env:
