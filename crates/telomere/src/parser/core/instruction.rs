@@ -157,6 +157,7 @@ fn fixed_stack_shape(
     (preserved_prefix_len, result_count)
 }
 
+#[cfg(feature = "simd")]
 fn is_simd_replace_lane_op(op: Op) -> bool {
     std::ptr::fn_addr_eq(op, vm::simd::i8x16_replace_lane as Op)
         || std::ptr::fn_addr_eq(op, vm::simd::i16x8_replace_lane as Op)
@@ -166,11 +167,13 @@ fn is_simd_replace_lane_op(op: Op) -> bool {
         || std::ptr::fn_addr_eq(op, vm::simd::f64x2_replace_lane as Op)
 }
 
+#[cfg(feature = "simd")]
 fn is_simd_binary_v128_to_v128_op(op: Op) -> bool {
     std::ptr::fn_addr_eq(op, vm::simd::i8x16_swizzle as Op)
         || std::ptr::fn_addr_eq(op, vm::simd::i8x16_shuffle as Op)
 }
 
+#[cfg(feature = "simd")]
 fn is_simd_shift_op(op: Op) -> bool {
     std::ptr::fn_addr_eq(op, vm::simd::i8x16_shl as Op)
         || std::ptr::fn_addr_eq(op, vm::simd::i8x16_shr as Op)
@@ -184,6 +187,16 @@ fn is_simd_shift_op(op: Op) -> bool {
         || std::ptr::fn_addr_eq(op, vm::simd::i64x2_shl as Op)
         || std::ptr::fn_addr_eq(op, vm::simd::i64x2_shr as Op)
         || std::ptr::fn_addr_eq(op, vm::simd::u64x2_shr as Op)
+}
+
+#[cfg(feature = "simd")]
+fn is_simd_fixed_two_to_one_op(op: Op) -> bool {
+    is_simd_replace_lane_op(op) || is_simd_binary_v128_to_v128_op(op) || is_simd_shift_op(op)
+}
+
+#[cfg(not(feature = "simd"))]
+fn is_simd_fixed_two_to_one_op(_op: Op) -> bool {
+    false
 }
 
 #[derive(Debug)]
@@ -406,8 +419,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         stack_after: &crate::parser::core::type_checker::StackSnapshot,
     ) -> (usize, usize) {
         let op = unsafe { instrs[start].op };
-        if is_simd_replace_lane_op(op) || is_simd_shift_op(op) || is_simd_binary_v128_to_v128_op(op)
-        {
+        if is_simd_fixed_two_to_one_op(op) {
             return fixed_stack_shape(2, 1, stack_before, stack_after);
         }
         if std::ptr::fn_addr_eq(op, vm::op_select as Op) {

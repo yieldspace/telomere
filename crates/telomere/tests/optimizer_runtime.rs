@@ -5349,6 +5349,7 @@ async fn optimizer_specializes_indirect_call_materializers_without_changing_abi(
     }
 }
 
+#[cfg(feature = "simd")]
 #[tokio::test]
 async fn optimizer_call_relower_const_like_zero_input_leaves_remain_correct() {
     let store = Store::new();
