@@ -12,6 +12,7 @@ pub(crate) mod memory;
 pub use memory::{
     AtomicRmwOp, LocalMemoryObject, MemArg, Memory, MemoryInitError, SharedMemoryObject,
 };
+#[cfg(feature = "threads")]
 pub use memory::{AtomicWaitResult, SharedWaitRegistration};
 pub(crate) mod stack;
 use stack::CachedMemoryKind;
@@ -917,6 +918,7 @@ impl StablePc {
         Self(raw)
     }
 
+    #[cfg(feature = "threads")]
     pub(crate) fn raw(self) -> usize {
         self.0
     }

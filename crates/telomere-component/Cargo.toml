@@ -8,7 +8,7 @@ authors.workspace = true
 keywords.workspace = true
 
 [dependencies]
-telomere.workspace = true
+telomere = { path = "../telomere", default-features = false }
 thiserror = "2.0.11"
 tracing = { version = "0.1.41" }
 num-derive = "0.4.2"
@@ -24,14 +24,16 @@ wast = { version = "243.0.0", features = ["component-model"] }
 wat = "1.243.0"
 anyhow = { version = "1.0.98", features = ["backtrace"] }
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
-tokio.workspace = true
+tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 
 [[bench]]
 name = "telomere_component_bench"
 harness = false
 
 [features]
-default = []
+default = ["simd", "threads"]
+simd = ["telomere/simd"]
+threads = ["telomere/threads"]
 component-gated-feature-value-imports-exports = []
 component-gated-feature-nested-namespaces-and-packages = []
 component-gated-feature-async = []

@@ -17,8 +17,10 @@ pub use instantiate::link_async_host_function_with_function_idx;
 pub use instantiate::link_host_function_with_export_name;
 pub use instantiate::link_host_function_with_function_idx;
 pub use jit::supported as jit_supported;
+#[cfg(feature = "threads")]
+pub use memory_effect::MemoryWaitPending;
 pub use memory_effect::{
-    Completion, CompletionPayload, HostCallPending, MemoryWaitPending, PendingOp, WasmAsyncPending,
+    Completion, CompletionPayload, HostCallPending, PendingOp, WasmAsyncPending,
 };
 pub use scheduler::{ExecutionDriver, TokioDriver};
 pub use vm::get_global;

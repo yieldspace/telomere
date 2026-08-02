@@ -1,6 +1,6 @@
-use super::memory_effect::{
-    Completion, CompletionPayload, HostCallPending, MemoryWaitPending, PendingOp,
-};
+#[cfg(feature = "threads")]
+use super::memory_effect::MemoryWaitPending;
+use super::memory_effect::{Completion, CompletionPayload, HostCallPending, PendingOp};
 use crate::{
     common::{
         stack::CachedMemoryKind, CallFrameCache, ExecuteContext, LocalReference, StablePc,
@@ -115,6 +115,7 @@ impl TokioDriver {
         }));
     }
 
+    #[cfg(feature = "threads")]
     fn submit_memory_wait(&mut self, op: MemoryWaitPending) {
         self.inflight.push(Box::pin(async move {
             let value = op.wait.wait_result(op.shared, op.timeout_ns).await;
@@ -130,6 +131,7 @@ impl ExecutionDriver for TokioDriver {
     fn submit(&mut self, op: PendingOp) {
         match op {
             PendingOp::HostCall(op) => self.submit_host_call(op),
+            #[cfg(feature = "threads")]
             PendingOp::MemoryWait(op) => self.submit_memory_wait(op),
             PendingOp::WasmAsync(op) => {
                 panic!(

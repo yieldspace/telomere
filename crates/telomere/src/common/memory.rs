@@ -1,16 +1,14 @@
+use std::{fmt, ptr::NonNull, slice::SliceIndex, sync::Arc};
+
+#[cfg(feature = "threads")]
 use std::{
     collections::{HashMap, VecDeque},
-    fmt,
-    ptr::NonNull,
-    slice::SliceIndex,
-    sync::{
-        atomic::{AtomicU8, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicU8, Ordering},
     time::Duration,
 };
 
 use parking_lot::Mutex;
+#[cfg(feature = "threads")]
 use tokio::sync::Notify;
 
 use super::{Stack, VMResult, PAGE_SIZE};
@@ -122,12 +120,14 @@ impl AtomicRmwOp {
     }
 }
 
+#[cfg(feature = "threads")]
 #[derive(Debug)]
 pub struct SharedWaitRegistration {
     address: usize,
     waiter: Arc<SharedWaiter>,
 }
 
+#[cfg(feature = "threads")]
 impl SharedWaitRegistration {
     pub fn address(&self) -> usize {
         self.address
@@ -139,11 +139,11 @@ impl SharedWaitRegistration {
             return 0;
         }
 
-        let sleep = tokio::time::sleep(Duration::from_nanos(timeout_ns as u64));
-        tokio::pin!(sleep);
-        tokio::select! {
-            _ = self.waiter.wait() => 0,
-            _ = &mut sleep => {
+        let wait = std::pin::pin!(self.waiter.wait());
+        let timeout = std::pin::pin!(tokio::time::sleep(Duration::from_nanos(timeout_ns as u64)));
+        match futures::future::select(wait, timeout).await {
+            futures::future::Either::Left(((), _)) => 0,
+            futures::future::Either::Right(((), _)) => {
                 if self.waiter.try_mark_timed_out() {
                     shared.remove_waiter(self.address, self.waiter.id());
                     2
@@ -155,12 +155,14 @@ impl SharedWaitRegistration {
     }
 }
 
+#[cfg(feature = "threads")]
 #[derive(Debug)]
 pub enum AtomicWaitResult {
     NotEqual,
     Pending(SharedWaitRegistration),
 }
 
+#[cfg(feature = "threads")]
 #[derive(Debug)]
 struct SharedWaiter {
     id: u64,
@@ -168,6 +170,7 @@ struct SharedWaiter {
     notify: Notify,
 }
 
+#[cfg(feature = "threads")]
 impl SharedWaiter {
     const WAITING: u8 = 0;
     const NOTIFIED: u8 = 1;
@@ -1042,7 +1045,9 @@ impl LocalMemoryObject {
 #[derive(Debug)]
 struct SharedMemoryState {
     memory: Memory,
+    #[cfg(feature = "threads")]
     wait_queues: HashMap<usize, VecDeque<Arc<SharedWaiter>>>,
+    #[cfg(feature = "threads")]
     next_waiter_id: u64,
 }
 
@@ -1056,7 +1061,9 @@ impl SharedMemoryObject {
         Ok(Arc::new(Self {
             state: Mutex::new(SharedMemoryState {
                 memory: Memory::new_shared(page_count, max_page_size)?,
+                #[cfg(feature = "threads")]
                 wait_queues: HashMap::new(),
+                #[cfg(feature = "threads")]
                 next_waiter_id: 1,
             }),
         }))
@@ -1228,6 +1235,7 @@ impl SharedMemoryObject {
         let _state = self.state.lock();
     }
 
+    #[cfg(feature = "threads")]
     pub fn register_wait32(&self, offset: usize, expected: u32) -> VMResult<AtomicWaitResult> {
         let mut state = self.state.lock();
         vm_try!(ensure_atomic_alignment(offset, 4));
@@ -1248,6 +1256,7 @@ impl SharedMemoryObject {
         }))
     }
 
+    #[cfg(feature = "threads")]
     pub fn register_wait64(&self, offset: usize, expected: u64) -> VMResult<AtomicWaitResult> {
         let mut state = self.state.lock();
         vm_try!(ensure_atomic_alignment(offset, 8));
@@ -1268,6 +1277,7 @@ impl SharedMemoryObject {
         }))
     }
 
+    #[cfg(feature = "threads")]
     pub fn notify_waiters(&self, offset: usize, count: u32) -> VMResult<u32> {
         let mut state = self.state.lock();
         vm_try!(state.memory.atomic_load_u32(offset));
@@ -1296,6 +1306,7 @@ impl SharedMemoryObject {
         VMResult::Success(woken)
     }
 
+    #[cfg(feature = "threads")]
     fn remove_waiter(&self, offset: usize, waiter_id: u64) {
         let mut state = self.state.lock();
         if let Some(queue) = state.wait_queues.get_mut(&offset) {
@@ -1398,6 +1409,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "threads")]
     #[tokio::test]
     async fn shared_wait_queue_internal_state_tracks_notify_and_timeout_cleanup() {
         let shared = SharedMemoryObject::new(1, 1).unwrap();
@@ -1443,6 +1455,7 @@ mod tests {
         assert_eq!(shared.notify_waiters(0, 1).unwrap(), 0);
     }
 
+    #[cfg(feature = "threads")]
     #[tokio::test]
     async fn shared_wait_queue_rejects_mismatch_and_notifies_fifo_up_to_count() {
         let shared = SharedMemoryObject::new(1, 1).unwrap();
@@ -1485,6 +1498,7 @@ mod tests {
         assert_eq!(shared.notify_waiters(0, 1).unwrap(), 0);
     }
 
+    #[cfg(feature = "threads")]
     #[tokio::test]
     async fn shared_wait64_queue_tracks_notify_and_timeout_cleanup() {
         let shared = SharedMemoryObject::new(1, 1).unwrap();
