@@ -84,6 +84,12 @@ jobs:
       - name: Test parser feature gates without threads
         run: cargo test -p telomere --no-default-features --features simd --test parser_feature_gates
 
+      - name: Check telomere without default features
+        run: cargo check -p telomere --no-default-features
+
+      - name: Test telomere without default features
+        run: cargo test -p telomere --release --no-default-features
+
   jit-native-test:
     name: JIT tests (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

@@ -6,6 +6,8 @@ use std::sync::{
     Mutex,
 };
 use std::{collections::VecDeque, future::Future, pin::Pin};
+#[cfg(feature = "threads")]
+use telomere::MemoryWaitPending;
 use telomere::{
     common::{
         AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, FuncType,
@@ -13,8 +15,8 @@ use telomere::{
     },
     get_global, instantiate_native_async_module, link_async_host_function_with_export_name,
     link_async_host_function_with_function_idx, link_host_function_with_function_idx, Completion,
-    CompletionPayload, ExecutionDriver, HostCallPending, MemoryWaitPending, PendingOp, Registry,
-    ResultValue, Store, StoreState, VMResult, WasmValue,
+    CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, Registry, ResultValue, Store,
+    StoreState, VMResult, WasmValue,
 };
 
 struct MockDriver {
@@ -45,6 +47,7 @@ impl ExecutionDriver for MockDriver {
                     }
                 }));
             }
+            #[cfg(feature = "threads")]
             PendingOp::MemoryWait(MemoryWaitPending {
                 task_id,
                 shared,
