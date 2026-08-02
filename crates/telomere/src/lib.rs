@@ -7,6 +7,10 @@
 //! JIT behind the `jit` feature. It is written from scratch and does not depend
 //! on Cranelift or on the `wasmparser`/`wasmtime` crates. Embedders normally
 //! start from [`Store`], [`instantiate`], and [`run_module_function`].
+//!
+//! Without the `threads` feature, shared memories and `0xFE` atomic opcodes are
+//! rejected during parsing and validation, and `tokio` is absent from this
+//! crate's normal dependency graph.
 
 pub mod binary;
 #[macro_use]
@@ -45,6 +49,7 @@ pub use runtime::Completion;
 pub use runtime::CompletionPayload;
 pub use runtime::ExecutionDriver;
 pub use runtime::HostCallPending;
+#[cfg(feature = "threads")]
 pub use runtime::MemoryWaitPending;
 pub use runtime::PendingOp;
 pub use runtime::TokioDriver;

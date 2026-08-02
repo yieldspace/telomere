@@ -1,10 +1,11 @@
 # Footprint and Cold Start
 
 This note records measured binary size, peak resident memory, and process cold
-start for the `telomere-cli` host binary. Every number below was produced by the
-commands in this document on the machine described in
-[Environment](#environment). Nothing here is estimated, and no number for another
-runtime is reported unless it was measured here or quoted with a source.
+start for the `telomere-cli` host binary. Every binary-size, RSS, and cold-start
+number below was produced by the commands in this document on the machine
+described in [Environment](#environment). Dependency-graph counts state their
+own method and evidence boundary. Nothing here is estimated, and no number for
+another runtime is reported unless it was measured here or quoted with a source.
 
 ## Scope and honesty boundary
 
@@ -18,6 +19,76 @@ runtime is reported unless it was measured here or quoted with a source.
   [Other runtimes](#other-runtimes)).
 - `riscv64` and Linux numbers are **not yet measured**. See
   [Not yet measured](#not-yet-measured).
+
+## Thread-free embedder dependency graph (#138)
+
+Issue #138 establishes a supported, compile-only minimal embedder cell for both
+the core and Component Model crates:
+
+```shell
+cargo check -p telomere --no-default-features --features simd
+cargo check -p telomere-component --no-default-features --features simd
+```
+
+The cell keeps `simd` enabled. `--no-default-features` by itself has a
+pre-existing simd-off compile failure in `main` ([#150](https://github.com/yieldspace/telomere/issues/150)),
+which is outside this issue. This is a dependency-graph and compilation claim,
+not a minimal-binary-size claim.
+
+Package counts use Cargo 1.96 and `cargo tree -e normal`. Repeated `(*)`
+entries are normalized to the same package identity before counting unique
+packages (including the root package). The first two rows record the
+pre-implementation audit stages; the final row was re-measured on the final
+configuration with the commands below.
+
+| Configuration | Unique normal packages | Evidence boundary |
+| --- | ---: | --- |
+| Pre-gate `--no-default-features --features simd` baseline | 48 | Pre-implementation audit |
+| Baseline with Tokio narrowed to `default-features = false`, `sync,time` only, but still ungated | 43 | Pre-implementation audit |
+| Final `--no-default-features --features simd` cell, with Tokio behind `threads` | 42 | Measured after #138 implementation |
+
+The 48-to-43 narrowing removes `bytes`, `mio`, `signal-hook-registry`,
+`socket2`, and `tokio-macros`; gating removes `tokio` itself for the final
+43-to-42 step. SIMD is deliberately present in every row above and adds
+`wide`, `safe_arch`, and `bytemuck`; those packages are not a threads cost.
+
+With `threads` disabled, shared-memory declarations and `0xFE` atomic
+instructions—including `memory.atomic.notify` and `memory.atomic.wait32`—are
+rejected as `WasmParserError::UnsupportedFeature { feature:
+ProposalFeature::Threads, .. }`. The final normal dependency graph has no Tokio
+path. Reproduce both trees and the three-state inverse-tree guard as follows:
+
+```shell
+cargo tree -p telomere -e normal --no-default-features --features simd
+cargo tree -p telomere-component -e normal --no-default-features --features simd
+
+assert_no_tokio() {
+  package="$1"
+  if ! inverse="$(cargo tree -p "$package" -e normal --no-default-features --features simd -i tokio)"; then
+    echo "cargo tree guard failed for $package"
+    return 1
+  fi
+  if [[ -n "$inverse" ]]; then
+    echo "tokio is present in $package's minimal normal graph"
+    printf '%s\n' "$inverse"
+    return 1
+  fi
+}
+
+assert_no_tokio telomere
+assert_no_tokio telomere-component
+```
+
+Cargo 1.96 prints `warning: nothing to print.` to stderr and exits zero when
+there is no inverse path. Therefore the guard intentionally treats an empty
+stdout result as pass, nonempty stdout as failure, and a nonzero `cargo tree`
+exit as failure; `! cargo tree ... -i tokio` would be a false failure here.
+
+The CI workflow adds this as a standalone `minimal-embedder` job now. It does
+not wait for [#148](https://github.com/yieldspace/telomere/issues/148), which
+will coordinate its eventual absorption into the broader feature matrix. No
+minimal embedder binary size is measured or claimed in this issue; that work
+belongs to [#139](https://github.com/yieldspace/telomere/issues/139).
 
 ## Environment
 
@@ -37,28 +108,44 @@ repeated-run median instead. Both methods used are given below.
 
 ## Binary size
 
+All three table rows are historical measurements from `30f049a` in the
+[Environment](#environment) above. The commands record the method used for
+those measurements; a current checkout is not expected to produce the same byte
+counts, and #138 does not re-measure them. The commented
+`--no-default-features` command is historical only and must not be run on
+current `main` because it now reaches the pre-existing simd-off failure tracked
+in [#150](https://github.com/yieldspace/telomere/issues/150).
+
 ```shell
 cargo build --release                          # default features (= full)
-cargo build --release --no-default-features
 cargo build --release --features jit
 # after each build:
 ls -l target/release/telomere-cli
 cp target/release/telomere-cli /tmp/telomere-cli-stripped
 strip /tmp/telomere-cli-stripped
 ls -l /tmp/telomere-cli-stripped
+
+# Historical only (30f049a); do not run on current main:
+# cargo build --release --no-default-features
 ```
+
+The historical `--release --no-default-features` command below did not disable
+the core defaults: feature unification in the CLI dependency graph still
+enabled them at the commit being measured. It is retained as a historical CLI
+measurement, but is **invalid as a feature comparison** and must not be
+reinterpreted as a minimal-embedder result.
 
 | Build | Unstripped | Stripped |
 | --- | ---: | ---: |
 | `--release` (default features: `full`) | 4,175,008 B (3.98 MiB) | 3,435,352 B (3.28 MiB) |
-| `--release --no-default-features` | 4,174,928 B (3.98 MiB) | 3,435,288 B (3.28 MiB) |
+| `--release --no-default-features` (historical CLI row; invalid as a feature comparison) | 4,174,928 B (3.98 MiB) | 3,435,288 B (3.28 MiB) |
 | `--release --features jit` | 4,694,160 B (4.48 MiB) | 3,870,408 B (3.69 MiB) |
 
 Observations:
 
-- Disabling the default `full` feature (core Wasm `simd` and `threads`) does not
-  measurably change the binary size on this target. The 80-byte difference is
-  below any meaningful resolution.
+- The historical default and `--no-default-features` CLI rows do not compare
+  different core feature sets. Their 80-byte delta is not minimal-embedder
+  evidence, and this note makes no unmeasured minimal binary-size claim.
 - The experimental JIT costs about 519 KB unstripped / 435 KB stripped.
 
 ## Peak resident memory

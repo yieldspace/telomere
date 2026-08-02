@@ -18,7 +18,7 @@ once_cell = "1.21.3"
 union-find.workspace = true
 telomere-macros.workspace = true
 futures = "0.3.31"
-tokio.workspace = true
+tokio = { workspace = true, optional = true, default-features = false, features = ["sync", "time"] }
 parking_lot = "0.12.5"
 libc.workspace = true
 smallvec.workspace = true
@@ -28,7 +28,7 @@ telomere-jit-codegen = { workspace = true, optional = true }
 futures = "0.3.31"
 libtest-mimic = "0.8.2"
 syn = { version = "2.0.100", features = ["full"] }
-tokio.workspace = true
+tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 wast = { version = "243.0.0", features = ["component-model"] }
 wat = "1.243.0"
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
@@ -48,7 +48,7 @@ default = [
     "threads",
 ]
 simd = ["wide"]
-threads = []
+threads = ["dep:tokio"]
 vm-profile = []
 vm-diagnostics = []
 jit = ["dep:telomere-jit-codegen"]

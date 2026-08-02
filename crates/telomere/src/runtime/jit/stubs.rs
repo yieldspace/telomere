@@ -1,13 +1,12 @@
 use crate::{
     common::store::{CallDispatchCache, CallDispatchTarget},
-    common::{
-        execute_elem_init_const_expr, AtomicWaitResult, ElemInit, ExecuteContext, Instr, ObjectRef,
-        SharedMemoryObject, SharedWaitRegistration, StablePc, VMResult,
-    },
-    runtime::{
-        memory_effect::{MemoryWaitPending, PendingOp},
-        vm,
-    },
+    common::{execute_elem_init_const_expr, ElemInit, ExecuteContext, Instr, ObjectRef, VMResult},
+    runtime::vm,
+};
+#[cfg(feature = "threads")]
+use crate::{
+    common::{AtomicWaitResult, SharedMemoryObject, SharedWaitRegistration, StablePc},
+    runtime::memory_effect::{MemoryWaitPending, PendingOp},
 };
 
 use super::{
@@ -44,17 +43,29 @@ const RUNTIME_STUB_CALL_NUMERIC_TOKEN_STATE_TRANSITION: u32 = 25;
 const RUNTIME_STUB_CALL_CACHED_U16_LOW7_GUARD: u32 = 26;
 const RUNTIME_STUB_I8X16_EXTRACT_LANE_S: u32 = 27;
 const RUNTIME_STUB_V128_BITSELECT: u32 = 28;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_NOTIFY_LOCAL: u32 = 29;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_NOTIFY_SHARED: u32 = 30;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_NOTIFY_INDEXED_LOCAL: u32 = 31;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_NOTIFY_INDEXED_SHARED: u32 = 32;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_WAIT32_LOCAL: u32 = 33;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_WAIT32_SHARED: u32 = 34;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_WAIT32_INDEXED_LOCAL: u32 = 35;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_WAIT32_INDEXED_SHARED: u32 = 36;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_WAIT64_LOCAL: u32 = 37;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_WAIT64_SHARED: u32 = 38;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_WAIT64_INDEXED_LOCAL: u32 = 39;
+#[cfg(feature = "threads")]
 const RUNTIME_STUB_ATOMIC_WAIT64_INDEXED_SHARED: u32 = 40;
 
 const RUNTIME_CONT_CURRENT_VM_HANDLER: u32 = 0;
@@ -564,39 +575,51 @@ pub(crate) extern "C" fn runtime_stack_op(
         }
         RUNTIME_STUB_I8X16_EXTRACT_LANE_S => runtime_i8x16_extract_lane_s(ctx, pc),
         RUNTIME_STUB_V128_BITSELECT => runtime_v128_bitselect(ctx),
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_NOTIFY_LOCAL => {
             runtime_atomic_notify(ctx, pc, MemoryStubKind::DefaultLocal)
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_NOTIFY_SHARED => {
             runtime_atomic_notify(ctx, pc, MemoryStubKind::DefaultShared)
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_NOTIFY_INDEXED_LOCAL => {
             runtime_atomic_notify(ctx, pc, MemoryStubKind::IndexedLocal)
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_NOTIFY_INDEXED_SHARED => {
             runtime_atomic_notify(ctx, pc, MemoryStubKind::IndexedShared)
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_WAIT32_LOCAL => {
             runtime_atomic_wait32(ctx, pc, MemoryStubKind::DefaultLocal)
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_WAIT32_SHARED => {
             return runtime_atomic_wait32_exit(ctx, pc, MemoryStubKind::DefaultShared);
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_WAIT32_INDEXED_LOCAL => {
             runtime_atomic_wait32(ctx, pc, MemoryStubKind::IndexedLocal)
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_WAIT32_INDEXED_SHARED => {
             return runtime_atomic_wait32_exit(ctx, pc, MemoryStubKind::IndexedShared);
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_WAIT64_LOCAL => {
             runtime_atomic_wait64(ctx, pc, MemoryStubKind::DefaultLocal)
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_WAIT64_SHARED => {
             return runtime_atomic_wait64_exit(ctx, pc, MemoryStubKind::DefaultShared);
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_WAIT64_INDEXED_LOCAL => {
             runtime_atomic_wait64(ctx, pc, MemoryStubKind::IndexedLocal)
         }
+        #[cfg(feature = "threads")]
         RUNTIME_STUB_ATOMIC_WAIT64_INDEXED_SHARED => {
             return runtime_atomic_wait64_exit(ctx, pc, MemoryStubKind::IndexedShared);
         }
@@ -969,12 +992,14 @@ fn runtime_v128_bitselect(ctx: &mut ExecuteContext<'_>) -> VMResult<()> {
     ctx.stack.push_u128((a & mask) | (b & !mask))
 }
 
+#[cfg(feature = "threads")]
 fn runtime_atomic_start(ctx: &mut ExecuteContext<'_>, pc: *const Instr) -> VMResult<usize> {
     let memarg = unsafe { (*pc.add(1)).operand.memarg };
     let offset = ctx.stack.pop_u32();
     vm::compute_memory_offset(memarg, offset)
 }
 
+#[cfg(feature = "threads")]
 fn runtime_atomic_start_indexed(
     ctx: &mut ExecuteContext<'_>,
     pc: *const Instr,
@@ -997,6 +1022,7 @@ fn runtime_atomic_start_indexed(
     }
 }
 
+#[cfg(feature = "threads")]
 fn runtime_atomic_notify(
     ctx: &mut ExecuteContext<'_>,
     pc: *const Instr,
@@ -1039,6 +1065,7 @@ fn runtime_atomic_notify(
     ctx.stack.push_u32(woken)
 }
 
+#[cfg(feature = "threads")]
 fn runtime_atomic_wait32(
     ctx: &mut ExecuteContext<'_>,
     pc: *const Instr,
@@ -1062,6 +1089,7 @@ fn runtime_atomic_wait32(
     VMResult::InvalidOperand
 }
 
+#[cfg(feature = "threads")]
 fn runtime_atomic_wait64(
     ctx: &mut ExecuteContext<'_>,
     pc: *const Instr,
@@ -1085,6 +1113,7 @@ fn runtime_atomic_wait64(
     VMResult::InvalidOperand
 }
 
+#[cfg(feature = "threads")]
 fn push_wait_effect(
     ctx: &mut ExecuteContext<'_>,
     shared: std::sync::Arc<SharedMemoryObject>,
@@ -1104,6 +1133,7 @@ fn push_wait_effect(
         }));
 }
 
+#[cfg(feature = "threads")]
 fn runtime_atomic_wait32_exit(
     ctx: &mut ExecuteContext<'_>,
     pc: *const Instr,
@@ -1156,6 +1186,7 @@ fn runtime_atomic_wait32_exit(
     }
 }
 
+#[cfg(feature = "threads")]
 fn runtime_atomic_wait64_exit(
     ctx: &mut ExecuteContext<'_>,
     pc: *const Instr,

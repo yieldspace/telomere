@@ -10,7 +10,13 @@ publish.workspace = true
 
 [features]
 default = ["full"]
-full = ["telomere/full"]
+full = [
+    "telomere/full",
+    "telomere-component/simd",
+    "telomere-component/threads",
+    "telomere-component-wasi/simd",
+    "telomere-component-wasi/threads",
+]
 jit = ["telomere/jit"]
 vm-profile = ["telomere/vm-profile"]
 vm-diagnostics = ["telomere/vm-diagnostics"]
@@ -20,9 +26,9 @@ clap = { version = "4.5.37", features = ["derive"] }
 anyhow = "1.0.98"
 libc.workspace = true
 telomere = { path = "crates/telomere", default-features = false }
-telomere-component.workspace = true
-telomere-component-wasi = { path = "crates/telomere-component-wasi" }
-tokio.workspace = true
+telomere-component = { path = "crates/telomere-component", default-features = false }
+telomere-component-wasi = { path = "crates/telomere-component-wasi", default-features = false }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
 wat = "1.243.0"
@@ -55,7 +61,7 @@ telomere-component = { path = "crates/telomere-component" }
 telomere-component-bindgen = { path = "crates/telomere-component-bindgen" }
 union-find = {path = "crates/union-find"}
 telomere-macros = { path = "crates/telomere-macros" }
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", default-features = false }
 getrandom = "0.3.3"
 libc = "0.2.175"
 mmap-rs = "0.7.0"

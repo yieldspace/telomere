@@ -1,15 +1,18 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
-use crate::{
-    common::{AsyncHostFuture, SharedMemoryObject, SharedWaitRegistration},
-    VMResult,
-};
+#[cfg(feature = "threads")]
+use std::sync::Arc;
+
+#[cfg(feature = "threads")]
+use crate::common::{SharedMemoryObject, SharedWaitRegistration};
+use crate::{common::AsyncHostFuture, VMResult};
 
 pub struct HostCallPending {
     pub task_id: u32,
     pub future: AsyncHostFuture,
 }
 
+#[cfg(feature = "threads")]
 pub struct MemoryWaitPending {
     pub task_id: u32,
     pub shared: Arc<SharedMemoryObject>,
@@ -25,6 +28,7 @@ pub struct WasmAsyncPending {
 
 pub enum PendingOp {
     HostCall(HostCallPending),
+    #[cfg(feature = "threads")]
     MemoryWait(MemoryWaitPending),
     #[allow(dead_code)]
     WasmAsync(WasmAsyncPending),
@@ -34,6 +38,7 @@ impl PendingOp {
     pub fn task_id(&self) -> u32 {
         match self {
             Self::HostCall(op) => op.task_id,
+            #[cfg(feature = "threads")]
             Self::MemoryWait(op) => op.task_id,
             Self::WasmAsync(op) => op.task_id,
         }
@@ -47,6 +52,7 @@ impl fmt::Debug for PendingOp {
                 .debug_struct("PendingOp::HostCall")
                 .field("task_id", &op.task_id)
                 .finish(),
+            #[cfg(feature = "threads")]
             Self::MemoryWait(op) => f
                 .debug_struct("PendingOp::MemoryWait")
                 .field("task_id", &op.task_id)

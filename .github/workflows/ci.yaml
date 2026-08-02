@@ -30,6 +30,60 @@ jobs:
       - name: Test
         run: cargo test --verbose --release --workspace
 
+  minimal-embedder:
+    name: Standalone minimal embedder
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: minimal-embedder
+
+      - name: Check minimal core crate
+        run: cargo check -p telomere --no-default-features --features simd
+
+      - name: Check minimal component crate
+        run: cargo check -p telomere-component --no-default-features --features simd
+
+      - name: Assert minimal core crate has no Tokio dependency
+        shell: bash
+        run: |
+          if ! inverse="$(cargo tree -p telomere -e normal --no-default-features --features simd -i tokio)"; then
+            echo '::error::cargo tree guard failed'
+            exit 1
+          fi
+          if [[ -n "$inverse" ]]; then
+            echo '::error::tokio is present in telomere minimal normal graph'
+            printf '%s\n' "$inverse"
+            exit 1
+          fi
+
+      - name: Assert minimal component crate has no Tokio dependency
+        shell: bash
+        run: |
+          if ! inverse="$(cargo tree -p telomere-component -e normal --no-default-features --features simd -i tokio)"; then
+            echo '::error::cargo tree guard failed'
+            exit 1
+          fi
+          if [[ -n "$inverse" ]]; then
+            echo '::error::tokio is present in telomere-component minimal normal graph'
+            printf '%s\n' "$inverse"
+            exit 1
+          fi
+
+      - name: Test parser feature gates without threads
+        run: cargo test -p telomere --no-default-features --features simd --test parser_feature_gates
+
   jit-native-test:
     name: JIT tests (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
