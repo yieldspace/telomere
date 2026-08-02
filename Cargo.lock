@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "telomere"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "criterion",
  "futures",
@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "telomere-cli"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "telomere-component"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "telomere-component-bindgen"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "heck",
  "proc-macro-crate",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "telomere-component-wasi"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "getrandom",
@@ -1105,14 +1105,14 @@ dependencies = [
 
 [[package]]
 name = "telomere-jit-codegen"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "mmap-rs",
 ]
 
 [[package]]
 name = "telomere-macros"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1314,7 +1314,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "union-find"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 
 [[package]]
 name = "utf8parse"
