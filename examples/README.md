@@ -11,8 +11,15 @@ was written down.
 | `wasi-preview1-hello.wasm` | WASI preview1 command module | `wasi-preview1-hello.wat` |
 | `wasi-component-args.wasm` | WASI 0.2 component command | `wasi-component-args.wat` |
 
-For standalone embedding samples that deliberately exclude the CLI dependency
-topology, see [`minimal-embedder/`](minimal-embedder/README.md).
+## Standalone minimal embedder
+
+The `telomere-minimal-embedder` crate in
+[`minimal-embedder/`](minimal-embedder/README.md) deliberately excludes the CLI
+dependency topology. Its standalone ladder uses `add.wasm` for the baseline and
+core rows, `component-add.wasm` for the WASI-free Component Model row, and
+`wasi-component-args.wasm` for the WASI 0.2 rows. Each configuration builds and
+runs with its own feature invocation; see that crate's README for commands and
+[the footprint note](../docs/benchmarks/footprint.md) for the measured boundary.
 
 ## Running
 

@@ -7,7 +7,9 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- No unreleased entries yet.
+- A standalone minimal-embedder configuration ladder, size-oriented release
+  profile, and footprint harness/CI coverage for measured file size, text, RSS,
+  and whole-process cold start.
 
 ### Changed
 

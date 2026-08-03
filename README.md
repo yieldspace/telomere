@@ -50,19 +50,25 @@ come at all. Please do not read silence as a judgement of the contribution.
 
 ## Where telomere sits
 
-| | Component Model | WASI 0.2 | JIT | Binary size | Peak RSS |
+| | Component Model | WASI 0.2 | JIT | Binary size (CLI / minimal; not an overhead ratio) | Peak RSS (CLI / minimal embedder) |
 | --- | --- | --- | --- | --- | --- |
-| **telomere** | Yes (own decoder, linker, and runtime) | Yes, partial (0.2.6 provider) | Yes, experimental baseline JIT | 3.98 MiB (measured, see note 1) | 3.3-4.8 MiB (measured, see note 1) |
+| **telomere** | Yes (own decoder, linker, and runtime) | Yes, partial (0.2.6 provider) | Yes, experimental baseline JIT | 3.98 MiB CLI; 1.10 MiB minimal WASI (measured, see note 1) | 3.3-4.8 MiB CLI; 2.94 MiB minimal WASI (measured, see note 1) |
 | wasmtime | Yes (Tier 1, note 2) | Yes (Tier 1, note 2) | Yes (Cranelift) | not measured here | not measured here |
 | WAMR | No (note 3) | No - preview1 only (note 3) | Yes | see note 3 | not measured here |
 
 Notes:
 
-1. Telomere's figures are for the `telomere-cli` host binary on macOS arm64 with
-   default features, measured on 2026-08-01. Full method, environment, and
-   per-workload breakdown: [docs/benchmarks/footprint.md](docs/benchmarks/footprint.md).
-   The CLI links `clap` and a multi-thread `tokio` runtime on top of the runtime
-   crates, so this is an upper bound rather than a minimal embedder footprint.
+1. The retained 3.98 MiB / 3.3-4.8 MiB figures are historical
+   `telomere-cli` host measurements on macOS arm64 with default features
+   (2026-08-01). The added minimal WASI figures are #139's macOS arm64
+   `release-size` `embed-wasi` measurement (1154832 B file; 3080192 B peak RSS,
+   2026-08-03). The CLI links `clap` and a multi-thread `tokio` runtime; the
+   minimal sample deliberately does not. Here "minimal" means the minimal
+   supported dependency topology, not the fewest possible bytes. Full method,
+   environments, and configuration ladder:
+   [docs/benchmarks/footprint.md](docs/benchmarks/footprint.md).
+   The paired CLI/minimal figures use different profiles and are shown for
+   orientation, not as a ratio or CLI-overhead comparison.
 2. From the wasmtime stability tiers page,
    <https://docs.wasmtime.dev/stability-tiers.html> (retrieved 2026-08-01).
 3. From the WAMR README, <https://github.com/bytecodealliance/wasm-micro-runtime>
@@ -72,11 +78,13 @@ Notes:
 
 **These columns are not a size benchmark.** The only numbers measured for this
 table are telomere's, and a Cortex-M4F library text size is not comparable with
-a macOS arm64 CLI binary. Telomere's current ~4 MiB host binary is far from
-WAMR-class; closing that distance is the goal, not a result. Cross-runtime
-footprint measurement with matched targets and feature sets is listed as open
-work in the footprint document. For execution speed there is a separate,
-earlier local comparison in
+a macOS arm64 CLI binary, the macOS minimal-embedder artifact, or the measured
+runtime text deltas (about 729 KiB on macOS and 1015 KiB on Linux).
+Telomere is not WAMR-class; closing that distance is the goal, not a result.
+The footprint note explains the unmatched target, libc, and standard-library
+conditions without deriving a WAMR ratio. Cross-runtime footprint measurement
+with matched targets and feature sets is listed as open work there. For
+execution speed there is a separate, earlier local comparison in
 [docs/core/coremark-benchmark.md](docs/core/coremark-benchmark.md).
 
 ## What is in this repository?
@@ -92,6 +100,7 @@ earlier local comparison in
 | `crates/telomere-macros`, `crates/union-find` | Internal support crates. |
 | `docs/` | Architecture notes, audits, and design boundaries. |
 | `examples/` | Small runnable Wasm fixtures with `.wat` sources; see [examples/README.md](examples/README.md). |
+| `examples/minimal-embedder/` | Standalone core, Component Model, and WASI embedding ladder with no CLI dependency topology. |
 | `tools/` | Out-of-process measurement scripts, such as the cold-start harness used by [docs/benchmarks/footprint.md](docs/benchmarks/footprint.md). |
 
 Start with [docs/README.md](docs/README.md) for the documentation map.
@@ -178,6 +187,24 @@ focused on argument passing. The companion stdout component writes a line via
 `get-stdout` and `blocking-write-and-flush`. See
 [examples/README.md](examples/README.md) for both fixtures, how to rebuild them
 from the committed `.wat` sources, and the remaining WASI constraints.
+
+## Embedding telomere
+
+For a host that does not need the CLI dependency topology, start with
+[`examples/minimal-embedder/`](examples/minimal-embedder/README.md). Its
+standalone configuration ladder shows core, Component Model, and WASI 0.2
+embedding code using the committed `add.wasm`, `component-add.wasm`, and
+`wasi-component-args.wasm` fixtures. "Minimal" means the supported dependency
+topology, not a promise of the fewest bytes; the headline rows keep SIMD on and
+`core-nosimd` is the comparison row.
+
+The core, component, and WASI samples use a visible std-only local executor
+(`Wake` + `thread::park`), not Tokio or `futures::executor::block_on`. The
+latter nests incompatibly with the executor used inside `telomere-component`;
+that Component Model follow-up is [#167](https://github.com/yieldspace/telomere/issues/167).
+The sample does not change component-runtime internals. See the measured
+footprint and its boundaries in
+[docs/benchmarks/footprint.md](docs/benchmarks/footprint.md).
 
 ## CLI usage
 
