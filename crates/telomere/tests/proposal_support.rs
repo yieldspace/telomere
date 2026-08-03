@@ -112,6 +112,17 @@ fn relaxed_simd_range_is_named_without_claiming_its_neighbors() {
     ));
 }
 
+#[test]
+fn relaxed_simd_diagnostic_preserves_leb128_subopcode() {
+    assert!(matches!(
+        parse_error(&prefixed_instruction_module(0xfd, 0x100)),
+        WasmParserError::UnsupportedFeature {
+            feature: ProposalFeature::RelaxedSimd,
+            opcode: [0xfd, 0x80, 0x02, 0x00],
+        }
+    ));
+}
+
 #[cfg(not(feature = "simd"))]
 #[test]
 fn no_default_standard_simd_mapping_preserves_wast_boundaries_and_holes() {
@@ -128,6 +139,15 @@ fn no_default_standard_simd_mapping_preserves_wast_boundaries_and_holes() {
             WasmParserError::InvalidInstruction(_)
         ));
     }
+}
+
+#[cfg(not(feature = "simd"))]
+#[test]
+fn no_default_unknown_simd_diagnostic_preserves_leb128_subopcode() {
+    assert!(matches!(
+        parse_error(&prefixed_instruction_module(0xfd, 0x114)),
+        WasmParserError::InvalidInstruction([0xfd, 0x94, 0x02, 0x00])
+    ));
 }
 
 #[test]

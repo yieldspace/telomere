@@ -38,6 +38,20 @@ macro_rules! simd_instruction {
     }
 }
 
+fn prefixed_opcode(prefix: u8, mut subopcode: u32) -> [u8; 4] {
+    let mut opcode = [prefix, 0, 0, 0];
+    for byte in &mut opcode[1..] {
+        *byte = (subopcode & 0x7f) as u8;
+        subopcode >>= 7;
+        if subopcode != 0 {
+            *byte |= 0x80;
+        } else {
+            break;
+        }
+    }
+    opcode
+}
+
 #[cfg(not(feature = "simd"))]
 fn is_standard_simd_subopcode(subopcode: u32) -> bool {
     // The standard SIMD subopcode set from pinned wast 243.0.0. Keep this
@@ -3292,7 +3306,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 if (0x100..=0x113).contains(&idx) {
                     return Err(WasmParserError::unsupported_feature(
                         super::ProposalFeature::RelaxedSimd,
-                        [0xFD, idx as u8, 0, 0],
+                        prefixed_opcode(0xFD, idx),
                     ));
                 }
                 #[cfg(feature = "simd")]
@@ -3555,9 +3569,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             [0xFD, 0, 0, 0],
                         ));
                     }
-                    return Err(WasmParserError::InvalidInstruction([
-                        0xFD, idx as u8, 0x00, 0x00,
-                    ]));
+                    return Err(WasmParserError::InvalidInstruction(prefixed_opcode(
+                        0xFD, idx,
+                    )));
                 }
             }
             0xFE => {

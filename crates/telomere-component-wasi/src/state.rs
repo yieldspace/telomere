@@ -216,11 +216,11 @@ impl WasiStateBuilder {
         self
     }
 
-    /// Lets guest standard input, output, and error use the embedding process streams.
+    /// Mirrors guest standard output and error to the embedding process streams.
     ///
-    /// By default input is an empty buffer and output is captured in the state.
-    /// This method grants ambient terminal or pipe access and additionally
-    /// mirrors guest output to the host streams.
+    /// Output remains captured in the state. This does not change guest standard
+    /// input: call [Self::inherit_stdin] to read from the embedding process, or
+    /// leave it buffered through the default or [Self::stdin].
     pub fn inherit_stdio(mut self) -> Self {
         self.inherit_stdio = true;
         self

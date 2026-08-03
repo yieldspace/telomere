@@ -132,7 +132,8 @@ pub mod common {
         ptr: u32,
         len: usize,
     ) -> Option<Vec<u8>> {
-        let end = ptr.checked_add(len as u32)? as usize;
+        let len = u32::try_from(len).ok()?;
+        let end = ptr.checked_add(len)? as usize;
         store
             .with_active_runtime(|gc| match *memory {
                 crate::common::MemoryHandle::Local(id) => gc
@@ -217,7 +218,10 @@ pub mod common {
         ptr: u32,
         bytes: &[u8],
     ) -> bool {
-        let Some(end) = ptr.checked_add(bytes.len() as u32).map(|it| it as usize) else {
+        let Some(len) = u32::try_from(bytes.len()).ok() else {
+            return false;
+        };
+        let Some(end) = ptr.checked_add(len).map(|it| it as usize) else {
             return false;
         };
         store
