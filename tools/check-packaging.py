@@ -13,6 +13,7 @@ EXPECTED = {
     "telomere": False,
     "telomere-jit-codegen": False,
     "telomere-macros": False,
+    "telomere-minimal-embedder": False,
     "union-find": False,
     "telomere-component": False,
     "telomere-component-bindgen": False,
