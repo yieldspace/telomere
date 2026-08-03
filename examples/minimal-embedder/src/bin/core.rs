@@ -114,7 +114,7 @@ fn make_store() -> Result<Store, String> {
             enabled: true,
             ..JitConfig::default()
         };
-        return Ok(Store::new_with_runtime_config(runtime_config));
+        Ok(Store::new_with_runtime_config(runtime_config))
     }
 
     #[cfg(not(feature = "jit"))]
