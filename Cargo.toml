@@ -8,6 +8,7 @@ authors.workspace = true
 homepage.workspace = true
 publish.workspace = true
 license.workspace = true
+autoexamples = false
 
 [features]
 default = ["full"]
@@ -43,7 +44,8 @@ members = [
     "crates/telomere-component-bindgen",
     "crates/telomere-component-wasi",
     "crates/telomere-macros",
-    "crates/union-find"
+    "crates/union-find",
+    "examples/minimal-embedder",
 ]
 
 [workspace.package]
@@ -72,3 +74,13 @@ smallvec = "1.14.0"
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+[profile.release-size]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+overflow-checks = false

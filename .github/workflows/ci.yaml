@@ -214,3 +214,107 @@ jobs:
 
       - name: Run checked reservation arithmetic tests
         run: cargo test -p telomere --lib --target i686-unknown-linux-gnu reservation_bytes_are_checked_on_every_target
+
+  embedder-configs:
+    name: Embedder configuration (${{ matrix.config }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: core
+            bin: embed-core
+            features: simd
+            fixture: examples/add.wasm
+            expected: "3"
+          - config: core-nosimd
+            bin: embed-core
+            features: ""
+            fixture: examples/add.wasm
+            expected: "3"
+          - config: component
+            bin: embed-component
+            features: simd,component
+            fixture: examples/component-add.wasm
+            expected: "42"
+          - config: wasi
+            bin: embed-wasi
+            features: simd,wasi
+            fixture: examples/wasi-component-args.wasm
+            expected: "0"
+          - config: core-jit
+            bin: embed-core
+            features: simd,jit
+            fixture: examples/add.wasm
+            expected: "3"
+          - config: wasi-threads
+            bin: embed-wasi
+            features: simd,threads,wasi
+            fixture: examples/wasi-component-args.wasm
+            expected: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: embedder-configs-${{ matrix.config }}
+
+      - name: Build and assert embedder stdout
+        shell: bash
+        env:
+          BIN: ${{ matrix.bin }}
+          FEATURES: ${{ matrix.features }}
+          FIXTURE: ${{ matrix.fixture }}
+          EXPECTED: ${{ matrix.expected }}
+        run: |
+          set -euo pipefail
+          build=(cargo build -p telomere-minimal-embedder --profile release-size --no-default-features --bin "$BIN")
+          if [[ -n "$FEATURES" ]]; then
+            build+=(--features "$FEATURES")
+          fi
+          "${build[@]}"
+
+          actual="$(mktemp)"
+          expected="$(mktemp)"
+          trap 'rm -f "$actual" "$expected"' EXIT
+          "target/release-size/$BIN" "$FIXTURE" >"$actual"
+          printf '%s\n' "$EXPECTED" >"$expected"
+          if ! cmp -s "$expected" "$actual"; then
+            echo "::error::unexpected stdout for $BIN with $FIXTURE"
+            diff -u "$expected" "$actual"
+            exit 1
+          fi
+
+  size-profile-guard:
+    name: Release-size profile guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: size-profile-guard
+
+      - name: Test release-size call threading
+        run: cargo test -p telomere --profile release-size --test call_threading
+
+      - name: Test release-size wast conformance
+        run: cargo test -p telomere --profile release-size --test wast

@@ -7,8 +7,19 @@ was written down.
 | File | Entry point | Source |
 | --- | --- | --- |
 | `add.wasm` | core Wasm export call | Compiled from Rust; no source kept in-tree. |
+| `component-add.wasm` | WASI-free Component Model export call | `component-add.wat` |
 | `wasi-preview1-hello.wasm` | WASI preview1 command module | `wasi-preview1-hello.wat` |
 | `wasi-component-args.wasm` | WASI 0.2 component command | `wasi-component-args.wat` |
+
+## Standalone minimal embedder
+
+The `telomere-minimal-embedder` crate in
+[`minimal-embedder/`](minimal-embedder/README.md) deliberately excludes the CLI
+dependency topology. Its standalone ladder uses `add.wasm` for the baseline and
+core rows, `component-add.wasm` for the WASI-free Component Model row, and
+`wasi-component-args.wasm` for the WASI 0.2 rows. Each configuration builds and
+runs with its own feature invocation; see that crate's README for commands and
+[the footprint note](../docs/benchmarks/footprint.md) for the measured boundary.
 
 ## Running
 
@@ -92,6 +103,8 @@ The WASI fixtures are committed as WebAssembly text and are rebuilt with
 
 ```shell
 cargo install wasm-tools
+wasm-tools parse examples/component-add.wat -o examples/component-add.wasm
+wasm-tools validate --features all examples/component-add.wasm
 wasm-tools parse examples/wasi-preview1-hello.wat -o examples/wasi-preview1-hello.wasm
 wasm-tools parse examples/wasi-component-args.wat -o examples/wasi-component-args.wasm
 wasm-tools validate --features all examples/wasi-component-args.wasm

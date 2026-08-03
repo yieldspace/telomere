@@ -1118,6 +1118,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "telomere-minimal-embedder"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "telomere",
+ "telomere-component",
+ "telomere-component-wasi",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"

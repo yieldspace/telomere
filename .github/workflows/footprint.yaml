@@ -1,0 +1,55 @@
+name: Embedder footprint
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "examples/minimal-embedder/**"
+      - "tools/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/footprint.yaml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  measure:
+    name: Measure embedder footprint
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: embedder-footprint
+
+      - name: Measure release footprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/measure-embedder-footprint.py --profile release | tee footprint-release.json
+
+      - name: Measure release-size footprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/measure-embedder-footprint.py --profile release-size | tee footprint-release-size.json
+
+      - name: Upload footprint measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: embedder-footprint
+          path: |
+            footprint-release.json
+            footprint-release-size.json
+          if-no-files-found: error
