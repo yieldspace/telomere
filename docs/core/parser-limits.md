@@ -101,6 +101,7 @@ frame is about 130 KiB, roughly 190 times its 681 B release frame. A limit low
 enough to fit a normal debug test thread would reject valid conformance inputs,
 so it does not resolve #154. The replay harnesses accordingly use 512 KiB only
 in release and retain a 64 MiB debug stack while #154 is addressed separately.
+Instrumented builds are excluded from this contract for the same reason.
 
 ## Reproducible regression fixtures
 
