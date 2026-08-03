@@ -310,10 +310,32 @@ fn emit_corpus_case(output_dir: &Path, hash: &str, bytes: &[u8]) -> bool {
     }
 }
 
+/// The stack a replayed parse is given.
+///
+/// The parser recurses on nested structured instructions with no depth limit,
+/// so how deep an input it survives is a function of the available stack rather
+/// than of anything the parser checks. A spec-suite module with roughly two
+/// hundred nested blocks already exhausts a default test thread's stack in an
+/// unoptimized build, which would abort this whole test process.
+///
+/// This is a harness accommodation, not a fix: it keeps corpus replay usable
+/// while the missing depth limit is resolved separately. See the bring-up
+/// findings in the pull request that introduced this file. Remove it once the
+/// parser bounds its own recursion.
+const REPLAY_STACK_BYTES: usize = 64 * 1024 * 1024;
+
 fn replay_core_case(bytes: &[u8]) {
-    let mut reader = telomere::IoReadBinaryReader::from(bytes);
-    let mut parser = telomere::WasmParser::new(&mut reader);
-    let _ = parser.parse_module();
+    let bytes = bytes.to_vec();
+    std::thread::Builder::new()
+        .stack_size(REPLAY_STACK_BYTES)
+        .spawn(move || {
+            let mut reader = telomere::IoReadBinaryReader::from(&bytes[..]);
+            let mut parser = telomere::WasmParser::new(&mut reader);
+            let _ = parser.parse_module();
+        })
+        .expect("spawning a replay thread")
+        .join()
+        .expect("a replayed parse must not panic");
 }
 
 #[derive(Clone, Copy)]
@@ -361,6 +383,18 @@ fn replay_committed_cases(repository_root: &Path, category: CommittedCorpus, rep
     }
 }
 
+/// Accepts only files that are corpus inputs.
+///
+/// This is a positive filter rather than a list of names to skip. The committed
+/// corpus directories carry `.gitkeep` placeholders, and a directory opened in a
+/// file browser on macOS gains a `.DS_Store`; either would otherwise be replayed
+/// as a malformed input and counted in the corpus totals.
+fn is_corpus_candidate(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| !name.starts_with('.'))
+}
+
 fn collect_all_files(root: &Path) -> Vec<PathBuf> {
     fn visit(dir: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = fs::read_dir(dir)
@@ -377,7 +411,7 @@ fn collect_all_files(root: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 visit(&path, files);
-            } else if path.is_file() {
+            } else if path.is_file() && is_corpus_candidate(&path) {
                 files.push(path);
             }
         }

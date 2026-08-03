@@ -35,8 +35,8 @@ pub use program::{ComponentOp, ComponentProgram, ComponentTypeInfo};
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub use runtime::{
-    fuzz_canonical_lift_args, FuzzCanonicalLiftInput, FuzzStringEncoding,
-    MAX_FUZZ_MEMORY_IMAGE_BYTES,
+    fuzz_canonical_lift_args, fuzz_canonical_lift_args_from_bytes, FuzzCanonicalLiftInput,
+    FuzzStringEncoding, MAX_FUZZ_MEMORY_IMAGE_BYTES,
 };
 pub use support::Store;
 pub use value::ComponentValue;

@@ -28,6 +28,11 @@ anyhow = { version = "1.0.98", features = ["backtrace"] }
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 sha2 = "0.10.9"
+# Enables the feature-gated canonical ABI fuzz adapter for this crate's own
+# tests, so `cargo test --workspace` replays the committed `canon_lift_args`
+# corpus without anyone having to remember `--features fuzzing`. Normal builds
+# of the crate are unaffected.
+telomere-component = { path = ".", features = ["fuzzing"] }
 
 [[bench]]
 name = "telomere_component_bench"

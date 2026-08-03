@@ -314,8 +314,23 @@ fn emit_corpus_case(output_dir: &Path, hash: &str, bytes: &[u8]) -> bool {
     }
 }
 
+/// The stack a replayed decode is given; see the note on the core parser's
+/// equivalent in `crates/telomere/tests/fuzz_corpus_replay.rs`. The component
+/// decoder recurses on nested types and nested components with no depth limit
+/// either, so it is given the same accommodation rather than being left to
+/// abort the test process.
+const REPLAY_STACK_BYTES: usize = 64 * 1024 * 1024;
+
 fn replay_component_case(bytes: &[u8]) {
-    let _ = telomere_component::ComponentEngine::new().compile(bytes);
+    let bytes = bytes.to_vec();
+    std::thread::Builder::new()
+        .stack_size(REPLAY_STACK_BYTES)
+        .spawn(move || {
+            let _ = telomere_component::ComponentEngine::new().compile(&bytes);
+        })
+        .expect("spawning a replay thread")
+        .join()
+        .expect("a replayed decode must not panic");
 }
 
 #[derive(Clone, Copy)]
@@ -363,6 +378,18 @@ fn replay_committed_cases(repository_root: &Path, category: CommittedCorpus, rep
     }
 }
 
+/// Accepts only files that are corpus inputs.
+///
+/// This is a positive filter rather than a list of names to skip. The committed
+/// corpus directories carry `.gitkeep` placeholders, and a directory opened in a
+/// file browser on macOS gains a `.DS_Store`; either would otherwise be replayed
+/// as a malformed input and counted in the corpus totals.
+fn is_corpus_candidate(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| !name.starts_with('.'))
+}
+
 fn collect_all_files(root: &Path) -> Vec<PathBuf> {
     fn visit(dir: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = fs::read_dir(dir)
@@ -379,7 +406,7 @@ fn collect_all_files(root: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 visit(&path, files);
-            } else if path.is_file() {
+            } else if path.is_file() && is_corpus_candidate(&path) {
                 files.push(path);
             }
         }

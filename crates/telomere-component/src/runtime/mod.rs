@@ -174,6 +174,6 @@ pub use env::instantiate;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub use fuzz_api::{
-    fuzz_canonical_lift_args, FuzzCanonicalLiftInput, FuzzStringEncoding,
-    MAX_FUZZ_MEMORY_IMAGE_BYTES,
+    fuzz_canonical_lift_args, fuzz_canonical_lift_args_from_bytes, FuzzCanonicalLiftInput,
+    FuzzStringEncoding, MAX_FUZZ_MEMORY_IMAGE_BYTES,
 };

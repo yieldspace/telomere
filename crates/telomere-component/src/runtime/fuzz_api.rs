@@ -187,6 +187,87 @@ fn write_memory(store: &Store, memory: &CoreExportRef, ptr: u32, bytes: &[u8]) -
         .ok_or(())
 }
 
+/// The fixed-size header consumed from a raw fuzz input.
+const HEADER_BYTES: usize = 7;
+/// The width of one encoded [`WasmValue`] record in a raw fuzz input.
+const FLAT_ARG_BYTES: usize = 17;
+const MAX_FLAT_ARGS: usize = 32;
+const MAX_FLAT_ARG_BYTES: usize = MAX_FLAT_ARGS * FLAT_ARG_BYTES;
+const MAX_PAYLOAD_BYTES: usize = MAX_FUZZ_MEMORY_IMAGE_BYTES + MAX_FLAT_ARG_BYTES;
+
+/// Runs [`fuzz_canonical_lift_args`] against a raw byte input.
+///
+/// The byte layout is owned here rather than by the fuzz target so that the
+/// nightly fuzzer and the stable corpus replay decode a committed input
+/// identically. A reproducer that decoded differently in the two places would
+/// silently stop reproducing.
+///
+/// Every byte sequence decodes, including the empty one: the header is read with
+/// defaults and the bounded payload is split deterministically between the
+/// memory image and fixed-width value records.
+pub fn fuzz_canonical_lift_args_from_bytes(
+    fixture_bytes: &[u8],
+    bytes: &[u8],
+) -> Result<Vec<ComponentValue>, ComponentError> {
+    let header_byte = |index: usize| bytes.get(index).copied().unwrap_or_default();
+    let payload = bytes.get(HEADER_BYTES..).unwrap_or_default();
+    let payload = &payload[..payload.len().min(MAX_PAYLOAD_BYTES)];
+    let split_selector = usize::from(header_byte(6));
+    let selected_memory_len = payload.len().saturating_mul(split_selector) / usize::from(u8::MAX);
+    let minimum_memory_len = payload.len().saturating_sub(MAX_FLAT_ARG_BYTES);
+    let memory_len = selected_memory_len
+        .max(minimum_memory_len)
+        .min(MAX_FUZZ_MEMORY_IMAGE_BYTES);
+    let (memory_image, flat_bytes) = payload.split_at(memory_len);
+
+    let flat_args = flat_bytes
+        .chunks_exact(FLAT_ARG_BYTES)
+        .map(decode_flat_arg)
+        .collect::<Vec<_>>();
+
+    fuzz_canonical_lift_args(&FuzzCanonicalLiftInput {
+        fixture_bytes,
+        export_selector: header_byte(0),
+        string_encoding: decode_string_encoding(header_byte(1)),
+        memory_offset: u32::from_le_bytes([
+            header_byte(2),
+            header_byte(3),
+            header_byte(4),
+            header_byte(5),
+        ]),
+        memory_image,
+        flat_args: &flat_args,
+    })
+}
+
+fn decode_flat_arg(chunk: &[u8]) -> WasmValue {
+    let payload: [u8; 16] = chunk[1..].try_into().expect("chunk has 16 payload bytes");
+    let low_u32 = u32::from_le_bytes(payload[..4].try_into().expect("u32 payload"));
+    let low_i32 = i32::from_le_bytes(payload[..4].try_into().expect("i32 payload"));
+    let low_i64 = i64::from_le_bytes(payload[..8].try_into().expect("i64 payload"));
+    let low_f32 = f32::from_le_bytes(payload[..4].try_into().expect("f32 payload"));
+    let low_f64 = f64::from_le_bytes(payload[..8].try_into().expect("f64 payload"));
+
+    match chunk[0] % 7 {
+        0 => WasmValue::I32(low_i32),
+        1 => WasmValue::I64(low_i64),
+        2 => WasmValue::F32(low_f32),
+        3 => WasmValue::F64(low_f64),
+        4 => WasmValue::V128(u128::from_le_bytes(payload)),
+        5 => WasmValue::FuncRef(low_u32),
+        _ => WasmValue::ExternRef(low_u32),
+    }
+}
+
+fn decode_string_encoding(selector: u8) -> FuzzStringEncoding {
+    match selector % 4 {
+        0 => FuzzStringEncoding::None,
+        1 => FuzzStringEncoding::Utf8,
+        2 => FuzzStringEncoding::Utf16,
+        _ => FuzzStringEncoding::CompactUtf16,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

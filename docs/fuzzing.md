@@ -78,19 +78,25 @@ directories are valid. Do not commit the mutable `fuzz/corpus/` or
 
 Remain in `fuzz/`. `cargo fuzz run` accepts multiple corpus directories;
 libFuzzer treats the first as writable and the later directories as additional
-read-only input. Put the target's own directory first so that any newly
-discovered corpus entries stay with that target.
+read-only input. Pass a target its own three directories, generated corpus
+first, so that newly discovered entries land in the gitignored `corpus/` and the
+committed `seeds/` and `regressions/` stay read-only. Do not pass one target the
+corpus of another: the inputs are decoded differently per target, so the extra
+directories would only waste budget.
 
 ```shell
 cargo +nightly-2026-07-31 fuzz run parse_core_module \
-  corpus/parse_core_module corpus/decode_component corpus/canon_lift_args
+  corpus/parse_core_module seeds/parse_core_module regressions/parse_core_module
 
 cargo +nightly-2026-07-31 fuzz run decode_component \
-  corpus/decode_component corpus/parse_core_module corpus/canon_lift_args
+  corpus/decode_component seeds/decode_component regressions/decode_component
 
 cargo +nightly-2026-07-31 fuzz run canon_lift_args \
-  corpus/canon_lift_args corpus/parse_core_module corpus/decode_component
+  corpus/canon_lift_args seeds/canon_lift_args regressions/canon_lift_args
 ```
+
+This is the same directory order the workflow uses, so a local reproduction and
+a CI run see the same inputs.
 
 These commands run until interrupted. For a bounded local smoke run, add a
 libFuzzer limit after `--`, for example `-- -max_total_time=300` or
@@ -142,8 +148,11 @@ The repository's current GitHub Actions workspace-test job runs
 `main`. The replay tests are ordinary integration tests, so they run as part
 of that job.
 
-There is currently no scheduled `cargo fuzz` GitHub Actions job and no hosted
-long-running campaign. Before a change that affects one of these boundaries,
+`.github/workflows/fuzz.yaml` runs all three targets for 60 seconds each on
+every pull request, a five-minute campaign per target on a daily schedule, and a
+thirty-minute campaign per target weekly, carrying the corpus between scheduled
+runs through the Actions cache. There is no hosted continuous campaign beyond
+that. Before a change that affects one of these boundaries,
 run the corresponding replay test locally; before a release or a dedicated
 fuzzing change, run bounded campaigns for all three targets and retain the
 commands and findings in the PR or release evidence. A nightly or continuous
