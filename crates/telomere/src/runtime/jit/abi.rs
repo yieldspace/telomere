@@ -86,6 +86,7 @@ pub(crate) fn vm_result_code<T>(result: VMResult<T>) -> u64 {
         VMResult::CallIndirectInvalidType => 5,
         VMResult::TableUninitialized => 6,
         VMResult::Unlinkable => 7,
+        VMResult::MemoryAllocationFailed => 11,
         VMResult::InvalidOperand => 8,
         VMResult::UnalignedAtomic => 9,
         VMResult::Unimplemented => 10,
@@ -105,9 +106,25 @@ pub(crate) fn vm_result_from_code(code: u64) -> VMResult<()> {
         5 => VMResult::CallIndirectInvalidType,
         6 => VMResult::TableUninitialized,
         7 => VMResult::Unlinkable,
+        11 => VMResult::MemoryAllocationFailed,
         8 => VMResult::InvalidOperand,
         9 => VMResult::UnalignedAtomic,
         10 => VMResult::Unimplemented,
         _ => VMResult::InvalidOperand,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{vm_result_code, vm_result_from_code};
+    use crate::common::VMResult;
+
+    #[test]
+    fn memory_allocation_failed_round_trips_through_jit_trap_code() {
+        assert_eq!(vm_result_code(VMResult::<()>::MemoryAllocationFailed), 11);
+        assert!(matches!(
+            vm_result_from_code(11),
+            VMResult::MemoryAllocationFailed
+        ));
     }
 }

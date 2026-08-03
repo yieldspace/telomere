@@ -254,15 +254,12 @@ pub(crate) async fn run(
 
     let state = Box::new(CoreWasiPreview1State::new(path, guest_argv, stdio));
     let state_ptr = unsafe { StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State) };
-    let store = Store::new_with_state_and_runtime_config(
-        state_ptr,
-        RuntimeConfig {
-            jit: JitConfig {
-                enabled: jit,
-                code_cache_max_bytes: jit_code_cache_mib.saturating_mul(1024 * 1024),
-            },
-        },
-    );
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig {
+        enabled: jit,
+        code_cache_max_bytes: jit_code_cache_mib.saturating_mul(1024 * 1024),
+    };
+    let store = Store::new_with_state_and_runtime_config(state_ptr, runtime_config);
     let mut registry = Registry::new();
     let host = vm_result_to_anyhow(
         instantiate_native_module(build_preview1_native_module(), &store, &registry).await,
@@ -514,6 +511,7 @@ fn describe_vm_result<T>(result: &VMResult<T>) -> &'static str {
         VMResult::CallIndirectInvalidType => "call_indirect invalid type",
         VMResult::TableUninitialized => "table uninitialized",
         VMResult::Unlinkable => "unlinkable",
+        VMResult::MemoryAllocationFailed => "memory allocation failed",
         VMResult::InvalidOperand => "invalid operand",
         VMResult::UnalignedAtomic => "unaligned atomic",
         VMResult::Unimplemented => "unimplemented",

@@ -532,6 +532,9 @@ pub(super) fn vm_result_to_component_error(
             ComponentError::Trap(format!("{context} trapped: table uninitialized"))
         }
         CoreVMResult::Unlinkable => ComponentError::Link(format!("{context} failed: unlinkable")),
+        CoreVMResult::MemoryAllocationFailed => {
+            ComponentError::Runtime(format!("{context} failed: memory allocation failed"))
+        }
         CoreVMResult::InvalidOperand => {
             ComponentError::Runtime(format!("{context} failed: invalid operand"))
         }

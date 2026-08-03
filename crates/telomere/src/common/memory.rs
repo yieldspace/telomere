@@ -1,5 +1,8 @@
 use std::{fmt, ptr::NonNull, slice::SliceIndex, sync::Arc};
 
+#[cfg(test)]
+use std::cell::Cell;
+
 #[cfg(feature = "threads")]
 use std::{
     collections::{HashMap, VecDeque},
@@ -11,6 +14,8 @@ use parking_lot::Mutex;
 #[cfg(feature = "threads")]
 use tokio::sync::Notify;
 
+#[cfg(test)]
+use super::PAGE_SIZE_MAX;
 use super::{Stack, VMResult, PAGE_SIZE};
 
 #[inline(always)]
@@ -222,36 +227,248 @@ impl SharedWaiter {
     }
 }
 
+/// Exact on every target: page counts are `u32` and `PAGE_SIZE` is 2^16, so
+/// their product is at most 2^48.
+pub(crate) const fn reservation_bytes_u64(max_pages: u32) -> u64 {
+    (max_pages as u64) * (PAGE_SIZE as u64)
+}
+
+pub(crate) fn reservation_bytes(max_pages: u32) -> Result<usize, MemoryInitError> {
+    let bytes = reservation_bytes_u64(max_pages).max(PAGE_SIZE as u64);
+    usize::try_from(bytes).map_err(|_| MemoryInitError::ReservationTooLarge { pages: max_pages })
+}
+
+fn committed_bytes_for_pages(page_count: u32) -> Result<usize, MemoryInitError> {
+    usize::try_from(reservation_bytes_u64(page_count))
+        .map_err(|_| MemoryInitError::ReservationTooLarge { pages: page_count })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryMappingOperation {
+    Mmap,
+    Mprotect,
+}
+
+impl fmt::Display for MemoryMappingOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mmap => f.write_str("mmap"),
+            Self::Mprotect => f.write_str("mprotect"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryInitError {
+    InvalidPageBounds {
+        page_count: u32,
+        max_page_size: u32,
+    },
+    ReservationTooLarge {
+        pages: u32,
+    },
+    MappingFailed {
+        operation: MemoryMappingOperation,
+        bytes: usize,
+        errno: Option<i32>,
+    },
+    InvalidCommitLength {
+        requested_bytes: usize,
+        committed_bytes: usize,
+        reserved_bytes: usize,
+    },
+}
+
+impl fmt::Display for MemoryInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPageBounds {
+                page_count,
+                max_page_size,
+            } => write!(
+                f,
+                "invalid memory bounds: page_count ({page_count}) must be <= max_page_size ({max_page_size})"
+            ),
+            Self::ReservationTooLarge { pages } => write!(
+                f,
+                "memory reservation for {pages} pages does not fit in the host address space"
+            ),
+            Self::MappingFailed {
+                operation,
+                bytes,
+                errno,
+            } => match errno {
+                Some(errno) => write!(
+                    f,
+                    "memory {operation} failed for {bytes} bytes (errno {errno})"
+                ),
+                None => write!(f, "memory {operation} failed for {bytes} bytes"),
+            },
+            Self::InvalidCommitLength {
+                requested_bytes,
+                committed_bytes,
+                reserved_bytes,
+            } => write!(
+                f,
+                "invalid memory commit length {requested_bytes}; committed={committed_bytes}, reserved={reserved_bytes}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MemoryInitError {}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestMemoryMappingFailure {
+    Mmap,
+    Mprotect,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MEMORY_MAPPING_FAILURE: Cell<Option<TestMemoryMappingFailure>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct TestMemoryMappingFailureGuard {
+    previous: Option<TestMemoryMappingFailure>,
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_memory_mapping(
+    failure: TestMemoryMappingFailure,
+) -> TestMemoryMappingFailureGuard {
+    let previous = TEST_MEMORY_MAPPING_FAILURE.with(|state| state.replace(Some(failure)));
+    TestMemoryMappingFailureGuard { previous }
+}
+
+#[cfg(test)]
+impl Drop for TestMemoryMappingFailureGuard {
+    fn drop(&mut self) {
+        TEST_MEMORY_MAPPING_FAILURE.with(|state| state.set(self.previous));
+    }
+}
+
+#[cfg(test)]
+fn take_test_memory_mapping_failure(failure: TestMemoryMappingFailure) -> bool {
+    TEST_MEMORY_MAPPING_FAILURE.with(|state| {
+        if state.get() == Some(failure) {
+            state.set(None);
+            true
+        } else {
+            false
+        }
+    })
+}
+
+fn mmap_region(len: usize, flags: libc::c_int) -> Result<NonNull<u8>, MemoryInitError> {
+    let ptr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_NONE, flags, -1, 0) };
+    if ptr == libc::MAP_FAILED {
+        return Err(MemoryInitError::MappingFailed {
+            operation: MemoryMappingOperation::Mmap,
+            bytes: len,
+            errno: std::io::Error::last_os_error().raw_os_error(),
+        });
+    }
+    if ptr.is_null() {
+        let _ = unsafe { libc::munmap(ptr, len) };
+        return Err(MemoryInitError::MappingFailed {
+            operation: MemoryMappingOperation::Mmap,
+            bytes: len,
+            errno: None,
+        });
+    }
+    Ok(unsafe { NonNull::new_unchecked(ptr.cast::<u8>()) })
+}
+
+fn mprotect_delta(ptr: *mut libc::c_void, len: usize) -> Result<(), Option<i32>> {
+    if unsafe { libc::mprotect(ptr, len, libc::PROT_READ | libc::PROT_WRITE) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().raw_os_error())
+    }
+}
+
 #[derive(Debug)]
 struct MmapRegion {
     ptr: NonNull<u8>,
-    len: usize,
+    reserved_bytes: usize,
+    committed_bytes: usize,
 }
 
 impl MmapRegion {
-    fn new(len: usize, shared: bool) -> Self {
-        assert!(len != 0, "mmap region length must be non-zero");
+    fn new(len: usize, shared: bool) -> Result<Self, MemoryInitError> {
         let mut flags = libc::MAP_ANON;
         flags |= if shared {
             libc::MAP_SHARED
         } else {
             libc::MAP_PRIVATE
         };
-        let ptr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                flags,
-                -1,
-                0,
-            )
-        };
-        assert_ne!(ptr, libc::MAP_FAILED, "mmap failed for {len} bytes");
-        Self {
-            ptr: NonNull::new(ptr.cast::<u8>()).expect("mmap returned null"),
-            len,
+        #[cfg(target_os = "linux")]
+        {
+            flags |= libc::MAP_NORESERVE;
         }
+
+        #[cfg(test)]
+        if take_test_memory_mapping_failure(TestMemoryMappingFailure::Mmap) {
+            return Err(MemoryInitError::MappingFailed {
+                operation: MemoryMappingOperation::Mmap,
+                bytes: len,
+                errno: Some(libc::ENOMEM),
+            });
+        }
+        let ptr = mmap_region(len, flags)?;
+        Ok(Self {
+            ptr,
+            reserved_bytes: len,
+            committed_bytes: 0,
+        })
+    }
+
+    fn commit(&mut self, new_len: usize) -> Result<(), MemoryInitError> {
+        if new_len == 0 || new_len == self.committed_bytes {
+            return Ok(());
+        }
+        if new_len < self.committed_bytes || new_len > self.reserved_bytes {
+            return Err(MemoryInitError::InvalidCommitLength {
+                requested_bytes: new_len,
+                committed_bytes: self.committed_bytes,
+                reserved_bytes: self.reserved_bytes,
+            });
+        }
+        let ptr = unsafe {
+            self.ptr
+                .as_ptr()
+                .add(self.committed_bytes)
+                .cast::<libc::c_void>()
+        };
+        let bytes = new_len - self.committed_bytes;
+        #[cfg(test)]
+        if take_test_memory_mapping_failure(TestMemoryMappingFailure::Mprotect) {
+            return Err(MemoryInitError::MappingFailed {
+                operation: MemoryMappingOperation::Mprotect,
+                bytes,
+                errno: Some(libc::ENOMEM),
+            });
+        }
+        if let Err(errno) = mprotect_delta(ptr, bytes) {
+            return Err(MemoryInitError::MappingFailed {
+                operation: MemoryMappingOperation::Mprotect,
+                bytes,
+                errno,
+            });
+        }
+        self.committed_bytes = new_len;
+        Ok(())
+    }
+
+    fn reserved_bytes(&self) -> usize {
+        self.reserved_bytes
+    }
+
+    fn committed_bytes(&self) -> usize {
+        self.committed_bytes
     }
 
     fn as_slice(&self, len: usize) -> &[u8] {
@@ -265,8 +482,12 @@ impl MmapRegion {
 
 impl Drop for MmapRegion {
     fn drop(&mut self) {
-        let ret = unsafe { libc::munmap(self.ptr.as_ptr().cast::<libc::c_void>(), self.len) };
-        debug_assert_eq!(ret, 0, "munmap failed");
+        let _ = unsafe {
+            libc::munmap(
+                self.ptr.as_ptr().cast::<libc::c_void>(),
+                self.reserved_bytes,
+            )
+        };
     }
 }
 
@@ -288,27 +509,6 @@ fn ensure_atomic_alignment(offset: usize, alignment: usize) -> VMResult<()> {
         VMResult::UnalignedAtomic
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MemoryInitError {
-    InvalidPageBounds { page_count: u32, max_page_size: u32 },
-}
-
-impl fmt::Display for MemoryInitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidPageBounds {
-                page_count,
-                max_page_size,
-            } => write!(
-                f,
-                "invalid memory bounds: page_count ({page_count}) must be <= max_page_size ({max_page_size})"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for MemoryInitError {}
 
 pub struct Memory {
     region: MmapRegion,
@@ -368,8 +568,12 @@ impl Memory {
                 max_page_size,
             });
         }
-        let reserved = (max_page_size as usize * PAGE_SIZE).max(PAGE_SIZE);
-        let region = MmapRegion::new(reserved, shared);
+        let reserved = reservation_bytes(max_page_size)?;
+        let committed = committed_bytes_for_pages(page_count)?;
+        let mut region = MmapRegion::new(reserved, shared)?;
+        region.commit(committed)?;
+        debug_assert_eq!(region.committed_bytes(), committed);
+        debug_assert_eq!(region.reserved_bytes(), reserved);
         Ok(Self {
             region,
             current_pages: page_count,
@@ -382,7 +586,17 @@ impl Memory {
     }
 
     pub fn data_size(&self) -> usize {
-        self.current_pages as usize * PAGE_SIZE
+        self.region.committed_bytes()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reserved_bytes(&self) -> usize {
+        self.region.reserved_bytes()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn committed_bytes(&self) -> usize {
+        self.region.committed_bytes()
     }
 
     #[inline(always)]
@@ -803,7 +1017,17 @@ impl Memory {
         if new_page_size > self.max_pages {
             return VMResult::Success(-1);
         }
+        let Ok(new_committed_bytes) = committed_bytes_for_pages(new_page_size) else {
+            return VMResult::Success(-1);
+        };
+        if new_committed_bytes > self.region.reserved_bytes() {
+            return VMResult::Success(-1);
+        }
+        if self.region.commit(new_committed_bytes).is_err() {
+            return VMResult::Success(-1);
+        }
         self.current_pages = new_page_size;
+        debug_assert_eq!(self.region.committed_bytes(), new_committed_bytes);
         VMResult::Success(current_page_size as i32)
     }
 
@@ -1407,6 +1631,105 @@ mod tests {
                 max_page_size: 1,
             })
         ));
+    }
+
+    #[test]
+    fn reservation_bytes_are_checked_on_every_target() {
+        let max_bytes = reservation_bytes_u64(PAGE_SIZE_MAX as u32);
+        assert_eq!(max_bytes, 4_u64 * 1024 * 1024 * 1024);
+        assert!(u32::try_from(max_bytes).is_err());
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            reservation_bytes(PAGE_SIZE_MAX as u32),
+            Ok(max_bytes as usize)
+        );
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(
+            reservation_bytes(PAGE_SIZE_MAX as u32),
+            Err(MemoryInitError::ReservationTooLarge {
+                pages: PAGE_SIZE_MAX as u32,
+            })
+        );
+        assert_eq!(reservation_bytes(0).unwrap(), PAGE_SIZE);
+    }
+
+    #[test]
+    fn zero_sized_memory_keeps_a_valid_uncommitted_reservation() {
+        let mut memory = Memory::new(0, 0).unwrap();
+        assert_eq!(memory.page_size(), 0);
+        assert_eq!(memory.data_size(), 0);
+        assert_eq!(memory.reserved_bytes(), PAGE_SIZE);
+        assert_eq!(memory.committed_bytes(), 0);
+        assert_eq!(memory.grow(1).unwrap(), -1);
+        assert_eq!(memory.committed_bytes(), 0);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn local_memory_reserves_lazily_and_commits_only_grown_pages() {
+        let max_pages = PAGE_SIZE_MAX as u32;
+        let mut memory = Memory::new(1, max_pages).unwrap();
+        assert_eq!(memory.reserved_bytes(), 4 * 1024 * 1024 * 1024usize);
+        assert_eq!(memory.committed_bytes(), PAGE_SIZE);
+
+        assert_eq!(memory.grow(1).unwrap(), 1);
+        assert_eq!(memory.reserved_bytes(), 4 * 1024 * 1024 * 1024usize);
+        assert_eq!(memory.committed_bytes(), 2 * PAGE_SIZE);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn shared_memory_reserves_lazily_and_commits_only_grown_pages() {
+        let max_pages = PAGE_SIZE_MAX as u32;
+        let shared = SharedMemoryObject::new(1, max_pages).unwrap();
+        shared.with_memory(|memory| {
+            assert_eq!(memory.reserved_bytes(), 4 * 1024 * 1024 * 1024usize);
+            assert_eq!(memory.committed_bytes(), PAGE_SIZE);
+        });
+
+        assert_eq!(shared.grow(1).unwrap(), 1);
+        shared.with_memory(|memory| {
+            assert_eq!(memory.reserved_bytes(), 4 * 1024 * 1024 * 1024usize);
+            assert_eq!(memory.committed_bytes(), 2 * PAGE_SIZE);
+        });
+    }
+
+    #[test]
+    fn mmap_failure_is_returned_from_local_memory_construction() {
+        let _failure = fail_next_memory_mapping(TestMemoryMappingFailure::Mmap);
+        let error = LocalMemoryObject::new(1, 1).unwrap_err();
+        assert!(matches!(
+            error,
+            MemoryInitError::MappingFailed {
+                operation: MemoryMappingOperation::Mmap,
+                bytes,
+                errno: Some(_),
+            } if bytes == PAGE_SIZE
+        ));
+    }
+
+    #[test]
+    fn initial_mprotect_failure_is_returned_from_local_memory_construction() {
+        let _failure = fail_next_memory_mapping(TestMemoryMappingFailure::Mprotect);
+        let error = LocalMemoryObject::new(1, 1).unwrap_err();
+        assert!(matches!(
+            error,
+            MemoryInitError::MappingFailed {
+                operation: MemoryMappingOperation::Mprotect,
+                bytes,
+                errno: Some(_),
+            } if bytes == PAGE_SIZE
+        ));
+    }
+
+    #[test]
+    fn failed_grow_keeps_pages_and_commit_length_unchanged() {
+        let mut memory = Memory::new(1, 2).unwrap();
+        let _failure = fail_next_memory_mapping(TestMemoryMappingFailure::Mprotect);
+
+        assert_eq!(memory.grow(1).unwrap(), -1);
+        assert_eq!(memory.page_size(), 1);
+        assert_eq!(memory.committed_bytes(), PAGE_SIZE);
     }
 
     #[cfg(feature = "threads")]

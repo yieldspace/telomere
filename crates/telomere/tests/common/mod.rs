@@ -121,12 +121,12 @@ fn wast_store() -> Store {
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(64 * 1024 * 1024);
-        Store::new_with_runtime_config(telomere::RuntimeConfig {
-            jit: telomere::JitConfig {
-                enabled: true,
-                code_cache_max_bytes,
-            },
-        })
+        let mut runtime_config = telomere::RuntimeConfig::default();
+        runtime_config.jit = telomere::JitConfig {
+            enabled: true,
+            code_cache_max_bytes,
+        };
+        Store::new_with_runtime_config(runtime_config)
     } else {
         Store::new()
     };

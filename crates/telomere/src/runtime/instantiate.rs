@@ -7,7 +7,7 @@ use crate::{
         FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
         ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
         ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
-        TypeSection, PAGE_SIZE_MAX,
+        TypeSection,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
@@ -351,13 +351,19 @@ pub async fn instantiate(
         });
         let inst_addr = gc.object_ref_for_instance(inst_id);
 
+        let memory_ceiling = store.runtime_config().memory.max_memory_pages;
         for mem in mems.iter().skip(memories.len()) {
             let limits = mem.limits;
-            memories.push(if mem.shared {
-                gc.new_shared_memory(limits.min, limits.max.unwrap_or(PAGE_SIZE_MAX as u32))
+            let effective_max = limits.max.unwrap_or(memory_ceiling).min(memory_ceiling);
+            let memory = if mem.shared {
+                gc.new_shared_memory(limits.min, effective_max)
             } else {
-                gc.new_memory(limits.min, limits.max.unwrap_or(PAGE_SIZE_MAX as u32))
-            });
+                gc.new_memory(limits.min, effective_max)
+            };
+            memories.push(vm_try!(match memory {
+                Ok(memory) => VMResult::Success(memory),
+                Err(_) => VMResult::MemoryAllocationFailed,
+            }));
         }
 
         for (idx, d) in (0..).zip(data.0) {
@@ -1411,19 +1417,89 @@ fn dump_materialized_function_if_requested(funcidx: u32, instrs: &[Instr], op_le
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IoReadBinaryReader, WasmParser};
+    use crate::{
+        common::{memory::fail_next_memory_mapping, memory::TestMemoryMappingFailure, PAGE_SIZE},
+        IoReadBinaryReader, WasmParser,
+    };
 
-    async fn instantiate_wat_for_test(wat_src: &str) -> (Store, InstanceHandle) {
+    fn parse_wat_for_test(wat_src: &str) -> Module {
         let bytes = wat::parse_str(wat_src).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
         let mut parser = WasmParser::new(&mut reader);
-        let module = parser.parse_module().expect("module must parse");
+        parser.parse_module().expect("module must parse")
+    }
+
+    async fn instantiate_wat_for_test(wat_src: &str) -> (Store, InstanceHandle) {
+        let module = parse_wat_for_test(wat_src);
         let store = Store::new();
         let registry = Registry::new();
         let VMResult::Success(instance) = instantiate(module, &store, &registry).await else {
             panic!("module must instantiate");
         };
         (store, instance)
+    }
+
+    #[tokio::test]
+    async fn instantiate_maps_mmap_and_initial_mprotect_failures_to_memory_allocation_failed() {
+        for failure in [
+            TestMemoryMappingFailure::Mmap,
+            TestMemoryMappingFailure::Mprotect,
+        ] {
+            let module = parse_wat_for_test("(module (memory 1))");
+            let store = Store::new();
+            let registry = Registry::new();
+            let _failure = fail_next_memory_mapping(failure);
+
+            assert!(matches!(
+                instantiate(module, &store, &registry).await,
+                VMResult::MemoryAllocationFailed
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_memory_ceiling_clamps_reservation_and_grow() {
+        let mut runtime_config = crate::RuntimeConfig::default();
+        runtime_config.memory.max_memory_pages = 2;
+        let store = Store::new_with_runtime_config(runtime_config);
+        let registry = Registry::new();
+        let module = parse_wat_for_test("(module (memory 1))");
+        let instance = match instantiate(module, &store, &registry).await {
+            VMResult::Success(instance) => instance,
+            other => panic!("module must instantiate: {other:?}"),
+        };
+
+        let mut gc = store.lock_gc();
+        let object_ref = instance
+            .object_ref_for_store(&store)
+            .expect("instance must belong to store");
+        let memory_ref = gc.get_instance(object_ref).mems[0];
+        let memory = gc.get_memory(memory_ref);
+        assert_eq!(memory.reserved_bytes(), 2 * PAGE_SIZE);
+        assert_eq!(memory.committed_bytes(), PAGE_SIZE);
+        assert_eq!(memory.grow(1).unwrap(), 1);
+        assert_eq!(memory.grow(1).unwrap(), -1);
+        assert_eq!(memory.page_size(), 2);
+        assert_eq!(memory.committed_bytes(), 2 * PAGE_SIZE);
+    }
+
+    #[tokio::test]
+    async fn unbounded_memory_instantiation_commits_only_its_minimum() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let module = parse_wat_for_test("(module (memory 1))");
+        let instance = match instantiate(module, &store, &registry).await {
+            VMResult::Success(instance) => instance,
+            other => panic!("module must instantiate: {other:?}"),
+        };
+
+        let mut gc = store.lock_gc();
+        let object_ref = instance
+            .object_ref_for_store(&store)
+            .expect("instance must belong to store");
+        let memory_ref = gc.get_instance(object_ref).mems[0];
+        let memory = gc.get_memory(memory_ref);
+        assert_eq!(memory.committed_bytes(), PAGE_SIZE);
     }
 
     #[test]

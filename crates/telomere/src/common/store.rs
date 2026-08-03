@@ -1,10 +1,10 @@
 #![allow(dead_code, private_interfaces)]
 
 use super::{
-    memory::{AtomicRmwOp, LocalMemoryObject, SharedMemoryObject},
+    memory::{AtomicRmwOp, LocalMemoryObject, MemoryInitError, SharedMemoryObject},
     object_ref::ObjectRef,
     AsyncHostFunction, CallFrameCache, Data, Elem, ExportSection, FuncType, GlobalType,
-    HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
+    HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult, PAGE_SIZE_MAX,
 };
 #[cfg(feature = "jit")]
 use crate::runtime::jit::{CompiledFunction, StoreJitCache};
@@ -262,9 +262,30 @@ impl Default for JitConfig {
     }
 }
 
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryConfig {
+    /// Hard ceiling on pages reserved per linear memory.
+    pub max_memory_pages: u32,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            max_memory_pages: if cfg!(target_pointer_width = "64") {
+                PAGE_SIZE_MAX as u32
+            } else {
+                4096
+            },
+        }
+    }
+}
+
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RuntimeConfig {
     pub jit: JitConfig,
+    pub memory: MemoryConfig,
 }
 
 #[repr(C, align(4))]
@@ -854,12 +875,13 @@ impl StoreInner {
         MemoryHandle::Local(id)
     }
 
-    pub(crate) fn new_memory(&mut self, page_count: u32, max_page_size: u32) -> ObjectRef {
-        let handle = self.alloc_local_memory(
-            LocalMemoryObject::new(page_count, max_page_size)
-                .expect("validated local memory bounds must satisfy page_count <= max_page_size"),
-        );
-        self.object_ref_for_memory_handle(handle)
+    pub(crate) fn new_memory(
+        &mut self,
+        page_count: u32,
+        max_page_size: u32,
+    ) -> Result<ObjectRef, MemoryInitError> {
+        let handle = self.alloc_local_memory(LocalMemoryObject::new(page_count, max_page_size)?);
+        Ok(self.object_ref_for_memory_handle(handle))
     }
 
     pub(crate) fn alloc_shared_memory(&mut self, memory: Arc<SharedMemoryObject>) -> MemoryHandle {
@@ -868,12 +890,13 @@ impl StoreInner {
         MemoryHandle::Shared(id)
     }
 
-    pub(crate) fn new_shared_memory(&mut self, page_count: u32, max_page_size: u32) -> ObjectRef {
-        let handle = self.alloc_shared_memory(
-            SharedMemoryObject::new(page_count, max_page_size)
-                .expect("validated shared memory bounds must satisfy page_count <= max_page_size"),
-        );
-        self.object_ref_for_memory_handle(handle)
+    pub(crate) fn new_shared_memory(
+        &mut self,
+        page_count: u32,
+        max_page_size: u32,
+    ) -> Result<ObjectRef, MemoryInitError> {
+        let handle = self.alloc_shared_memory(SharedMemoryObject::new(page_count, max_page_size)?);
+        Ok(self.object_ref_for_memory_handle(handle))
     }
 
     pub(crate) fn memory_page_size(&self, handle: MemoryHandle) -> u32 {
@@ -2024,10 +2047,13 @@ impl StoreState {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalMemoryObject, MemoryHandle, SharedMemoryId, SharedMemoryObject, Stack, Store,
-        StoreInner, StoreState, VMResult,
+        LocalMemoryObject, MemoryConfig, MemoryHandle, SharedMemoryId, SharedMemoryObject, Stack,
+        Store, StoreInner, StoreState, VMResult,
     };
-    use crate::common::PAGE_SIZE;
+    use crate::common::{
+        memory::{fail_next_memory_mapping, TestMemoryMappingFailure},
+        MemoryInitError, MemoryMappingOperation, PAGE_SIZE,
+    };
 
     fn local_id(handle: MemoryHandle) -> super::LocalMemoryId {
         match handle {
@@ -2049,6 +2075,32 @@ mod tests {
         let state = StoreState::from_static(&DATA);
         let value = unsafe { state.get::<[i32; 3]>() }.unwrap();
         assert_eq!(value, &DATA);
+    }
+
+    #[test]
+    fn memory_config_default_uses_the_supported_pointer_width_ceiling() {
+        let expected = if cfg!(target_pointer_width = "64") {
+            65_536
+        } else {
+            4_096
+        };
+        assert_eq!(MemoryConfig::default().max_memory_pages, expected);
+    }
+
+    #[test]
+    fn store_memory_creation_returns_initial_mprotect_failure() {
+        let mut store = StoreInner::new();
+        let _failure = fail_next_memory_mapping(TestMemoryMappingFailure::Mprotect);
+
+        let error = store.new_memory(1, 1).unwrap_err();
+        assert!(matches!(
+            error,
+            MemoryInitError::MappingFailed {
+                operation: MemoryMappingOperation::Mprotect,
+                bytes,
+                errno: Some(_),
+            } if bytes == PAGE_SIZE
+        ));
     }
 
     #[test]
