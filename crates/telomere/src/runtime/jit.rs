@@ -63,6 +63,7 @@ pub(crate) unsafe fn enter_current_frame(ctx: &mut ExecuteContext<'_>) -> VMResu
         VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
         VMResult::TableUninitialized => return VMResult::TableUninitialized,
         VMResult::Unlinkable => return VMResult::Unlinkable,
+        VMResult::MemoryAllocationFailed => return VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => return VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
     };
@@ -100,6 +101,7 @@ pub(crate) unsafe fn enter_current_frame_from_lazy_call(
         VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
         VMResult::TableUninitialized => return VMResult::TableUninitialized,
         VMResult::Unlinkable => return VMResult::Unlinkable,
+        VMResult::MemoryAllocationFailed => return VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => return VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
     };

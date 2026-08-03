@@ -31,12 +31,12 @@ fn parse_module(wat: &str) -> telomere::Module {
 fn runtime_config_defaults_to_jit_off() {
     assert!(!Store::new().runtime_config().jit.enabled);
 
-    let store = Store::new_with_runtime_config(RuntimeConfig {
-        jit: JitConfig {
-            enabled: true,
-            ..JitConfig::default()
-        },
-    });
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig {
+        enabled: true,
+        ..JitConfig::default()
+    };
+    let store = Store::new_with_runtime_config(runtime_config);
     assert!(store.runtime_config().jit.enabled);
     assert_eq!(
         store.runtime_config().jit.code_cache_max_bytes,
@@ -73,12 +73,12 @@ fn jit_supported_matches_target_matrix() {
     )
 ))]
 fn jit_store() -> Store {
-    Store::new_with_runtime_config(RuntimeConfig {
-        jit: JitConfig {
-            enabled: true,
-            ..JitConfig::default()
-        },
-    })
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig {
+        enabled: true,
+        ..JitConfig::default()
+    };
+    Store::new_with_runtime_config(runtime_config)
 }
 
 #[cfg(all(
@@ -242,6 +242,7 @@ impl<T> VmResultMap<T> for VMResult<T> {
             VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
             VMResult::TableUninitialized => VMResult::TableUninitialized,
             VMResult::Unlinkable => VMResult::Unlinkable,
+            VMResult::MemoryAllocationFailed => VMResult::MemoryAllocationFailed,
             VMResult::InvalidOperand => VMResult::InvalidOperand,
             VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
             VMResult::Unimplemented => VMResult::Unimplemented,
@@ -2408,12 +2409,12 @@ async fn jit_falls_back_when_function_exceeds_code_cache_limit() {
             i32.const 1))
         "#,
     );
-    let store = Store::new_with_runtime_config(RuntimeConfig {
-        jit: JitConfig {
-            enabled: true,
-            code_cache_max_bytes: 1,
-        },
-    });
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig {
+        enabled: true,
+        code_cache_max_bytes: 1,
+    };
+    let store = Store::new_with_runtime_config(runtime_config);
     let registry = Registry::new();
     let instance = match telomere::instantiate(module, &store, &registry).await {
         VMResult::Success(instance) => instance,

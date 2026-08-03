@@ -22,6 +22,7 @@ pub mod runtime;
 pub use binary::IoReadBinaryReader;
 pub use common::Instance;
 pub use common::JitConfig;
+pub use common::MemoryConfig;
 pub use common::Module;
 pub use common::Registry;
 pub use common::ResultValue;

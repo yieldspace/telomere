@@ -246,6 +246,37 @@ The repository already has a separate, previously recorded execution-speed
 comparison in [../core/coremark-benchmark.md](../core/coremark-benchmark.md).
 That note was measured on a different date and is not re-measured here.
 
+## Static linear-memory ceiling
+
+Linear memories now reserve address space lazily: the configured maximum is
+reserved, while only the module minimum is committed initially. Embedders can
+set a per-memory ceiling before creating the store:
+
+```rust
+let mut runtime_config = telomere::RuntimeConfig::default();
+runtime_config.memory.max_memory_pages = 256;
+let store = telomere::Store::new_with_runtime_config(runtime_config);
+```
+
+The effective maximum is the lower of a module's declared maximum and this
+ceiling; an unbounded memory uses the ceiling. `RuntimeConfig` and
+`MemoryConfig` are intentionally `#[non_exhaustive]`, so this is a one-time
+source break for direct struct literals: start from `Default` and mutate the
+fields instead. Issue #126 may add further runtime-limit configuration without
+requiring another literal migration.
+
+The configured default is 65,536 pages (a 4 GiB reservation ceiling) on
+64-bit targets and 4,096 pages (a 256 MiB reservation ceiling) on 32-bit
+targets. These are configuration values, not measured RSS or committed-memory
+results.
+
+This makes a controlled static-ceiling measurement possible: fix the target,
+module, and `max_memory_pages`, then measure process RSS and, on Linux, inspect
+`Committed_AS` before and after instantiation. No RSS, `Committed_AS`, or
+`memory.grow` latency values for this behavior have been measured in this
+document. The inaccessible `PROT_NONE` tail is only a fail-fast guard if an
+existing explicit bounds check regresses; it is not a host-containment boundary.
+
 ## Not yet measured
 
 The following are open and should not be inferred from the numbers above:

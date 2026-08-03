@@ -10,6 +10,7 @@ pub enum VMResult<V> {
     CallIndirectInvalidType,
     TableUninitialized,
     Unlinkable,
+    MemoryAllocationFailed,
     InvalidOperand,
     Unimplemented,
 }
@@ -26,6 +27,7 @@ macro_rules! vm_try {
             VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
             VMResult::TableUninitialized => return VMResult::TableUninitialized,
             VMResult::Unlinkable => return VMResult::Unlinkable,
+            VMResult::MemoryAllocationFailed => return VMResult::MemoryAllocationFailed,
             VMResult::InvalidOperand => return VMResult::InvalidOperand,
             VMResult::Unimplemented => return VMResult::Unimplemented,
         }
@@ -64,6 +66,9 @@ impl<V> VMResult<V> {
             }
             VMResult::Unlinkable => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: Unlinkable")
+            }
+            VMResult::MemoryAllocationFailed => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: MemoryAllocationFailed")
             }
             VMResult::InvalidOperand => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: InvalidOperand")

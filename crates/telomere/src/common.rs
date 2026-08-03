@@ -10,7 +10,8 @@ use smallvec::SmallVec;
 pub use vm_result::VMResult;
 pub(crate) mod memory;
 pub use memory::{
-    AtomicRmwOp, LocalMemoryObject, MemArg, Memory, MemoryInitError, SharedMemoryObject,
+    AtomicRmwOp, LocalMemoryObject, MemArg, Memory, MemoryInitError, MemoryMappingOperation,
+    SharedMemoryObject,
 };
 #[cfg(feature = "threads")]
 pub use memory::{AtomicWaitResult, SharedWaitRegistration};
@@ -24,7 +25,9 @@ mod object_ref;
 pub(crate) mod store;
 pub use object_ref::ObjectRef;
 pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
-pub use store::{InstanceHandle, JitConfig, MemoryHandle, RuntimeConfig, Store, StoreState};
+pub use store::{
+    InstanceHandle, JitConfig, MemoryConfig, MemoryHandle, RuntimeConfig, Store, StoreState,
+};
 use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};
 
 use crate::runtime::scheduler::EffectSupplier;

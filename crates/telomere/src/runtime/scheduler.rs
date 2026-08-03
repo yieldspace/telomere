@@ -22,6 +22,7 @@ fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
         VMResult::TableUninitialized => VMResult::TableUninitialized,
         VMResult::Unlinkable => VMResult::Unlinkable,
+        VMResult::MemoryAllocationFailed => VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::Unimplemented => VMResult::Unimplemented,
     }

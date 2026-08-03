@@ -145,12 +145,12 @@ async fn run_exported_core_function(
         );
     }
     let store = if jit {
-        telomere::Store::new_with_runtime_config(RuntimeConfig {
-            jit: JitConfig {
-                enabled: true,
-                code_cache_max_bytes: jit_code_cache_mib.saturating_mul(1024 * 1024),
-            },
-        })
+        let mut runtime_config = RuntimeConfig::default();
+        runtime_config.jit = JitConfig {
+            enabled: true,
+            code_cache_max_bytes: jit_code_cache_mib.saturating_mul(1024 * 1024),
+        };
+        telomere::Store::new_with_runtime_config(runtime_config)
     } else {
         telomere::Store::new()
     };
@@ -202,6 +202,9 @@ fn vm_result_to_anyhow<T>(
             Err(anyhow::anyhow!("{context}: table uninitialized"))
         }
         telomere::VMResult::Unlinkable => Err(anyhow::anyhow!("{context}: unlinkable")),
+        telomere::VMResult::MemoryAllocationFailed => {
+            Err(anyhow::anyhow!("{context}: memory allocation failed"))
+        }
         telomere::VMResult::InvalidOperand => Err(anyhow::anyhow!("{context}: invalid operand")),
         telomere::VMResult::UnalignedAtomic => Err(anyhow::anyhow!("{context}: unaligned atomic")),
         telomere::VMResult::Unimplemented => Err(anyhow::anyhow!("{context}: unimplemented")),

@@ -191,3 +191,26 @@ jobs:
 
       - name: Check packaging metadata
         run: python3 tools/check-packaging.py
+
+  memory-32bit-check:
+    name: 32-bit memory reservation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: i686-unknown-linux-gnu
+
+      - name: Install 32-bit linker support
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+
+      - name: Run checked reservation arithmetic tests
+        run: cargo test -p telomere --lib --target i686-unknown-linux-gnu reservation_bytes_are_checked_on_every_target
