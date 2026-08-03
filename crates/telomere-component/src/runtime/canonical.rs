@@ -64,17 +64,29 @@ pub(super) fn lower_component_args(
         let realloc = options.realloc.as_ref().ok_or_else(|| {
             ComponentError::Runtime("canonical option `realloc` is required".to_owned())
         })?;
-        let offsets = function_param_offsets(func_type, program)?;
-        let total_size = function_param_size(func_type, program)?;
-        let ptr = if total_size == 0 {
+        let layout = value_area_layout(&func_type.params, program)?;
+        let ptr = if layout.size == 0 {
             0
         } else {
-            call_realloc(realloc, store, 0, 0, 4, total_size as i32)? as u32
+            let ptr = call_realloc(
+                realloc,
+                store,
+                0,
+                0,
+                layout.align as i32,
+                layout.size as i32,
+            )? as u32;
+            validate_realloc_pointer_alignment(
+                ptr,
+                layout.align,
+                "indirect canonical parameter area",
+            )?;
+            ptr
         };
         for ((value, ty), offset) in args
             .iter()
             .zip(func_type.params.iter())
-            .zip(offsets.iter().copied())
+            .zip(layout.offsets.iter().copied())
         {
             write_value_to_memory(value, ty, options, program, store, ptr + offset)?;
         }
@@ -111,11 +123,11 @@ pub(super) fn lift_component_args(
                 ))
             }
         };
-        let offsets = function_param_offsets(func_type, program)?;
+        let layout = value_area_layout(&func_type.params, program)?;
         return func_type
             .params
             .iter()
-            .zip(offsets.iter().copied())
+            .zip(layout.offsets.iter().copied())
             .map(|(ty, offset)| {
                 read_value_from_memory(ty, options, program, store, &memory, ptr + offset)
             })
@@ -398,31 +410,100 @@ fn lower_string(
     let encoding = options
         .string_encoding
         .unwrap_or(CanonicalStringEncoding::Utf8);
-    let align = if matches!(
-        encoding,
-        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16
-    ) {
-        2
-    } else {
-        1
-    };
-    let utf16;
-    let bytes = match encoding {
-        CanonicalStringEncoding::Utf8 => string.as_bytes(),
-        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => {
-            utf16 = encode_string_utf16(string);
-            &utf16
+    match encoding {
+        CanonicalStringEncoding::Utf8 => {
+            let bytes = string.as_bytes();
+            let ptr = call_realloc(realloc, store, 0, 0, 1, bytes.len() as i32)? as u32;
+            validate_realloc_pointer_alignment(ptr, 1, "UTF-8 string")?;
+            write_memory(store, &memory, ptr, bytes)?;
+            Ok(vec![
+                WasmValue::I32(ptr as i32),
+                WasmValue::I32(bytes.len() as i32),
+            ])
         }
-    };
-    let ptr = call_realloc(realloc, store, 0, 0, align, bytes.len() as i32)? as u32;
-    write_memory(store, &memory, ptr, bytes)?;
-    let len = match encoding {
-        CanonicalStringEncoding::Utf8 => bytes.len() as u32,
-        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => {
-            (bytes.len() / 2) as u32
+        CanonicalStringEncoding::Utf16 => {
+            let bytes = encode_string_utf16(string);
+            let ptr = call_realloc(realloc, store, 0, 0, 2, bytes.len() as i32)? as u32;
+            validate_realloc_pointer_alignment(ptr, 2, "UTF-16 string")?;
+            write_memory(store, &memory, ptr, &bytes)?;
+            Ok(vec![
+                WasmValue::I32(ptr as i32),
+                WasmValue::I32((bytes.len() / 2) as i32),
+            ])
         }
-    };
-    Ok(vec![WasmValue::I32(ptr as i32), WasmValue::I32(len as i32)])
+        CanonicalStringEncoding::CompactUtf16 => {
+            lower_compact_utf16_string(string, &memory, realloc, store)
+        }
+    }
+}
+
+const COMPACT_UTF16_TAG: u32 = 0x8000_0000;
+
+// Canonical ABI `store_string_to_latin1_or_utf16`:
+// https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
+fn lower_compact_utf16_string(
+    string: &str,
+    memory: &CoreExportRef,
+    realloc: &RuntimeCoreFunc,
+    store: &Store,
+) -> Result<Vec<WasmValue>, ComponentError> {
+    let src_code_units = string.len();
+    let mut ptr = call_realloc(realloc, store, 0, 0, 2, src_code_units as i32)? as u32;
+    validate_realloc_pointer_alignment(ptr, 2, "latin1+utf16 string")?;
+
+    let mut dst_len = 0usize;
+    for character in string.chars() {
+        if (character as u32) >= 0x100 {
+            let worst_case_len = 2 * src_code_units;
+            ptr = call_realloc(
+                realloc,
+                store,
+                ptr as i32,
+                src_code_units as i32,
+                2,
+                worst_case_len as i32,
+            )? as u32;
+            validate_realloc_pointer_alignment(ptr, 2, "latin1+utf16 string")?;
+
+            let encoded = encode_string_utf16(string);
+            write_memory(store, memory, ptr, &encoded)?;
+            if worst_case_len > encoded.len() {
+                ptr = call_realloc(
+                    realloc,
+                    store,
+                    ptr as i32,
+                    worst_case_len as i32,
+                    2,
+                    encoded.len() as i32,
+                )? as u32;
+                validate_realloc_pointer_alignment(ptr, 2, "latin1+utf16 string")?;
+            }
+            let tagged_len = ((encoded.len() / 2) as u32) | COMPACT_UTF16_TAG;
+            return Ok(vec![
+                WasmValue::I32(ptr as i32),
+                WasmValue::I32(tagged_len as i32),
+            ]);
+        }
+
+        write_memory(store, memory, ptr + dst_len as u32, &[character as u8])?;
+        dst_len += 1;
+    }
+
+    if dst_len < src_code_units {
+        ptr = call_realloc(
+            realloc,
+            store,
+            ptr as i32,
+            src_code_units as i32,
+            2,
+            dst_len as i32,
+        )? as u32;
+        validate_realloc_pointer_alignment(ptr, 2, "latin1+utf16 string")?;
+    }
+    Ok(vec![
+        WasmValue::I32(ptr as i32),
+        WasmValue::I32(dst_len as i32),
+    ])
 }
 
 fn encode_string_utf16(value: &str) -> Vec<u8> {
@@ -434,6 +515,12 @@ fn encode_string_utf16(value: &str) -> Vec<u8> {
 
 #[derive(Clone, Copy)]
 struct MemoryAbiInfo {
+    size: u32,
+    align: u32,
+}
+
+struct ValueAreaLayout {
+    offsets: Vec<u32>,
     size: u32,
     align: u32,
 }
@@ -509,7 +596,7 @@ fn memory_abi_for_valtype(
 fn value_area_layout(
     values: &[ValType],
     program: &ComponentProgram,
-) -> Result<(Vec<u32>, u32), ComponentError> {
+) -> Result<ValueAreaLayout, ComponentError> {
     let mut offsets = Vec::with_capacity(values.len());
     let mut cursor = 0u32;
     let mut max_align = 1u32;
@@ -520,7 +607,11 @@ fn value_area_layout(
         offsets.push(cursor);
         cursor = cursor.saturating_add(abi.size);
     }
-    Ok((offsets, align_to(cursor, max_align)))
+    Ok(ValueAreaLayout {
+        offsets,
+        size: align_to(cursor, max_align),
+        align: max_align,
+    })
 }
 
 fn element_stride(elem: &ValType, program: &ComponentProgram) -> Result<u32, ComponentError> {
@@ -536,20 +627,6 @@ fn function_params_flat_len(
         .params
         .iter()
         .try_fold(0usize, |len, ty| Ok(len + value_flat_len(ty, program)?))
-}
-
-fn function_param_offsets(
-    func_type: &FuncType,
-    program: &ComponentProgram,
-) -> Result<Vec<u32>, ComponentError> {
-    Ok(value_area_layout(&func_type.params, program)?.0)
-}
-
-fn function_param_size(
-    func_type: &FuncType,
-    program: &ComponentProgram,
-) -> Result<u32, ComponentError> {
-    Ok(value_area_layout(&func_type.params, program)?.1)
 }
 
 fn flat_types_for_valtype(
@@ -1644,12 +1721,16 @@ fn lower_list_value(
     let realloc = options.realloc.as_ref().ok_or_else(|| {
         ComponentError::Runtime("canonical option `realloc` is required".to_owned())
     })?;
-    let stride = element_stride(elem, program)?;
+    let elem_abi = memory_abi_for_valtype(elem, program)?;
+    let elem_align = elem_abi.align.max(1);
+    let stride = align_to(elem_abi.size, elem_align);
     let total_len = stride.saturating_mul(values.len() as u32);
     let ptr = if total_len == 0 {
         0
     } else {
-        call_realloc(realloc, store, 0, 0, 4, total_len as i32)? as u32
+        let ptr = call_realloc(realloc, store, 0, 0, elem_align as i32, total_len as i32)? as u32;
+        validate_realloc_pointer_alignment(ptr, elem_align, "canonical list")?;
+        ptr
     };
     for (index, value) in values.iter().enumerate() {
         write_value_to_memory(
@@ -1820,29 +1901,39 @@ fn read_string_from_memory(
     encoding: Option<CanonicalStringEncoding>,
 ) -> Result<String, ComponentError> {
     let encoding = encoding.unwrap_or(CanonicalStringEncoding::Utf8);
-    let bytes = read_memory(
-        store,
-        memory,
-        ptr,
-        match encoding {
-            CanonicalStringEncoding::Utf8 => len as usize,
-            CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => {
-                len as usize * 2
-            }
-        },
-    )?;
     match encoding {
         CanonicalStringEncoding::Utf8 => {
+            let bytes = read_memory(store, memory, ptr, len as usize)?;
             String::from_utf8(bytes).map_err(|error| ComponentError::Trap(error.to_string()))
         }
-        CanonicalStringEncoding::Utf16 | CanonicalStringEncoding::CompactUtf16 => {
-            let mut units = Vec::with_capacity(bytes.len() / 2);
-            for chunk in bytes.chunks_exact(2) {
-                units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        CanonicalStringEncoding::Utf16 => {
+            let bytes = read_memory(store, memory, ptr, len as usize * 2)?;
+            decode_utf16_le(bytes)
+        }
+        CanonicalStringEncoding::CompactUtf16 => {
+            if ptr % 2 != 0 {
+                return Err(ComponentError::Trap(format!(
+                    "latin1+utf16 string pointer {ptr} is not aligned to 2 bytes"
+                )));
             }
-            String::from_utf16(&units).map_err(|error| ComponentError::Trap(error.to_string()))
+            if len & COMPACT_UTF16_TAG != 0 {
+                let utf16_len = len ^ COMPACT_UTF16_TAG;
+                let bytes = read_memory(store, memory, ptr, utf16_len as usize * 2)?;
+                decode_utf16_le(bytes)
+            } else {
+                let bytes = read_memory(store, memory, ptr, len as usize)?;
+                Ok(bytes.into_iter().map(|byte| byte as char).collect())
+            }
         }
     }
+}
+
+fn decode_utf16_le(bytes: Vec<u8>) -> Result<String, ComponentError> {
+    let mut units = Vec::with_capacity(bytes.len() / 2);
+    for chunk in bytes.chunks_exact(2) {
+        units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+    }
+    String::from_utf16(&units).map_err(|error| ComponentError::Trap(error.to_string()))
 }
 
 fn read_memory(
@@ -1951,6 +2042,19 @@ fn call_realloc(
             "realloc returned an unexpected result".to_owned(),
         )),
     }
+}
+
+fn validate_realloc_pointer_alignment(
+    ptr: u32,
+    align: u32,
+    allocation: &str,
+) -> Result<(), ComponentError> {
+    if ptr % align != 0 {
+        return Err(ComponentError::Trap(format!(
+            "canonical realloc returned pointer {ptr:#x} for {allocation}, which is not aligned to {align} bytes"
+        )));
+    }
+    Ok(())
 }
 
 pub(super) fn program_func_type(
