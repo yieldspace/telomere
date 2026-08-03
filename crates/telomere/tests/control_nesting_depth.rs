@@ -3,6 +3,8 @@
 use telomere::{IoReadBinaryReader, WasmParser, WasmParserError, MAX_CONTROL_NESTING_DEPTH};
 
 const RELEASE_STACK_BUDGET_BYTES: usize = 512 * 1024;
+const NESTED_BLOCKS_513: &[u8] =
+    include_bytes!("../../../fuzz/regressions/parse_core_module/nested-blocks-513.bin");
 
 fn encode_u32_leb128(mut value: u32, bytes: &mut Vec<u8>) {
     loop {
@@ -73,6 +75,21 @@ fn parser_rejects_control_nesting_above_the_limit() {
     let module = nested_block_module(MAX_CONTROL_NESTING_DEPTH + 1);
     let err = match parse_module(&module) {
         Ok(_) => panic!("513 nested blocks must be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        WasmParserError::NestingTooDeep {
+            limit: MAX_CONTROL_NESTING_DEPTH
+        }
+    ));
+}
+
+#[test]
+fn parser_rejects_the_committed_513_block_regression() {
+    let err = match parse_module(NESTED_BLOCKS_513) {
+        Ok(_) => panic!("the committed 513-block regression must be rejected"),
         Err(err) => err,
     };
 

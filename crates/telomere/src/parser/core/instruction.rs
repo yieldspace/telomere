@@ -164,6 +164,17 @@ fn default_memory_is_shared(mems: &[MemType]) -> bool {
     mems.first().map(|mem| mem.shared).unwrap_or(false)
 }
 
+#[inline]
+fn next_control_nesting_depth(depth: u32) -> Result<u32> {
+    let next_depth = depth.saturating_add(1);
+    if next_depth > crate::MAX_CONTROL_NESTING_DEPTH {
+        return Err(WasmParserError::NestingTooDeep {
+            limit: crate::MAX_CONTROL_NESTING_DEPTH,
+        });
+    }
+    Ok(next_depth)
+}
+
 fn infer_generic_stack_shape(
     stack_before: &crate::parser::core::type_checker::StackSnapshot,
     stack_after: &crate::parser::core::type_checker::StackSnapshot,
@@ -558,6 +569,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x01 => (1, false),
             0x02 => {
+                let next_depth = next_control_nesting_depth(depth)?;
                 *record_meta = false;
                 let (len, blocktype) = self.parse_block_type()?;
                 trace!("parse_op_block: {blocktype:?}");
@@ -582,7 +594,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     else_addr,
-                    depth + 1,
+                    next_depth,
                 )?;
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
@@ -640,6 +652,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1 + len + len2, false)
             }
             0x03 => {
+                let next_depth = next_control_nesting_depth(depth)?;
                 *record_meta = false;
                 let (len, blocktype) = self.parse_block_type()?;
                 trace!("parse_op_loop: {blocktype:?}");
@@ -690,7 +703,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     else_addr,
-                    depth + 1,
+                    next_depth,
                 )?;
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
@@ -745,6 +758,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1 + len + len2, false)
             }
             0x04 => {
+                let next_depth = next_control_nesting_depth(depth)?;
                 *record_meta = false;
                 trace!("parse_op_if");
                 let (len, blocktype) = self.parse_block_type()?;
@@ -791,7 +805,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     &mut else_addr,
-                    depth + 1,
+                    next_depth,
                 )?;
                 if !is_unreachable_if_block {
                     instrs[index].operand = Operand {
