@@ -127,6 +127,14 @@ const INDEXED_MEMORY_COPY_WAT: &str = r#"
         (memory.copy $dst $src (i32.const 0) (i32.const 0) (i32.const 8192))))
 "#;
 
+#[cfg(feature = "threads")]
+const SHARED_NOTIFY_WAT: &str = r#"
+    (module
+      (memory 1 1 shared)
+      (func (export "notify") (param i32) (result i32)
+        (memory.atomic.notify (i32.const 0) (local.get 0))))
+"#;
+
 struct PauseState {
     entered: mpsc::SyncSender<()>,
     resume: Mutex<mpsc::Receiver<()>>,
@@ -508,6 +516,28 @@ async fn native_bulk_admission_charge_is_not_refunded_by_a_trap_or_limit_rejecti
     );
     assert_eq!(limit_meter.fuel_remaining(), Some(0));
     assert_eq!(limit_meter.fuel_consumed(), 9);
+}
+
+#[cfg(feature = "threads")]
+#[tokio::test]
+async fn shared_atomic_notify_postcharges_wakes_not_the_requested_count() {
+    let store = metered_store(Some(1));
+    let meter = store.metering().expect("metering must be enabled");
+    let registry = Registry::new();
+    let instance = instantiate_wat(SHARED_NOTIFY_WAT, &store, &registry).await;
+
+    assert_counter_result(
+        run_module_function(
+            &instance,
+            &store,
+            "notify",
+            &ResultValue::new(vec![WasmValue::I32(-1)]),
+        )
+        .await,
+        0,
+    );
+    assert_eq!(meter.fuel_remaining(), Some(0));
+    assert_eq!(meter.fuel_consumed(), 1);
 }
 
 #[tokio::test]

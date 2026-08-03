@@ -276,13 +276,13 @@ const LOOP_ALLOWANCES: &[LoopAllowance] = &[
         source: "src/common/memory.rs",
         function: "notify_waiters",
         identifier: "while:remaining != 0",
-        reason: "the guest count is bounded by u32 and the wait queue is finite; acquiring the metering ledger while its wait-queue lock is held would violate the leaf-lock ordering.",
+        reason: "the queue length is bounded by the number of guest threads concurrently blocked in atomic.wait, which is controlled by host thread creation rather than guest data; metered callers charge completed wakes after the wait-queue lock is released.",
     },
     LoopAllowance {
         source: "src/common/memory.rs",
         function: "notify_waiters",
         identifier: "for:wake",
-        reason: "the u32 guest count and finite queue bound wake after its lock is released; retain and iterator internals are native iteration outside this AST gate.",
+        reason: "the wake set is bounded by the host-controlled number of concurrently waiting guest threads and is charged after the wait-queue lock is released.",
     },
 ];
 

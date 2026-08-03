@@ -106,6 +106,16 @@ checkpoint, the worst-case cancellation response is one checkpoint plus at
 most one maximum native bulk operation. This is a bounded-work contract, not a
 fixed wall-clock promise.
 
+Shared-memory `memory.atomic.notify` is different from guest-sized native bulk
+work. Its queue length is bounded by the number of guest threads concurrently
+blocked in `atomic.wait`, and only the embedder can create those threads. The
+guest-supplied `count` therefore does not control the queue-scan bound; in
+particular, the conventional `u32::MAX` "wake all" request is not charged as
+billions of operations. After releasing the wait-queue lock, a metered
+interpreter charges `1 + woken` checkpoints for the work that completed. If
+that postcharge exhausts fuel or observes cancellation, the waiters have
+already been notified and the operation is not rolled back.
+
 An indexed `memory.copy` uses that native admission path only when its source
 and destination resolve to the same underlying linear memory. A cross-memory
 copy is intentionally different: it validates both complete ranges before
@@ -215,10 +225,15 @@ match result {
 Every metered checkpoint performs a Relaxed load of the cancellation flag. A
 request is therefore observed by the next checkpoint, at most one checkpoint
 after it races a just-completed load. A native bulk operation that has already
-passed its admission checkpoint runs to completion first, which gives the
-documented bound of one checkpoint plus at most one maximum native bulk
-operation. Cross-memory copy and `table.init` retain their smaller chunk or
-element checkpoints and can expose partial writes as described above.
+passed its admission checkpoint runs to completion first. Shared-memory
+`atomic.notify` likewise finishes scanning and waking its current wait queue
+before its postcharge observes cancellation. The worst-case response is one
+checkpoint plus one of: a maximum native bulk operation, or one
+`atomic.notify` over the current wait queue. The latter queue is bounded by the
+number of guest threads concurrently blocked in `atomic.wait`, which is set by
+host thread creation and cannot grow from guest data alone. Cross-memory copy
+and `table.init` retain their smaller chunk or element checkpoints and can
+expose partial writes as described above.
 
 Cancellation still cannot interrupt a host function that is blocked in I/O, a
 lock, or another host call; that host call must have its own timeout or

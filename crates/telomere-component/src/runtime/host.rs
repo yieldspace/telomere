@@ -545,10 +545,10 @@ pub(super) fn vm_result_to_component_error(
             ComponentError::Runtime(format!("{context} failed: unimplemented"))
         }
         CoreVMResult::FuelExhausted => {
-            ComponentError::Trap(format!("{context} interrupted: FuelExhausted"))
+            ComponentError::Trap(format!("{context} interrupted: fuel exhausted"))
         }
         CoreVMResult::Cancelled => {
-            ComponentError::Trap(format!("{context} interrupted: Cancelled"))
+            ComponentError::Trap(format!("{context} interrupted: cancelled"))
         }
     }
 }
