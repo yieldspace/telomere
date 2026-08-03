@@ -310,18 +310,16 @@ fn emit_corpus_case(output_dir: &Path, hash: &str, bytes: &[u8]) -> bool {
     }
 }
 
-/// The stack a replayed parse is given.
-///
-/// The parser recurses on nested structured instructions with no depth limit,
-/// so how deep an input it survives is a function of the available stack rather
-/// than of anything the parser checks. A spec-suite module with roughly two
-/// hundred nested blocks already exhausts a default test thread's stack in an
-/// unoptimized build, which would abort this whole test process.
-///
-/// This is a harness accommodation, not a fix: it keeps corpus replay usable
-/// while the missing depth limit is resolved separately. See the bring-up
-/// findings in the pull request that introduced this file. Remove it once the
-/// parser bounds its own recursion.
+// In optimized builds, the input-driven structured-control recursion is bounded
+// by `MAX_CONTROL_NESTING_DEPTH`, so replay uses the documented 512 KiB budget
+// instead of hiding a regression behind a much larger thread stack.
+#[cfg(not(debug_assertions))]
+const REPLAY_STACK_BYTES: usize = 512 * 1024;
+
+// Keep the debug replay stack large. #154 remains open: an unoptimized
+// `parse_inst` frame is about 130 KiB (roughly 190 times its release size), so
+// the release-only stack contract cannot make debug corpus replay safe.
+#[cfg(debug_assertions)]
 const REPLAY_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 fn replay_core_case(bytes: &[u8]) {

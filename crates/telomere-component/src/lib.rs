@@ -49,6 +49,11 @@ pub mod validate;
 #[warn(missing_docs)]
 mod value;
 
+/// Shared maximum nesting depth of 100 for component sections and component/instance type declarations.
+///
+/// Inputs that exceed this limit return [`ComponentError::NestingTooDeep`].
+pub const MAX_COMPONENT_NESTING_DEPTH: u32 = 100;
+
 use std::future::Future;
 use std::pin::Pin;
 

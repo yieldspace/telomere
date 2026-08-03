@@ -24,14 +24,23 @@ pub fn parse_component(
     tracing::trace!("parse_component_root");
     let mut ctx = ParseContext::new(reader, state, validator);
     ctx.validator.push_scope();
-    _parse_component(&mut ctx)?;
+    _parse_component(&mut ctx, 0)?;
     let component_ty = ctx.validator.make_component();
     ctx.validator.validate_component_surface(&component_ty)?;
     ctx.validator.pop_scope();
     Ok(())
 }
 
-fn _parse_component(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(), ComponentParseError> {
+fn _parse_component(
+    ctx: &mut ParseContext<impl BinaryReader>,
+    depth: u32,
+) -> Result<(), ComponentParseError> {
+    if depth > crate::MAX_COMPONENT_NESTING_DEPTH {
+        return Err(ComponentParseError::NestingTooDeep {
+            limit: crate::MAX_COMPONENT_NESTING_DEPTH,
+        });
+    }
+
     tracing::trace!("_parse_component");
     parse_magic(ctx.reader)?;
     parse_version(ctx.reader)?;
@@ -43,7 +52,7 @@ fn _parse_component(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(), Com
             ComponentSection::Custom => parse_custom_section(ctx.reader, section_size as usize)?,
             ComponentSection::Type => {
                 for _ in parse_vec_range(ctx)? {
-                    let ty = parse_type(ctx)?;
+                    let ty = parse_type(ctx, depth)?;
                     let id = ctx.validator.new_type(ty);
                     ctx.validator.validate_effective_type_size(id)?;
                     ctx.validator.scope_mut().type_indexes.add(id);
@@ -84,7 +93,7 @@ fn _parse_component(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(), Com
                 {
                     let mut sized_reader = ctx.reader.take(section_size as usize);
                     let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    _parse_component(&mut ctx)?;
+                    _parse_component(&mut ctx, depth + 1)?;
                 }
                 let component_ty = ctx.validator.make_component();
                 let component = ctx.state.scope().make_component();

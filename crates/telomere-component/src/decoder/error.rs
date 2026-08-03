@@ -96,6 +96,8 @@ pub enum ComponentParseError {
     InvalidSortType(SortType, SortType),
     #[error("the sort scope is invalid")]
     InvalidScope,
+    #[error("nesting depth exceeds the limit of {limit}")]
+    NestingTooDeep { limit: u32 },
 }
 
 impl ComponentParseError {

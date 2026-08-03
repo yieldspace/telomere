@@ -314,11 +314,18 @@ fn emit_corpus_case(output_dir: &Path, hash: &str, bytes: &[u8]) -> bool {
     }
 }
 
-/// The stack a replayed decode is given; see the note on the core parser's
-/// equivalent in `crates/telomere/tests/fuzz_corpus_replay.rs`. The component
-/// decoder recurses on nested types and nested components with no depth limit
-/// either, so it is given the same accommodation rather than being left to
-/// abort the test process.
+// In optimized builds, this is the known-corpus harness budget for the bounded,
+// input-driven component decoder. It is not a stack guarantee for all of
+// `ComponentEngine::compile`: its unbounded type-graph walks are outside this
+// recursion-limit change.
+#[cfg(not(debug_assertions))]
+const REPLAY_STACK_BYTES: usize = 512 * 1024;
+
+// Keep the debug replay stack large. A component can enter the core parser, and
+// #154 remains open because an unoptimized `parse_inst` frame is about 130 KiB
+// (roughly 190 times its release size); the release-only contract cannot make
+// debug corpus replay safe.
+#[cfg(debug_assertions)]
 const REPLAY_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 fn replay_component_case(bytes: &[u8]) {

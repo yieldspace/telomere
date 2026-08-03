@@ -540,6 +540,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
+        depth: u32,
     ) -> Result<(usize, bool)> {
         let v = self.reader.read_exact_one()?;
 
@@ -581,6 +582,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     else_addr,
+                    depth + 1,
                 )?;
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
@@ -688,6 +690,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     else_addr,
+                    depth + 1,
                 )?;
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
@@ -788,6 +791,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     &mut else_addr,
+                    depth + 1,
                 )?;
                 if !is_unreachable_if_block {
                     instrs[index].operand = Operand {
@@ -4336,7 +4340,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
+        depth: u32,
     ) -> Result<usize> {
+        if depth > crate::MAX_CONTROL_NESTING_DEPTH {
+            return Err(WasmParserError::NestingTooDeep {
+                limit: crate::MAX_CONTROL_NESTING_DEPTH,
+            });
+        }
+
         let mut read_bytes = 0;
         loop {
             let start = instrs.len();
@@ -4350,6 +4361,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 checker,
                 jump_resolver,
                 else_addr,
+                depth,
             )?;
             trace!("{checker:?}");
             read_bytes += len;

@@ -7,7 +7,14 @@ use crate::support::binary::BinaryReader;
 
 pub fn parse_component_type(
     ctx: &mut ParseContext<impl BinaryReader>,
+    depth: u32,
 ) -> ParseResult<ComponentType> {
+    if depth > crate::MAX_COMPONENT_NESTING_DEPTH {
+        return Err(ComponentParseError::NestingTooDeep {
+            limit: crate::MAX_COMPONENT_NESTING_DEPTH,
+        });
+    }
+
     ctx.validator.push_type_scope();
 
     for _ in parse_vec_range(ctx)? {
@@ -69,7 +76,7 @@ pub fn parse_component_type(
                 }
             }
             x => {
-                _parse_instance_decl(ctx, Some(x))?;
+                _parse_instance_decl(ctx, Some(x), depth)?;
             }
         };
     }

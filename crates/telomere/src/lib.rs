@@ -89,6 +89,11 @@ pub mod parser;
 #[allow(missing_docs)]
 pub mod runtime;
 
+/// Maximum nesting depth for `block`, `loop`, and `if` instructions accepted by [`WasmParser`].
+///
+/// Inputs that exceed this limit return [`WasmParserError::NestingTooDeep`].
+pub const MAX_CONTROL_NESTING_DEPTH: u32 = 512;
+
 /// Reads core WebAssembly bytes from any value that implements [`std::io::Read`].
 pub use binary::IoReadBinaryReader;
 /// Parsed runtime instance data; embedders normally retain an [`InstanceHandle`](common::InstanceHandle) instead.
