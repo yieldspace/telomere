@@ -27,6 +27,7 @@ wat = "1.243.0"
 anyhow = { version = "1.0.98", features = ["backtrace"] }
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+sha2 = "0.10.9"
 
 [[bench]]
 name = "telomere_component_bench"
@@ -36,6 +37,7 @@ harness = false
 default = ["simd", "threads"]
 simd = ["telomere/simd"]
 threads = ["telomere/threads"]
+fuzzing = []
 component-gated-feature-value-imports-exports = []
 component-gated-feature-nested-namespaces-and-packages = []
 component-gated-feature-async = []

@@ -32,6 +32,12 @@ pub use func::{ComponentParams, ComponentReturn};
 pub use instance::{ComponentExports, ComponentInstance};
 pub use linker::{ComponentLinker, ComponentLinkerInstance};
 pub use program::{ComponentOp, ComponentProgram, ComponentTypeInfo};
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub use runtime::{
+    fuzz_canonical_lift_args, FuzzCanonicalLiftInput, FuzzStringEncoding,
+    MAX_FUZZ_MEMORY_IMAGE_BYTES,
+};
 pub use support::Store;
 pub use value::ComponentValue;
 

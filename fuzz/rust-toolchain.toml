@@ -1,0 +1,5 @@
+[toolchain]
+# Keep the sanitizer-capable fuzz toolchain reproducible and independent of
+# the stable toolchain pinned by the root workspace.
+channel = "nightly-2026-07-31"
+profile = "minimal"
