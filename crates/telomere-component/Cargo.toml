@@ -25,6 +25,7 @@ wat = "1.243.0"
 anyhow = { version = "1.0.98", features = ["backtrace"] }
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 tokio.workspace = true
+sha2 = "0.10.9"
 
 [[bench]]
 name = "telomere_component_bench"
@@ -32,6 +33,7 @@ harness = false
 
 [features]
 default = []
+fuzzing = []
 component-gated-feature-value-imports-exports = []
 component-gated-feature-nested-namespaces-and-packages = []
 component-gated-feature-async = []

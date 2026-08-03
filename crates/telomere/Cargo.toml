@@ -31,6 +31,7 @@ syn = { version = "2.0.100", features = ["full"] }
 tokio.workspace = true
 wast = { version = "243.0.0", features = ["component-model"] }
 wat = "1.243.0"
+sha2 = "0.10.9"
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 [[bench]]
 name = "telomere_bench"

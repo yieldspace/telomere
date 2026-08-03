@@ -19,3 +19,10 @@ target/
 *.wat
 !crates/telomere-component/tests/component_model_upstream/precompiled/**/*.wat
 !examples/*.wat
+!fuzz/fixtures/canon_abi.wat
+
+# cargo-fuzz generated state. Checked-in seeds and regressions live under
+# `fuzz/`, but the mutable corpus and crash artifacts do not.
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/

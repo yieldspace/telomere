@@ -1,0 +1,46 @@
+[package]
+name = "telomere-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Keep fuzzing dependencies and their lockfile independent from the main
+# workspace. `cargo fuzz` must always be invoked from this directory.
+[workspace]
+members = ["."]
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+telomere = { path = "../crates/telomere" }
+telomere-component = { path = "../crates/telomere-component", features = ["fuzzing"] }
+
+[profile.dev]
+overflow-checks = true
+
+[profile.release]
+overflow-checks = true
+
+[[bin]]
+name = "parse_core_module"
+path = "fuzz_targets/parse_core_module.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_component"
+path = "fuzz_targets/decode_component.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canon_lift_args"
+path = "fuzz_targets/canon_lift_args.rs"
+test = false
+doc = false
+bench = false
