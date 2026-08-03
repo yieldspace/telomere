@@ -7,8 +7,12 @@ was written down.
 | File | Entry point | Source |
 | --- | --- | --- |
 | `add.wasm` | core Wasm export call | Compiled from Rust; no source kept in-tree. |
+| `component-add.wasm` | WASI-free Component Model export call | `component-add.wat` |
 | `wasi-preview1-hello.wasm` | WASI preview1 command module | `wasi-preview1-hello.wat` |
 | `wasi-component-args.wasm` | WASI 0.2 component command | `wasi-component-args.wat` |
+
+For standalone embedding samples that deliberately exclude the CLI dependency
+topology, see [`minimal-embedder/`](minimal-embedder/README.md).
 
 ## Running
 
@@ -92,6 +96,8 @@ The WASI fixtures are committed as WebAssembly text and are rebuilt with
 
 ```shell
 cargo install wasm-tools
+wasm-tools parse examples/component-add.wat -o examples/component-add.wasm
+wasm-tools validate --features all examples/component-add.wasm
 wasm-tools parse examples/wasi-preview1-hello.wat -o examples/wasi-preview1-hello.wasm
 wasm-tools parse examples/wasi-component-args.wat -o examples/wasi-component-args.wasm
 wasm-tools validate --features all examples/wasi-component-args.wasm

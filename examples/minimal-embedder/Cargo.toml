@@ -1,0 +1,45 @@
+[package]
+name = "telomere-minimal-embedder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+default = []
+simd = [
+    "telomere/simd",
+    "telomere-component?/simd",
+    "telomere-component-wasi?/simd",
+]
+threads = [
+    "telomere/threads",
+    "telomere-component?/threads",
+    "telomere-component-wasi?/threads",
+]
+jit = ["telomere/jit"]
+component = ["dep:telomere-component"]
+wasi = ["component", "dep:telomere-component-wasi"]
+
+[dependencies]
+telomere = { path = "../../crates/telomere", default-features = false }
+telomere-component = { path = "../../crates/telomere-component", default-features = false, optional = true }
+telomere-component-wasi = { path = "../../crates/telomere-component-wasi", default-features = false, optional = true }
+
+[[bin]]
+name = "embed-baseline"
+path = "src/bin/baseline.rs"
+
+[[bin]]
+name = "embed-core"
+path = "src/bin/core.rs"
+
+[[bin]]
+name = "embed-component"
+path = "src/bin/component.rs"
+required-features = ["component"]
+
+[[bin]]
+name = "embed-wasi"
+path = "src/bin/wasi.rs"
+required-features = ["wasi"]
