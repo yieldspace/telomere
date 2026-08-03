@@ -16,8 +16,17 @@ use common::{
     run_wast_with_spec_divergences, SpecDivergence,
 };
 
-// `names.wast` intentionally exercises confusing Unicode identifiers; common's WAST lexer
-// permits them so the upstream fixture remains covered.
+/// These entries record a spec-version divergence, not parser defects.
+///
+/// In Wasm 2.0, the `memory.size` and `memory.grow` immediates use a reserved byte that must
+/// be the literal `0x00`. Multi-memory in Wasm 3.0 instead encodes `memidx:u32` as LEB128, for
+/// which up to five bytes of padding are valid. Telomere implements multi-memory through
+/// `parse_memory_index_immediate` and `select_memory_op` in `instruction.rs:232`.
+///
+/// The upstream `proposals/wasm-3.0/binary.wast` and
+/// `proposals/multi-memory/binary.wast` remove these ten cases, reducing `assert_malformed`
+/// from 116 to 106. Therefore this table documents a spec-version divergence rather than a
+/// parser defect.
 const BINARY_SPEC_DIVERGENCES: &[SpecDivergence] = &[
     SpecDivergence {
         module_sha256: "909d4aa41a4f6623de2050a202fc9f9051ab2fe9befad35e4fc51590e179de33",
