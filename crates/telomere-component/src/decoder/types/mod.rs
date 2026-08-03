@@ -78,7 +78,7 @@ fn is_type_opcode(opcode: i32) -> bool {
     opcode <= -1
 }
 
-pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type> {
+pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>, depth: u32) -> ParseResult<Type> {
     trace!("parse type");
     let (_, opcode) = parse_i32(ctx.reader)?;
 
@@ -266,8 +266,8 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
                 result: rs,
             })
         }
-        COMPONENT_TYPE => Type::Component(parse_component_type(ctx)?),
-        INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?),
+        COMPONENT_TYPE => Type::Component(parse_component_type(ctx, depth + 1)?),
+        INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx, depth + 1)?),
         RESOURCE_TYPE => {
             if !ctx.validator.in_concrete_scope() {
                 return Err(ComponentParseError::TypeMismatch(

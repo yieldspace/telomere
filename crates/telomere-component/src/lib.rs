@@ -49,6 +49,17 @@ pub mod validate;
 #[warn(missing_docs)]
 mod value;
 
+/// Shared maximum nesting depth of 100 for component sections and component/instance type declarations.
+///
+/// This limit is part of the optimized-build input-decoder stack-budget policy. The root decode
+/// starts at `depth = 0`, and the decoder rejects `depth > limit`, so 100 nested constructs are
+/// accepted and 101 are rejected with [`ComponentError::NestingTooDeep`].
+///
+/// See the [parser limits guide](https://github.com/yieldspace/telomere/blob/main/docs/core/parser-limits.md)
+/// for the policy scope and measurement boundary; it does not claim a stack bound for all of
+/// [`ComponentEngine::compile`].
+pub const MAX_COMPONENT_NESTING_DEPTH: u32 = 100;
+
 use std::future::Future;
 use std::pin::Pin;
 

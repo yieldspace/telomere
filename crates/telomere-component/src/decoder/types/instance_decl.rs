@@ -4,13 +4,17 @@ use crate::decoder::types::{parse_export_decl, parse_type};
 use crate::decoder::{ComponentParseError, ParseContext, ParseResult};
 use crate::support::binary::BinaryReader;
 
-pub fn parse_instance_decl(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
-    _parse_instance_decl(ctx, None)
+pub fn parse_instance_decl(
+    ctx: &mut ParseContext<impl BinaryReader>,
+    depth: u32,
+) -> ParseResult<()> {
+    _parse_instance_decl(ctx, None, depth)
 }
 
 pub fn _parse_instance_decl(
     ctx: &mut ParseContext<impl BinaryReader>,
     byte: Option<u8>,
+    depth: u32,
 ) -> ParseResult<()> {
     tracing::trace!("_parse_instance_decl");
     let b = match byte {
@@ -23,7 +27,7 @@ pub fn _parse_instance_decl(
             ctx.validator.scope_mut().core_types.add(ty);
         }
         0x01 => {
-            let t = parse_type(ctx)?;
+            let t = parse_type(ctx, depth)?;
             let id = ctx.validator.new_type(t);
             ctx.validator.scope_mut().type_indexes.add(id);
         }

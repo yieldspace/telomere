@@ -96,6 +96,15 @@ pub enum ComponentParseError {
     InvalidSortType(SortType, SortType),
     #[error("the sort scope is invalid")]
     InvalidScope,
+    /// Component sections or component/instance type declarations exceeded their shared nesting limit.
+    ///
+    /// When surfaced by [`crate::ComponentEngine::compile`], this becomes
+    /// [`crate::ComponentError::NestingTooDeep`].
+    #[error("nesting depth exceeds the limit of {limit}")]
+    NestingTooDeep {
+        /// The shared maximum nesting depth accepted by the component decoder.
+        limit: u32,
+    },
 }
 
 impl ComponentParseError {

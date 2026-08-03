@@ -89,6 +89,16 @@ pub mod parser;
 #[allow(missing_docs)]
 pub mod runtime;
 
+/// Maximum nesting depth for `block`, `loop`, and `if` instructions accepted by [`WasmParser`].
+///
+/// This limit implements the optimized-build 512 KiB input-parser stack-budget policy. The root
+/// is at `depth = 0`, and parsing rejects `depth > limit`, so 512 nested constructs are accepted
+/// and 513 are rejected with [`WasmParserError::NestingTooDeep`].
+///
+/// See the [parser limits guide](https://github.com/yieldspace/telomere/blob/main/docs/core/parser-limits.md)
+/// for the policy scope and measurement boundary.
+pub const MAX_CONTROL_NESTING_DEPTH: u32 = 512;
+
 /// Reads core WebAssembly bytes from any value that implements [`std::io::Read`].
 pub use binary::IoReadBinaryReader;
 /// Parsed runtime instance data; embedders normally retain an [`InstanceHandle`](common::InstanceHandle) instead.

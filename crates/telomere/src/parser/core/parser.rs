@@ -779,6 +779,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             &mut checker,
             &mut jump_resolver,
             &mut else_addr,
+            0,
         )?;
         trace!("function return");
 

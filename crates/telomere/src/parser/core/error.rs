@@ -188,6 +188,12 @@ pub enum WasmParserError {
     /// A function declares more locals than the parser can represent.
     #[error("too many locals")]
     TooManyLocals,
+    /// Nested structured control exceeds the parser's explicit depth limit.
+    #[error("nesting depth exceeds the limit of {limit}")]
+    NestingTooDeep {
+        /// The fixed maximum nesting depth accepted by the parser.
+        limit: u32,
+    },
     /// The function and code sections declare different function counts.
     #[error("function and code section have inconsistent lengths")]
     FunctionAndCodeSectionLengthMismatch,
