@@ -121,6 +121,8 @@ pub fn parse_memtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, MemType)
         ));
     }
     if flag & 0x04 != 0 {
+        // Report a recognized memory64 bit before validating shared-memory limits.
+        // This intentionally makes 0x06 a stable Memory64 diagnostic.
         return Err(WasmParserError::unsupported_feature(
             crate::parser::core::ProposalFeature::Memory64,
             [flag, 0, 0, 0],

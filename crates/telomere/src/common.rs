@@ -303,19 +303,22 @@ pub struct DataSection(pub Vec<Data>);
 pub struct Module {
     /// Function signatures from the type section.
     pub fts: TypeSection,
-    /// Type index for every defined function.
+    /// Complete core function index space: imported function type indices first, then defined functions.
     pub functions: Vec<TypeIdx>,
     /// Imported tables, memories, globals, and functions.
     pub imports: ImportSection,
-    /// Defined linear-memory types.
+    /// Complete core memory index space: imported memory types first, then defined memories.
     pub mems: Vec<MemType>,
-    /// Defined global types.
+    /// Complete core global index space: imported global types first, then defined globals.
     pub globals: Vec<GlobalType>,
-    /// Constant expressions used to initialize globals.
+    /// Initializers for defined globals only, aligned with `globals[imported_global_len..]`.
+    ///
+    /// `imported_global_len` is the number of global imports in [`Self::imports`], so
+    /// `global_init[i]` initializes `globals[imported_global_len + i]`.
     pub global_init: Vec<ConstExpr>,
     /// Export declarations indexed by name.
     pub exs: ExportSection,
-    /// Defined table types.
+    /// Complete core table index space: imported table types first, then defined tables.
     pub tables: Vec<TableType>,
     /// Element segments for table initialization.
     pub elems: ElementSection,

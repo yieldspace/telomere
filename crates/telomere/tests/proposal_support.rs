@@ -225,6 +225,13 @@ fn memory_proposal_flags_are_named_without_reclassifying_table64() {
         &module_with_section(5, &[0x01, 0x04, 0x01]),
         ProposalFeature::Memory64,
     );
+    assert!(matches!(
+        parse_error(&module_with_section(5, &[0x01, 0x06, 0x01])),
+        WasmParserError::UnsupportedFeature {
+            feature: ProposalFeature::Memory64,
+            opcode: [0x06, 0x00, 0x00, 0x00],
+        }
+    ));
     assert_feature(
         &module_with_section(5, &[0x01, 0x08, 0x01, 0x10]),
         ProposalFeature::CustomPageSizes,

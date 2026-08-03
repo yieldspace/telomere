@@ -23,11 +23,13 @@ pub struct ComponentTypeInfo {
     pub fixed_length: Option<u32>,
 }
 
-/// A high-level operation recorded while compiling a component.
+/// Placeholder entries produced for root exports while compiling a component.
 ///
-/// These operations expose the decoded component structure for tooling. Normal
-/// embedders should compile and instantiate through ComponentEngine instead of
-/// interpreting this list directly.
+/// This is not a complete decoded operation stream. The engine currently emits
+/// `CanonLift { func_idx: 0 }` once per function export, where `0` is a
+/// placeholder rather than a local function index, and an [`Self::Export`] for
+/// each non-function export. It does not currently construct [`Self::Instantiate`],
+/// [`Self::Alias`], or [`Self::CanonLower`] entries.
 #[derive(Clone, Debug)]
 pub enum ComponentOp {
     /// Instantiates the component at the given local component index.
@@ -77,7 +79,7 @@ pub struct ComponentProgram {
     pub exports: Vec<String>,
     /// Root exports that are callable functions.
     pub callable_exports: Vec<String>,
-    /// High-level operations collected from root exports.
+    /// An incomplete placeholder summary of root exports; see [`ComponentOp`].
     pub ops: Vec<ComponentOp>,
     /// The original Component Model binary bytes.
     pub bytes: Vec<u8>,
