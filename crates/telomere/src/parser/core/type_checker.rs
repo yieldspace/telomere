@@ -139,11 +139,13 @@ impl TypeChecker {
     pub fn block_base_stack_size(&self) -> Result<u32> {
         let mut size = 0;
         for ty in &self.types[..self.block_base()?] {
-            if let MaybeUnreachable::Normal(v) = ty {
-                size += v.stack_size().u32()
-            } else {
-                unreachable!()
-            }
+            // Entries below the current block base are expected to be concrete.
+            // The expectation is not something the input has to honour, so a
+            // module that breaks it is rejected rather than asserted against.
+            let MaybeUnreachable::Normal(v) = ty else {
+                return Err(WasmParserError::InvalidStackValTypeAny);
+            };
+            size += v.stack_size().u32();
         }
         Ok(size)
     }

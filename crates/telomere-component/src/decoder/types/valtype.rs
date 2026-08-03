@@ -9,8 +9,16 @@ use num_traits::FromPrimitive;
 
 pub fn parse_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<ValType> {
     let (_, value) = parse_i32(ctx.reader)?;
-    if is_type_opcode(value) {
-        Ok(ValType::Primitive(PrimValType::from_i32(value).unwrap()))
+    // Drive the branch off the conversion itself. `is_type_opcode` accepts every
+    // negative opcode, but only some of them name a primitive, so testing the
+    // guard first and unwrapping the conversion aborts on an input that uses any
+    // other negative value here.
+    if let Some(prim) = PrimValType::from_i32(value) {
+        Ok(ValType::Primitive(prim))
+    } else if is_type_opcode(value) {
+        Err(ComponentParseError::InvalidType(format!(
+            "{value} is not a primitive value type opcode"
+        )))
     } else {
         let tid = ctx
             .validator
