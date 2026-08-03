@@ -141,9 +141,9 @@ milliseconds from the JSON samples.
 | Measurement environment | Value |
 | --- | --- |
 | macOS date and host | 2026-08-03; macOS 26.5.2 arm64; Apple M2 Pro; 32 GiB |
-| macOS toolchain and source | Rust 1.96; measurement commit `81497fe` for both CLI and embedders |
+| macOS toolchain and source | Rust 1.96; measurement source head `b0012a6dc87ce9323e076f74a5e687bb1c3d3d58` for both CLI and embedders |
 | macOS caveat | Physical laptop; foreground/system load was uncontrolled. RSS and time are measured observations, not a controlled-machine benchmark. |
-| Linux source | GitHub Actions run `30821594881` at measurement head `27a760d` |
+| Linux source | GitHub Actions run `30823517715` at measurement source head `b0012a6dc87ce9323e076f74a5e687bb1c3d3d58` |
 | Linux host | Ubuntu 24.04; Linux 6.17.0-1020-azure x86_64; glibc 2.39 |
 | Linux caveat | Exact file/text bytes are from this recorded build. The shared runner's absolute RSS and time values are indicative; same-run comparisons are more useful than cross-host absolute values. |
 
@@ -153,12 +153,12 @@ part of the #139 data set.
 
 | JSON source artifact | SHA-256 |
 | --- | --- |
-| `/private/tmp/telomere-139-embedder-release-final.json` | `39720f372720eefe64525b40194077e85c7458a7a1545d6414b60a826f8df1fb` |
-| `/private/tmp/telomere-139-embedder-release-size-final.json` | `2b8bf183e08fa25dc6a72af4e364866b0d565a5e80f45f2a8b8b6c6f77047d96` |
-| `/private/tmp/telomere-139-cli-artifact-final.json` | `83746c81184e3cfcaf0597c4d9a5da9fae5173b7377edf2067ac1540a144f905` |
-| `/private/tmp/telomere-139-cli-cold-start.json` | `29085d4eb5ab9964972fc3c58de541e7b7625ef3f3d2ca73ec2fccc96711f012` |
-| `/private/tmp/telomere-139-linux-27a760d/footprint-release.json` | `89760e6fe643af991de1eb7f8fa0746636cb3153f17451dc7d5aba3a977b0c40` |
-| `/private/tmp/telomere-139-linux-27a760d/footprint-release-size.json` | `0c5378f320edf093b2b1d366716716849e6df868f48494b7110c33c3a1dfc931` |
+| `/private/tmp/telomere-139-macos-b0012a6-release.json` | `5f09f4caf67737df7b6bbc5c7646abcbf423987c54a4a881d20beab78fbafe38` |
+| `/private/tmp/telomere-139-macos-b0012a6-release-size.json` | `2ee83bd9d94a5b86b3ce1472691f0ea418cefe901448b575a0e90e7c51411386` |
+| `/private/tmp/telomere-139-macos-b0012a6-cli-artifact.json` | `652dfe41d66fed7d3a76c3b06c8302cd0c8659eaf3522c9b3dc5132fd486a0ff` |
+| `/private/tmp/telomere-139-macos-b0012a6-cli-cold-start.json` | `28c3020d579848118c79e589bc6d0883825f9c95dbe08c3275efd52935fbd4a8` |
+| `/private/tmp/telomere-139-linux-b0012a6/footprint-release.json` | `6f78d9c350458e5f4d0f7b719cbf91da5eb678265cb7a2b4aaacbbb9afa29f67` |
+| `/private/tmp/telomere-139-linux-b0012a6/footprint-release-size.json` | `985f1374e39685c4db8f3d934cdff7a7330761412c58bf9e5eaf5476ed7f1109` |
 
 The commands used for the #139 measurements, from the repository root, are:
 
@@ -169,11 +169,14 @@ python3 tools/measure-embedder-footprint.py --profile release
 python3 tools/measure-embedder-footprint.py --profile release-size
 ~~~
 
-The CLI artifact record additionally used `/usr/bin/size -m` before and after
-`/usr/bin/strip` on a copied `target/release/telomere-cli`. On Linux the
-embedder harness selected `/usr/bin/size -A` and `/usr/bin/strip --strip-all`
-for the release-copy inspection. The JSON records the exact per-artifact
-commands, selected section, and expected output.
+The macOS CLI artifact measurement copied `target/release/telomere-cli` to
+`/private/tmp/telomere-139-cli-b0012a6/telomere-cli`, retaining the
+`telomere-cli` basename, then used `/usr/bin/size -m` before and after
+`/usr/bin/strip`. An earlier long-name copy was 24 B larger after Apple
+`strip`; this is an observed artifact-size difference, and no cause is
+assigned. On Linux the embedder harness selected `/usr/bin/size -A` and
+`/usr/bin/strip --strip-all` for the release-copy inspection. The JSON records
+the exact per-artifact commands, selected section, and expected output.
 
 ### macOS arm64 — Apple M2 Pro
 
@@ -181,25 +184,25 @@ commands, selected section, and expected output.
 
 | Configuration | Raw file (B) | Stripped file (B) | `__TEXT,__text` (B) | Peak RSS median of 5 (B) | Cold median of 30 (ms) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `baseline` | 428064 | 339808 | 221144 | 1556480 | 2.800 |
-| `core` | 1681104 | 1338152 | 974664 | 2179072 | 3.054 |
-| `component` | 2648368 | 2160592 | 1639664 | 2883584 | 2.926 |
-| `wasi` | 3012800 | 2463832 | 1867048 | 3899392 | 3.794 |
-| `core-nosimd` | 1435568 | 1142072 | 828212 | 2179072 | 2.955 |
-| `core-jit` | 2181728 | 1756728 | 1323760 | 2392064 | 3.222 |
-| `wasi-threads` | 3210720 | 2627848 | 1991160 | 3899392 | 3.530 |
+| `baseline` | 428064 | 339808 | 221144 | 1556480 | 2.767 |
+| `core` | 1681104 | 1338152 | 974664 | 2179072 | 2.966 |
+| `component` | 2648368 | 2160592 | 1639664 | 2867200 | 2.944 |
+| `wasi` | 3012800 | 2463832 | 1867048 | 3899392 | 3.595 |
+| `core-nosimd` | 1435568 | 1142072 | 828212 | 2195456 | 3.015 |
+| `core-jit` | 2181728 | 1756728 | 1323760 | 2392064 | 3.331 |
+| `wasi-threads` | 3210720 | 2627848 | 1991160 | 3915776 | 3.631 |
 
 #### `release-size` (already stripped by profile)
 
 | Configuration | File (B) | `__TEXT,__text` (B) | Peak RSS median of 5 (B) | Cold median of 30 (ms) |
 | --- | ---: | ---: | ---: | ---: |
-| `baseline` | 286160 | 195284 | 1507328 | 2.842 |
-| `core` | 737184 | 577224 | 2031616 | 2.835 |
-| `component` | 1054176 | 859308 | 2375680 | 2.889 |
-| `wasi` | 1154832 | 941672 | 3080192 | 3.486 |
-| `core-nosimd` | 687120 | 535156 | 1966080 | 2.911 |
-| `core-jit` | 937040 | 762236 | 2129920 | 2.965 |
-| `wasi-threads` | 1188368 | 984276 | 3063808 | 3.473 |
+| `baseline` | 286160 | 195284 | 1507328 | 2.878 |
+| `core` | 737184 | 577224 | 2031616 | 3.071 |
+| `component` | 1054176 | 859308 | 2326528 | 2.988 |
+| `wasi` | 1154832 | 941672 | 3063808 | 3.482 |
+| `core-nosimd` | 687120 | 535156 | 1966080 | 3.055 |
+| `core-jit` | 937040 | 762236 | 2129920 | 3.052 |
+| `wasi-threads` | 1188368 | 984276 | 3063808 | 3.538 |
 
 The following are comparative text-section deltas, not a link-map attribution
 of individual symbols or a proof of why a layer has that size.
@@ -220,25 +223,25 @@ of individual symbols or a proof of why a layer has that size.
 
 | Configuration | Raw file (B) | Stripped file (B) | `.text` (B) | Peak RSS median of 5 (B) | Cold median of 30 (ms) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `baseline` | 439432 | 345672 | 261695 | 2056192 | 0.772 |
-| `core` | 1801600 | 1428896 | 1087495 | 2965504 | 0.905 |
-| `component` | 2921536 | 2388728 | 1905607 | 3825664 | 0.978 |
-| `wasi` | 3335160 | 2727216 | 2162023 | 4739072 | 1.682 |
-| `core-nosimd` | 1559664 | 1240040 | 948727 | 2895872 | 0.917 |
-| `core-jit` | 2342640 | 1876408 | 1439991 | 3162112 | 0.956 |
-| `wasi-threads` | 3533240 | 2889168 | 2284231 | 4866048 | 1.700 |
+| `baseline` | 439432 | 345672 | 261695 | 2093056 | 0.753 |
+| `core` | 1801600 | 1428896 | 1087495 | 2883584 | 0.907 |
+| `component` | 2921536 | 2388728 | 1905607 | 3817472 | 0.962 |
+| `wasi` | 3335160 | 2727216 | 2162023 | 4734976 | 1.670 |
+| `core-nosimd` | 1559664 | 1240040 | 948727 | 2891776 | 0.909 |
+| `core-jit` | 2342640 | 1876408 | 1439991 | 3293184 | 0.943 |
+| `wasi-threads` | 3533240 | 2889168 | 2284231 | 4866048 | 1.666 |
 
 #### `release-size` (already stripped by profile)
 
 | Configuration | File (B) | `.text` (B) | Peak RSS median of 5 (B) | Cold median of 30 (ms) |
 | --- | ---: | ---: | ---: | ---: |
-| `baseline` | 296384 | 228114 | 1925120 | 0.752 |
-| `core` | 1043952 | 732743 | 2678784 | 0.917 |
-| `component` | 1553584 | 1139911 | 3117056 | 0.976 |
-| `wasi` | 1743744 | 1267639 | 3862528 | 1.775 |
-| `core-nosimd` | 937112 | 659719 | 2568192 | 0.928 |
-| `core-jit` | 1369376 | 958119 | 2822144 | 0.961 |
-| `wasi-threads` | 1850016 | 1340151 | 3956736 | 1.785 |
+| `baseline` | 296384 | 228114 | 1859584 | 0.750 |
+| `core` | 1043952 | 732743 | 2658304 | 0.911 |
+| `component` | 1553584 | 1139911 | 3125248 | 0.959 |
+| `wasi` | 1743744 | 1267639 | 3883008 | 1.763 |
+| `core-nosimd` | 937112 | 659719 | 2539520 | 0.916 |
+| `core-jit` | 1369376 | 958119 | 2854912 | 0.956 |
+| `wasi-threads` | 1850016 | 1340151 | 3899392 | 1.740 |
 
 | `release-size` comparison | Text delta (B) | Reading |
 | --- | ---: | --- |
@@ -296,31 +299,33 @@ input-reachable panics safe. The latter remain tracked by
 
 ## CLI host comparison (separate from layer deltas)
 
-On the same macOS machine, at measurement commit `81497fe`, and with the same
-`release` profile, the stripped `embed-wasi` is 2463832 B and the stripped
-`telomere-cli` is 3400792 B. The CLI shell difference is 936960 B; the CLI
+On the same macOS machine, at common measurement source head
+`b0012a6dc87ce9323e076f74a5e687bb1c3d3d58`, and with the same `release`
+profile, the stripped `embed-wasi` is 2463832 B and the stripped
+`telomere-cli` is 3400768 B. The CLI shell difference is 936936 B; the CLI
 artifact is 1.38× the embedder artifact in this like-for-like profile
 comparison.
 
 A different comparison describes the effect of the shipped-style profile, not
-CLI overhead: the same 3400792 B release-stripped CLI divided by the
+CLI overhead: the same 3400768 B release-stripped CLI divided by the
 1154832 B `release-size` `wasi` artifact is 2.94×. That ratio includes the
 profile change and must not be read as a CLI-overhead number.
 
 ## Whole-process cold-start boundary
 
 No cold-start improvement is claimed. On the macOS `release-size` run, the
-recorded `baseline` median is 2.841875 ms and `wasi` is 3.4862495 ms. The
+recorded `baseline` median is 2.877729 ms and `wasi` is 3.4815205 ms. The
 shared baseline is most of the absolute value, so the measurement is dominated
 by whole-process work (including process creation); the incremental gap is
-0.6443745 ms. Repeated laptop medians move by roughly ±0.4 ms, so macOS
+0.6037915 ms. Repeated laptop medians move by roughly ±0.4 ms, so macOS
 configuration differences are not distinguishable at this resolution; this is
 not an instantiate-only timing.
 
-On the measurement-head `27a760d` Linux `release-size` shared-runner data, `core` is
-0.916672 ms and `wasi` is 1.774528 ms: the Component Model + WASI 0.2
+On the common measurement-source head `b0012a6dc87ce9323e076f74a5e687bb1c3d3d58`
+Linux `release-size` shared-runner data, `baseline` is 0.7502845 ms, `core` is
+0.9105735 ms, and `wasi` is 1.7632145 ms: the Component Model + WASI 0.2
 instantiate-and-run path is about 0.9 ms higher than the core-call path
-(+0.857856 ms, about 1.94×) in that same run. Its absolute values remain
+(+0.852641 ms, about 1.94×) in that same run. Its absolute values remain
 indicative because the runner is shared, but the within-run comparison is more
 useful than a cross-host absolute comparison. It still includes process
 creation, parsing, guest execution, and exit, rather than isolating
