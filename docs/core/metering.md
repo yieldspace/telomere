@@ -240,6 +240,13 @@ lock, or another host call; that host call must have its own timeout or
 cancellation policy. Once it returns to guest execution, the next metering
 checkpoint observes the flag.
 
+`MeteringHandle::interrupt()` stops guest code that is executing at a metered
+checkpoint. It does not wake guest code parked in a `memory.atomic.wait` with
+no timeout: metering bounds execution, not waiting. A guest can park only when
+its embedder has provided shared memory, and the embedder owns guest-thread
+creation. An embedder executing untrusted code must therefore either withhold
+shared memory and threads or allow only waits with finite timeouts.
+
 `reset_interrupt()` clears the flag for a later invocation. It does not restore
 fuel or resume an invocation that has already returned an interruption result.
 
