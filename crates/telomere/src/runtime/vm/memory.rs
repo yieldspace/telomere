@@ -802,6 +802,7 @@ pub unsafe fn op_i32_load_store_local_base_relink_loop(
     let mut cursor = ctx.stack.local_u32_from_base(local_base, cursor_local);
 
     loop {
+        vm_checkpoint!(ctx);
         ctx.stack
             .local_set4_from_base_value(ctx.local_base_ptr, current_local, cursor);
         let load_start = vm_try!(compute_memory_offset(load_memarg, cursor));
@@ -844,6 +845,7 @@ pub unsafe fn op_i32_load_store_local_base_reverse_loop(
         .local_u32_from_base(ctx.local_base_ptr as *const u8, cursor_local);
 
     loop {
+        vm_checkpoint!(ctx);
         ctx.stack
             .local_set4_from_base_value(ctx.local_base_ptr, saved_local, prev);
         ctx.stack
@@ -997,6 +999,7 @@ pub unsafe fn op_i32_load16_s_mul_add_local_base_loop(
     let mut acc = ctx.stack.local_u32_from_base(local_base, acc_local);
     let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
     loop {
+        vm_checkpoint!(ctx);
         let a = vm_try!(read_i32_load16_s_default(ctx, a_memarg, a_addr));
         let b = vm_try!(read_i32_load16_s_default(ctx, b_memarg, b_addr));
         let product = a.wrapping_mul(b) as u32;
@@ -1053,6 +1056,7 @@ pub unsafe fn op_i32_load16_s_mul_add_local_base_delta_loop(
     let mut acc = ctx.stack.local_u32_from_base(local_base, acc_local);
     let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
     loop {
+        vm_checkpoint!(ctx);
         let a = vm_try!(read_i32_load16_s_default(ctx, a_memarg, a_addr));
         let b = vm_try!(read_i32_load16_s_default(ctx, b_memarg, b_addr));
         let product = a.wrapping_mul(b) as u32;
@@ -1142,6 +1146,7 @@ pub unsafe fn op_i32_load16_u_bitmix_acc_local_base_delta_loop(
     let mut acc = ctx.stack.local_u32_from_base(local_base, acc_local);
     let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
     loop {
+        vm_checkpoint!(ctx);
         let a_start = vm_try!(compute_memory_offset(a_memarg, a_addr));
         let a = u32::from(vm_try!(
             unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(a_start)
@@ -1237,6 +1242,7 @@ pub unsafe fn op_i32_sum_clip_local_base_loop(
     let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
     let clip = ctx.stack.local_u32_from_base(local_base, clip_local);
     loop {
+        vm_checkpoint!(ctx);
         let start = vm_try!(compute_memory_offset(memarg, ptr.wrapping_add(load_delta)));
         let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(start));
         ctx.stack
@@ -1306,6 +1312,7 @@ pub unsafe fn op_i32_load16_u_update_store16_local_base_loop(
     let scalar = ctx.stack.local_u32_from_base(local_base, scalar_local);
     let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
     loop {
+        vm_checkpoint!(ctx);
         let load_start = vm_try!(compute_memory_offset(
             load_memarg,
             ptr.wrapping_add(load_delta)
@@ -1652,6 +1659,7 @@ pub(crate) unsafe fn i32_numeric_token_state_transition_value(
     }
 
     loop {
+        vm_checkpoint!(ctx);
         if ch == b',' {
             ptr = ptr.wrapping_add(1);
             break;
@@ -1773,6 +1781,7 @@ unsafe fn scan_numeric_token_state_array(
     }
 
     loop {
+        vm_checkpoint!(ctx);
         if ch == b',' {
             *ptr = (*ptr).wrapping_add(1);
             break;
@@ -1882,6 +1891,7 @@ unsafe fn scan_numeric_token_state_sequence(
         return VMResult::Success(());
     }
     loop {
+        vm_checkpoint!(ctx);
         let state = vm_try!(unsafe { scan_numeric_token_state_array(ctx, &mut ptr, transitions) });
         inc_counter_array(counts, state);
         if vm_try!(unsafe { read_u8_linear(ctx, ptr) }) == 0 {
@@ -1905,6 +1915,7 @@ unsafe fn mutate_core_state_data(
     let end = data.wrapping_add(size);
     let mut ptr = data;
     while ptr < end {
+        vm_checkpoint!(ctx);
         let ch = vm_try!(unsafe { read_u8_linear(ctx, ptr) });
         if ch != b',' {
             vm_try!(unsafe { write_u8_linear(ctx, ptr, (u32::from(ch) ^ seed) as u8) });
@@ -2009,9 +2020,11 @@ unsafe fn core_matrix_sum_i32(
     let mut tally = 0u32;
     let mut prev = 0u32;
     while row != n {
+        vm_checkpoint!(ctx);
         let mut col = 0;
         let mut ptr = row_ptr;
         while col != n {
+            vm_checkpoint!(ctx);
             let value = vm_try!(unsafe { read_u32_linear(ctx, ptr) });
             let sum = acc.wrapping_add(value);
             let overflow = (sum as i32) > (clip as i32);
@@ -2043,9 +2056,11 @@ unsafe fn core_matrix_add_const_i16(
     let mut row = 0;
     let mut row_ptr = a_ptr;
     while row != n {
+        vm_checkpoint!(ctx);
         let mut col = 0;
         let mut ptr = row_ptr;
         while col != n {
+            vm_checkpoint!(ctx);
             let value = u32::from(vm_try!(unsafe { read_u16_linear(ctx, ptr) }));
             vm_try!(unsafe { write_u16_linear(ctx, ptr, value.wrapping_add(delta) as u16) });
             ptr = ptr.wrapping_add(2);
@@ -2071,10 +2086,12 @@ unsafe fn core_matrix_mul_const_i16_i32(
     let mut a_row = a_ptr;
     let mut c_row = c_ptr;
     while row != n {
+        vm_checkpoint!(ctx);
         let mut col = 0;
         let mut a = a_row;
         let mut c = c_row;
         while col != n {
+            vm_checkpoint!(ctx);
             let product = (vm_try!(unsafe { read_i16_linear(ctx, a) }) as u32).wrapping_mul(value);
             vm_try!(unsafe { write_u32_linear(ctx, c, product) });
             a = a.wrapping_add(2);
@@ -2100,11 +2117,13 @@ unsafe fn core_matrix_mul_vect_i16_i32(
     let mut row = 0;
     let mut a_row = a_ptr;
     while row != n {
+        vm_checkpoint!(ctx);
         let mut k = 0;
         let mut a = a_row;
         let mut b = b_ptr;
         let mut acc = 0u32;
         while k != n {
+            vm_checkpoint!(ctx);
             let av = vm_try!(unsafe { read_i16_linear(ctx, a) }) as u32;
             let bv = vm_try!(unsafe { read_i16_linear(ctx, b) }) as u32;
             acc = acc.wrapping_add(av.wrapping_mul(bv));
@@ -2133,14 +2152,17 @@ unsafe fn core_matrix_mul_matrix_i16_i32(
     let mut a_row = a_ptr;
     let mut c_row = c_ptr;
     while row != n {
+        vm_checkpoint!(ctx);
         let mut col = 0;
         let mut b_col = b_ptr;
         while col != n {
+            vm_checkpoint!(ctx);
             let mut k = 0;
             let mut a = a_row;
             let mut b = b_col;
             let mut acc = 0u32;
             while k != n {
+                vm_checkpoint!(ctx);
                 let av = vm_try!(unsafe { read_i16_linear(ctx, a) }) as u32;
                 let bv = vm_try!(unsafe { read_i16_linear(ctx, b) }) as u32;
                 acc = acc.wrapping_add(av.wrapping_mul(bv));
@@ -2173,14 +2195,17 @@ unsafe fn core_matrix_mul_matrix_bitextract_i16_i32(
     let mut a_row = a_ptr;
     let mut c_row = c_ptr;
     while row != n {
+        vm_checkpoint!(ctx);
         let mut col = 0;
         let mut b_col = b_ptr;
         while col != n {
+            vm_checkpoint!(ctx);
             let mut k = 0;
             let mut a = a_row;
             let mut b = b_col;
             let mut acc = 0u32;
             while k != n {
+                vm_checkpoint!(ctx);
                 let av = u32::from(vm_try!(unsafe { read_u16_linear(ctx, a) }));
                 let bv = u32::from(vm_try!(unsafe { read_u16_linear(ctx, b) }));
                 let product = av.wrapping_mul(bv);
@@ -2293,6 +2318,7 @@ unsafe fn core_list_find(
     if (idx as u16 as i16) >= 0 {
         let needle = idx & 0xffff;
         while list != 0 {
+            vm_checkpoint!(ctx);
             let info = vm_try!(unsafe { list_info(ctx, list) });
             if u32::from(vm_try!(unsafe {
                 read_u16_linear(ctx, info.wrapping_add(2))
@@ -2305,6 +2331,7 @@ unsafe fn core_list_find(
     } else {
         let needle = data16 & 0xff;
         while list != 0 {
+            vm_checkpoint!(ctx);
             let info = vm_try!(unsafe { list_info(ctx, list) });
             if u32::from(vm_try!(unsafe { read_u8_linear(ctx, info) })) == needle {
                 return VMResult::Success(list);
@@ -2319,6 +2346,7 @@ unsafe fn core_list_find(
 unsafe fn core_list_reverse(ctx: &mut ExecuteContext, mut list: u32) -> VMResult<u32> {
     let mut next = 0u32;
     while list != 0 {
+        vm_checkpoint!(ctx);
         let tmp = vm_try!(unsafe { list_next(ctx, list) });
         vm_try!(unsafe { list_set_next(ctx, list, next) });
         next = list;
@@ -2459,15 +2487,18 @@ unsafe fn core_list_mergesort(
 ) -> VMResult<u32> {
     let mut insize = 1u32;
     loop {
+        vm_checkpoint!(ctx);
         let mut p = list;
         list = 0;
         let mut tail = 0u32;
         let mut nmerges = 0u32;
         while p != 0 {
+            vm_checkpoint!(ctx);
             nmerges = nmerges.wrapping_add(1);
             let mut q = p;
             let mut psize = 0u32;
             for _ in 0..insize {
+                vm_checkpoint!(ctx);
                 psize = psize.wrapping_add(1);
                 q = vm_try!(unsafe { list_next(ctx, q) });
                 if q == 0 {
@@ -2476,6 +2507,7 @@ unsafe fn core_list_mergesort(
             }
             let mut qsize = insize;
             while psize > 0 || (qsize > 0 && q != 0) {
+                vm_checkpoint!(ctx);
                 let e;
                 if psize == 0 {
                     e = q;
@@ -2529,6 +2561,7 @@ unsafe fn core_list_benchmark_summary(
     if find_num >= 1 {
         let mut i = 0i32;
         while i < find_num {
+            vm_checkpoint!(ctx);
             info_data = (i as u32) & 0xff;
             let this_find = vm_try!(unsafe { core_list_find(ctx, list, info_idx, info_data) });
             list = vm_try!(unsafe { core_list_reverse(ctx, list) });
@@ -2581,6 +2614,7 @@ unsafe fn core_list_benchmark_summary(
         let head_data = vm_try!(unsafe { list_data16(ctx, head_info) });
         let mut cursor = finder;
         while cursor != 0 {
+            vm_checkpoint!(ctx);
             retval = crc16_masked(head_data, retval);
             cursor = vm_try!(unsafe { list_next(ctx, cursor) });
         }
@@ -2595,6 +2629,7 @@ unsafe fn core_list_benchmark_summary(
         let head_info = vm_try!(unsafe { list_info(ctx, list) });
         let head_data = vm_try!(unsafe { list_data16(ctx, head_info) });
         while cursor != 0 {
+            vm_checkpoint!(ctx);
             retval = crc16_masked(head_data, retval);
             cursor = vm_try!(unsafe { list_next(ctx, cursor) });
         }
@@ -2648,6 +2683,7 @@ pub unsafe fn op_i32_list_crc_pair_loop(
 
     let mut i = 0u32;
     while i != iterations {
+        vm_checkpoint!(ctx);
         let positive = vm_try!(unsafe { list_crc_summary_value(ctx, res, 1) });
         let crc = u32::from(vm_try!(unsafe { read_u16_linear(ctx, crc_addr) }));
         vm_try!(unsafe { write_u16_linear(ctx, crc_addr, crc16_masked(positive, crc) as u16) });
@@ -3861,6 +3897,7 @@ pub unsafe fn op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_searc
     let mut node = ctx.stack.local_u32_from_base(local_base, node_local);
 
     loop {
+        vm_checkpoint!(ctx);
         let data_offset = node.wrapping_add(data_delta);
         let data_start = vm_try!(compute_memory_offset(data_memarg, data_offset));
         let data = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(data_start));
@@ -3918,6 +3955,7 @@ pub unsafe fn op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_searc
     let mut node = ctx.stack.local_u32_from_base(local_base, node_local);
 
     loop {
+        vm_checkpoint!(ctx);
         let data_offset = node.wrapping_add(data_delta);
         let data_start = vm_try!(compute_memory_offset(data_memarg, data_offset));
         let data = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(data_start));
@@ -3976,6 +4014,7 @@ pub unsafe fn op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_se
     let mut node = ctx.stack.local_u32_from_base(local_base, node_local);
 
     loop {
+        vm_checkpoint!(ctx);
         let data_offset = node.wrapping_add(data_delta);
         let data_start = vm_try!(compute_memory_offset(data_memarg, data_offset));
         let data = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(data_start));
@@ -4039,6 +4078,7 @@ pub unsafe fn op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_se
     let mut node = ctx.stack.local_u32_from_base(local_base, node_local);
 
     loop {
+        vm_checkpoint!(ctx);
         let data_offset = node.wrapping_add(data_delta);
         let data_start = vm_try!(compute_memory_offset(data_memarg, data_offset));
         let data = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(data_start));
@@ -5533,6 +5573,7 @@ pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let page_size_delta = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, 1 + (u64::from(page_size_delta) << 4));
     let result = vm_try!(ctx
         .gc
         .local_grow_memory(ctx.default_local_memory_id_unchecked(), page_size_delta,));
@@ -7155,6 +7196,7 @@ pub unsafe fn op_mem_grow_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let page_size_delta = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, 1 + (u64::from(page_size_delta) << 4));
     let result = vm_try!(ctx
         .gc
         .shared_grow_memory(ctx.default_shared_memory_id_unchecked(), page_size_delta,));
@@ -7236,6 +7278,7 @@ pub unsafe fn op_mem_grow_indexed_local(
 ) -> VMResult<()> {
     let memidx = (*tail_code).operand.u32;
     let page_size_delta = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, 1 + (u64::from(page_size_delta) << 4));
     let result = vm_try!(ctx
         .gc
         .local_grow_memory(ctx.local_memory_id_at_unchecked(memidx), page_size_delta));
@@ -7263,6 +7306,7 @@ pub unsafe fn op_mem_grow_indexed_shared(
 ) -> VMResult<()> {
     let memidx = (*tail_code).operand.u32;
     let page_size_delta = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, 1 + (u64::from(page_size_delta) << 4));
     let result = vm_try!(ctx
         .gc
         .shared_grow_memory(ctx.shared_memory_id_at_unchecked(memidx), page_size_delta));
@@ -7362,6 +7406,9 @@ mod tests {
             effect: EffectSupplier::from_parts(1, pending_effects, queue),
             cont: std::ptr::null(),
             task_id: 1,
+            budget: u64::MAX,
+            reserved: 0,
+            budget_epoch: 0,
         }
     }
 

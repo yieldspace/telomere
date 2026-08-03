@@ -246,6 +246,8 @@ impl<T> VmResultMap<T> for VMResult<T> {
             VMResult::InvalidOperand => VMResult::InvalidOperand,
             VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
             VMResult::Unimplemented => VMResult::Unimplemented,
+            VMResult::FuelExhausted => VMResult::FuelExhausted,
+            VMResult::Cancelled => VMResult::Cancelled,
         }
     }
 }

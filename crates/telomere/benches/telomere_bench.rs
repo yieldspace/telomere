@@ -1,13 +1,94 @@
-use std::fs;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use telomere::{
     common::{ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, ValType},
-    instantiate, IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
+    instantiate, IoReadBinaryReader, Registry, ResultValue, RuntimeConfig, Store, VMResult,
+    WasmParser, WasmValue,
 };
 use tokio::runtime::Runtime;
+
+const RELINK_NODE_COUNT: i32 = 4096;
+const RELINK_TAIL: i32 = (RELINK_NODE_COUNT - 1) * 4;
+
+#[derive(Clone, Copy)]
+enum BenchmarkMetering {
+    Disabled,
+    Unlimited,
+}
+
+impl BenchmarkMetering {
+    /// The default preserves the long-lived Criterion names used for baseline comparisons.
+    /// Set `TELOMERE_BENCH_METERING=unlimited` to re-run all six existing workloads with
+    /// `MeteringConfig { enabled: true, initial_fuel: None }`; `disabled` is accepted explicitly
+    /// for scripted branch comparisons.
+    fn from_environment() -> Self {
+        match env::var("TELOMERE_BENCH_METERING") {
+            Err(env::VarError::NotPresent) => Self::Disabled,
+            Ok(value) => match value.as_str() {
+                "disabled" => Self::Disabled,
+                "unlimited" => Self::Unlimited,
+                _ => panic!(
+                    "TELOMERE_BENCH_METERING must be `disabled` or `unlimited`, got `{value}`"
+                ),
+            },
+            Err(error) => panic!("could not read TELOMERE_BENCH_METERING: {error}"),
+        }
+    }
+
+    fn criterion_group_name(self) -> &'static str {
+        match self {
+            Self::Disabled => "criterion_benchmark",
+            Self::Unlimited => "criterion_benchmark_metering_unlimited",
+        }
+    }
+}
+
+// This is the exact loop shape accepted by
+// `I32LoadStoreLocalBaseRelinkLoopSpec::emit` in the optimizer. It materializes
+// `op_i32_load_store_local_base_relink_loop`, whose native inner loop checks
+// `vm_checkpoint!(ctx)` once per linked-list node.
+const FUSED_RELINK_LOOP_WAT: &str = r#"
+    (module
+      (memory 1)
+      (func (export "init")
+        (local $cursor i32)
+        loop $again
+          local.get $cursor
+          local.get $cursor
+          i32.const 4
+          i32.add
+          i32.store
+          local.get $cursor
+          i32.const 4
+          i32.add
+          local.tee $cursor
+          i32.const 16384
+          i32.lt_u
+          br_if $again
+        end
+        i32.const 16380
+        i32.const 0
+        i32.store)
+      (func (export "reverse") (param $cursor i32) (param $prev i32) (result i32)
+        (local $current i32)
+        loop $again
+          local.get $cursor
+          local.tee $current
+          i32.load
+          local.set $cursor
+          local.get $current
+          local.get $prev
+          i32.store
+          local.get $current
+          local.set $prev
+          local.get $cursor
+          br_if $again
+        end
+        local.get $prev))
+"#;
 
 fn parse_wat(wat: &str) -> telomere::Module {
     let source = wat::parse_str(wat).expect("wat must parse");
@@ -43,6 +124,72 @@ fn bench_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     VMResult::Success(return_addr)
 }
 
+fn unlimited_metered_store() -> Store {
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.metering.enabled = true;
+    runtime_config.metering.initial_fuel = None;
+    Store::new_with_runtime_config(runtime_config)
+}
+
+fn benchmark_store(metering: BenchmarkMetering) -> Store {
+    match metering {
+        BenchmarkMetering::Disabled => Store::new(),
+        BenchmarkMetering::Unlimited => unlimited_metered_store(),
+    }
+}
+
+async fn instantiate_fused_relink_workload(store: &Store) -> telomere::common::InstanceHandle {
+    let registry = Registry::new();
+    let handle = instantiate_wat(FUSED_RELINK_LOOP_WAT, store, &registry).await;
+    assert_eq!(
+        telomere::run_module_function(&handle, store, "init", &ResultValue::new(vec![]))
+            .await
+            .unwrap(),
+        ResultValue::new(vec![])
+    );
+    handle
+}
+
+async fn run_fused_relink_roundtrip(handle: &telomere::common::InstanceHandle, store: &Store) {
+    assert_eq!(
+        black_box(
+            telomere::run_module_function(
+                handle,
+                store,
+                "reverse",
+                &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+            )
+            .await
+        )
+        .unwrap(),
+        ResultValue::new(vec![WasmValue::I32(RELINK_TAIL)])
+    );
+    assert_eq!(
+        black_box(
+            telomere::run_module_function(
+                handle,
+                store,
+                "reverse",
+                &ResultValue::new(vec![WasmValue::I32(RELINK_TAIL), WasmValue::I32(0)]),
+            )
+            .await
+        )
+        .unwrap(),
+        ResultValue::new(vec![WasmValue::I32(0)])
+    );
+}
+
+async fn time_fused_relink_roundtrips(store: Store, iters: u64) -> Duration {
+    let handle = instantiate_fused_relink_workload(&store).await;
+    let mut duration = Duration::ZERO;
+    for _ in 0..iters {
+        let start = Instant::now();
+        run_fused_relink_roundtrip(&handle, &store).await;
+        duration += start.elapsed();
+    }
+    duration
+}
+
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("benches/telomere-benchmark.wasm");
@@ -51,7 +198,8 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let mut parser = telomere::WasmParser::new(&mut reader);
     let module = parser.parse_module().unwrap();
     let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("criterion_benchmark");
+    let metering_mode = BenchmarkMetering::from_environment();
+    let mut group = c.benchmark_group(metering_mode.criterion_group_name());
     group.sampling_mode(SamplingMode::Flat);
     group.bench_function("fib", |b| {
         b.to_async(&rt).iter_custom(|iters| {
@@ -60,7 +208,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                 let module = module.clone();
                 let mut duration = Duration::new(0, 0);
                 for _ in 0..iters {
-                    let store = telomere::Store::new();
+                    let store = benchmark_store(metering_mode);
                     let registry = telomere::Registry::new();
                     let handle = telomere::instantiate(module.clone(), &store, &registry)
                         .await
@@ -88,7 +236,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("return_call_chain", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
-            let store = Store::new();
+            let store = benchmark_store(metering_mode);
             let registry = Registry::new();
             let handle = instantiate_wat(
                 r#"
@@ -138,7 +286,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("tail_recursive_accumulate", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
-            let store = Store::new();
+            let store = benchmark_store(metering_mode);
             let registry = Registry::new();
             let handle = instantiate_wat(
                 r#"
@@ -190,7 +338,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("sync_host_roundtrip_i32", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
-            let store = Store::new();
+            let store = benchmark_store(metering_mode);
             let mut registry = Registry::new();
             let host = match telomere::runtime::instantiate_native_module(
                 NativeModule {
@@ -245,7 +393,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("memory_load_store_loop", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
-            let store = Store::new();
+            let store = benchmark_store(metering_mode);
             let registry = Registry::new();
             let handle = instantiate_wat(
                 r#"
@@ -305,7 +453,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("scalar_local_loop", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
-            let store = Store::new();
+            let store = benchmark_store(metering_mode);
             let registry = Registry::new();
             let handle = instantiate_wat(
                 r#"
@@ -358,6 +506,18 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         })
     });
     group.finish();
+
+    let mut metering_group = c.benchmark_group("metering_overhead");
+    metering_group.sampling_mode(SamplingMode::Flat);
+    metering_group.bench_function("fused_relink_loop_disabled", |b| {
+        b.to_async(&rt)
+            .iter_custom(|iters| time_fused_relink_roundtrips(Store::new(), iters))
+    });
+    metering_group.bench_function("fused_relink_loop_unlimited", |b| {
+        b.to_async(&rt)
+            .iter_custom(|iters| time_fused_relink_roundtrips(unlimited_metered_store(), iters))
+    });
+    metering_group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

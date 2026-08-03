@@ -1,5 +1,10 @@
 use super::*;
 
+#[inline(always)]
+fn memory_bulk_charge(len: u32) -> u64 {
+    1 + (u64::from(len) >> 12)
+}
+
 #[inline(never)]
 fn mem_init_bytes(
     ctx: &mut ExecuteContext,
@@ -119,6 +124,7 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     vm_try!(mem_init_impl_local(ctx, idx, dst, src, len));
     call_next(tail_code, 1, ctx)
 }
@@ -172,6 +178,7 @@ pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     trace!("op_mem_copy src: {src},dst: {dst},len: {len}");
     vm_try!(ctx
         .gc
@@ -198,6 +205,7 @@ pub unsafe fn op_mem_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();
     let ptr = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     vm_try!(ctx
         .gc
         .local_fill_memory(ctx.default_local_memory_id_unchecked(), ptr, len, data,));
@@ -227,6 +235,7 @@ pub unsafe fn op_mem_init_shared(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     vm_try!(mem_init_impl_shared(ctx, idx, dst, src, len));
     call_next(tail_code, 1, ctx)
 }
@@ -257,6 +266,7 @@ pub unsafe fn op_mem_copy_shared(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     trace!("op_mem_copy_shared src: {src},dst: {dst},len: {len}");
     vm_try!(ctx
         .gc
@@ -286,6 +296,7 @@ pub unsafe fn op_mem_fill_shared(
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();
     let ptr = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     vm_try!(ctx
         .gc
         .shared_fill_memory(ctx.default_shared_memory_id_unchecked(), ptr, len, data,));
@@ -315,6 +326,7 @@ pub unsafe fn op_mem_init_indexed_local(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     vm_try!(mem_init_impl_local_with_id(
         ctx,
         ctx.local_memory_id_at_unchecked(memidx),
@@ -349,6 +361,7 @@ pub unsafe fn op_mem_init_indexed_shared(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     vm_try!(mem_init_impl_shared_with_id(
         ctx,
         ctx.shared_memory_id_at_unchecked(memidx),
@@ -387,13 +400,27 @@ pub unsafe fn op_mem_copy_indexed_local_local(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.gc.copy_memory_local_to_local(
-        ctx.local_memory_id_at_unchecked(dst_memidx),
-        ctx.local_memory_id_at_unchecked(src_memidx),
-        dst,
-        src,
-        len,
-    ));
+    let dst_memory = ctx.local_memory_id_at_unchecked(dst_memidx);
+    let src_memory = ctx.local_memory_id_at_unchecked(src_memidx);
+    if dst_memory == src_memory {
+        vm_checkpoint_n!(ctx, memory_bulk_charge(len));
+    }
+    {
+        let metering = ctx.store.metering_ref();
+        let ExecuteContext {
+            gc,
+            budget,
+            reserved,
+            budget_epoch,
+            ..
+        } = ctx;
+        vm_try!(
+            gc.copy_memory_local_to_local(dst_memory, src_memory, dst, src, len, || {
+                vm_checkpoint!(metering, budget, reserved, budget_epoch);
+                VMResult::Success(())
+            },)
+        );
+    }
     call_next(tail_code, 2, ctx)
 }
 
@@ -424,13 +451,24 @@ pub unsafe fn op_mem_copy_indexed_local_shared(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.gc.copy_memory_shared_to_local(
-        ctx.local_memory_id_at_unchecked(dst_memidx),
-        ctx.shared_memory_id_at_unchecked(src_memidx),
-        dst,
-        src,
-        len,
-    ));
+    let dst_memory = ctx.local_memory_id_at_unchecked(dst_memidx);
+    let src_memory = ctx.shared_memory_id_at_unchecked(src_memidx);
+    {
+        let metering = ctx.store.metering_ref();
+        let ExecuteContext {
+            gc,
+            budget,
+            reserved,
+            budget_epoch,
+            ..
+        } = ctx;
+        vm_try!(
+            gc.copy_memory_shared_to_local(dst_memory, src_memory, dst, src, len, || {
+                vm_checkpoint!(metering, budget, reserved, budget_epoch);
+                VMResult::Success(())
+            },)
+        );
+    }
     call_next(tail_code, 2, ctx)
 }
 
@@ -461,13 +499,24 @@ pub unsafe fn op_mem_copy_indexed_shared_local(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.gc.copy_memory_local_to_shared(
-        ctx.shared_memory_id_at_unchecked(dst_memidx),
-        ctx.local_memory_id_at_unchecked(src_memidx),
-        dst,
-        src,
-        len,
-    ));
+    let dst_memory = ctx.shared_memory_id_at_unchecked(dst_memidx);
+    let src_memory = ctx.local_memory_id_at_unchecked(src_memidx);
+    {
+        let metering = ctx.store.metering_ref();
+        let ExecuteContext {
+            gc,
+            budget,
+            reserved,
+            budget_epoch,
+            ..
+        } = ctx;
+        vm_try!(
+            gc.copy_memory_local_to_shared(dst_memory, src_memory, dst, src, len, || {
+                vm_checkpoint!(metering, budget, reserved, budget_epoch);
+                VMResult::Success(())
+            },)
+        );
+    }
     call_next(tail_code, 2, ctx)
 }
 
@@ -498,13 +547,27 @@ pub unsafe fn op_mem_copy_indexed_shared_shared(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.gc.copy_memory_shared_to_shared(
-        ctx.shared_memory_id_at_unchecked(dst_memidx),
-        ctx.shared_memory_id_at_unchecked(src_memidx),
-        dst,
-        src,
-        len,
-    ));
+    let dst_memory = ctx.shared_memory_id_at_unchecked(dst_memidx);
+    let src_memory = ctx.shared_memory_id_at_unchecked(src_memidx);
+    if dst_memory == src_memory {
+        vm_checkpoint_n!(ctx, memory_bulk_charge(len));
+    }
+    {
+        let metering = ctx.store.metering_ref();
+        let ExecuteContext {
+            gc,
+            budget,
+            reserved,
+            budget_epoch,
+            ..
+        } = ctx;
+        vm_try!(
+            gc.copy_memory_shared_to_shared(dst_memory, src_memory, dst, src, len, || {
+                vm_checkpoint!(metering, budget, reserved, budget_epoch);
+                VMResult::Success(())
+            },)
+        );
+    }
     call_next(tail_code, 2, ctx)
 }
 
@@ -530,6 +593,7 @@ pub unsafe fn op_mem_fill_indexed_local(
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();
     let ptr = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     vm_try!(ctx
         .gc
         .local_fill_memory(ctx.local_memory_id_at_unchecked(memidx), ptr, len, data,));
@@ -558,6 +622,7 @@ pub unsafe fn op_mem_fill_indexed_shared(
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();
     let ptr = ctx.stack.pop_u32();
+    vm_checkpoint_n!(ctx, memory_bulk_charge(len));
     vm_try!(ctx
         .gc
         .shared_fill_memory(ctx.shared_memory_id_at_unchecked(memidx), ptr, len, data,));

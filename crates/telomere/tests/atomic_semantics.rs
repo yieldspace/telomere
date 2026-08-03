@@ -38,6 +38,8 @@ async fn call_i32(
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::Unimplemented => VMResult::Unimplemented,
+        VMResult::FuelExhausted => VMResult::FuelExhausted,
+        VMResult::Cancelled => VMResult::Cancelled,
     }
 }
 
@@ -63,6 +65,8 @@ async fn call_i64(
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::Unimplemented => VMResult::Unimplemented,
+        VMResult::FuelExhausted => VMResult::FuelExhausted,
+        VMResult::Cancelled => VMResult::Cancelled,
     }
 }
 

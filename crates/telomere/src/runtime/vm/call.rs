@@ -6,15 +6,14 @@ fn ensure_call_recipe(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDisp
 }
 
 #[cfg(feature = "jit")]
-fn jit_exit_from_call_outcome(
+fn jit_exit_from_call_outcome<const IS_RETURN_CALL: bool>(
     result: VMResult<CallOutcome>,
     continuation: *const Instr,
     recipe: CallDispatchCache,
-    is_return_call: bool,
 ) -> crate::runtime::jit::JitNativeExit {
     match result {
         VMResult::Success(CallOutcome::Immediate(ptr)) => {
-            if !is_return_call && ptr == continuation {
+            if !IS_RETURN_CALL && ptr == continuation {
                 crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
             } else {
                 crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
@@ -41,13 +40,15 @@ fn jit_exit_from_call_outcome(
 /// - `return_addr` must remain valid for the duration of the helper and must point back into the active decoded instruction stream.
 /// - `ctx` must reference a live execution context for the same store and validated frame layout.
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
-unsafe fn internal_op_call(
+unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
     return_addr: *const Instr,
     recipe: CallDispatchCache,
     ctx: &mut ExecuteContext,
-    is_return_call: bool,
 ) -> VMResult<CallOutcome> {
-    dispatch_profile_count(if is_return_call {
+    if IS_RETURN_CALL {
+        vm_checkpoint!(ctx);
+    }
+    dispatch_profile_count(if IS_RETURN_CALL {
         "op_return_call"
     } else {
         "op_call"
@@ -66,7 +67,7 @@ unsafe fn internal_op_call(
     let return_pc = cached_return_pc(return_addr, ctx);
     match recipe.target {
         CallDispatchTarget::Host(fp) => {
-            if is_return_call {
+            if IS_RETURN_CALL {
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                     &ctx.local_reference,
                     param_size,
@@ -87,7 +88,7 @@ unsafe fn internal_op_call(
             invoke_sync_host_function_with(return_addr, ctx, fp)
         }
         CallDispatchTarget::AsyncHost(fp) => {
-            if is_return_call {
+            if IS_RETURN_CALL {
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                     &ctx.local_reference,
                     param_size,
@@ -109,7 +110,7 @@ unsafe fn internal_op_call(
         }
         CallDispatchTarget::Wasm { local_size } => {
             let local_size = local_size as usize;
-            if is_return_call {
+            if IS_RETURN_CALL {
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                     &ctx.local_reference,
                     param_size,
@@ -144,10 +145,9 @@ unsafe fn internal_op_call(
 /// - `tail_code` must point to the call recipe operand in the active decoded instruction stream.
 /// - `ctx` must reference a live execution context whose stack and current frame match that stream.
 /// - The caller must return to the JIT/interpreter continuation indicated by the returned exit.
-pub(crate) unsafe fn jit_call_direct(
+pub(crate) unsafe fn jit_call_direct<const IS_RETURN_CALL: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    is_return_call: bool,
 ) -> crate::runtime::jit::JitNativeExit {
     if ctx.effect.get_pending_count() != 0 {
         return crate::runtime::jit::JitNativeExit::pending();
@@ -155,25 +155,23 @@ pub(crate) unsafe fn jit_call_direct(
     let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };
     if let CallDispatchTarget::Wasm { local_size } = recipe.target {
         return match unsafe {
-            prepare_jit_wasm_call(
+            prepare_jit_wasm_call::<IS_RETURN_CALL>(
                 tail_code.offset(1),
                 recipe,
                 local_size as usize,
                 ctx,
-                is_return_call,
             )
         } {
             VMResult::Success(()) => unsafe {
-                finish_jit_wasm_call(tail_code.offset(1), recipe, ctx, is_return_call)
+                finish_jit_wasm_call::<IS_RETURN_CALL>(tail_code.offset(1), recipe, ctx)
             },
             other => crate::runtime::jit::JitNativeExit::trap(other),
         };
     }
-    jit_exit_from_call_outcome(
-        unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) },
+    jit_exit_from_call_outcome::<IS_RETURN_CALL>(
+        unsafe { internal_op_call::<IS_RETURN_CALL>(tail_code.offset(1), recipe, ctx) },
         unsafe { tail_code.offset(1) },
         recipe,
-        is_return_call,
     )
 }
 
@@ -198,18 +196,20 @@ pub(crate) unsafe fn jit_call_direct_wasm_fast(
     }
     let recipe = ensure_call_recipe(funcaddr, ctx);
     let CallDispatchTarget::Wasm { local_size } = recipe.target else {
-        return jit_exit_from_call_outcome(
-            unsafe { internal_op_call(continuation, recipe, ctx, false) },
+        return jit_exit_from_call_outcome::<false>(
+            unsafe { internal_op_call::<false>(continuation, recipe, ctx) },
             continuation,
             recipe,
-            false,
         );
     };
-    match unsafe { prepare_jit_wasm_call(continuation, recipe, local_size as usize, ctx, false) } {
+    match unsafe { prepare_jit_wasm_call::<false>(continuation, recipe, local_size as usize, ctx) }
+    {
         VMResult::Success(()) if ctx.gc.jit_rejected_func(funcaddr) => unsafe {
             finish_rejected_direct_wasm_call(continuation, recipe, ctx)
         },
-        VMResult::Success(()) => unsafe { finish_jit_wasm_call(continuation, recipe, ctx, false) },
+        VMResult::Success(()) => unsafe {
+            finish_jit_wasm_call::<false>(continuation, recipe, ctx)
+        },
         other => crate::runtime::jit::JitNativeExit::trap(other),
     }
 }
@@ -227,10 +227,9 @@ pub(crate) unsafe fn jit_call_direct_wasm_fast(
 /// - `tail_code` must point to the decoded indirect call instruction in the active stream.
 /// - `ctx` must reference a live execution context whose stack contains the validated table index.
 /// - The caller must honor the returned JIT exit and resume through the indicated continuation.
-pub(crate) unsafe fn jit_call_indirect(
+pub(crate) unsafe fn jit_call_indirect<const IS_RETURN_CALL: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    is_return_call: bool,
 ) -> crate::runtime::jit::JitNativeExit {
     if ctx.effect.get_pending_count() != 0 {
         return crate::runtime::jit::JitNativeExit::pending();
@@ -270,38 +269,36 @@ pub(crate) unsafe fn jit_call_indirect(
     let recipe = ensure_indirect_call_recipe(func_addr, ctx);
     if let CallDispatchTarget::Wasm { local_size } = recipe.target {
         return match unsafe {
-            prepare_jit_wasm_call(
+            prepare_jit_wasm_call::<IS_RETURN_CALL>(
                 tail_code.offset(2),
                 recipe,
                 local_size as usize,
                 ctx,
-                is_return_call,
             )
         } {
             VMResult::Success(()) => unsafe {
-                finish_jit_wasm_call(tail_code.offset(2), recipe, ctx, is_return_call)
+                finish_jit_wasm_call::<IS_RETURN_CALL>(tail_code.offset(2), recipe, ctx)
             },
             other => crate::runtime::jit::JitNativeExit::trap(other),
         };
     }
-    jit_exit_from_call_outcome(
-        unsafe { internal_op_call(tail_code.offset(2), recipe, ctx, is_return_call) },
+    jit_exit_from_call_outcome::<IS_RETURN_CALL>(
+        unsafe { internal_op_call::<IS_RETURN_CALL>(tail_code.offset(2), recipe, ctx) },
         unsafe { tail_code.offset(2) },
         recipe,
-        is_return_call,
     )
 }
 
 #[cfg(feature = "jit")]
-unsafe fn prepare_jit_wasm_call(
+unsafe fn prepare_jit_wasm_call<const IS_RETURN_CALL: bool>(
     return_addr: *const Instr,
     recipe: CallDispatchCache,
     local_size: usize,
     ctx: &mut ExecuteContext,
-    is_return_call: bool,
 ) -> VMResult<()> {
     let param_size = recipe.param_size as usize;
-    if is_return_call {
+    if IS_RETURN_CALL {
+        vm_checkpoint!(ctx);
         let local_reference = vm_try!(ctx.stack.function_return_call_cached(
             &ctx.local_reference,
             param_size,
@@ -324,18 +321,17 @@ unsafe fn prepare_jit_wasm_call(
 }
 
 #[cfg(feature = "jit")]
-unsafe fn finish_jit_wasm_call(
+unsafe fn finish_jit_wasm_call<const IS_RETURN_CALL: bool>(
     continuation: *const Instr,
     recipe: CallDispatchCache,
     ctx: &mut ExecuteContext,
-    is_return_call: bool,
 ) -> crate::runtime::jit::JitNativeExit {
     let exit = unsafe { crate::runtime::jit::enter_current_frame_from_jit_call(ctx) };
     let returned_to_continuation = exit.kind == crate::runtime::jit::JitNativeExit::DONE
         || (exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR
             && exit.value == continuation as u64)
         || (exit.kind == crate::runtime::jit::JitNativeExit::PENDING && ctx.cont == continuation);
-    if !is_return_call && returned_to_continuation {
+    if !IS_RETURN_CALL && returned_to_continuation {
         if exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR {
             crate::runtime::jit::profile::count(
                 crate::runtime::jit::profile::Counter::ExitContinuePtrConsumed,
@@ -344,7 +340,7 @@ unsafe fn finish_jit_wasm_call(
             crate::runtime::jit::profile::count_exit(exit.kind);
         }
         crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
-    } else if !is_return_call
+    } else if !IS_RETURN_CALL
         && matches!(
             exit.kind,
             crate::runtime::jit::JitNativeExit::CONTINUE_PTR
@@ -458,7 +454,7 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
         return VMResult::Success(());
     }
     let recipe = decode_direct_call_recipe(tail_code, ctx);
-    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, false)) {
+    match vm_try!(internal_op_call::<false>(tail_code.offset(1), recipe, ctx)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -476,31 +472,30 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - The recipe must describe a Wasm target prepared by instantiation-time callsite quickening.
 /// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
 pub unsafe fn op_call_jit_lazy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    unsafe { op_call_jit_lazy_inner(tail_code, ctx, false) }
+    unsafe { op_call_jit_lazy_inner::<false>(tail_code, ctx) }
 }
 
 #[cfg(feature = "jit")]
-unsafe fn op_call_jit_lazy_inner(
+unsafe fn op_call_jit_lazy_inner<const IS_RETURN_CALL: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    is_return_call: bool,
 ) -> VMResult<()> {
     if ctx.effect.get_pending_count() != 0 {
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    if is_return_call && crate::runtime::jit::interpreter_stop_active() {
+    if IS_RETURN_CALL && crate::runtime::jit::interpreter_stop_active() {
         return unsafe { op_return_call(tail_code, ctx) };
     }
     let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };
     if !matches!(recipe.target, CallDispatchTarget::Wasm { .. }) {
-        return if is_return_call {
+        return if IS_RETURN_CALL {
             unsafe { op_return_call(tail_code, ctx) }
         } else {
             unsafe { op_call(tail_code, ctx) }
         };
     }
-    match vm_try!(unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) }) {
+    match vm_try!(unsafe { internal_op_call::<IS_RETURN_CALL>(tail_code.offset(1), recipe, ctx) }) {
         CallOutcome::Immediate(_ptr) => unsafe {
             crate::runtime::jit::enter_current_frame_from_lazy_call(ctx, tail_code.offset(1))
         },
@@ -849,7 +844,7 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
         return VMResult::Success(());
     }
     let recipe = decode_direct_call_recipe(tail_code, ctx);
-    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, false)) {
+    match vm_try!(internal_op_call::<false>(tail_code.offset(1), recipe, ctx)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -874,7 +869,7 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
         return VMResult::Success(());
     }
     let recipe = decode_direct_call_recipe(tail_code, ctx);
-    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, true)) {
+    match vm_try!(internal_op_call::<true>(tail_code.offset(1), recipe, ctx)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -896,7 +891,7 @@ pub unsafe fn op_return_call_jit_lazy(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    unsafe { op_call_jit_lazy_inner(tail_code, ctx, true) }
+    unsafe { op_call_jit_lazy_inner::<true>(tail_code, ctx) }
 }
 
 /// WebAssembly `return_call` for imported or otherwise generic direct callees.
@@ -922,7 +917,7 @@ pub unsafe fn op_return_call_import(
         return VMResult::Success(());
     }
     let recipe = decode_direct_call_recipe(tail_code, ctx);
-    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, true)) {
+    match vm_try!(internal_op_call::<true>(tail_code.offset(1), recipe, ctx)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -942,12 +937,11 @@ pub unsafe fn op_return_call_import(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context for the same store and validated frame layout.
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
-unsafe fn internal_op_call_indirect(
+unsafe fn internal_op_call_indirect<const IS_RETURN_CALL: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    is_return_call: bool,
 ) -> VMResult<CallOutcome> {
-    dispatch_profile_count(if is_return_call {
+    dispatch_profile_count(if IS_RETURN_CALL {
         "op_return_call_indirect"
     } else {
         "op_call_indirect"
@@ -983,11 +977,10 @@ unsafe fn internal_op_call_indirect(
         return VMResult::CallIndirectInvalidType;
     }
     let recipe = ensure_indirect_call_recipe(func_addr, ctx);
-    let outcome = vm_try!(internal_op_call(
+    let outcome = vm_try!(internal_op_call::<IS_RETURN_CALL>(
         tail_code.offset(2),
         recipe,
-        ctx,
-        is_return_call
+        ctx
     ));
     VMResult::Success(outcome)
 }
@@ -1012,7 +1005,7 @@ pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    match vm_try!(internal_op_call_indirect(tail_code, ctx, false)) {
+    match vm_try!(internal_op_call_indirect::<false>(tail_code, ctx)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -1039,7 +1032,7 @@ pub unsafe fn op_return_call_indirect(
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    match vm_try!(internal_op_call_indirect(tail_code, ctx, true)) {
+    match vm_try!(internal_op_call_indirect::<true>(tail_code, ctx)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }

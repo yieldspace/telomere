@@ -208,6 +208,10 @@ fn vm_result_to_anyhow<T>(
         telomere::VMResult::InvalidOperand => Err(anyhow::anyhow!("{context}: invalid operand")),
         telomere::VMResult::UnalignedAtomic => Err(anyhow::anyhow!("{context}: unaligned atomic")),
         telomere::VMResult::Unimplemented => Err(anyhow::anyhow!("{context}: unimplemented")),
+        telomere::VMResult::FuelExhausted => {
+            Err(anyhow::anyhow!("{context}: interrupted: FuelExhausted"))
+        }
+        telomere::VMResult::Cancelled => Err(anyhow::anyhow!("{context}: interrupted: Cancelled")),
     }
 }
 

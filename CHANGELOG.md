@@ -10,6 +10,12 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A standalone minimal-embedder configuration ladder, size-oriented release
   profile, and footprint harness/CI coverage for measured file size, text, RSS,
   and whole-process cold start.
+- Opt-in Store-scoped interpreter metering with finite or unlimited fuel,
+  cumulative fuel accounting, and cross-thread cancellation through
+  `MeteringHandle`, including per-checkpoint cancellation observation and
+  proportional precharges for native bulk operations. Fuel exhaustion and
+  cancellation are exposed as payload-free `VMResult` variants with
+  `InterruptReason` conversion helpers.
 
 ### Changed
 
@@ -25,7 +31,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
-- No unreleased entries yet.
+- Metered Stores disable the experimental JIT, preventing a fuel-configured
+  Store from executing an unmetered native JIT path.
 
 ## [0.1.0-alpha.1] - 2026-08-03
 

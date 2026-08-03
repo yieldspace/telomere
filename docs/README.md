@@ -24,6 +24,7 @@ the body for the details.
 | [core/runtime-memory.md](core/runtime-memory.md) | Current | Store ownership, linear memory, execution lease, and compact runtime representation. |
 | [support-matrix.md](support-matrix.md) | Current | Core proposal, Component Model canonical ABI, and WASI 0.2.6 support boundaries with source-backed coverage counts. |
 | [core/optimizer.md](core/optimizer.md) | Current | The canonical optimizer pipeline and runtime boundary. |
+| [core/metering.md](core/metering.md) | Current | Store-scoped interpreter fuel, accounting, cancellation, and its JIT boundary. |
 | [core/current-optimizer.md](core/current-optimizer.md) | Current snapshot | As-built optimizer behavior, research basis, and remaining fallback families. |
 | [core/jit.md](core/jit.md) | Current | Experimental function-local lazy baseline JIT status, supported targets, diagnostics, and gaps. |
 | [core/coremark-benchmark.md](core/coremark-benchmark.md) | Local benchmark note | Serial CoreMark comparison against WAMR, wasm3, and WasmEdge. |

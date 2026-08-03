@@ -1,5 +1,82 @@
 #[macro_use]
 pub(crate) mod traps;
+
+macro_rules! vm_checkpoint {
+    ($ctx:expr) => {{
+        match $crate::runtime::vm::checkpoint($ctx) {
+            $crate::VMResult::Success(()) => {}
+            $crate::VMResult::FuelExhausted => return $crate::VMResult::FuelExhausted,
+            $crate::VMResult::Cancelled => return $crate::VMResult::Cancelled,
+            _ => unreachable!("checkpoint can only return an interruption"),
+        }
+    }};
+    ($metering:expr, $budget:ident, $reserved:ident, $epoch:ident) => {{
+        match (*$budget).checked_sub(1) {
+            Some(next) => {
+                if *$reserved != 0
+                    && $metering
+                        .as_ref()
+                        .expect("metered checkpoint budget requires a metering handle")
+                        .is_interrupted()
+                {
+                    return $crate::VMResult::Cancelled;
+                }
+                *$budget = next;
+            }
+            None => {
+                let metering = $metering
+                    .as_ref()
+                    .expect("only metered execution loops can exhaust their checkpoint budget");
+                match metering.refill_checkpoint_budget($budget, $reserved, $epoch) {
+                    Ok(()) => {}
+                    Err(reason) => return reason.into_vm_result(),
+                }
+            }
+        }
+    }};
+}
+#[allow(unused_imports)]
+pub(crate) use vm_checkpoint;
+
+macro_rules! vm_checkpoint_n {
+    ($ctx:expr, $amount:expr) => {{
+        match $crate::runtime::vm::charge_n($ctx, $amount) {
+            $crate::VMResult::Success(()) => {}
+            $crate::VMResult::FuelExhausted => return $crate::VMResult::FuelExhausted,
+            $crate::VMResult::Cancelled => return $crate::VMResult::Cancelled,
+            _ => unreachable!("bulk checkpoint can only return an interruption"),
+        }
+    }};
+    ($metering:expr, $budget:ident, $reserved:ident, $epoch:ident, $amount:expr) => {{
+        let amount: u64 = $amount;
+        if amount != 0 {
+            match (*$budget).checked_sub(amount) {
+                Some(next) => {
+                    if *$reserved != 0
+                        && $metering
+                            .as_ref()
+                            .expect("metered checkpoint budget requires a metering handle")
+                            .is_interrupted()
+                    {
+                        return $crate::VMResult::Cancelled;
+                    }
+                    *$budget = next;
+                }
+                None => {
+                    let metering = $metering
+                        .as_ref()
+                        .expect("only metered execution loops can exhaust their checkpoint budget");
+                    match metering.charge_n($budget, $reserved, $epoch, amount) {
+                        Ok(()) => {}
+                        Err(reason) => return reason.into_vm_result(),
+                    }
+                }
+            }
+        }
+    }};
+}
+#[allow(unused_imports)]
+pub(crate) use vm_checkpoint_n;
 #[cfg(feature = "threads")]
 mod atomics;
 mod bulk_memory;
@@ -1390,6 +1467,16 @@ enum CallOutcome {
     Pending,
 }
 
+// Rebase baseline af3e2d9 retains the one-byte `VMResult<()>` layout measured at 0743f16.
+// Keeping the compact tag prevents an accidental payload from turning ordinary VM errors into an
+// aggregate return value.
+const _: () = assert!(std::mem::size_of::<VMResult<()>>() <= 1);
+// Rebase baseline af3e2d9 retains the 16-byte `VMResult<CallOutcome>` layout measured at
+// 0743f16. On the supported direct-threaded targets that preserves the register return used by
+// the tail jump; growing it changes the ABI to an indirect result and reintroduces a call/return
+// epilogue.
+const _: () = assert!(std::mem::size_of::<VMResult<CallOutcome>>() <= 16);
+
 /// Telomere runtime helper `call_code`.
 ///
 /// Related spec:
@@ -1437,6 +1524,96 @@ pub(crate) unsafe fn call_next(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     call_code(tail_code.offset(consumed), ctx)
+}
+
+/// Charges one execution checkpoint, entering the cold metering path only when a grant is empty.
+#[inline(always)]
+pub(crate) fn checkpoint(ctx: &mut ExecuteContext) -> VMResult<()> {
+    match ctx.budget.checked_sub(1) {
+        Some(next) if ctx.reserved == 0 => {
+            ctx.budget = next;
+            VMResult::Success(())
+        }
+        Some(next) => {
+            let metering = ctx
+                .store
+                .metering_ref()
+                .expect("metered checkpoint budget requires a metering handle");
+            if metering.is_interrupted() {
+                VMResult::Cancelled
+            } else {
+                ctx.budget = next;
+                VMResult::Success(())
+            }
+        }
+        None => checkpoint_slow(ctx),
+    }
+}
+
+/// Charges several execution checkpoints before a native bulk operation runs.
+///
+/// A zero amount is a no-op. The fast path spends only the caller-owned budget. The slow path
+/// atomically consumes the old grant plus the requested remainder, then reserves a new chunk.
+#[inline(always)]
+pub(crate) fn charge_n(ctx: &mut ExecuteContext, amount: u64) -> VMResult<()> {
+    if amount == 0 {
+        return VMResult::Success(());
+    }
+
+    match ctx.budget.checked_sub(amount) {
+        Some(next) if ctx.reserved == 0 => {
+            ctx.budget = next;
+            VMResult::Success(())
+        }
+        Some(next) => {
+            let metering = ctx
+                .store
+                .metering_ref()
+                .expect("metered checkpoint budget requires a metering handle");
+            if metering.is_interrupted() {
+                VMResult::Cancelled
+            } else {
+                ctx.budget = next;
+                VMResult::Success(())
+            }
+        }
+        None => charge_n_slow(ctx, amount),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn checkpoint_slow(ctx: &mut ExecuteContext) -> VMResult<()> {
+    let metering = ctx
+        .store
+        .metering_ref()
+        .expect("only metered execution contexts can exhaust their checkpoint budget");
+    match metering.refill_checkpoint_budget(
+        &mut ctx.budget,
+        &mut ctx.reserved,
+        &mut ctx.budget_epoch,
+    ) {
+        Ok(()) => VMResult::Success(()),
+        Err(reason) => reason.into_vm_result(),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn charge_n_slow(ctx: &mut ExecuteContext, amount: u64) -> VMResult<()> {
+    let metering = ctx
+        .store
+        .metering_ref()
+        .expect("only metered execution contexts can exhaust their checkpoint budget");
+    match metering.charge_n(
+        &mut ctx.budget,
+        &mut ctx.reserved,
+        &mut ctx.budget_epoch,
+        amount,
+    ) {
+        Ok(()) => VMResult::Success(()),
+        Err(reason) => reason.into_vm_result(),
+    }
 }
 
 fn result_type_size(ty: &ResultType) -> usize {
@@ -1981,6 +2158,8 @@ pub(crate) fn run_module_function_sync_with_gc(
         VMResult::InvalidOperand => Ok(VMResult::InvalidOperand),
         VMResult::UnalignedAtomic => Ok(VMResult::UnalignedAtomic),
         VMResult::Unimplemented => Ok(VMResult::Unimplemented),
+        VMResult::FuelExhausted => Ok(VMResult::FuelExhausted),
+        VMResult::Cancelled => Ok(VMResult::Cancelled),
     }
 }
 
@@ -1998,6 +2177,8 @@ fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultVal
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::Unimplemented => VMResult::Unimplemented,
+        VMResult::FuelExhausted => VMResult::FuelExhausted,
+        VMResult::Cancelled => VMResult::Cancelled,
     }
 }
 

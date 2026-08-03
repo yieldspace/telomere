@@ -1,5 +1,9 @@
 #![allow(private_interfaces)]
 
+/// Store-scoped guest execution metering.
+#[warn(missing_docs)]
+mod metering;
+pub use metering::{InterruptReason, MeteringConfig, MeteringHandle};
 /// Runtime result values shared by the interpreter and embedding API.
 #[warn(missing_docs)]
 #[macro_use]
@@ -1160,6 +1164,12 @@ pub struct ExecuteContext<'a> {
     pub effect: EffectSupplier<'a>,
     pub cont: *const Instr,
     pub task_id: u32,
+    /// Checkpoints available before the next cold-path metering grant.
+    pub(crate) budget: u64,
+    /// Full size of the currently reserved grant.
+    pub(crate) reserved: u64,
+    /// Ledger epoch captured with the current grant.
+    pub(crate) budget_epoch: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

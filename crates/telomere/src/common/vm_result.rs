@@ -1,3 +1,5 @@
+use super::InterruptReason;
+
 #[derive(Debug, Clone)]
 #[must_use]
 /// The result of instantiation or guest execution.
@@ -30,6 +32,10 @@ pub enum VMResult<V> {
     InvalidOperand,
     /// The runtime does not implement this execution path yet.
     Unimplemented,
+    /// Finite Store fuel was exhausted at a metering checkpoint.
+    FuelExhausted,
+    /// A watchdog requested Store execution cancellation at a metering checkpoint.
+    Cancelled,
 }
 #[macro_export]
 /// Propagates a non-success [`VMResult`](crate::VMResult) from the current function.
@@ -48,10 +54,21 @@ macro_rules! vm_try {
             VMResult::MemoryAllocationFailed => return VMResult::MemoryAllocationFailed,
             VMResult::InvalidOperand => return VMResult::InvalidOperand,
             VMResult::Unimplemented => return VMResult::Unimplemented,
+            VMResult::FuelExhausted => return VMResult::FuelExhausted,
+            VMResult::Cancelled => return VMResult::Cancelled,
         }
     };
 }
 impl<V> VMResult<V> {
+    /// Returns the interruption reason when this result stopped at a metering checkpoint.
+    pub fn interrupt_reason(&self) -> Option<InterruptReason> {
+        match self {
+            VMResult::FuelExhausted => Some(InterruptReason::FuelExhausted),
+            VMResult::Cancelled => Some(InterruptReason::Cancelled),
+            _ => None,
+        }
+    }
+
     /// Converts an option into a success or a caller-selected runtime failure.
     pub fn from_option(opt: Option<V>, err: impl FnOnce() -> VMResult<V>) -> VMResult<V> {
         match opt {
@@ -96,10 +113,26 @@ impl<V> VMResult<V> {
             VMResult::Unimplemented => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: Unimplemented")
             }
+            VMResult::FuelExhausted => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: FuelExhausted")
+            }
+            VMResult::Cancelled => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: Cancelled")
+            }
         }
     }
     /// Returns `true` when this value is a trap or runtime failure.
     pub fn is_err(&self) -> bool {
         !matches!(self, VMResult::Success(_))
+    }
+}
+
+impl InterruptReason {
+    /// Converts this public interruption reason into the corresponding VM result variant.
+    pub fn into_vm_result<V>(self) -> VMResult<V> {
+        match self {
+            InterruptReason::FuelExhausted => VMResult::FuelExhausted,
+            InterruptReason::Cancelled => VMResult::Cancelled,
+        }
     }
 }

@@ -1082,6 +1082,8 @@ dependencies = [
  "num-derive",
  "num-traits",
  "parking_lot",
+ "proc-macro2",
+ "quote",
  "sha2",
  "smallvec",
  "syn",

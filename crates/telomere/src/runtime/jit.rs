@@ -70,6 +70,8 @@ pub(crate) unsafe fn enter_current_frame(ctx: &mut ExecuteContext<'_>) -> VMResu
         VMResult::MemoryAllocationFailed => return VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => return VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
+        VMResult::FuelExhausted => return VMResult::FuelExhausted,
+        VMResult::Cancelled => return VMResult::Cancelled,
     };
     unsafe { handle_exit(exit, code_base, ctx) }
 }
@@ -108,6 +110,8 @@ pub(crate) unsafe fn enter_current_frame_from_lazy_call(
         VMResult::MemoryAllocationFailed => return VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => return VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
+        VMResult::FuelExhausted => return VMResult::FuelExhausted,
+        VMResult::Cancelled => return VMResult::Cancelled,
     };
     if exit.kind == JitNativeExit::CONTINUE_PTR && exit.value == continuation as u64 {
         return unsafe { vm::call_code(continuation, ctx) };

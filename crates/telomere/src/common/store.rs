@@ -4,7 +4,8 @@ use super::{
     memory::{AtomicRmwOp, LocalMemoryObject, MemoryInitError, SharedMemoryObject},
     object_ref::ObjectRef,
     AsyncHostFunction, CallFrameCache, Data, Elem, ExportSection, FuncType, GlobalType,
-    HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult, PAGE_SIZE_MAX,
+    HostFunction, Instr, LocalsData, MemType, MeteringConfig, MeteringHandle, Stack, TableType,
+    TypeIdx, VMResult, PAGE_SIZE_MAX,
 };
 #[cfg(feature = "jit")]
 use crate::runtime::jit::{CompiledFunction, StoreJitCache};
@@ -296,12 +297,15 @@ impl Default for MemoryConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// Runtime options used to create a [`Store`].
 ///
-/// Use the default unless an embedder needs to bound memory or opt into JIT.
+/// Use the default unless an embedder needs to bound memory, opt into JIT, or
+/// configure execution metering.
 pub struct RuntimeConfig {
     /// JIT settings for this store.
     pub jit: JitConfig,
     /// Memory allocation settings for this store.
     pub memory: MemoryConfig,
+    /// Fuel and cancellation settings for this store.
+    pub metering: MeteringConfig,
 }
 
 #[repr(C, align(4))]
@@ -1198,6 +1202,8 @@ impl StoreInner {
         })
     }
 
+    // Cross-memory copy helpers invoke their callback before each chunk. Range validation happens
+    // before the first callback, but an interruption may leave earlier chunks committed.
     fn copy_chunk_size(remaining: usize) -> usize {
         const CHUNK_SIZE: usize = 4096;
         remaining.min(CHUNK_SIZE)
@@ -1222,6 +1228,7 @@ impl StoreInner {
         dst_offset: u32,
         src_offset: u32,
         len: u32,
+        mut checkpoint_copy_chunk: impl FnMut() -> VMResult<()>,
     ) -> VMResult<()> {
         if dst == src {
             return self.local_copy_memory(dst, dst_offset, src_offset, len);
@@ -1233,6 +1240,7 @@ impl StoreInner {
         let mut remaining = len as usize;
         let mut chunk = Self::copy_chunk_buffer();
         while remaining != 0 {
+            vm_try!(checkpoint_copy_chunk());
             let size = Self::copy_chunk_size(remaining);
             let slice = &mut chunk[..size];
             vm_try!(self.local_read_bytes_into(
@@ -1256,6 +1264,7 @@ impl StoreInner {
         dst_offset: u32,
         src_offset: u32,
         len: u32,
+        mut checkpoint_copy_chunk: impl FnMut() -> VMResult<()>,
     ) -> VMResult<()> {
         vm_try!(self.check_local_memory_range(src, src_offset, len));
         vm_try!(self.check_shared_memory_range(dst, dst_offset, len));
@@ -1264,6 +1273,7 @@ impl StoreInner {
         let mut remaining = len as usize;
         let mut chunk = Self::copy_chunk_buffer();
         while remaining != 0 {
+            vm_try!(checkpoint_copy_chunk());
             let size = Self::copy_chunk_size(remaining);
             let slice = &mut chunk[..size];
             vm_try!(self.local_read_bytes_into(
@@ -1287,6 +1297,7 @@ impl StoreInner {
         dst_offset: u32,
         src_offset: u32,
         len: u32,
+        mut checkpoint_copy_chunk: impl FnMut() -> VMResult<()>,
     ) -> VMResult<()> {
         vm_try!(self.check_shared_memory_range(src, src_offset, len));
         vm_try!(self.check_local_memory_range(dst, dst_offset, len));
@@ -1295,6 +1306,7 @@ impl StoreInner {
         let mut remaining = len as usize;
         let mut chunk = Self::copy_chunk_buffer();
         while remaining != 0 {
+            vm_try!(checkpoint_copy_chunk());
             let size = Self::copy_chunk_size(remaining);
             let slice = &mut chunk[..size];
             vm_try!(self.shared_read_bytes_into(
@@ -1318,6 +1330,7 @@ impl StoreInner {
         dst_offset: u32,
         src_offset: u32,
         len: u32,
+        mut checkpoint_copy_chunk: impl FnMut() -> VMResult<()>,
     ) -> VMResult<()> {
         if dst == src {
             return self.shared_copy_memory(dst, dst_offset, src_offset, len);
@@ -1329,6 +1342,7 @@ impl StoreInner {
         let mut remaining = len as usize;
         let mut chunk = Self::copy_chunk_buffer();
         while remaining != 0 {
+            vm_try!(checkpoint_copy_chunk());
             let size = Self::copy_chunk_size(remaining);
             let slice = &mut chunk[..size];
             vm_try!(self.shared_read_bytes_into(
@@ -1857,6 +1871,7 @@ pub struct Store {
     segments: Mutex<StoreSegments>,
     next_instance_id: AtomicU32,
     runtime_config: RuntimeConfig,
+    metering: Option<MeteringHandle>,
     #[cfg(feature = "jit")]
     jit_cache: StoreJitCache,
     /// Optional immutable embedder state made available to host functions.
@@ -1880,7 +1895,7 @@ impl Store {
         Self::new_with_state_and_runtime_config(state, RuntimeConfig::default())
     }
 
-    /// Creates a store with custom JIT and memory limits and empty embedder state.
+    /// Creates a store with custom runtime configuration and empty embedder state.
     pub fn new_with_runtime_config(runtime_config: RuntimeConfig) -> Self {
         Self::new_with_state_and_runtime_config(StoreState::default(), runtime_config)
     }
@@ -1890,12 +1905,24 @@ impl Store {
         state: StoreState,
         runtime_config: RuntimeConfig,
     ) -> Self {
+        let mut runtime_config = runtime_config;
+        if runtime_config.metering.enabled && runtime_config.jit.enabled {
+            tracing::warn!(
+                "metered execution does not support the JIT; disabling JIT for this Store"
+            );
+            runtime_config.jit.enabled = false;
+        }
+        let metering = runtime_config
+            .metering
+            .enabled
+            .then(|| MeteringHandle::new(runtime_config.metering.initial_fuel));
         Self {
             runtime: Arc::new(Mutex::new(StoreInner::new())),
             identity: Arc::new(()),
             segments: Mutex::new(StoreSegments::default()),
             next_instance_id: AtomicU32::new(1),
             runtime_config,
+            metering,
             #[cfg(feature = "jit")]
             jit_cache: StoreJitCache::default(),
             state,
@@ -1905,6 +1932,16 @@ impl Store {
     /// Returns the configuration captured when this store was created.
     pub fn runtime_config(&self) -> RuntimeConfig {
         self.runtime_config
+    }
+
+    /// Returns a clone of the Store-scoped metering handle, or `None` when metering is disabled.
+    pub fn metering(&self) -> Option<MeteringHandle> {
+        self.metering.clone()
+    }
+
+    /// Borrows the Store-scoped metering handle without cloning its shared ownership.
+    pub(crate) fn metering_ref(&self) -> Option<&MeteringHandle> {
+        self.metering.as_ref()
     }
 
     #[cfg(feature = "jit")]
@@ -2192,13 +2229,13 @@ mod tests {
             .unwrap();
 
         store
-            .copy_memory_local_to_shared(shared, local, 16, 8, 4)
+            .copy_memory_local_to_shared(shared, local, 16, 8, 4, || VMResult::Success(()))
             .unwrap();
         store
-            .copy_memory_shared_to_local(local_dst, shared, 4, 16, 4)
+            .copy_memory_shared_to_local(local_dst, shared, 4, 16, 4, || VMResult::Success(()))
             .unwrap();
         store
-            .copy_memory_shared_to_shared(shared_dst, shared, 0, 12, 4)
+            .copy_memory_shared_to_shared(shared_dst, shared, 0, 12, 4, || VMResult::Success(()))
             .unwrap();
 
         let mut stack = Stack::new(32);
@@ -2258,6 +2295,62 @@ mod tests {
                 .shared_memory(shared)
                 .with_memory(|memory| memory.read_u8_array::<8>(PAGE_SIZE).unwrap()),
             [0; 8]
+        );
+    }
+
+    #[test]
+    fn cross_memory_copy_checkpoint_interrupts_before_the_later_chunk() {
+        const CHUNK_SIZE: usize = 4096;
+        let mut store = StoreInner::new();
+        let source = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap()));
+        let destination =
+            shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 1).unwrap()));
+        store
+            .write_bytes(MemoryHandle::Local(source), 0, &vec![0xa5; CHUNK_SIZE * 2])
+            .unwrap();
+
+        let mut checkpoint_calls = 0;
+        let result = store.copy_memory_local_to_shared(
+            destination,
+            source,
+            0,
+            0,
+            (CHUNK_SIZE * 2) as u32,
+            || {
+                checkpoint_calls += 1;
+                if checkpoint_calls == 2 {
+                    VMResult::FuelExhausted
+                } else {
+                    VMResult::Success(())
+                }
+            },
+        );
+
+        assert!(matches!(result, VMResult::FuelExhausted));
+        assert_eq!(checkpoint_calls, 2);
+        assert_eq!(
+            store
+                .shared_memory(destination)
+                .with_memory(|memory| memory.read_u8_array::<1>(0).unwrap()),
+            [0xa5]
+        );
+        assert_eq!(
+            store
+                .shared_memory(destination)
+                .with_memory(|memory| memory.read_u8_array::<1>(CHUNK_SIZE - 1).unwrap()),
+            [0xa5]
+        );
+        assert_eq!(
+            store
+                .shared_memory(destination)
+                .with_memory(|memory| memory.read_u8_array::<1>(CHUNK_SIZE).unwrap()),
+            [0]
+        );
+        assert_eq!(
+            store
+                .shared_memory(destination)
+                .with_memory(|memory| memory.read_u8_array::<1>(CHUNK_SIZE * 2 - 1).unwrap()),
+            [0]
         );
     }
 

@@ -1,5 +1,10 @@
 use super::*;
 
+#[inline(always)]
+fn table_bulk_charge(len: u32) -> u64 {
+    1 + (u64::from(len) >> 10)
+}
+
 /// WebAssembly `table.get`.
 ///
 /// Spec:
@@ -83,7 +88,17 @@ unsafe fn table_init_impl(
     len: usize,
 ) -> VMResult<()> {
     let instance_addr = ctx.instance_addr();
-    let ExecuteContext { store, gc, .. } = ctx;
+    // The handle is independent from the Store segment and GC borrows below. Its cold path locks
+    // only the metering ledger and never re-enters Store or GC while that leaf lock is held.
+    let metering = ctx.store.metering();
+    let ExecuteContext {
+        store,
+        gc,
+        budget,
+        reserved,
+        budget_epoch,
+        ..
+    } = ctx;
     let instance = unsafe { &*gc.get_instance_unchecked(instance_addr) };
     let dst_table_addr = instance.tables.as_slice()[dst_table_idx];
     let segments = store.lock_segments();
@@ -122,6 +137,7 @@ unsafe fn table_init_impl(
                 || { VMResult::TableIndexOutOfRange }
             ));
             for (i, funcidx) in slice.iter().enumerate() {
+                vm_checkpoint!(metering, budget, reserved, budget_epoch);
                 dst[i] = func_addrs[*funcidx as usize];
             }
         }
@@ -130,6 +146,7 @@ unsafe fn table_init_impl(
                 VMResult::TableIndexOutOfRange
             }));
             for (i, expr) in slice.iter().enumerate() {
+                vm_checkpoint!(metering, budget, reserved, budget_epoch);
                 let res = vm_try!(execute_elem_init_const_expr(
                     gc,
                     instance.globals.as_slice(),
@@ -228,9 +245,11 @@ pub unsafe fn op_elem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let len = ctx.stack.pop_u32() as usize;
+    let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32() as usize;
     let dst = ctx.stack.pop_u32() as usize;
+    vm_checkpoint_n!(ctx, table_bulk_charge(len));
+    let len = len as usize;
     let dst_table_idx = (*tail_code).operand.u32 as usize;
     let src_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
 
@@ -268,14 +287,15 @@ pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_table_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let table_idx = (*tail_code).operand.u32 as usize;
-    let table_addr = ctx.instance().tables.as_slice()[table_idx];
-    let table_inst = &mut ctx.gc.get_table(table_addr);
     let n = ctx.stack.pop_i32();
     let val = ctx.stack.pop_u32();
-    let sz = table_inst.1.len();
     if n < 0 {
         vm_try!(ctx.stack.push_i32(-1));
     } else {
+        vm_checkpoint_n!(ctx, table_bulk_charge(n as u32));
+        let table_addr = ctx.instance().tables.as_slice()[table_idx];
+        let table_inst = &mut ctx.gc.get_table(table_addr);
+        let sz = table_inst.1.len();
         let new_len = sz + n as usize;
         match table_inst.0.limits.max {
             Some(max) if max as usize >= new_len => {
@@ -335,9 +355,11 @@ pub unsafe fn op_table_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_table_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let n = ctx.stack.pop_u32() as usize;
+    let n = ctx.stack.pop_u32();
     let val = ctx.stack.pop_u32();
     let i = ctx.stack.pop_u32() as usize;
+    vm_checkpoint_n!(ctx, table_bulk_charge(n));
+    let n = n as usize;
     let table_idx = (*tail_code).operand.u32 as usize;
 
     let table_addr = ctx.instance().tables.as_slice()[table_idx];

@@ -1020,6 +1020,8 @@ fn runtime_atomic_start_indexed(
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::Unimplemented => VMResult::Unimplemented,
+        VMResult::FuelExhausted => VMResult::FuelExhausted,
+        VMResult::Cancelled => VMResult::Cancelled,
     }
 }
 
@@ -1254,6 +1256,8 @@ fn unit_result<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::Unimplemented => VMResult::Unimplemented,
+        VMResult::FuelExhausted => VMResult::FuelExhausted,
+        VMResult::Cancelled => VMResult::Cancelled,
     }
 }
 
@@ -1372,6 +1376,9 @@ fn runtime_mem_copy(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    // Metered Stores do not enter JIT. Keep the cross-memory helper's callback explicit so this
+    // native path retains its existing unmetered behavior.
+    let mut no_checkpoint = || VMResult::Success(());
     match kind {
         CopyStubKind::DefaultShared => ctx.gc.shared_copy_memory(
             unsafe { ctx.default_shared_memory_id_unchecked() },
@@ -1385,6 +1392,7 @@ fn runtime_mem_copy(
             dst,
             src,
             len,
+            &mut no_checkpoint,
         ),
         CopyStubKind::IndexedLocalShared => ctx.gc.copy_memory_shared_to_local(
             unsafe { ctx.local_memory_id_at_unchecked((*pc.add(1)).operand.u32) },
@@ -1392,6 +1400,7 @@ fn runtime_mem_copy(
             dst,
             src,
             len,
+            &mut no_checkpoint,
         ),
         CopyStubKind::IndexedSharedLocal => ctx.gc.copy_memory_local_to_shared(
             unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(1)).operand.u32) },
@@ -1399,6 +1408,7 @@ fn runtime_mem_copy(
             dst,
             src,
             len,
+            &mut no_checkpoint,
         ),
         CopyStubKind::IndexedSharedShared => ctx.gc.copy_memory_shared_to_shared(
             unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(1)).operand.u32) },
@@ -1406,6 +1416,7 @@ fn runtime_mem_copy(
             dst,
             src,
             len,
+            &mut no_checkpoint,
         ),
     }
 }
@@ -1683,7 +1694,11 @@ pub(crate) extern "C" fn direct_call(
     is_return_call: u64,
 ) -> JitNativeExit {
     let ctx = unsafe { &mut *ctx };
-    unsafe { vm::jit_call_direct(tail_code, ctx, is_return_call != 0) }
+    if is_return_call != 0 {
+        unsafe { vm::jit_call_direct::<true>(tail_code, ctx) }
+    } else {
+        unsafe { vm::jit_call_direct::<false>(tail_code, ctx) }
+    }
 }
 
 pub(crate) extern "C" fn wasm_direct_call_fast(
@@ -1701,7 +1716,11 @@ pub(crate) extern "C" fn indirect_call(
     is_return_call: u64,
 ) -> JitNativeExit {
     let ctx = unsafe { &mut *ctx };
-    unsafe { vm::jit_call_indirect(tail_code, ctx, is_return_call != 0) }
+    if is_return_call != 0 {
+        unsafe { vm::jit_call_indirect::<true>(tail_code, ctx) }
+    } else {
+        unsafe { vm::jit_call_indirect::<false>(tail_code, ctx) }
+    }
 }
 
 pub(crate) extern "C" fn i32_crc16_update16(

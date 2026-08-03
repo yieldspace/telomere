@@ -515,6 +515,8 @@ fn describe_vm_result<T>(result: &VMResult<T>) -> &'static str {
         VMResult::InvalidOperand => "invalid operand",
         VMResult::UnalignedAtomic => "unaligned atomic",
         VMResult::Unimplemented => "unimplemented",
+        VMResult::FuelExhausted => "fuel exhausted",
+        VMResult::Cancelled => "cancelled",
     }
 }
 

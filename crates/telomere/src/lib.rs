@@ -93,10 +93,16 @@ pub mod runtime;
 pub use binary::IoReadBinaryReader;
 /// Parsed runtime instance data; embedders normally retain an [`InstanceHandle`](common::InstanceHandle) instead.
 pub use common::Instance;
+/// Explains why metered guest execution stopped.
+pub use common::InterruptReason;
 /// Configures the optional lazy baseline JIT for a [`Store`].
 pub use common::JitConfig;
 /// Sets resource limits for memories created by a [`Store`].
 pub use common::MemoryConfig;
+/// Configures Store-scoped guest execution metering.
+pub use common::MeteringConfig;
+/// Controls fuel and cancellation for an enabled Store's metered execution.
+pub use common::MeteringHandle;
 /// The parsed, validated representation supplied to [`instantiate`].
 pub use common::Module;
 /// Resolves imported module names to already-instantiated instances.
