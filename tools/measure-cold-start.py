@@ -28,12 +28,16 @@ Output is JSON on stdout.
 import json
 import os
 import platform
-import re
 import shlex
-import statistics
 import subprocess
 import sys
-import time
+
+from _measure_support import (
+    MeasurementError,
+    median,
+    peak_rss_samples,
+    wall_ms_samples,
+)
 
 RUNS = 30
 WARMUP = 3
@@ -42,73 +46,17 @@ RSS_RUNS = 5
 CLI = os.path.join("target", "release", "telomere-cli")
 JIT_CLI = os.environ.get("TELOMERE_JIT_BIN")
 
-MACOS_RSS = re.compile(r"^\s*(\d+)\s+maximum resident set size", re.M)
-LINUX_RSS = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
-
-
-class MeasurementError(RuntimeError):
-    """A measurement could not be taken, so no number should be reported."""
-
-
-def rss_bytes(stderr: str) -> "int | None":
-    match = MACOS_RSS.search(stderr)
-    if match:
-        return int(match.group(1))
-    match = LINUX_RSS.search(stderr)
-    if match:
-        return int(match.group(1)) * 1024
-    return None
-
-
-def time_argv() -> "list[str]":
-    return ["/usr/bin/time", "-l" if platform.system() == "Darwin" else "-v"]
-
-
-def run(cmd: "list[str]") -> str:
-    """Run `cmd` to completion and return its stderr.
-
-    Guest stdout is discarded; stderr is kept so that a failure can be
-    reported, and so that the `/usr/bin/time` report can be parsed. A non-zero
-    exit raises `subprocess.CalledProcessError`.
-    """
-    completed = subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    return completed.stderr
-
 
 def measure(name: str, cmd: "list[str]") -> dict:
-    for _ in range(WARMUP):
-        run(cmd)
+    times = wall_ms_samples(cmd, WARMUP, RUNS)
+    samples, _timed_cmd = peak_rss_samples(cmd, RSS_RUNS)
 
-    times = []
-    for _ in range(RUNS):
-        start = time.perf_counter_ns()
-        run(cmd)
-        times.append((time.perf_counter_ns() - start) / 1_000_000.0)
-
-    timed_cmd = time_argv() + cmd
-    samples = []
-    for _ in range(RSS_RUNS):
-        stderr = run(timed_cmd)
-        value = rss_bytes(stderr)
-        if value is None:
-            raise MeasurementError(
-                f"could not find peak RSS in the output of "
-                f"`{shlex.join(timed_cmd)}`:\n{stderr}"
-            )
-        samples.append(value)
-
-    median_rss = statistics.median(samples)
+    median_rss = median(samples)
     return {
         "case": name,
         "command": shlex.join(cmd),
         "runs": RUNS,
-        "wall_ms_median": round(statistics.median(times), 2),
+        "wall_ms_median": round(median(times), 2),
         "wall_ms_min": round(min(times), 2),
         "wall_ms_max": round(max(times), 2),
         "peak_rss_bytes_median": int(median_rss),
