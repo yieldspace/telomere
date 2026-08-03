@@ -74,3 +74,13 @@ smallvec = "1.14.0"
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+[profile.release-size]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+overflow-checks = false
