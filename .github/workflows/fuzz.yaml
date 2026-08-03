@@ -76,11 +76,17 @@ jobs:
 
       # cargo-fuzz defaults to AddressSanitizer; fuzz/Cargo.toml enables
       # overflow checks for both dev and release target builds.
+      #
+      # `--target` is passed explicitly because cargo-fuzz otherwise builds for
+      # its own build triple, and the binary that install-action fetches is
+      # built for musl so it stays glibc-independent. That made it select
+      # x86_64-unknown-linux-musl on a gnu runner, where no musl std is
+      # installed, and the build failed with `can't find crate for core`.
       - name: Run 60-second fuzz smoke
         working-directory: fuzz
         run: |
           mkdir -p "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}"
-          cargo fuzz run "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=60"
+          cargo fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=60"
 
       - name: Upload failing fuzz artifacts
         if: failure()
@@ -150,11 +156,12 @@ jobs:
           tool: cargo-fuzz
 
       # Initial five-minute budget; change only after a measured CI campaign.
+      # `--target` is pinned for the reason given on the smoke job above.
       - name: Run five-minute fuzz campaign
         working-directory: fuzz
         run: |
           mkdir -p "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}"
-          cargo fuzz run "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=300"
+          cargo fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=300"
 
       - name: Upload failing fuzz artifacts
         if: failure()
@@ -224,11 +231,12 @@ jobs:
           tool: cargo-fuzz
 
       # Initial thirty-minute budget; change only after a measured CI campaign.
+      # `--target` is pinned for the reason given on the smoke job above.
       - name: Run thirty-minute fuzz campaign
         working-directory: fuzz
         run: |
           mkdir -p "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}"
-          cargo fuzz run "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=1800"
+          cargo fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=1800"
 
       - name: Upload failing fuzz artifacts
         if: failure()

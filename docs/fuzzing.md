@@ -98,6 +98,14 @@ cargo +nightly-2026-07-31 fuzz run canon_lift_args \
 This is the same directory order the workflow uses, so a local reproduction and
 a CI run see the same inputs.
 
+CI additionally passes `--target x86_64-unknown-linux-gnu`. cargo-fuzz builds for
+its own build triple unless told otherwise, and the prebuilt binary CI installs
+is built for musl so that it does not depend on the runner's glibc. Left alone it
+therefore selects `x86_64-unknown-linux-musl` on a gnu runner, where no musl std
+is installed, and the build fails with `can't find crate for core`. A locally
+`cargo install`ed cargo-fuzz already matches the host, so the flag is only needed
+when the binary and the host disagree.
+
 These commands run until interrupted. For a bounded local smoke run, add a
 libFuzzer limit after `--`, for example `-- -max_total_time=300` or
 `-- -runs=1000`. Record the exact command, target, toolchain, platform, and
