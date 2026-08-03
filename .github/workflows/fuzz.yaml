@@ -1,0 +1,247 @@
+name: Fuzzing
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+    - cron: "41 4 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    name: Fuzz smoke (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_core_module
+          - decode_component
+          - canon_lift_args
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # A new key is saved after each run; restore-keys reuse the most recent
+      # compatible corpus so the generated corpus advances over time.
+      - name: Restore rolling corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-${{ github.ref_name }}-
+            fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Install stable corpus-generator toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Generate corpus from stable workspace tests
+        if: matrix.target != 'canon_lift_args'
+        working-directory: .
+        env:
+          TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
+        run: |
+          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
+            cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
+          else
+            cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
+          fi
+
+      - name: Create the canonical target corpus directory
+        if: matrix.target == 'canon_lift_args'
+        working-directory: .
+        run: mkdir -p "${{ github.workspace }}/fuzz/corpus/canon_lift_args"
+
+      - name: Install pinned fuzzing toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      # cargo-fuzz defaults to AddressSanitizer; fuzz/Cargo.toml enables
+      # overflow checks for both dev and release target builds.
+      #
+      # `--target` is passed explicitly because cargo-fuzz otherwise builds for
+      # its own build triple, and the binary that install-action fetches is
+      # built for musl so it stays glibc-independent. That made it select
+      # x86_64-unknown-linux-musl on a gnu runner, where no musl std is
+      # installed, and the build failed with `can't find crate for core`.
+      - name: Run 60-second fuzz smoke
+        working-directory: fuzz
+        run: |
+          mkdir -p "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}"
+          cargo fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=60"
+
+      - name: Upload failing fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-smoke-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  daily:
+    if: github.event_name == 'schedule' && github.event.schedule == '17 3 * * *'
+    name: Daily fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_core_module
+          - decode_component
+          - canon_lift_args
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore rolling corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-${{ github.ref_name }}-
+            fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Install stable corpus-generator toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Generate corpus from stable workspace tests
+        if: matrix.target != 'canon_lift_args'
+        working-directory: .
+        env:
+          TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
+        run: |
+          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
+            cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
+          else
+            cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
+          fi
+
+      - name: Create the canonical target corpus directory
+        if: matrix.target == 'canon_lift_args'
+        working-directory: .
+        run: mkdir -p "${{ github.workspace }}/fuzz/corpus/canon_lift_args"
+
+      - name: Install pinned fuzzing toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      # Initial five-minute budget; change only after a measured CI campaign.
+      # `--target` is pinned for the reason given on the smoke job above.
+      - name: Run five-minute fuzz campaign
+        working-directory: fuzz
+        run: |
+          mkdir -p "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}"
+          cargo fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=300"
+
+      - name: Upload failing fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-daily-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  weekly:
+    if: github.event_name == 'schedule' && github.event.schedule == '41 4 * * 0'
+    name: Weekly fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_core_module
+          - decode_component
+          - canon_lift_args
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore rolling corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-${{ github.ref_name }}-
+            fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Install stable corpus-generator toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Generate corpus from stable workspace tests
+        if: matrix.target != 'canon_lift_args'
+        working-directory: .
+        env:
+          TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
+        run: |
+          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
+            cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
+          else
+            cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
+          fi
+
+      - name: Create the canonical target corpus directory
+        if: matrix.target == 'canon_lift_args'
+        working-directory: .
+        run: mkdir -p "${{ github.workspace }}/fuzz/corpus/canon_lift_args"
+
+      - name: Install pinned fuzzing toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      # Initial thirty-minute budget; change only after a measured CI campaign.
+      # `--target` is pinned for the reason given on the smoke job above.
+      - name: Run thirty-minute fuzz campaign
+        working-directory: fuzz
+        run: |
+          mkdir -p "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}"
+          cargo fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" "regressions/${{ matrix.target }}" -- "-max_total_time=1800"
+
+      - name: Upload failing fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-weekly-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

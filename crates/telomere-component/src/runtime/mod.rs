@@ -166,6 +166,14 @@ enum HostBinding {
 
 mod canonical;
 mod env;
+#[cfg(feature = "fuzzing")]
+mod fuzz_api;
 mod host;
 
 pub use env::instantiate;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub use fuzz_api::{
+    fuzz_canonical_lift_args, fuzz_canonical_lift_args_from_bytes, FuzzCanonicalLiftInput,
+    FuzzStringEncoding, MAX_FUZZ_MEMORY_IMAGE_BYTES,
+};

@@ -1188,7 +1188,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 
                         checker.push(x);
                     } else {
-                        assert!(instrs.is_unreachable());
+                        // An abstract operand type here is only meaningful in
+                        // unreachable code. Reaching it otherwise means the
+                        // module is ill-typed, which is a rejection rather than
+                        // something to assert against.
+                        if !instrs.is_unreachable() {
+                            Err(WasmParserError::InvalidStackValTypeAny)?;
+                        }
                         checker.push_any();
                     }
                 }

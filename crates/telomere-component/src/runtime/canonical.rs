@@ -1287,26 +1287,18 @@ fn read_list_value_from_memory(
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
     let list_ptr = read_i32_from_memory(store, memory, ptr)? as u32;
-    let len = read_i32_from_memory(store, memory, ptr + 4)? as usize;
+    let len_ptr = ptr.checked_add(4).ok_or_else(|| {
+        ComponentError::Trap(format!("list length at {ptr} is outside the address space"))
+    })?;
+    let len = read_i32_from_memory(store, memory, len_ptr)? as u32;
     if let Some(expected) = fixed_len {
-        if len != expected {
+        if len as usize != expected {
             return Err(ComponentError::Trap(format!(
                 "fixed-length list expected {expected} elements, got {len}"
             )));
         }
     }
-    let stride = element_stride(elem, program)?;
-    let mut values = Vec::with_capacity(len);
-    for index in 0..len {
-        values.push(read_value_from_memory(
-            elem,
-            options,
-            program,
-            store,
-            memory,
-            list_ptr + stride * index as u32,
-        )?);
-    }
+    let values = read_list_elements(elem, list_ptr, len, options, program, store, memory)?;
     Ok(ComponentValue::List(values))
 }
 
@@ -1760,27 +1752,56 @@ fn lift_list_value(
         ComponentError::Runtime("canonical option `memory` is required".to_owned())
     })?;
     let ptr = cursor.next_i32()? as u32;
-    let len = cursor.next_i32()? as usize;
+    let len = cursor.next_i32()? as u32;
     if let Some(expected) = fixed_len {
-        if len != expected {
+        if len as usize != expected {
             return Err(ComponentError::Trap(format!(
                 "fixed-length list expected {expected} elements, got {len}"
             )));
         }
     }
+    let values = read_list_elements(elem, ptr, len, options, program, store, &memory)?;
+    Ok(ComponentValue::List(values))
+}
+
+/// Reads `len` list elements of type `elem`, starting at `base`.
+///
+/// `base` and `len` come from the guest, so neither is trusted: the length is
+/// never used as an allocation hint, and every element address is computed with
+/// checked arithmetic. With a non-zero stride the loop is bounded by linear
+/// memory, because the first out-of-range element read fails. A zero-stride
+/// element type would leave the loop bounded only by the guest's length, so it
+/// is rejected instead.
+fn read_list_elements(
+    elem: &ValType,
+    base: u32,
+    len: u32,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &Store,
+    memory: &CoreExportRef,
+) -> Result<Vec<ComponentValue>, ComponentError> {
     let stride = element_stride(elem, program)?;
-    let mut values = Vec::with_capacity(len);
+    if stride == 0 && len != 0 {
+        return Err(ComponentError::Trap(format!(
+            "list element type occupies no memory, so a guest-supplied length of {len} cannot be bounded"
+        )));
+    }
+    let mut values = Vec::new();
     for index in 0..len {
+        let offset = stride
+            .checked_mul(index)
+            .and_then(|offset| base.checked_add(offset))
+            .ok_or_else(|| {
+                ComponentError::Trap(format!(
+                    "list element {index} at base {base} with stride {stride} is outside the address space"
+                ))
+            })?;
         values.push(read_value_from_memory(
-            elem,
-            options,
-            program,
-            store,
-            &memory,
-            ptr + stride * index as u32,
+            elem, options, program, store, memory, offset,
         )?);
     }
-    Ok(ComponentValue::List(values))
+    Ok(values)
 }
 
 fn lift_value_from_flat_values(

@@ -43,7 +43,12 @@ where
     let (len_len, len) = parse_u32(r)?;
     trace!("parse_vec: {len_len} {len}");
     read_bytes += len_len;
-    let mut result = Vec::with_capacity(len as usize);
+    // `len` is the declared element count straight from the input, and this is
+    // the vector reader the whole core parser goes through. Using it as a
+    // capacity hint lets a short module ask for an arbitrary allocation before a
+    // single element has been read. Growing as elements arrive keeps the
+    // allocation bounded by the input that actually decodes.
+    let mut result = Vec::new();
     for _i in 0..len {
         let (len, v) = f(env)?;
         result.push(v);

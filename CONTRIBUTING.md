@@ -68,6 +68,29 @@ ordinary release preparation or a feature change. Publishing is a separate
 maintainer decision. See [RELEASING.md](RELEASING.md) for the versioning policy,
 release gate, and release checklist.
 
+## Fuzzing
+
+The fuzz harnesses live in the independent `fuzz/` workspace and require
+`nightly-2026-07-31` plus `cargo-fuzz`. Run `cargo fuzz` only from that
+directory. Before a fuzz campaign, generate the stable core and component seed
+corpora with an absolute output path:
+
+```shell
+cd fuzz
+TELOMERE_FUZZ_CORPUS_OUT="$(pwd -P)/corpus" \
+  cargo +1.96.0 test --manifest-path ../Cargo.toml -p telomere \
+  --test fuzz_corpus_replay --release -- --nocapture
+TELOMERE_FUZZ_CORPUS_OUT="$(pwd -P)/corpus" \
+  cargo +1.96.0 test --manifest-path ../Cargo.toml -p telomere-component \
+  --test fuzz_corpus_replay --release -- --nocapture
+```
+
+Keep mutable corpus and artifact files out of commits. Promote reviewed inputs
+only to `fuzz/seeds/<target>/` or `fuzz/regressions/<target>/`, then run the
+corresponding replay test. See [docs/fuzzing.md](docs/fuzzing.md) for the three
+targets, corpus-directory ordering, triage, current CI cadence, and known
+limits.
+
 ## Documentation Expectations
 
 Update docs with every behavior change that affects users, contributors, or
