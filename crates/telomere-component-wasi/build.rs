@@ -22,8 +22,13 @@ fn main() {
 
     let generated = format!(
         r#"
+/// Absolute paths to the bundled WIT packages used by the generated bindings.
 pub const WASI_WIT_DIRS: &[&str] = &[{deps_literals}];
 
+/// Generates bindings that use this crate's bundled WASI WIT dependencies.
+///
+/// The macro also adopts the provider's generated WASI types so downstream
+/// component worlds can share them without duplicate type definitions.
 #[macro_export]
 macro_rules! bindgen {{
     ({{ $($body:tt)* }}) => {{

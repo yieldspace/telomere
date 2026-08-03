@@ -1,5 +1,10 @@
 use super::*;
 
+/// A dynamically typed handle to one root component-function export.
+///
+/// Obtain a handle from [crate::ComponentInstance::get_func] when the function
+/// signature is discovered at runtime, or call [Self::typed] to validate a
+/// Rust representation once.
 #[derive(Clone)]
 pub struct ComponentFunc {
     runtime: RuntimeInstance,
@@ -23,6 +28,7 @@ impl ComponentFunc {
         }
     }
 
+    /// Calls this function with dynamic Component Model arguments.
     pub async fn call(
         &self,
         store: &Store,
@@ -31,6 +37,11 @@ impl ComponentFunc {
         self.runtime.call(store, &self.name, args).await
     }
 
+    /// Validates this function against P and R and returns a typed wrapper.
+    ///
+    /// The conversion constraints are checked before the first invocation, so a
+    /// mismatched WIT signature fails as a link error instead of silently
+    /// coercing values at call time.
     pub fn typed<P, R>(&self) -> Result<TypedComponentFunc<P, R>, ComponentError>
     where
         P: ComponentParams,
@@ -54,6 +65,10 @@ impl ComponentFunc {
     }
 }
 
+/// A [ComponentFunc] whose parameters and result have been checked once.
+///
+/// Calls convert P and R through the canonical ABI using the hidden
+/// [ComponentParams] and [ComponentReturn] implementation contracts.
 #[derive(Clone)]
 pub struct TypedComponentFunc<P, R> {
     func: ComponentFunc,
@@ -65,6 +80,7 @@ where
     P: ComponentParams,
     R: ComponentReturn,
 {
+    /// Calls the function with typed parameters and lifts its typed result.
     pub async fn call(&self, store: &Store, params: P) -> Result<R, ComponentError> {
         let results = self
             .func

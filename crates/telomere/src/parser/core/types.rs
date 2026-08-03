@@ -104,6 +104,29 @@ pub fn parse_global_type<R: BinaryReader>(reader: &mut R) -> Result<(usize, Glob
 
 pub fn parse_memtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, MemType)> {
     let flag = reader.read_exact_one()?;
+
+    // The low four bits are the currently assigned memory-type flags. Check
+    // reserved higher bits before proposal bits so malformed encodings retain
+    // the generic limit error instead of being attributed to a proposal.
+    if flag & !0x0f != 0 {
+        Err(WasmParserError::InvalidLimit)?
+    }
+    // A memory may combine memory64 and custom page sizes. This parser can
+    // report one feature at a time; choose the more specific page-size bit
+    // first so the outcome is stable for flags such as 0x0c.
+    if flag & 0x08 != 0 {
+        return Err(WasmParserError::unsupported_feature(
+            crate::parser::core::ProposalFeature::CustomPageSizes,
+            [flag, 0, 0, 0],
+        ));
+    }
+    if flag & 0x04 != 0 {
+        return Err(WasmParserError::unsupported_feature(
+            crate::parser::core::ProposalFeature::Memory64,
+            [flag, 0, 0, 0],
+        ));
+    }
+
     let (len, limits, shared) = match flag {
         0x00 => {
             let (len, min) = parse_u32(reader)?;

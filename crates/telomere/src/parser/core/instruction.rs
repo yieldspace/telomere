@@ -37,6 +37,30 @@ macro_rules! simd_instruction {
         }
     }
 }
+
+#[cfg(not(feature = "simd"))]
+fn is_standard_simd_subopcode(subopcode: u32) -> bool {
+    // The standard SIMD subopcode set from pinned wast 243.0.0. Keep this
+    // separate from relaxed SIMD so no-default builds still identify normal
+    // SIMD, while reserved values (including 0x114) remain generic errors.
+    matches!(
+        subopcode,
+        0x00..=0x99
+            | 0x9B..=0xA1
+            | 0xA3..=0xA4
+            | 0xA7..=0xAE
+            | 0xB1
+            | 0xB5..=0xBA
+            | 0xBC..=0xC1
+            | 0xC3..=0xC4
+            | 0xC7..=0xCE
+            | 0xD1
+            | 0xD5..=0xE1
+            | 0xE3..=0xED
+            | 0xEF..=0xFF
+    )
+}
+
 fn get_local_addr(
     ty: &ResultType,
     locals: &LocalReassignTable,
@@ -868,6 +892,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 
                 (1, false)
             }
+            0x06..=0x0A => Err(WasmParserError::unsupported_feature(
+                super::ProposalFeature::ExceptionHandling,
+                [v, 0, 0, 0],
+            ))?,
             0x0B => {
                 trace!("parse_op_end");
                 jump_resolver.push(JumpResolverDSL::LeaveBlock(instrs.len() as u32));
@@ -1136,6 +1164,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 
                 (1 + len + len2, false)
             }
+            0x18 | 0x19 | 0x1F => Err(WasmParserError::unsupported_feature(
+                super::ProposalFeature::ExceptionHandling,
+                [v, 0, 0, 0],
+            ))?,
             0x1A => {
                 trace!("parse_op_drop");
                 let x = checker.pop()?;
@@ -2844,6 +2876,22 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 checker.op(&[ValType::I64], &[ValType::F64])?;
                 (1, false)
             }
+            0xFB => {
+                let (_, subopcode) = self.parse_u32()?;
+                match subopcode {
+                    // wast 243.0.0 assigns 0x00..=0x1e to the GC proposal.
+                    0x00..=0x1E => Err(WasmParserError::unsupported_feature(
+                        super::ProposalFeature::GarbageCollection,
+                        [0xFB, subopcode as u8, 0, 0],
+                    ))?,
+                    _ => Err(WasmParserError::InvalidInstruction([
+                        0xFB,
+                        subopcode as u8,
+                        0x00,
+                        0x00,
+                    ]))?,
+                }
+            }
             0xFC => {
                 let (len, next) = self.parse_u32()?;
                 match next {
@@ -3108,6 +3156,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 
                         (1 + len + len2, false)
                     }
+                    19..=22 => Err(WasmParserError::unsupported_feature(
+                        super::ProposalFeature::WideArithmetic,
+                        [0xFC, next as u8, 0x00, 0x00],
+                    ))?,
                     _ => Err(WasmParserError::InvalidInstruction([
                         0xFC, next as u8, 0x00, 0x00,
                     ]))?,
@@ -3231,10 +3283,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 checker.op(&[], &[ValType::FuncRef])?;
                 (1 + len, false)
             }
+            0xD3 => Err(WasmParserError::unsupported_feature(
+                super::ProposalFeature::GarbageCollection,
+                [0xD3, 0, 0, 0],
+            ))?,
             0xFD => {
+                let (subopcode_len, idx) = self.parse_u32()?;
+                if (0x100..=0x113).contains(&idx) {
+                    return Err(WasmParserError::unsupported_feature(
+                        super::ProposalFeature::RelaxedSimd,
+                        [0xFD, idx as u8, 0, 0],
+                    ));
+                }
                 #[cfg(feature = "simd")]
                 {
-                    let (len, idx) = self.parse_u32()?;
                     use super::simd_instruction::*;
                     let mut ctx = SimdParserContext {
                         mems: self.mems,
@@ -3482,14 +3544,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         i64x2_extmul_low_i32x4_u,
                         i64x2_extmul_high_i32x4_u
                     );
-                    (1 + len + len2, false)
+                    (1 + subopcode_len + len2, false)
                 }
                 #[cfg(not(feature = "simd"))]
                 {
-                    return Err(WasmParserError::unsupported_feature(
-                        super::ProposalFeature::Simd,
-                        [0xFD, 0, 0, 0],
-                    ));
+                    let _ = subopcode_len;
+                    if is_standard_simd_subopcode(idx) {
+                        return Err(WasmParserError::unsupported_feature(
+                            super::ProposalFeature::Simd,
+                            [0xFD, 0, 0, 0],
+                        ));
+                    }
+                    return Err(WasmParserError::InvalidInstruction([
+                        0xFD, idx as u8, 0x00, 0x00,
+                    ]));
                 }
             }
             0xFE => {

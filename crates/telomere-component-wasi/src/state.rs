@@ -8,6 +8,13 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
+/// Configuration state shared by a WASI host and its embedding application.
+///
+/// Clones share the same interior state. Keep one clone after registering it
+/// with a linker to inspect captured standard output, standard error, or a
+/// guest-requested exit status. Standard output and error are always captured;
+/// inherited standard I/O additionally mirrors them to host streams. Construct
+/// it with [WasiState::builder] to control process-derived guest settings.
 #[derive(Clone)]
 pub struct WasiState {
     pub(crate) inner: Rc<RefCell<WasiStateInner>>,
@@ -91,6 +98,13 @@ pub(crate) struct WasiStateInner {
     pub directory_entry_streams: HashMap<u32, DirectoryEntryStreamEntry>,
 }
 
+/// Builds a [WasiState] with explicit process-derived guest settings.
+///
+/// A new builder does not inherit arguments, environment variables, filesystem
+/// paths, or process standard I/O. It does provide default wall and monotonic
+/// clocks plus secure random values; those provider defaults are not configured
+/// through this builder. Standard output and error are captured in the resulting
+/// state; inheritance additionally mirrors them to host streams.
 pub struct WasiStateBuilder {
     args: Vec<String>,
     env: HashMap<String, String>,
@@ -112,24 +126,49 @@ impl Default for WasiStateBuilder {
 }
 
 impl WasiState {
+    /// Starts a WASI state builder with no inherited process data or filesystem paths.
+    ///
+    /// The initial builder has empty arguments and environment, no preopened
+    /// directories, buffered empty standard input, and captured standard output
+    /// and error. Default provider wall and monotonic clocks and secure random
+    /// values remain available; configure process-derived settings before build.
     pub fn builder() -> WasiStateBuilder {
         WasiStateBuilder::new()
     }
 
+    /// Returns the status requested through the WASI CLI exit interface.
+    ///
+    /// This is None until the guest calls that interface; it does not infer a
+    /// status from a successful component return.
     pub fn exit_code(&self) -> Option<u8> {
         self.inner.borrow().exit_code
     }
 
+    /// Returns a snapshot of bytes captured from guest standard output.
+    ///
+    /// Output is captured even when [WasiStateBuilder::inherit_stdio] also
+    /// mirrors it to the embedding process stream.
     pub fn stdout(&self) -> Vec<u8> {
         self.inner.borrow().stdout.clone()
     }
 
+    /// Returns a snapshot of bytes captured from guest standard error.
+    ///
+    /// Error output is captured even when [WasiStateBuilder::inherit_stdio]
+    /// also mirrors it to the embedding process stream.
     pub fn stderr(&self) -> Vec<u8> {
         self.inner.borrow().stderr.clone()
     }
 }
 
 impl WasiStateBuilder {
+    /// Creates a builder with no inherited process data or filesystem paths.
+    ///
+    /// Defaults are empty arguments and environment, empty buffered input, no
+    /// preopened directories, and captured output. The provider exposes the
+    /// host wall clock, a monotonic clock measured from construction, and secure
+    /// random values through getrandom. The deterministic 0x5eed seed controls
+    /// only the insecure random interfaces.
     pub fn new() -> Self {
         let monotonic_origin = Instant::now();
         Self {
@@ -147,6 +186,10 @@ impl WasiStateBuilder {
         }
     }
 
+    /// Replaces the guest argument vector.
+    ///
+    /// The default is an empty vector, so a guest sees no arguments unless this
+    /// method or [Self::inherit_args] is used.
     pub fn args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -156,6 +199,10 @@ impl WasiStateBuilder {
         self
     }
 
+    /// Replaces the guest environment with the supplied key/value pairs.
+    ///
+    /// The default environment is empty. This grants only the values supplied;
+    /// use [Self::inherit_env] to opt into the embedding process environment.
     pub fn env<I, K, V>(mut self, env: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -169,16 +216,30 @@ impl WasiStateBuilder {
         self
     }
 
+    /// Lets guest standard input, output, and error use the embedding process streams.
+    ///
+    /// By default input is an empty buffer and output is captured in the state.
+    /// This method grants ambient terminal or pipe access and additionally
+    /// mirrors guest output to the host streams.
     pub fn inherit_stdio(mut self) -> Self {
         self.inherit_stdio = true;
         self
     }
 
+    /// Lets guest standard input read from the embedding process input stream.
+    ///
+    /// Without this call, the guest reads only the empty buffer or bytes set by
+    /// [Self::stdin]. Output remains captured unless [Self::inherit_stdio] is
+    /// also used.
     pub fn inherit_stdin(mut self) -> Self {
         self.inherit_stdin = true;
         self
     }
 
+    /// Adds the embedding process environment to the guest environment.
+    ///
+    /// The default exposes no environment values. Explicit values added by
+    /// [Self::env] remain unless a process variable has the same key.
     pub fn inherit_env(mut self) -> Self {
         for (key, value) in std::env::vars() {
             self.env.insert(key, value);
@@ -186,16 +247,28 @@ impl WasiStateBuilder {
         self
     }
 
+    /// Replaces guest arguments with the embedding process argument vector.
+    ///
+    /// The default is no arguments. This deliberately includes the embedding
+    /// program name, following std::env::args semantics.
     pub fn inherit_args(mut self) -> Self {
         self.args = std::env::args().collect();
         self
     }
 
+    /// Supplies a fixed byte buffer as guest standard input.
+    ///
+    /// The default buffer is empty. This does not grant access to the embedding
+    /// process input stream and is overridden by [Self::inherit_stdin].
     pub fn stdin(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.stdin = bytes.into();
         self
     }
 
+    /// Grants the guest a read-only preopened directory at a chosen guest path.
+    ///
+    /// No filesystem paths are visible by default. Each call adds one named
+    /// read-only preopen backed by the supplied host directory.
     pub fn preopen_dir(
         mut self,
         host_path: impl AsRef<Path>,
@@ -208,21 +281,39 @@ impl WasiStateBuilder {
         self
     }
 
+    /// Replaces the guest wall clock source.
+    ///
+    /// The default calls SystemTime::now, which exposes host wall time. Supply
+    /// a deterministic source when reproducible tests require it.
     pub fn wall_clock(mut self, clock: impl Fn() -> SystemTime + 'static) -> Self {
         self.wall_clock = Rc::new(clock);
         self
     }
 
+    /// Replaces the guest monotonic clock source.
+    ///
+    /// By default it measures elapsed time since builder construction. A custom
+    /// source can make time-dependent guests deterministic.
     pub fn monotonic_clock(mut self, clock: impl Fn() -> Duration + 'static) -> Self {
         self.monotonic_clock = Rc::new(clock);
         self
     }
 
+    /// Sets the deterministic seed used by the provider's seeded random state.
+    ///
+    /// The default seed is 0x5eed. It controls only the insecure random
+    /// interfaces; secure random values are independently supplied by getrandom.
+    /// Choose an explicit seed for reproducible component tests.
     pub fn random_seed(mut self, seed: u64) -> Self {
         self.random_seed = seed;
         self
     }
 
+    /// Creates the shared WASI state and materializes preopened directory handles.
+    ///
+    /// The returned state can be cloned into add_to_linker_sync or
+    /// add_to_linker_async while the original clone observes captured output and
+    /// exit status after guest execution.
     pub fn build(self) -> WasiState {
         let mut inner = WasiStateInner {
             args: self.args,

@@ -202,6 +202,7 @@ pub fn expand(input: BindgenInput) -> Result<TokenStream2> {
     )?;
     let body = generator.generate()?;
     Ok(quote! {
+        #[allow(missing_docs)]
         pub mod #module_ident {
             #body
         }
@@ -2525,5 +2526,29 @@ mod tests {
         assert!(error
             .to_string()
             .contains("conflicts with direct export `ex-counterdemo-runner`"));
+    }
+
+    #[test]
+    fn generated_module_keeps_missing_docs_allow() {
+        let input: BindgenInput = syn::parse_str(
+            r##"{
+                inline: r#"
+                    package ex:doclint;
+
+                    world demo {
+                        export ping: func();
+                    }
+                "#,
+                world: "demo",
+                module: "bindings"
+            }"##,
+        )
+        .expect("bindgen input should parse");
+
+        let tokens = expand(input).expect("bindgen should expand").to_string();
+        assert!(
+            tokens.contains("allow (missing_docs)"),
+            "generated binding module lost its missing_docs allow: {tokens}"
+        );
     }
 }

@@ -1,20 +1,38 @@
 #[derive(Debug, Clone)]
 #[must_use]
+/// The result of instantiation or guest execution.
+///
+/// Unlike [`Result`], failures are WebAssembly traps and runtime conditions
+/// rather than host-language errors. Match the variants to decide whether a
+/// guest result can be used.
 pub enum VMResult<V> {
+    /// The operation completed and produced its value.
     Success(V),
+    /// Guest execution reached an `unreachable` instruction.
     Unreachable,
+    /// The guest exhausted the interpreter's stack capacity.
     StackOverflow,
+    /// A guest memory instruction referenced a missing memory.
     MemoryIndexOutOfRange,
+    /// A guest atomic instruction used an address with insufficient alignment.
     UnalignedAtomic,
+    /// A guest table instruction referenced a missing table.
     TableIndexOutOfRange,
+    /// An indirect call's runtime type did not match its expected type.
     CallIndirectInvalidType,
+    /// An indirect call selected an uninitialized table entry.
     TableUninitialized,
+    /// Imports, exports, or initialization could not be linked into an instance.
     Unlinkable,
+    /// The runtime could not reserve or grow guest memory.
     MemoryAllocationFailed,
+    /// A guest instruction received an invalid dynamic operand.
     InvalidOperand,
+    /// The runtime does not implement this execution path yet.
     Unimplemented,
 }
 #[macro_export]
+/// Propagates a non-success [`VMResult`](crate::VMResult) from the current function.
 macro_rules! vm_try {
     ($expr: expr) => {
         match $expr {
@@ -34,12 +52,14 @@ macro_rules! vm_try {
     };
 }
 impl<V> VMResult<V> {
+    /// Converts an option into a success or a caller-selected runtime failure.
     pub fn from_option(opt: Option<V>, err: impl FnOnce() -> VMResult<V>) -> VMResult<V> {
         match opt {
             Some(v) => VMResult::Success(v),
             None => err(),
         }
     }
+    /// Returns the success value, panicking with the trap name for every failure variant.
     pub fn unwrap(self) -> V {
         match self {
             VMResult::Success(v) => v,
@@ -78,6 +98,7 @@ impl<V> VMResult<V> {
             }
         }
     }
+    /// Returns `true` when this value is a trap or runtime failure.
     pub fn is_err(&self) -> bool {
         !matches!(self, VMResult::Success(_))
     }

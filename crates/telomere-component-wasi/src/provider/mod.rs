@@ -24,6 +24,13 @@ impl WasiHost {
     }
 }
 
+/// Installs synchronous WASI 0.2 host functions into a component linker.
+///
+/// The supplied state is shared with the registered host implementation, so
+/// callers can inspect captured output and exit status after component calls.
+/// Arguments, environment, preopened directories, and inherited process I/O
+/// require explicit WasiStateBuilder configuration. Default clock and secure
+/// random providers remain available without those settings.
 pub fn add_to_linker_sync(
     linker: &mut ComponentLinker,
     state: WasiState,
@@ -33,6 +40,11 @@ pub fn add_to_linker_sync(
     Ok(())
 }
 
+/// Installs asynchronous WASI 0.2 host functions into a component linker.
+///
+/// This registers the async trait variants generated from the bundled WIT. It
+/// shares the same process-data configuration and default clock/random provider
+/// behavior as add_to_linker_sync.
 pub fn add_to_linker_async(
     linker: &mut ComponentLinker,
     state: WasiState,

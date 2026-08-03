@@ -182,6 +182,10 @@ fn convert_async_native_module_to_module(m: AsyncNativeModule) -> (Module, Vec<A
         async_functions,
     )
 }
+/// Instantiates a synthetic module made entirely of synchronous host functions.
+///
+/// This is useful when an embedder wants to register a Rust-provided module in
+/// a [`Registry`] before instantiating a guest that imports it.
 pub async fn instantiate_native_module(
     m: NativeModule,
     store: &Store,
@@ -190,6 +194,10 @@ pub async fn instantiate_native_module(
     instantiate(convert_native_module_to_module(m), store, registry).await
 }
 
+/// Instantiates a synthetic module made entirely of asynchronous host functions.
+///
+/// Each host callback is linked before the returned handle is exposed, so guest
+/// calls suspend through the runtime's [`crate::ExecutionDriver`] integration.
 pub async fn instantiate_native_async_module(
     m: AsyncNativeModule,
     store: &Store,
@@ -203,6 +211,33 @@ pub async fn instantiate_native_async_module(
     VMResult::Success(instance)
 }
 
+/// Allocates and initializes a parsed module in `store`.
+///
+/// Imports are resolved through `registry`; a missing or incompatible import,
+/// invalid initialization expression, or start-function trap returns a
+/// non-success [`VMResult`]. The resulting [`InstanceHandle`] is bound to the
+/// supplied store.
+///
+/// # Examples
+///
+/// ```
+/// use telomere::{instantiate, IoReadBinaryReader, Registry, Store, VMResult, WasmParser};
+///
+/// let bytes = wat::parse_str("(module (func (export \"ready\")))")
+///     .expect("the inline module is valid");
+/// let mut reader = IoReadBinaryReader::from(&bytes[..]);
+/// let module = WasmParser::new(&mut reader)
+///     .parse_module()
+///     .expect("the module parses");
+/// let runtime = tokio::runtime::Builder::new_current_thread()
+///     .build()
+///     .expect("Tokio runtime builds");
+///
+/// match runtime.block_on(instantiate(module, &Store::new(), &Registry::new())) {
+///     VMResult::Success(_) => {}
+///     failure => panic!("instantiation failed: {failure:?}"),
+/// }
+/// ```
 pub async fn instantiate(
     m: Module,
     store: &Store,
@@ -627,6 +662,11 @@ pub async fn instantiate(
     VMResult::Success(addr)
 }
 #[allow(dead_code)]
+/// Builds a lightweight module that re-exports imports from registered instances.
+///
+/// Every tuple is `(registered_module, imported_export, new_export_name)`. This
+/// advanced helper shares the existing underlying functions, globals, memories,
+/// or tables; it does not copy their state.
 pub fn aliasing(
     registry: &Registry,
     triplets: &[(String, String, String)],
@@ -732,6 +772,10 @@ pub fn aliasing(
     });
     VMResult::Success(InstanceHandle::new(store, inst_id_handle, inst_id))
 }
+/// Replaces a function in `addr` with a synchronous host callback by index.
+///
+/// `funcidx` must select an existing function of a signature compatible with
+/// `f`, and `addr` must belong to `store`.
 pub fn link_host_function_with_function_idx(
     addr: &InstanceHandle,
     funcidx: u32,
@@ -758,6 +802,10 @@ pub fn link_host_function_with_function_idx(
     let recipe = gc.build_call_recipe(funcaddr);
     gc.set_call_recipe_for_func(funcaddr, recipe);
 }
+/// Replaces an exported function with a synchronous host callback.
+///
+/// `name` must resolve to a function export of `addr`; use the index variant
+/// when the embedder already has the function index.
 pub fn link_host_function_with_export_name(
     addr: &InstanceHandle,
     name: &str,
@@ -786,6 +834,10 @@ pub fn link_host_function_with_export_name(
     link_host_function_with_function_idx(addr, func_idx, f, store);
 }
 
+/// Replaces a function in `addr` with an asynchronous host callback by index.
+///
+/// The callback future is submitted to the [`crate::ExecutionDriver`] used by
+/// [`crate::run_module_function_with_driver`].
 pub fn link_async_host_function_with_function_idx(
     addr: &InstanceHandle,
     funcidx: u32,
@@ -813,6 +865,10 @@ pub fn link_async_host_function_with_function_idx(
     gc.set_call_recipe_for_func(funcaddr, recipe);
 }
 
+/// Replaces an exported function with an asynchronous host callback.
+///
+/// `name` must resolve to a function export of `addr`; use the index variant
+/// when the embedder already has the function index.
 pub fn link_async_host_function_with_export_name(
     addr: &InstanceHandle,
     name: &str,
