@@ -242,10 +242,15 @@ checkpoint observes the flag.
 
 `MeteringHandle::interrupt()` stops guest code that is executing at a metered
 checkpoint. It does not wake guest code parked in a `memory.atomic.wait` with
-no timeout: metering bounds execution, not waiting. A guest can park only when
-its embedder has provided shared memory, and the embedder owns guest-thread
-creation. An embedder executing untrusted code must therefore either withhold
-shared memory and threads or allow only waits with finite timeouts.
+no timeout, so such a guest cannot currently be evicted. **This is a known gap
+in this change, not a definitional boundary: `memory.atomic.wait` is a guest
+instruction, and bounding it is within the intent of store-scoped metering. It
+was deferred as an engineering judgement — the fix changes the public
+`ExecutionDriver`/`PendingOp` completion path, which should be designed together
+with the async facade — and is tracked as #177.** A guest can park only when its
+embedder has provided shared memory, and the embedder owns guest-thread
+creation. Until #177 lands, an embedder executing untrusted code must either
+withhold shared memory and threads or allow only waits with finite timeouts.
 
 `reset_interrupt()` clears the flag for a later invocation. It does not restore
 fuel or resume an invocation that has already returned an interruption result.
