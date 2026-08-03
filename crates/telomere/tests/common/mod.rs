@@ -1,3 +1,5 @@
+#[cfg(feature = "jit")]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
     common::InstanceHandle, get_global, instantiate, IoReadBinaryReader, Registry, ResultValue,
     Store, VMResult, WasmParser, WasmValue,
@@ -8,6 +10,9 @@ use wast::{
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
+
+#[cfg(feature = "jit")]
+static WAST_JIT_COMPILED_FUNCTIONS: AtomicUsize = AtomicUsize::new(0);
 
 pub async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
     let buf = ParseBuffer::new(wat).unwrap();
@@ -109,33 +114,98 @@ pub async fn run_wast(text: &str) {
     assert_wast_jit_acceptance(&store);
 }
 
+#[cfg(feature = "jit")]
 fn wast_store() -> Store {
-    #[cfg(feature = "jit")]
-    if std::env::var_os("TELOMERE_WAST_JIT").is_some() && telomere::jit_supported() {
+    let store = if std::env::var_os("TELOMERE_WAST_JIT").is_some() && telomere::jit_supported() {
         let code_cache_max_bytes = std::env::var("TELOMERE_WAST_JIT_CACHE_MAX_BYTES")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(64 * 1024 * 1024);
-        return Store::new_with_runtime_config(telomere::RuntimeConfig {
+        Store::new_with_runtime_config(telomere::RuntimeConfig {
             jit: telomere::JitConfig {
                 enabled: true,
                 code_cache_max_bytes,
             },
-        });
+        })
+    } else {
+        Store::new()
+    };
+
+    if std::env::var_os("TELOMERE_WAST_JIT_REQUIRE_ACCEPT").is_some() {
+        assert!(
+            telomere::jit_supported(),
+            "TELOMERE_WAST_JIT_REQUIRE_ACCEPT requires JIT support on this target"
+        );
+        assert!(
+            store.runtime_config().jit.enabled,
+            "TELOMERE_WAST_JIT_REQUIRE_ACCEPT requires TELOMERE_WAST_JIT=1"
+        );
     }
+
+    store
+}
+
+#[cfg(not(feature = "jit"))]
+fn wast_store() -> Store {
+    if std::env::var_os("TELOMERE_WAST_JIT_REQUIRE_ACCEPT").is_some() {
+        panic!(
+            "TELOMERE_WAST_JIT_REQUIRE_ACCEPT requires the telomere `jit` feature to be enabled"
+        );
+    }
+
     Store::new()
 }
 
 fn assert_wast_jit_acceptance(store: &Store) {
-    let _ = store;
     #[cfg(feature = "jit")]
-    if std::env::var_os("TELOMERE_WAST_JIT_REQUIRE_ACCEPT").is_some()
-        && store.runtime_config().jit.enabled
-    {
+    if std::env::var_os("TELOMERE_WAST_JIT_REQUIRE_ACCEPT").is_some() {
+        assert!(
+            store.runtime_config().jit.enabled,
+            "TELOMERE_WAST_JIT_REQUIRE_ACCEPT requires a JIT-enabled store"
+        );
         let stats = store.jit_cache_stats();
         assert_eq!(
             stats.rejected_functions, 0,
             "wast fixture produced JIT compile rejection: {stats:?}"
+        );
+        WAST_JIT_COMPILED_FUNCTIONS.fetch_add(stats.compiled_functions, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "jit"))]
+    {
+        let _ = store;
+    }
+}
+
+#[allow(dead_code)]
+pub fn reset_wast_jit_compiled_functions() {
+    #[cfg(feature = "jit")]
+    WAST_JIT_COMPILED_FUNCTIONS.store(0, Ordering::Relaxed);
+}
+
+#[allow(dead_code)]
+pub fn assert_wast_jit_compiled_functions() {
+    #[cfg(feature = "jit")]
+    if std::env::var_os("TELOMERE_WAST_JIT_REQUIRE_ACCEPT").is_some() {
+        assert!(
+            telomere::jit_supported(),
+            "TELOMERE_WAST_JIT_REQUIRE_ACCEPT requires JIT support on this target"
+        );
+        assert!(
+            std::env::var_os("TELOMERE_WAST_JIT").is_some(),
+            "TELOMERE_WAST_JIT_REQUIRE_ACCEPT requires TELOMERE_WAST_JIT=1"
+        );
+        let compiled_functions = WAST_JIT_COMPILED_FUNCTIONS.load(Ordering::Relaxed);
+        assert!(
+            compiled_functions > 0,
+            "TELOMERE_WAST_JIT_REQUIRE_ACCEPT completed the wast suite without compiling any functions"
+        );
+    }
+
+    #[cfg(not(feature = "jit"))]
+    if std::env::var_os("TELOMERE_WAST_JIT_REQUIRE_ACCEPT").is_some() {
+        panic!(
+            "TELOMERE_WAST_JIT_REQUIRE_ACCEPT requires the telomere `jit` feature to be enabled"
         );
     }
 }

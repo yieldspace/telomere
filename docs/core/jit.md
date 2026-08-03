@@ -13,12 +13,29 @@ cargo run --features jit -- --jit examples/add.wasm main 1 2
 
 ## Supported Targets
 
-The active native backends are:
+Execution-verified in CI. The wast conformance suite runs on every push with the
+JIT enabled and acceptance enforced (`TELOMERE_WAST_JIT=1`,
+`TELOMERE_WAST_JIT_REQUIRE_ACCEPT=1`):
 
-- macOS AArch64
-- macOS/Linux x86_64
-- Linux GNU riscv64 targets with standard riscv64gc F/D floating-point ISA
-  assumptions
+- macOS AArch64 (`aarch64-apple-darwin`)
+- macOS x86_64 (`x86_64-apple-darwin`)
+- Linux x86_64 (`x86_64-unknown-linux-gnu`)
+
+Compile-only:
+
+- Linux GNU riscv64 (`riscv64gc-unknown-linux-gnu`), assuming the standard
+  riscv64gc F/D floating-point ISA. CI type-checks and links this backend but
+  does not execute it.
+
+  The one attempt to execute it, under `qemu-riscv64-static`, segfaulted on
+  entering the first JIT-compiled function. Non-JIT riscv64 tests passed under
+  the same emulator, linker and sysroot, which isolates the failure to the JIT
+  path — but it does not distinguish a backend defect from a limitation of
+  user-mode emulation, since the JIT maps W^X executable memory and depends on
+  instruction-cache behaviour that qemu-user need not reproduce faithfully.
+
+  Treat riscv64 JIT execution as **unverified**: not known-good, and not known
+  broken. It has not been run on riscv64 hardware.
 
 Runtime use is additionally gated by `telomere::jit_supported()`. The CLI fails
 closed if `--jit` is requested on an unsupported build or target.
@@ -76,6 +93,8 @@ Known gaps:
   metadata;
 - broader executable-memory policy and cache tuning outside the supported
   Unix-like targets.
+- execution verification for the riscv64 backend, which is compile-checked
+  only.
 
 Benchmark-specific whole-function rewrites are intentionally not enabled. JIT
 work should improve reusable Wasm instruction patterns rather than recognizing a
@@ -105,6 +124,11 @@ Focused checks:
 cargo test -p telomere --release --features jit --test jit -- --nocapture
 TELOMERE_WAST_JIT=1 TELOMERE_WAST_JIT_REQUIRE_ACCEPT=1 cargo test -p telomere --release --features jit --test wast -- --nocapture
 ```
+
+CI runs the full WAST suite with strict JIT acceptance on the three supported
+desktop targets (Linux x86_64, macOS x86_64, and macOS AArch64). The riscv64
+Linux GNU backend is limited to cross-compiling and checking the core and CLI
+in CI.
 
 See [jit-coverage-audit.md](jit-coverage-audit.md) for the handler-level audit.
 
