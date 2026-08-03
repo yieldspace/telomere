@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 #[cfg(feature = "jit")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
@@ -7,12 +9,25 @@ use telomere::{
 use tracing::error;
 use wast::{
     core::{AbstractHeapType, HeapType, NanPattern, V128Pattern, WastRetCore},
+    lexer::Lexer,
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
 
 #[cfg(feature = "jit")]
 static WAST_JIT_COMPILED_FUNCTIONS: AtomicUsize = AtomicUsize::new(0);
+
+pub struct SpecDivergence {
+    pub module_sha256: &'static str,
+    pub why: &'static str,
+}
+
+fn wast_parse_buffer(text: &str) -> ParseBuffer<'_> {
+    let mut lexer = Lexer::new(text);
+    // `names.wast` intentionally contains confusing Unicode in upstream identifiers.
+    lexer.allow_confusing_unicode(true);
+    ParseBuffer::new_with_lexer(lexer).unwrap()
+}
 
 pub async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
     let buf = ParseBuffer::new(wat).unwrap();
@@ -106,11 +121,27 @@ async fn init_spectest(store: &Store, registry: &Registry) -> InstanceHandle {
 }
 #[allow(dead_code)]
 pub async fn run_wast(text: &str) {
+    let mut divergence_hits = HashSet::new();
+    run_wast_with_spec_divergences(text, &[], &mut divergence_hits).await;
+}
+
+pub async fn run_wast_with_spec_divergences(
+    text: &str,
+    divergences: &[SpecDivergence],
+    divergence_hits: &mut HashSet<&'static str>,
+) {
     let store = wast_store();
     let mut registry = Registry::new();
     let st = init_spectest(&store, &registry).await;
     registry.register("spectest", st.clone());
-    run_wast_with(text, &store, &mut registry).await;
+    run_wast_with_spec_divergences_in_context(
+        text,
+        &store,
+        &mut registry,
+        divergences,
+        divergence_hits,
+    )
+    .await;
     assert_wast_jit_acceptance(&store);
 }
 
@@ -210,8 +241,21 @@ pub fn assert_wast_jit_compiled_functions() {
     }
 }
 
+#[allow(dead_code)]
 pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
-    let buf = ParseBuffer::new(text).unwrap();
+    let mut divergence_hits = HashSet::new();
+    run_wast_with_spec_divergences_in_context(text, store, registry, &[], &mut divergence_hits)
+        .await;
+}
+
+async fn run_wast_with_spec_divergences_in_context(
+    text: &str,
+    store: &Store,
+    registry: &mut Registry,
+    divergences: &[SpecDivergence],
+    divergence_hits: &mut HashSet<&'static str>,
+) {
+    let buf = wast_parse_buffer(text);
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
     let mut instance: Option<InstanceHandle> = None;
 
@@ -466,23 +510,8 @@ pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
             } => {
                 let test = module.to_test().unwrap();
                 match test {
-                    wast::QuoteWatTest::Text(source) => {
-                        let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                        let mut parser = telomere::WasmParser::new(&mut reader);
-                        assert!(
-                            parser.parse_module().is_err(),
-                            "{:?}",
-                            span.linecol_in(text)
-                        )
-                    }
-                    wast::QuoteWatTest::Binary(source) => {
-                        let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                        let mut parser = telomere::WasmParser::new(&mut reader);
-                        assert!(
-                            parser.parse_module().is_err(),
-                            "{:?}",
-                            span.linecol_in(text)
-                        )
+                    wast::QuoteWatTest::Text(source) | wast::QuoteWatTest::Binary(source) => {
+                        assert_malformed_module(&source, span, text, divergences, divergence_hits)
                     }
                 }
             }
@@ -492,11 +521,11 @@ pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
                 message,
             } => {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
-                //FIXME: ignoring alignment error
+                // Message fidelity is outside #130's scope and tracked by #120.
                 if message != "alignment must not be larger than natural" {
                     let multiple_tables = message == "multiple tables";
                     let multiple_memories = message == "multiple memories";
-                    //TODO: Is there anything that wast fails to encode that could be binary?
+                    // Multi-table/multi-memory support supersedes these pre-3.0 assertions.
                     if let Ok(source) = module.encode() {
                         let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                         let mut parser = telomere::WasmParser::new(&mut reader);
@@ -626,5 +655,37 @@ pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
             }
             _ => unimplemented!(),
         }
+    }
+}
+
+fn assert_malformed_module(
+    source: &[u8],
+    span: wast::token::Span,
+    text: &str,
+    divergences: &[SpecDivergence],
+    divergence_hits: &mut HashSet<&'static str>,
+) {
+    let module_sha256 = format!("{:x}", Sha256::digest(source));
+    let divergence = divergences
+        .iter()
+        .find(|divergence| divergence.module_sha256 == module_sha256);
+    let mut reader = telomere::IoReadBinaryReader::from(source);
+    let mut parser = telomere::WasmParser::new(&mut reader);
+
+    if let Some(divergence) = divergence {
+        assert!(
+            parser.parse_module().is_ok(),
+            "stale spec divergence {}: {} @ {:?}",
+            divergence.module_sha256,
+            divergence.why,
+            span.linecol_in(text),
+        );
+        divergence_hits.insert(divergence.module_sha256);
+    } else {
+        assert!(
+            parser.parse_module().is_err(),
+            "AssertMalformed unexpectedly parsed SHA-256 {module_sha256} @ {:?}",
+            span.linecol_in(text),
+        );
     }
 }

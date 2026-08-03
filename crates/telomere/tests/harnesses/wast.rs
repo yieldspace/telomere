@@ -11,10 +11,47 @@ use tokio::runtime::Builder;
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::{assert_wast_jit_compiled_functions, reset_wast_jit_compiled_functions, run_wast};
+use common::{
+    assert_wast_jit_compiled_functions, reset_wast_jit_compiled_functions, run_wast,
+    run_wast_with_spec_divergences, SpecDivergence,
+};
 
-// `labels` / `names` are existing wast parser limitations.
-const ROOT_SKIP: &[&str] = &["labels", "names"];
+// `names.wast` intentionally exercises confusing Unicode identifiers; common's WAST lexer
+// permits them so the upstream fixture remains covered.
+const BINARY_SPEC_DIVERGENCES: &[SpecDivergence] = &[
+    SpecDivergence {
+        module_sha256: "909d4aa41a4f6623de2050a202fc9f9051ab2fe9befad35e4fc51590e179de33",
+        why: "memory.grow memidx as a 2-byte padded LEB128 zero \\80\\00 (binary.wast:157)",
+    },
+    SpecDivergence {
+        module_sha256: "1705fe3c26ab0a39d9e10a9b7e5bf651f05c5cbdf87955105d13d2728216b3a8",
+        why: "memory.grow memidx as a 3-byte padded LEB128 zero \\80\\80\\00 (binary.wast:177)",
+    },
+    SpecDivergence {
+        module_sha256: "6bcc89147ce94827cca33c548c0eb2024e4a81570ed61863dec0dfbf20b1c9a1",
+        why: "memory.grow memidx as a 4-byte padded LEB128 zero \\80\\80\\80\\00 (binary.wast:196)",
+    },
+    SpecDivergence {
+        module_sha256: "2b1fd5cdc1a748b6328cc9d50df39d4bf6c556ee98ae1129b49772db5759bbeb",
+        why: "memory.grow memidx as a 5-byte padded LEB128 zero \\80\\80\\80\\80\\00 (binary.wast:215)",
+    },
+    SpecDivergence {
+        module_sha256: "1574757b0db4833333076f316fe8bf18628f778e49adeaf8f459c8d2b4915d6e",
+        why: "memory.size memidx as a 2-byte padded LEB128 zero \\80\\00 (binary.wast:253)",
+    },
+    SpecDivergence {
+        module_sha256: "e243a4ae6cfcdb613e343d696bfdae24d53ce0699df3ddfb76f1a33fb6496e9d",
+        why: "memory.size memidx as a 3-byte padded LEB128 zero \\80\\80\\00 (binary.wast:272)",
+    },
+    SpecDivergence {
+        module_sha256: "eabdad468198fb15996d6aef9ef74107fcf790a1c7100e955cde92970ef93492",
+        why: "memory.size memidx as a 4-byte padded LEB128 zero \\80\\80\\80\\00 (binary.wast:290)",
+    },
+    SpecDivergence {
+        module_sha256: "96835584e3bf2470bbec7338a887ad606c24547e89622a094d25ce9a1091c90b",
+        why: "memory.size memidx as a 5-byte padded LEB128 zero \\80\\80\\80\\80\\00 (binary.wast:308)",
+    },
+];
 
 #[allow(clippy::vec_init_then_push)]
 fn proposal_allowlist() -> Vec<&'static str> {
@@ -55,6 +92,7 @@ fn proposal_only() -> Vec<&'static str> {
 struct Case {
     name: String,
     fixture: PathBuf,
+    divergences: &'static [SpecDivergence],
 }
 
 fn main() -> ExitCode {
@@ -83,7 +121,7 @@ fn collect_trials() -> Vec<Trial> {
         .into_iter()
         .map(|case| {
             let fixture = case.fixture.clone();
-            Trial::test(case.name, move || run_case(fixture))
+            Trial::test(case.name, move || run_case(fixture, case.divergences))
         })
         .collect()
 }
@@ -98,7 +136,7 @@ fn resolve_suite_dir() -> PathBuf {
     suite_dir
 }
 
-fn run_case(fixture: PathBuf) -> Result<(), Failed> {
+fn run_case(fixture: PathBuf, divergences: &'static [SpecDivergence]) -> Result<(), Failed> {
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
@@ -112,7 +150,26 @@ fn run_case(fixture: PathBuf) -> Result<(), Failed> {
     runtime.block_on(async move {
         let wast = fs::read_to_string(&fixture)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", fixture.display()));
-        run_wast(&wast).await;
+        if divergences.is_empty() {
+            run_wast(&wast).await;
+        } else {
+            let mut divergence_hits = HashSet::new();
+            run_wast_with_spec_divergences(&wast, divergences, &mut divergence_hits).await;
+            assert_eq!(
+                divergence_hits.len(),
+                divergences.len(),
+                "stale spec divergence entries for {}: {divergence_hits:?}",
+                fixture.display(),
+            );
+            for divergence in divergences {
+                assert!(
+                    divergence_hits.contains(divergence.module_sha256),
+                    "stale spec divergence {}: {}",
+                    divergence.module_sha256,
+                    divergence.why,
+                );
+            }
+        }
     });
 
     Ok(())
@@ -129,21 +186,19 @@ fn collect_root_cases(suite_dir: &Path) -> (Vec<Case>, HashSet<String>) {
         }
 
         let stem = file_stem(&path);
-        if ROOT_SKIP.contains(&stem.as_str()) {
-            continue;
-        }
         #[cfg(not(feature = "simd"))]
         if stem.starts_with("simd") {
             continue;
         }
-        if matches!(stem.as_str(), "memory" | "binary" | "binary-leb128") {
-            continue;
-        }
-
         root_names.insert(stem.clone());
         cases.push(Case {
             name: normalize_name(&stem),
             fixture: path,
+            divergences: if stem == "binary" {
+                BINARY_SPEC_DIVERGENCES
+            } else {
+                &[]
+            },
         });
     }
 
@@ -208,6 +263,7 @@ fn collect_proposal_cases_in_dir(
             cases.push(Case {
                 name: normalize_name(&rel),
                 fixture: path,
+                divergences: &[],
             });
         }
     }
