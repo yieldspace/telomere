@@ -186,6 +186,9 @@ from producing output through this runner.
   CI guards that property with `cargo tree` in the
   [`minimal-embedder` job][minimal-ci]
   ([#138](https://github.com/yieldspace/telomere/issues/138)).
+- [Parser recursion limits](core/parser-limits.md) is the canonical policy reference for
+  [#166](https://github.com/yieldspace/telomere/issues/166); this matrix intentionally repeats
+  none of its claims.
 
 ## Verified source snapshot
 
