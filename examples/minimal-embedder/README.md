@@ -10,6 +10,14 @@ achievable byte count. The headline configurations retain SIMD because it is a
 supported default; core-nosimd is included to make the byte-cost difference
 visible.
 
+## Rustdoc walkthrough
+
+For a self-contained inline-WAT core embedding example, start with the
+[`telomere` crate rustdoc source](../../crates/telomere/src/lib.rs). It uses a
+Tokio current-thread runtime to show the public asynchronous API; this example
+crate is the complementary standalone program with the feature configurations
+and executable commands below.
+
 Run all commands from the repository root. The binaries accept the fixture path
 as their only argument and fail with a non-zero status if parsing,
 instantiation, execution, or the expected result fails.

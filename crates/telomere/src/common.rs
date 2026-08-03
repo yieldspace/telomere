@@ -1,5 +1,7 @@
 #![allow(private_interfaces)]
 
+/// Runtime result values shared by the interpreter and embedding API.
+#[warn(missing_docs)]
 #[macro_use]
 mod vm_result;
 use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
@@ -19,9 +21,15 @@ pub(crate) mod stack;
 use stack::CachedMemoryKind;
 pub(crate) use stack::CallFrameCache;
 pub use stack::{LocalReference, Stack};
+/// Import registry used while instantiating a core module.
+#[warn(missing_docs)]
 mod registry;
 pub use registry::Registry;
+/// Stable object references used by advanced runtime integrations.
+#[warn(missing_docs)]
 mod object_ref;
+/// Store configuration and handles exposed through the core embedding API.
+#[warn(missing_docs)]
 pub(crate) mod store;
 pub use object_ref::ObjectRef;
 pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
@@ -32,6 +40,8 @@ use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};
 
 use crate::runtime::scheduler::EffectSupplier;
 use crate::WasmParserError;
+/// Parsed name custom-section data.
+#[warn(missing_docs)]
 pub mod custom_section;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -107,17 +117,31 @@ impl ResultType {
     }
 }
 #[derive(Debug, Clone, PartialEq)]
-pub struct ResultValue(Vec<WasmValue>);
+/// Ordered parameters supplied to, or results returned from, a guest function.
+///
+/// The order follows the function type. Construct a value with [`Self::new`]
+/// when invoking [`crate::run_module_function`].
+pub struct ResultValue(
+    /// Values in WebAssembly parameter or result order.
+    Vec<WasmValue>,
+);
 impl ResultValue {
+    /// Creates an ordered parameter or result list from host values.
     pub fn new(args: Vec<WasmValue>) -> Self {
         Self(args)
     }
+
+    /// Iterates over values in their WebAssembly order.
     pub fn iter(&self) -> impl Iterator<Item = &WasmValue> + use<'_> {
         self.0.iter()
     }
+
+    /// Returns the number of values in this list.
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    /// Returns whether the list contains no values.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -177,8 +201,17 @@ impl ExportSection {
         self.0.iter().find(|it| it.0 == name).map(|it| it.1)
     }
 }
+/// Signature of a synchronous host function linked into a native module.
+///
+/// The returned instruction pointer tells the interpreter where to continue;
+/// host functions normally use [`ExecuteContext::return_slot`] to write values.
 pub type HostFunction = fn(ctx: &mut ExecuteContext) -> VMResult<*const Instr>;
+/// Boxed future returned by an asynchronous host function.
+///
+/// The future resolves to the instruction pointer at which the runtime resumes
+/// guest execution, or a WebAssembly trap.
 pub type AsyncHostFuture = Pin<Box<dyn Future<Output = VMResult<*const Instr>> + 'static>>;
+/// Signature of an asynchronous host function linked into a native module.
 pub type AsyncHostFunction = fn(&mut ExecuteContext<'_>) -> AsyncHostFuture;
 
 pub struct ReturnSlot(*mut u8);
@@ -263,35 +296,67 @@ pub enum DataCountVerifier {
 #[derive(Debug, Clone)]
 pub struct DataSection(pub Vec<Data>);
 #[derive(Clone)]
+/// The parsed core module consumed by [`crate::instantiate`].
+///
+/// It exposes the decoded sections for advanced embedders, but the usual flow
+/// is to receive it from [`crate::WasmParser::parse_module`].
 pub struct Module {
+    /// Function signatures from the type section.
     pub fts: TypeSection,
+    /// Complete core function index space: imported function type indices first, then defined functions.
     pub functions: Vec<TypeIdx>,
+    /// Imported tables, memories, globals, and functions.
     pub imports: ImportSection,
+    /// Complete core memory index space: imported memory types first, then defined memories.
     pub mems: Vec<MemType>,
+    /// Complete core global index space: imported global types first, then defined globals.
     pub globals: Vec<GlobalType>,
+    /// Initializers for defined globals only, aligned with `globals[imported_global_len..]`.
+    ///
+    /// `imported_global_len` is the number of global imports in [`Self::imports`], so
+    /// `global_init[i]` initializes `globals[imported_global_len + i]`.
     pub global_init: Vec<ConstExpr>,
+    /// Export declarations indexed by name.
     pub exs: ExportSection,
+    /// Complete core table index space: imported table types first, then defined tables.
     pub tables: Vec<TableType>,
+    /// Element segments for table initialization.
     pub elems: ElementSection,
+    /// Function bodies in definition order.
     pub codes: CodeSection,
+    /// Data segments for memory initialization.
     pub data: DataSection,
+    /// Optional function invoked automatically after instantiation.
     pub start: Option<FuncIdx>,
+    /// Producer-supplied names, when the module includes a `name` custom section.
     pub name: Option<NameSubSection>,
 }
+/// A native synchronous host function and its core WebAssembly signature.
 pub struct HostFunctionDefinition {
+    /// Optional export name assigned to the generated native module.
     pub name: Option<String>,
+    /// Parameter and result types accepted by the host callback.
     pub signature: FuncType,
+    /// Synchronous callback invoked by the interpreter.
     pub fp: HostFunction,
 }
+/// A native asynchronous host function and its core WebAssembly signature.
 pub struct AsyncHostFunctionDefinition {
+    /// Optional export name assigned to the generated native module.
     pub name: Option<String>,
+    /// Parameter and result types accepted by the host callback.
     pub signature: FuncType,
+    /// Callback whose future completes before guest execution resumes.
     pub fp: AsyncHostFunction,
 }
+/// A collection of synchronous host functions that can be instantiated as a module.
 pub struct NativeModule {
+    /// Host functions exposed by the native module.
     pub functions: Vec<HostFunctionDefinition>,
 }
+/// A collection of asynchronous host functions that can be instantiated as a module.
 pub struct AsyncNativeModule {
+    /// Host functions exposed by the native module.
     pub functions: Vec<AsyncHostFunctionDefinition>,
 }
 pub const TABLE_UNINITIALIZED: u32 = 0x00;
@@ -303,16 +368,22 @@ impl TableInstance {
     }
 }
 #[derive(Clone)]
+/// Runtime instance data allocated for a parsed module.
+///
+/// Embedders usually interact through [`InstanceHandle`], which keeps this
+/// store-local data valid and prevents accidental cross-store use.
 pub struct Instance {
+    /// Object reference of the module metadata backing this instance.
     pub module_addr: ObjectRef,
+    /// Monotonic identifier assigned by the owning store.
     pub instance_id: u32,
-    //  -> addr
+    /// Store object references for the instance's memories.
     pub memory: Vec<ObjectRef>,
-    // idx -> addr
+    /// Store object references for the instance's globals.
     pub globals: Vec<ObjectRef>,
-    // idx -> addr
+    /// Store object references for the instance's functions.
     pub funcs: Vec<ObjectRef>,
-    // idx -> addr
+    /// Store object references for the instance's tables.
     pub tables: Vec<ObjectRef>,
 }
 #[derive(Debug, Clone)]
@@ -1026,13 +1097,24 @@ impl StablePc {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// A core WebAssembly value passed between an embedder and a guest function.
+///
+/// Use [`ResultValue`] to preserve the parameter/result ordering of an exported
+/// function call.
 pub enum WasmValue {
+    /// A signed 32-bit integer.
     I32(i32),
+    /// A signed 64-bit integer.
     I64(i64),
+    /// A 32-bit IEEE 754 floating-point value.
     F32(f32),
+    /// A 64-bit IEEE 754 floating-point value.
     F64(f64),
+    /// A 128-bit SIMD lane value.
     V128(u128),
+    /// A store-local function-reference handle.
     FuncRef(u32),
+    /// A store-local external-reference handle.
     ExternRef(u32),
 }
 #[derive(Debug, Clone, Copy)]

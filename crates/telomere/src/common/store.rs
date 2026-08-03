@@ -67,8 +67,14 @@ define_store_id!(LocalMemoryId);
 define_store_id!(SharedMemoryId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Identifies a store-owned memory for advanced embedding integrations.
+///
+/// Obtain handles from component-support helpers rather than constructing them;
+/// a handle is only meaningful for the [`Store`] that created it.
 pub enum MemoryHandle {
+    /// A memory whose contents are owned by one store instance.
     Local(LocalMemoryId),
+    /// A memory shared between threads when the `threads` feature is enabled.
     Shared(SharedMemoryId),
 }
 
@@ -246,10 +252,14 @@ impl FunctionInstanceData {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Configures the optional lazy baseline JIT for a [`Store`].
+///
+/// Set [`enabled`](Self::enabled) only after checking [`crate::jit_supported`].
 pub struct JitConfig {
     /// Enables the core JIT only when Telomere is compiled with the `jit`
     /// Cargo feature and the current target is supported.
     pub enabled: bool,
+    /// Upper bound for cached machine code owned by this store.
     pub code_cache_max_bytes: u32,
 }
 
@@ -264,6 +274,7 @@ impl Default for JitConfig {
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Limits memory resources allocated while instantiating and running a module.
 pub struct MemoryConfig {
     /// Hard ceiling on pages reserved per linear memory.
     pub max_memory_pages: u32,
@@ -283,8 +294,13 @@ impl Default for MemoryConfig {
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Runtime options used to create a [`Store`].
+///
+/// Use the default unless an embedder needs to bound memory or opt into JIT.
 pub struct RuntimeConfig {
+    /// JIT settings for this store.
     pub jit: JitConfig,
+    /// Memory allocation settings for this store.
     pub memory: MemoryConfig,
 }
 
@@ -1742,6 +1758,10 @@ impl StoreInner {
 }
 
 #[derive(Debug, Clone)]
+/// A cloneable, store-bound handle to an instantiated WebAssembly module.
+///
+/// Handles are returned by [`crate::instantiate`] and can be stored in a
+/// [`crate::Registry`]. Passing a handle to a different store is rejected.
 pub struct InstanceHandle {
     pub(crate) store_identity: Weak<()>,
     pub(crate) instance: InstanceId,
@@ -1826,6 +1846,11 @@ impl Drop for StoreRuntimeGuard<'_> {
     }
 }
 
+/// Owns guest instances, memories, compiled code, and embedder state.
+///
+/// A store is the isolation boundary for core WebAssembly execution. Create one
+/// per independently managed set of instances; instances and their handles
+/// cannot be moved to another store.
 pub struct Store {
     runtime: Arc<Mutex<StoreInner>>,
     identity: Arc<()>,
@@ -1834,6 +1859,7 @@ pub struct Store {
     runtime_config: RuntimeConfig,
     #[cfg(feature = "jit")]
     jit_cache: StoreJitCache,
+    /// Optional immutable embedder state made available to host functions.
     pub state: StoreState,
 }
 
@@ -1844,18 +1870,22 @@ impl Default for Store {
 }
 
 impl Store {
+    /// Creates a store with the default runtime configuration and empty state.
     pub fn new() -> Self {
         Self::new_with_state(StoreState::default())
     }
 
+    /// Creates a store whose host functions can recover `state` through [`StoreState::get`].
     pub fn new_with_state(state: StoreState) -> Self {
         Self::new_with_state_and_runtime_config(state, RuntimeConfig::default())
     }
 
+    /// Creates a store with custom JIT and memory limits and empty embedder state.
     pub fn new_with_runtime_config(runtime_config: RuntimeConfig) -> Self {
         Self::new_with_state_and_runtime_config(StoreState::default(), runtime_config)
     }
 
+    /// Creates a store with both custom embedder state and runtime configuration.
     pub fn new_with_state_and_runtime_config(
         state: StoreState,
         runtime_config: RuntimeConfig,
@@ -1872,11 +1902,16 @@ impl Store {
         }
     }
 
+    /// Returns the configuration captured when this store was created.
     pub fn runtime_config(&self) -> RuntimeConfig {
         self.runtime_config
     }
 
     #[cfg(feature = "jit")]
+    /// Returns a snapshot of the store-local JIT cache.
+    ///
+    /// This is useful for confirming that a workload compiled after enabling
+    /// [`JitConfig`]; it does not force compilation.
     pub fn jit_cache_stats(&self) -> crate::runtime::jit::JitCacheStats {
         self.jit_cache.stats()
     }
@@ -2008,13 +2043,19 @@ impl Store {
 }
 
 #[derive(Default, Clone, Copy)]
+/// Opaque immutable state that an embedder attaches to a [`Store`].
+///
+/// The state stores a raw pointer by design so it can reference static host
+/// configuration without requiring a type parameter on every runtime API.
 pub struct StoreState(usize);
 
 impl StoreState {
+    /// Creates a state value with no attached host data.
     pub const fn empty() -> Self {
         StoreState(0)
     }
 
+    /// Stores a reference to static, thread-safe host data.
     pub fn from_static<T>(data: &'static T) -> Self
     where
         T: Sync,
@@ -2022,6 +2063,8 @@ impl StoreState {
         unsafe { Self::from_ptr(data as *const T) }
     }
 
+    /// Stores a raw pointer to thread-safe host data.
+    ///
     /// # Safety
     ///
     /// `data` must remain valid for the entire time the store may expose this state,
@@ -2033,11 +2076,13 @@ impl StoreState {
         StoreState(data.cast::<()>() as usize)
     }
 
-    #[inline]
+    /// Returns the attached host value if it is non-null and has type `T`.
+    ///
     /// # Safety
     ///
     /// The stored pointer must either be null or point to a live value of type `T`
     /// for the duration of the returned reference.
+    #[inline]
     pub unsafe fn get<T>(&self) -> Option<&T> {
         let ptr = self.0 as *const T;
         ptr.as_ref()

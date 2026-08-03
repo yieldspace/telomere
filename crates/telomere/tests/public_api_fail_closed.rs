@@ -2,9 +2,12 @@ mod common;
 
 use common::instantiate_wat;
 use telomere::{
-    component_support::runtime::run_core_export_sync_reentrant, get_global, run_module_function,
-    IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmParserError,
-    WasmValue,
+    component_support::{
+        common::{memory_export, read_memory},
+        runtime::run_core_export_sync_reentrant,
+    },
+    get_global, run_module_function, IoReadBinaryReader, Registry, ResultValue, Store, VMResult,
+    WasmParser, WasmParserError, WasmValue,
 };
 
 fn parse_module_err(wat: &str) -> WasmParserError {
@@ -15,6 +18,28 @@ fn parse_module_err(wat: &str) -> WasmParserError {
         Ok(_) => panic!("module must fail to parse"),
         Err(err) => err,
     }
+}
+
+#[tokio::test]
+async fn component_memory_read_rejects_lengths_outside_wasm32_address_space() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory (export "memory") 1)
+          (data (i32.const 4) "\01\02\03"))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    let memory = memory_export(&instance, &store, "memory").expect("memory export must exist");
+
+    assert_eq!(read_memory(&store, &memory, 4, 3), Some(vec![1, 2, 3]));
+
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(read_memory(&store, &memory, 4, u32::MAX as usize + 1), None);
 }
 
 #[tokio::test]

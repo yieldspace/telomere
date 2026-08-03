@@ -32,6 +32,10 @@ pub use cache::JitCacheStats;
 #[cfg(feature = "jit")]
 pub(crate) use cache::{CompiledFunction, StoreJitCache};
 
+/// Returns whether the JIT is compiled in and available for the current target.
+///
+/// A `true` result only means the target can run JIT code; enable it for a
+/// particular store with [`crate::JitConfig`].
 pub fn supported() -> bool {
     jit_supported()
 }

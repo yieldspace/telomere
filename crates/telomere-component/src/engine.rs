@@ -9,14 +9,72 @@ use crate::{
     ComponentTypeInfo,
 };
 
+/// Compiles Component Model binaries and instantiates their exported functions.
+///
+/// A `ComponentEngine` is stateless and cheap to create. Compilation validates a
+/// component and creates a reusable [`ComponentProgram`]; instantiation binds
+/// that program to a [`Store`] and [`ComponentLinker`].
+///
+/// # Examples
+///
+/// The executor below uses only `std` and mirrors the complete standalone
+/// example in `examples/minimal-embedder/`; do not use a nested
+/// `futures::executor::block_on` for component calls.
+///
+/// ```
+/// use telomere_component::{ComponentEngine, ComponentLinker, ComponentValue, Store};
+/// # use std::{future::Future, sync::Arc, task::{Context, Poll, Wake, Waker}};
+/// # struct ThreadWaker(std::thread::Thread);
+/// # impl Wake for ThreadWaker {
+/// #     fn wake(self: Arc<Self>) { self.0.unpark(); }
+/// #     fn wake_by_ref(self: &Arc<Self>) { self.0.unpark(); }
+/// # }
+/// # fn block_on<F: Future>(future: F) -> F::Output {
+/// #     let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+/// #     let mut context = Context::from_waker(&waker);
+/// #     let mut future = std::pin::pin!(future);
+/// #     loop {
+/// #         match future.as_mut().poll(&mut context) {
+/// #             Poll::Ready(output) => return output,
+/// #             Poll::Pending => std::thread::park(),
+/// #         }
+/// #     }
+/// # }
+/// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let bytes = std::fs::read(concat!(
+///     env!("CARGO_MANIFEST_DIR"),
+///     "/../../examples/component-add.wasm",
+/// ))?;
+/// let engine = ComponentEngine::new();
+/// let program = engine.compile(&bytes)?;
+/// let store = Store::new();
+/// let linker = ComponentLinker::new();
+/// let instance = block_on(engine.instantiate(&program, &store, &linker))?;
+/// let result = block_on(instance.call(
+///     &store,
+///     "add",
+///     &[ComponentValue::S32(20), ComponentValue::S32(22)],
+/// ))?;
+/// assert_eq!(result, vec![ComponentValue::S32(42)]);
+/// # Ok(())
+/// # }
+/// # run().unwrap();
+/// ```
 #[derive(Default, Debug, Clone, Copy)]
 pub struct ComponentEngine;
 
 impl ComponentEngine {
+    /// Creates a stateless engine ready to compile Component Model binaries.
     pub fn new() -> Self {
         Self
     }
 
+    /// Validates `bytes` and returns the reusable program representation.
+    ///
+    /// The returned program owns a copy of the component bytes and its decoded
+    /// type metadata. Use [`Self::instantiate`] to bind it to a store and host
+    /// imports. Invalid binaries return decode or validation variants of
+    /// [`ComponentError`].
     pub fn compile(&self, bytes: &[u8]) -> Result<ComponentProgram, ComponentError> {
         let mut reader = IoReadBinaryReader::from(bytes);
         let state_arena = typed_arena::Arena::new();
@@ -87,6 +145,11 @@ impl ComponentEngine {
         })
     }
 
+    /// Instantiates a compiled component with the supplied store and linker.
+    ///
+    /// Import resolution happens while the returned future is polled. The
+    /// resulting [`ComponentInstance`] keeps the program alive and can call its
+    /// root exports or traverse nested export instances.
     pub async fn instantiate(
         &self,
         program: &ComponentProgram,

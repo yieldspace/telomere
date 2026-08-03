@@ -90,17 +90,30 @@ impl EffectSupplier<'_> {
 
 type DriverFuture = Pin<Box<dyn Future<Output = Completion>>>;
 
+/// Schedules pending guest work and returns its completions to the runtime.
+///
+/// Implement this trait to connect asynchronous host functions to an embedder's
+/// executor. The driver must eventually return a completion for every submitted
+/// operation unless the surrounding guest call is deliberately cancelled.
 pub trait ExecutionDriver {
+    /// Submits a pending host call or shared-memory wait for asynchronous execution.
     fn submit(&mut self, op: PendingOp);
+
+    /// Resolves to the next completion, or `None` when no more work can complete.
     fn next_completion<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<Completion>> + 'a>>;
 }
 
 #[derive(Default)]
+/// The built-in driver for async host calls and shared-memory waits.
+///
+/// It polls submitted futures directly, so callers must invoke the surrounding
+/// execution future from a Tokio runtime or another compatible async context.
 pub struct TokioDriver {
     inflight: FuturesUnordered<DriverFuture>,
 }
 
 impl TokioDriver {
+    /// Creates a driver with no submitted operations.
     pub fn new() -> Self {
         Self::default()
     }

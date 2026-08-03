@@ -104,6 +104,11 @@ enum NameData {
     NameSection(NameSubSection),
     Unknown(String),
 }
+/// A streaming parser for one core WebAssembly binary module.
+///
+/// The parser borrows its [`BinaryReader`] so an embedder can choose the input
+/// source and retain control over its lifetime. Call [`Self::parse_module`] to
+/// decode and validate the next module from that reader.
 pub struct WasmParser<'a, R: BinaryReader> {
     reader: &'a mut R,
 }
@@ -238,6 +243,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 0xD2 => {
                     let (len, idx) = self.parse_u32()?;
                     (1 + len, ConstExpr::FuncRef(idx))
+                }
+                0x6A | 0x6B | 0x6C | 0x7C | 0x7D | 0x7E => {
+                    Err(WasmParserError::unsupported_feature(
+                        super::ProposalFeature::ExtendedConst,
+                        [v, 0, 0, 0],
+                    ))?
                 }
                 0xFD => {
                     #[cfg(not(feature = "simd"))]
@@ -821,6 +832,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             lowered: Arc::new(lowered),
         })
     }
+    /// Parses and validates one function body from the code section.
+    ///
+    /// This lower-level entry point is useful to embedders that already manage
+    /// section state themselves; [`Self::parse_module`] is the normal API for
+    /// complete modules.
     #[allow(clippy::too_many_arguments)]
     pub fn parse_code(
         &mut self,
@@ -859,9 +875,16 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         )?;
         Ok((len + size as usize, func))
     }
+    /// Creates a parser that reads from `reader` without taking ownership of it.
     pub fn new(reader: &'a mut R) -> Self {
         Self { reader }
     }
+
+    /// Parses one complete core WebAssembly module from the underlying reader.
+    ///
+    /// The returned module has passed the parser's structural and instruction
+    /// validation checks, but instantiation can still fail when host imports or
+    /// runtime resources are unavailable.
     pub fn parse_module(&mut self) -> Result<Module> {
         self.parse_magic()?;
         self.parse_version()?;
@@ -937,6 +960,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             }
 
             match st {
+                WasmSectionType::Unknown(13) => Err(WasmParserError::unsupported_feature(
+                    super::ProposalFeature::ExceptionHandling,
+                    [13, 0, 0, 0],
+                ))?,
                 WasmSectionType::Unknown(id) => Err(WasmParserError::InvalidSectionType(id))?,
                 WasmSectionType::Custom => match self.parse_section_body(Self::parse_namedata)? {
                     NameData::NameSection(subsec) => name_section = Some(subsec),

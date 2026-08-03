@@ -251,6 +251,14 @@ as `component-gated-feature-async` and
 because Component Model proposal stability differs from core Wasm proposal
 coverage.
 
+## Support matrix
+
+The [support matrix](docs/support-matrix.md) records the conformance-fixture
+meaning of "supported", feature-dependent evidence, named unsupported core
+proposal errors, Component Model canonical ABI coverage, and per-interface WASI
+0.2.6 function coverage. It is the authoritative map for these boundaries;
+this feature list remains the source of truth for Cargo feature selection.
+
 ## Library entry points
 
 The core crate re-exports the common runtime entry points from `telomere`:

@@ -1546,6 +1546,10 @@ pub(crate) use call::{
 };
 #[cfg(feature = "jit")]
 pub(crate) use call::{op_call_jit_lazy, op_return_call_jit_lazy, special_start_jit_function_call};
+/// Internal host-call trampoline exposed for low-level native-module integrations.
+///
+/// Most embedders should link a [`crate::common::HostFunction`] instead of
+/// calling this unsafe function directly.
 pub use control::special_function_return;
 pub(crate) use control::*;
 pub(crate) use globals::*;
@@ -1712,6 +1716,56 @@ pub(crate) fn function_entry_pc(store: &Store, funcinst: &FunctionInstanceData) 
     wasm_entry_pc(store)
 }
 
+/// Calls a named function export with the default Tokio-backed execution driver.
+///
+/// Arguments and results retain WebAssembly order in [`ResultValue`]. Missing
+/// exports, a handle from another store, signature mismatches, and guest traps
+/// return a non-success [`VMResult`]. Use
+/// [`run_module_function_with_driver`] when asynchronous host calls must run on
+/// an embedder-owned executor.
+///
+/// # Examples
+///
+/// ```
+/// use telomere::{
+///     instantiate, IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser,
+///     WasmValue,
+/// };
+///
+/// let bytes = wat::parse_str(
+///     "(module (func (export \"double\") (param i32) (result i32) local.get 0 i32.const 2 i32.mul))",
+/// )
+/// .expect("the inline module is valid");
+/// let mut reader = IoReadBinaryReader::from(&bytes[..]);
+/// let module = WasmParser::new(&mut reader)
+///     .parse_module()
+///     .expect("the module parses");
+/// let store = Store::new();
+/// let registry = Registry::new();
+/// let runtime = tokio::runtime::Builder::new_current_thread()
+///     .build()
+///     .expect("Tokio runtime builds");
+///
+/// let result = runtime.block_on(async {
+///     let instance = match instantiate(module, &store, &registry).await {
+///         VMResult::Success(instance) => instance,
+///         failure => panic!("instantiation failed: {failure:?}"),
+///     };
+///     telomere::run_module_function(
+///         &instance,
+///         &store,
+///         "double",
+///         &ResultValue::new(vec![WasmValue::I32(21)]),
+///     )
+///     .await
+/// });
+/// match result {
+///     VMResult::Success(values) => {
+///         assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+///     }
+///     failure => panic!("guest call failed: {failure:?}"),
+/// }
+/// ```
 pub async fn run_module_function(
     instance: &InstanceHandle,
     store: &Store,
@@ -1722,6 +1776,11 @@ pub async fn run_module_function(
     run_module_function_with_driver(instance, store, name, args, &mut driver).await
 }
 
+/// Calls a named function export with an embedder-provided async driver.
+///
+/// The runtime gives pending host futures and shared-memory waits to `driver`.
+/// This lets embedders integrate guest execution with a custom executor instead
+/// of the default [`TokioDriver`].
 pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     instance: &InstanceHandle,
     store: &Store,
@@ -1962,6 +2021,10 @@ fn read_global_value(bytes: &[u8], ty: ValType) -> Option<WasmValue> {
     }
 }
 
+/// Reads a global exported as `name` from an instance.
+///
+/// The handle must belong to `store`, and `name` must select a global export.
+/// Otherwise this returns [`VMResult::Unlinkable`].
 pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMResult<WasmValue> {
     if store.has_active_gc_on_current_thread() {
         tracing::error!("get_global is unsupported while the same store GC is already active");
