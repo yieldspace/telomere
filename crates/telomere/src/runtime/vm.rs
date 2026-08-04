@@ -718,9 +718,10 @@ fn dispatch_budget() -> Option<&'static DispatchBudget> {
         .as_ref()
 }
 
-#[cfg(feature = "vm-diagnostics")]
-fn dispatch_pc_index(tail_code: *const Instr, ctx: &ExecuteContext<'_>) -> Option<usize> {
-    let code_base = ctx.current_frame.code_base;
+pub(crate) fn instr_index_from_base(
+    tail_code: *const Instr,
+    code_base: *const Instr,
+) -> Option<u32> {
     if code_base.is_null() {
         return None;
     }
@@ -728,7 +729,13 @@ fn dispatch_pc_index(tail_code: *const Instr, ctx: &ExecuteContext<'_>) -> Optio
     let base = code_base as usize;
     let pc = tail_code as usize;
     let delta = pc.checked_sub(base)?;
-    (delta % instr_size == 0).then_some(delta / instr_size)
+    let index = (delta % instr_size == 0).then_some(delta / instr_size)?;
+    u32::try_from(index).ok()
+}
+
+#[cfg(feature = "vm-diagnostics")]
+fn dispatch_pc_index(tail_code: *const Instr, ctx: &ExecuteContext<'_>) -> Option<usize> {
+    instr_index_from_base(tail_code, ctx.current_frame.code_base).map(usize::from)
 }
 
 #[cfg(feature = "vm-diagnostics")]
@@ -1990,7 +1997,8 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
-        let gc = store.lock_gc();
+        let mut gc = store.lock_gc();
+        gc.clear_last_trap();
         let instance = gc.get_instance(vm_try!(VMResult::from_option(
             instance.object_ref_for_store(store),
             || { VMResult::Unlinkable }
@@ -2054,6 +2062,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
                 ready_flag: ReadyFlag::Ready,
                 pending_effects: 0,
                 terminal_result: None,
+                terminal_trap: None,
             });
             ft
         } else {
@@ -2063,6 +2072,10 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     };
     scheduler.run_with_driver(driver).await;
     let ct = scheduler.completed_tasks.pop().unwrap();
+    {
+        let mut gc = store.lock_gc();
+        gc.set_last_trap(ct.trap);
+    }
     vm_try!(ct.result);
     let mut stack = ct.stack;
     VMResult::Success(pop_result_values(&mut stack, &ft.1))
@@ -2076,6 +2089,7 @@ pub(crate) fn run_module_function_sync_with_gc(
     args: &ResultValue,
 ) -> Result<VMResult<ResultValue>, SyncRunError> {
     let _dispatch_profile_guard = DispatchProfileRunGuard::new();
+    gc.clear_last_trap();
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
@@ -2147,6 +2161,7 @@ pub(crate) fn run_module_function_sync_with_gc(
                 ready_flag: ReadyFlag::Ready,
                 pending_effects: 0,
                 terminal_result: None,
+                terminal_trap: None,
             });
             ft
         } else {
@@ -2157,6 +2172,7 @@ pub(crate) fn run_module_function_sync_with_gc(
 
     scheduler.run_sync_with_gc(gc)?;
     let ct = scheduler.completed_tasks.pop().unwrap();
+    gc.set_last_trap(ct.trap);
     match ct.result {
         VMResult::Success(()) => {
             let mut stack = ct.stack;

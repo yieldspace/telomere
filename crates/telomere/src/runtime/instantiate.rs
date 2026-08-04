@@ -273,6 +273,7 @@ pub async fn instantiate(
     let mut scheduler = Scheduler::new(store);
     let (addr, has_start) = {
         let mut gc = store.lock_gc();
+        gc.clear_last_trap();
         let instance_id = store.new_instance_id();
 
         // -> addr
@@ -621,6 +622,7 @@ pub async fn instantiate(
                     fp: StablePc::from_stable_ptr(vm::START_HOST_FUNCTION_PROGRAM.as_ptr()),
                     pending_effects: 0,
                     terminal_result: None,
+                    terminal_trap: None,
                 });
             } else {
                 let locals = funcinst.locals();
@@ -652,6 +654,7 @@ pub async fn instantiate(
                     ready_flag: ReadyFlag::Ready,
                     pending_effects: 0,
                     terminal_result: None,
+                    terminal_trap: None,
                 });
             }
             true
@@ -664,7 +667,12 @@ pub async fn instantiate(
 
     if has_start {
         scheduler.run().await;
-        vm_try!(scheduler.completed_tasks.pop().unwrap().result);
+        let completed = scheduler.completed_tasks.pop().unwrap();
+        {
+            let mut gc = store.lock_gc();
+            gc.set_last_trap(completed.trap);
+        }
+        vm_try!(completed.result);
     }
 
     VMResult::Success(addr)

@@ -9,6 +9,7 @@ use super::{
 };
 #[cfg(feature = "jit")]
 use crate::runtime::jit::{CompiledFunction, StoreJitCache};
+use crate::runtime::trap_context::TrapContext;
 use parking_lot::{Mutex, MutexGuard};
 #[cfg(feature = "jit")]
 use std::sync::atomic::AtomicBool;
@@ -440,6 +441,7 @@ pub struct StoreInner {
     instances: Vec<InstanceData>,
     funcs: Vec<FunctionInstanceData>,
     call_recipes: Vec<Option<CallRecipe>>,
+    last_trap: Option<Box<TrapContext>>,
     #[cfg(feature = "jit")]
     jit_rejected_funcs: Vec<AtomicBool>,
     #[cfg(feature = "jit")]
@@ -596,6 +598,18 @@ impl StoreInner {
         }
     }
 
+    pub(crate) fn set_last_trap(&mut self, trap: Option<Box<TrapContext>>) {
+        self.last_trap = trap;
+    }
+
+    pub(crate) fn take_last_trap(&mut self) -> Option<Box<TrapContext>> {
+        self.last_trap.take()
+    }
+
+    pub(crate) fn clear_last_trap(&mut self) {
+        self.last_trap = None;
+    }
+
     pub(crate) fn new_instance_id(&mut self) -> u32 {
         let id = self.next_instance_id;
         self.next_instance_id = self
@@ -701,6 +715,16 @@ impl StoreInner {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Function);
         &self.funcs[index]
+    }
+
+    /// The diagnostics-safe counterpart to [`Self::get_func`].
+    pub(crate) fn try_get_func(&self, addr: ObjectRef) -> Option<&FunctionInstanceData> {
+        let raw = addr.get();
+        if raw >> OBJECT_KIND_SHIFT != ObjectKind::Function as u32 {
+            return None;
+        }
+        let index = (raw & OBJECT_INDEX_MASK).checked_sub(1)? as usize;
+        self.funcs.get(index)
     }
 
     pub(crate) fn func_mut(&mut self, id: FuncId) -> &mut FunctionInstanceData {
