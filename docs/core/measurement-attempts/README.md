@@ -7,8 +7,19 @@
 
 This directory preserves the failed-but-informative observations from issue
 `yieldspace/telomere#184`. They show why this host could not produce a trusted
-baseline on 2026-08-04, while leaving the normal measurement harness runnable
-for a later quiet host or quiet interval.
+baseline on 2026-08-04. The normal measurement harness remains runnable if an
+independently changed environment satisfies its unchanged gates.
+
+## Premise for downstream performance work
+
+On this machine as currently operated, the conditions required to publish a
+performance number do not exist. Issues #185, #186, #187, and #188 must treat
+that as an explicit prerequisite, not as noise that statistics or an A/A floor
+can absorb. This is not pending a maintainer response and no retry is scheduled:
+numeric publication is blocked indefinitely unless the environment changes and
+then passes the existing gate. A downstream issue that encounters the same
+condition must retain a failed-with-reason artifact instead of lowering the
+gate or publishing a contended number.
 
 The JSON files are immutable copies of the original artifacts. Verify them with:
 
@@ -96,10 +107,11 @@ a different-build comparison. Thus a small A/A result would not validate an
 optimizer-build delta under this host interference. The audit is evidence for
 the schedule correction, not performance data.
 
-## Conditions for a later first record
+## Conditions required before any future first record
 
-Before retrying, retain the conservative load gate rather than deriving a lower
-one from these contaminated samples. A valid run requires all of the following:
+Before any new execution, retain the conservative load gate rather than
+deriving a lower one from these contaminated samples. A valid run requires all
+of the following:
 
 1. The host is quiet enough for the configured start threshold and end-of-run
    load-rise gate; per-sample load observations are retained for audit. If
@@ -112,7 +124,7 @@ one from these contaminated samples. A valid run requires all of the following:
 4. Run the build and first-record commands above without changing the gate or
    blending characterization/A-A samples into the published record.
 
-When those conditions hold, the harness can produce a new raw first-record
-artifact, which may be evaluated under the methodology's publication rules and
-committed under `../baseline/`. Until then, the honest result is this recorded
-measurement refusal, not a numerical baseline.
+Only after those conditions independently hold can the harness produce a raw
+first-record artifact for evaluation under the methodology's publication rules
+and possible commit under `../baseline/`. Until then, the completed result is
+this recorded measurement refusal, not a pending run or a numerical baseline.
