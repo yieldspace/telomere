@@ -7,11 +7,12 @@ use std::{
 
 use common::instantiate_wat;
 use telomere::{
-    common::{ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule},
-    run_module_function,
-    runtime::instantiate_native_module,
-    InterruptReason, MeteringConfig, Registry, ResultValue, RuntimeConfig, Store, StoreState,
-    VMResult, WasmValue,
+    component_support::common::FuncType,
+    host_abi::{
+        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
+    },
+    run_module_function, InterruptReason, MeteringConfig, Registry, ResultValue, RuntimeConfig,
+    Store, StoreState, VMResult, WasmValue,
 };
 
 const LOOP_FOREVER_WAT: &str = r#"

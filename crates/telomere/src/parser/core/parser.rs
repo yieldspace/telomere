@@ -887,7 +887,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     /// section state themselves; [`Self::parse_module`] is the normal API for
     /// complete modules.
     #[allow(clippy::too_many_arguments)]
-    pub fn parse_code(
+    pub(crate) fn parse_code(
         &mut self,
         funcidx: FuncIdx,
         type_section: &TypeSection,

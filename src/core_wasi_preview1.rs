@@ -11,12 +11,16 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use telomere::{
-    common::{
-        ExecuteContext, ExportDesc, FuncType, HostFunctionDefinition, ImportDesc, Instr, MemArg,
-        Memory, NativeModule, StoreState, VMResult, ValType,
+    component_support::common::{
+        module_exports, module_function_types, module_imports, ExportDesc, FuncType, ImportDesc,
+        MemArg, ValType,
     },
-    runtime::instantiate_native_module,
-    JitConfig, Module, Registry, ResultValue, RuntimeConfig, Store,
+    host_abi::{
+        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, Memory,
+        NativeModule,
+    },
+    unstable_internals::pending_effect_count,
+    JitConfig, Module, Registry, ResultValue, RuntimeConfig, Store, StoreState, VMResult,
 };
 
 pub(crate) const PREVIEW1_MODULE: &str = "wasi_snapshot_preview1";
@@ -124,7 +128,7 @@ unsafe fn proc_exit_wait_for_effects(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    if ctx.effect.get_pending_count() != 0 {
+    if pending_effect_count(ctx) != 0 {
         ctx.cont = PROC_EXIT_PROGRAM.as_ptr();
         return VMResult::Success(());
     }
@@ -132,9 +136,7 @@ unsafe fn proc_exit_wait_for_effects(
     VMResult::Success(())
 }
 
-const PROC_EXIT_PROGRAM: [Instr; 1] = [Instr {
-    op: proc_exit_wait_for_effects,
-}];
+const PROC_EXIT_PROGRAM: [Instr; 1] = [Instr::from_op(proc_exit_wait_for_effects)];
 
 impl CoreWasiPreview1State {
     fn new(path: &Path, args: &[String], stdio: StdioMode) -> Self {
@@ -229,12 +231,12 @@ fn fd_bit(fd: u32) -> Option<u32> {
 }
 
 pub(crate) fn is_preview1_command_module(module: &Module) -> bool {
-    module
-        .imports
-        .0
+    module_imports(module)
         .iter()
         .any(|import| import.module == PREVIEW1_MODULE)
-        && matches!(module.exs.find(START_EXPORT), Some(ExportDesc::Func(_)))
+        && module_exports(module)
+            .iter()
+            .any(|export| export.0 == START_EXPORT && matches!(export.1, ExportDesc::Func(_)))
 }
 
 pub(crate) async fn run(
@@ -291,9 +293,7 @@ pub(crate) async fn run(
 
 fn validate_preview1_module(module: &Module) -> anyhow::Result<()> {
     let mut unsupported = Vec::new();
-    for import in module
-        .imports
-        .0
+    for import in module_imports(module)
         .iter()
         .filter(|import| import.module == PREVIEW1_MODULE)
     {
@@ -309,9 +309,8 @@ fn validate_preview1_module(module: &Module) -> anyhow::Result<()> {
             unsupported.push(import.name.clone());
             continue;
         };
-        let actual = module
-            .fts
-            .get(type_idx)
+        let actual = module_function_types(module)
+            .get(type_idx.0 as usize)
             .with_context(|| format!("missing function type for import `{}`", import.name))?;
         if actual != &expected {
             bail!(
@@ -329,7 +328,10 @@ fn validate_preview1_module(module: &Module) -> anyhow::Result<()> {
             unsupported.join(", ")
         );
     }
-    if !matches!(module.exs.find(START_EXPORT), Some(ExportDesc::Func(_))) {
+    if !module_exports(module)
+        .iter()
+        .any(|export| export.0 == START_EXPORT && matches!(export.1, ExportDesc::Func(_)))
+    {
         bail!("`{PREVIEW1_MODULE}` modules must export `{START_EXPORT}`");
     }
     Ok(())

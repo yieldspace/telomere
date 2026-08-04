@@ -2,3 +2,4 @@ mod reader;
 
 pub use reader::BinaryReader;
 pub use reader::IoReadBinaryReader;
+pub use reader::LimitingBinaryReader;

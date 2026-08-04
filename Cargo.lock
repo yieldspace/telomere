@@ -1087,6 +1087,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "syn",
+ "telomere",
  "telomere-jit-codegen",
  "telomere-macros",
  "thiserror 2.0.11",

@@ -4,8 +4,9 @@ mod common;
 
 use common::instantiate_wat;
 use telomere::{
-    instantiate, run_module_function, IoReadBinaryReader, Registry, ResultValue, Store, VMResult,
-    WasmParser, WasmParserError, WasmValue,
+    component_support::common::module_memories, instantiate, run_module_function,
+    IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmParserError,
+    WasmValue,
 };
 
 fn parse_module_bytes(bytes: &[u8]) -> Result<telomere::Module, WasmParserError> {
@@ -40,10 +41,11 @@ fn parser_rejects_shared_memory_without_maximum() {
 #[test]
 fn parser_accepts_shared_memory_with_maximum() {
     let module = parse_module("(module (memory 1 2 shared))");
-    assert_eq!(module.mems.len(), 1);
-    assert!(module.mems[0].shared);
-    assert_eq!(module.mems[0].limits.min, 1);
-    assert_eq!(module.mems[0].limits.max, Some(2));
+    let memories = module_memories(&module);
+    assert_eq!(memories.len(), 1);
+    assert!(memories[0].shared);
+    assert_eq!(memories[0].limits.min, 1);
+    assert_eq!(memories[0].limits.max, Some(2));
 }
 
 #[tokio::test]

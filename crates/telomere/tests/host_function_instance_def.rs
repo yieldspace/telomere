@@ -2,13 +2,17 @@ mod common;
 use common::run_wast_with;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
-    common::{
-        ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, ObjectRef,
-        StoreState, ValType,
+    component_support::common::{FuncType, ValType},
+    host_abi::{
+        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
+        ObjectRef,
     },
     link_host_function_with_function_idx, run_module_function,
-    runtime::instantiate_native_module,
-    vm_try, Registry, ResultValue, Store, VMResult, WasmValue,
+    unstable_internals::{
+        function_call, function_code_pointer, function_host_code_pointer, function_is_host,
+        function_locals_size, Operand,
+    },
+    vm_try, Registry, ResultValue, Store, StoreState, VMResult, WasmValue,
 };
 
 fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
@@ -210,12 +214,8 @@ async fn test_print() {
 }
 
 const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
-    Instr {
-        op: telomere::special_function_return,
-    },
-    Instr {
-        operand: telomere::common::Operand { u32: 4 },
-    },
+    Instr::from_op(telomere::special_function_return),
+    Instr::from_operand(Operand { u32: 4 }),
 ];
 
 fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
@@ -225,35 +225,28 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let arg1 = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push_i32(arg1 + 40));
     let func_addr = ObjectRef(arg0);
-    let (is_host, host_fp, locals_size, ptr) = {
-        let func = ctx.func_by_addr(func_addr);
-        (
-            func.is_host_func(),
-            func.is_host_func().then(|| func.host_code_pointer()),
-            func.locals().byte_size(),
-            func.code_pointer(),
-        )
-    };
+    let is_host = function_is_host(ctx, func_addr);
+    let host_fp = function_host_code_pointer(ctx, func_addr);
+    let locals_size = function_locals_size(ctx, func_addr);
+    let ptr = function_code_pointer(ctx, func_addr);
     if is_host {
         let f = host_fp.expect("host function must expose a host code pointer");
-        let local_reference = vm_try!(ctx.stack.function_call(
+        let local_reference = vm_try!(function_call(
+            ctx,
             4,
             0,
             func_addr,
-            ctx.local_reference,
             TAIL_CALL_FUNCTION_RETURN.as_ptr(),
-            ctx.gc,
         ));
         ctx.set_local_reference(local_reference);
         f(ctx)
     } else {
-        let local_reference = vm_try!(ctx.stack.function_call(
+        let local_reference = vm_try!(function_call(
+            ctx,
             4,
             locals_size,
             func_addr,
-            ctx.local_reference,
             TAIL_CALL_FUNCTION_RETURN.as_ptr(),
-            ctx.gc,
         ));
         ctx.set_local_reference(local_reference);
         let ptr = ptr.expect("wasm function must expose a code pointer");

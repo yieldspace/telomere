@@ -3,10 +3,10 @@ use super::memory_effect::MemoryWaitPending;
 use super::memory_effect::{Completion, CompletionPayload, HostCallPending, PendingOp};
 use crate::{
     common::{
-        stack::CachedMemoryKind, CallFrameCache, ExecuteContext, LocalReference, StablePc,
+        stack::CachedMemoryKind, CallFrameCache, ExecuteContext, LocalReference, StablePc, Stack,
         StoreInner,
     },
-    Stack, Store, VMResult,
+    Store, VMResult,
 };
 use futures::{stream::FuturesUnordered, StreamExt};
 use std::{collections::VecDeque, future::Future, pin::Pin};
@@ -59,7 +59,7 @@ pub(crate) enum SyncRunError {
     Stalled,
 }
 
-pub struct EffectSupplier<'a> {
+pub(crate) struct EffectSupplier<'a> {
     task_id: u32,
     pending_effects: &'a mut u32,
     queue: &'a mut VecDeque<PendingOp>,

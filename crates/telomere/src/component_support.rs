@@ -4,6 +4,8 @@ pub mod binary {
     pub use crate::binary::BinaryReader;
     /// Adapts a standard I/O reader to the binary-reader interface.
     pub use crate::binary::IoReadBinaryReader;
+    /// A limited view produced by [`BinaryReader::take`].
+    pub use crate::binary::LimitingBinaryReader;
 }
 
 /// Parsing helpers that Component Model crates reuse from the core parser.
@@ -59,11 +61,51 @@ pub mod parser {
 
 /// Store, memory, and instance helpers shared with Component Model integrations.
 pub mod common {
-    /// Core runtime types used by component adapters.
-    pub use crate::common::*;
+    /// Named core types used by component adapters without exposing parser or runtime modules.
+    pub use crate::common::{
+        Export, ExportDesc, FuncIdx, FuncType, GlobalIdx, GlobalType, Import, ImportDesc,
+        InstanceHandle, Limits, MemArg, MemIdx, MemType, MemoryHandle, Module, Mut, RefType,
+        ResultType, ResultValue, Store, StoreState, TableIdx, TableType, TypeIdx, VMResult,
+        ValType, WasmValue,
+    };
 
     /// A memory handle that remains valid only for the store that produced it.
     pub type CoreMemoryHandle = crate::common::MemoryHandle;
+
+    /// Returns the function signatures declared by `module`.
+    pub fn module_function_types(module: &crate::common::Module) -> &[crate::common::FuncType] {
+        &module.fts.0
+    }
+
+    /// Returns the imports declared by `module`.
+    pub fn module_imports(module: &crate::common::Module) -> &[crate::common::Import] {
+        &module.imports.0
+    }
+
+    /// Returns the exports declared by `module`.
+    pub fn module_exports(module: &crate::common::Module) -> &[crate::common::Export] {
+        &module.exs.0
+    }
+
+    /// Returns the complete function index space of `module`.
+    pub fn module_functions(module: &crate::common::Module) -> &[crate::common::TypeIdx] {
+        &module.functions
+    }
+
+    /// Returns the complete table index space of `module`.
+    pub fn module_tables(module: &crate::common::Module) -> &[crate::common::TableType] {
+        &module.tables
+    }
+
+    /// Returns the complete memory index space of `module`.
+    pub fn module_memories(module: &crate::common::Module) -> &[crate::common::MemType] {
+        &module.mems
+    }
+
+    /// Returns the complete global index space of `module`.
+    pub fn module_globals(module: &crate::common::Module) -> &[crate::common::GlobalType] {
+        &module.globals
+    }
 
     /// Returns the numeric ID of a handle when it belongs to `store`.
     pub fn instance_id(
@@ -281,14 +323,6 @@ pub mod runtime {
     pub use crate::runtime::aliasing;
     /// Instantiates a parsed core module.
     pub use crate::runtime::instantiate;
-    /// Instantiates a native module with asynchronous host callbacks.
-    pub use crate::runtime::instantiate_native_async_module;
-    /// Instantiates a native module with synchronous host callbacks.
-    pub use crate::runtime::instantiate_native_module;
-    /// Replaces an exported function with an asynchronous host callback.
-    pub use crate::runtime::link_async_host_function_with_export_name;
-    /// Replaces a function by index with an asynchronous host callback.
-    pub use crate::runtime::link_async_host_function_with_function_idx;
     /// Calls a named exported core function with the default driver.
     pub use crate::runtime::run_module_function;
     /// Ordered values supplied to or returned from core function calls.

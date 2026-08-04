@@ -2,8 +2,11 @@ use std::io::{ErrorKind, Read};
 
 use futures::executor::block_on;
 use telomere::{
-    instantiate, run_module_function, IoReadBinaryReader, Registry, ResultValue, Store, VMResult,
-    WasmParser, WasmParserError, WasmValue,
+    component_support::common::{module_exports, module_function_types, module_functions},
+    instantiate, run_module_function,
+    unstable_internals::module_name,
+    IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmParserError,
+    WasmValue,
 };
 
 fn parse_module(bytes: &[u8]) -> Result<telomere::Module, WasmParserError> {
@@ -131,10 +134,10 @@ fn malformed_name_body_is_ignored_and_resynchronizes_at_the_section_boundary() {
     let module = parse_module(&module_with_malformed_name_body())
         .expect("a malformed name body must not reject the core module");
 
-    assert!(module.name.is_none());
-    assert_eq!(module.fts.0.len(), 1);
-    assert_eq!(module.functions.len(), 1);
-    assert_eq!(module.exs.0.len(), 1);
+    assert!(module_name(&module).is_none());
+    assert_eq!(module_function_types(&module).len(), 1);
+    assert_eq!(module_functions(&module).len(), 1);
+    assert_eq!(module_exports(&module).len(), 1);
 
     let store = Store::new();
     let registry = Registry::new();
@@ -162,14 +165,7 @@ fn valid_name_section_is_retained() {
     append_answer_sections(&mut module);
 
     let module = parse_module(&module).expect("a valid name section must parse");
-    assert_eq!(
-        module
-            .name
-            .as_ref()
-            .and_then(|names| names.module_name.as_ref())
-            .map(|name| name.0.as_str()),
-        Some("foo")
-    );
+    assert_eq!(module_name(&module), Some("foo"));
 }
 
 #[test]
@@ -188,14 +184,7 @@ fn malformed_name_section_does_not_clear_a_previous_valid_name_section() {
     append_answer_sections(&mut module);
 
     let module = parse_module(&module).expect("the malformed section must be ignored");
-    assert_eq!(
-        module
-            .name
-            .as_ref()
-            .and_then(|names| names.module_name.as_ref())
-            .map(|name| name.0.as_str()),
-        Some("foo")
-    );
+    assert_eq!(module_name(&module), Some("foo"));
 }
 
 #[test]
@@ -254,9 +243,9 @@ fn malformed_name_recovery_fills_skip_chunks_across_short_reads() {
         .parse_module()
         .expect("short reads must not make an intact custom section look truncated");
 
-    assert!(module.name.is_none());
-    assert_eq!(module.functions.len(), 1);
-    assert_eq!(module.exs.0.len(), 1);
+    assert!(module_name(&module).is_none());
+    assert_eq!(module_functions(&module).len(), 1);
+    assert_eq!(module_exports(&module).len(), 1);
 }
 
 #[test]

@@ -3,10 +3,8 @@ mod common;
 use common::instantiate_wat;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
-    common::{
-        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, FuncType,
-        ValType,
-    },
+    component_support::common::{FuncType, ValType},
+    host_abi::{AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext},
     instantiate_native_async_module, run_module_function, Registry, ResultValue, Store, StoreState,
     VMResult, WasmValue,
 };

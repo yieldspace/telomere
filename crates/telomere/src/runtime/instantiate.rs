@@ -5,15 +5,15 @@ use crate::{
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
         FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
-        ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
-        ModuleInstance, ModuleNames, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx,
-        TypeIdx, TypeSection,
+        ImportSection, Instance, InstanceData, InstanceHandle, Instr, Limits, LocalReference,
+        MemIdx, ModuleInstance, ModuleNames, NativeModule, ObjectRef, StablePc, Stack, StoreInner,
+        TableIdx, TypeIdx, TypeSection,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
         vm,
     },
-    Instance, Module, Registry, Stack, Store, VMResult,
+    Module, Registry, Store, VMResult,
 };
 use std::sync::Arc;
 
@@ -198,6 +198,7 @@ pub async fn instantiate_native_module(
 ///
 /// Each host callback is linked before the returned handle is exposed, so guest
 /// calls suspend through the runtime's [`crate::ExecutionDriver`] integration.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub async fn instantiate_native_async_module(
     m: AsyncNativeModule,
     store: &Store,
@@ -986,7 +987,7 @@ fn crc16_update_masked_wrapper_shape(
     if op_lens != EXPECTED_LENS.as_slice() {
         return None;
     }
-    let required_instrs = EXPECTED_LENS.iter().map(|len| usize::from(*len)).sum();
+    let required_instrs: usize = EXPECTED_LENS.iter().map(|len| usize::from(*len)).sum();
     if instrs.len() != required_instrs {
         return None;
     }

@@ -3,8 +3,8 @@ use std::collections::HashSet;
 #[cfg(feature = "jit")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
-    common::InstanceHandle, get_global, instantiate, IoReadBinaryReader, Registry, ResultValue,
-    Store, VMResult, WasmParser, WasmValue,
+    get_global, instantiate, InstanceHandle, IoReadBinaryReader, Registry, ResultValue, Store,
+    VMResult, WasmParser, WasmValue,
 };
 use tracing::error;
 use wast::{
@@ -274,7 +274,7 @@ async fn run_wast_with_spec_divergences_in_context(
                         panic!("{:?} {:?}", span.linecol_in(text), v);
                     }
                 };
-                tracing::trace!("{:?}", m.elems);
+                tracing::trace!("instantiating parsed module");
                 let inst = instantiate(m, store, registry).await.unwrap();
                 if let Some(name) = name {
                     registry.register(name.name(), inst.clone());

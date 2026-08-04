@@ -302,7 +302,10 @@ fn register_host_bindings(
 }
 
 fn component_host_trampoline(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let key = (ctx.instance_id(), ctx.func().funcidx);
+    let key = (
+        ctx.instance_id(),
+        crate::support::internals::current_function_index(ctx),
+    );
     let binding = HOST_BINDINGS.with(|bindings| bindings.borrow().get(&key).cloned());
     let Some(binding) = binding else {
         return VMResult::Unlinkable;

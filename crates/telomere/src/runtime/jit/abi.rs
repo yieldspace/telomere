@@ -26,6 +26,8 @@ impl JitNativeExit {
         }
     }
 
+    // #202 retains the codegen ABI constructor although Rust dispatch does not call it directly.
+    #[allow(dead_code)]
     pub const fn fallback_index(index: usize) -> Self {
         Self {
             kind: Self::FALLBACK_INDEX,

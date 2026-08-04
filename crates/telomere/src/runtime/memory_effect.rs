@@ -73,13 +73,10 @@ pub struct Completion {
 #[derive(Debug)]
 pub enum CompletionPayload {
     #[allow(dead_code)]
-    Resume {
-        fp: usize,
-    },
-    ResumeWithI32 {
-        fp: usize,
-        value: i32,
-    },
+    Resume { fp: usize },
+    // #202: Shared-memory wait completion is intentionally dormant without threads support.
+    #[cfg_attr(not(feature = "threads"), allow(dead_code))]
+    ResumeWithI32 { fp: usize, value: i32 },
     HostCall {
         result: VMResult<*const crate::common::Instr>,
     },

@@ -19,6 +19,8 @@ use super::PAGE_SIZE_MAX;
 use super::{Stack, VMResult, PAGE_SIZE};
 
 #[inline(always)]
+// #202: This helper is only reachable through the feature-gated raw linear-memory ABI.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub fn checked_memory_offset(memarg_offset: u32, offset: u32) -> Option<usize> {
     let sum = memarg_offset as u64 + offset as u64;
     if sum <= u32::MAX as u64 {
@@ -54,6 +56,8 @@ pub fn trusted_copy_within(dst: &mut [u8], src_start: usize, src_end: usize, dst
 }
 
 #[inline(always)]
+// #202: This helper is only reachable through the feature-gated raw linear-memory ABI.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub fn trusted_read_u128(src: &[u8]) -> u128 {
     debug_assert_eq!(src.len(), 16);
     unsafe { u128::from_le(src.as_ptr().cast::<u128>().read_unaligned()) }
@@ -66,7 +70,9 @@ pub struct MemArg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AtomicRmwOp {
+// #202: Atomic operations are intentionally dormant without the optional threads runtime.
+#[cfg_attr(not(feature = "threads"), allow(dead_code))]
+pub(crate) enum AtomicRmwOp {
     Add,
     Sub,
     And,
@@ -134,7 +140,9 @@ pub struct SharedWaitRegistration {
 
 #[cfg(feature = "threads")]
 impl SharedWaitRegistration {
-    pub fn address(&self) -> usize {
+    // #202: Keep the internal queue address for wait-removal bookkeeping.
+    #[allow(dead_code)]
+    pub(crate) fn address(&self) -> usize {
         self.address
     }
 
@@ -162,7 +170,7 @@ impl SharedWaitRegistration {
 
 #[cfg(feature = "threads")]
 #[derive(Debug)]
-pub enum AtomicWaitResult {
+pub(crate) enum AtomicWaitResult {
     NotEqual,
     Pending(SharedWaitRegistration),
 }
@@ -244,7 +252,7 @@ fn committed_bytes_for_pages(page_count: u32) -> Result<usize, MemoryInitError> 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemoryMappingOperation {
+pub(crate) enum MemoryMappingOperation {
     Mmap,
     Mprotect,
 }
@@ -259,7 +267,7 @@ impl fmt::Display for MemoryMappingOperation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MemoryInitError {
+pub(crate) enum MemoryInitError {
     InvalidPageBounds {
         page_count: u32,
         max_page_size: u32,
@@ -495,6 +503,8 @@ impl Drop for MmapRegion {
 // Cross-thread access is synchronized by the caller (`Store` single-flight or shared-memory mutex).
 unsafe impl Send for MmapRegion {}
 
+// #202: Raw memory accessors are exposed only through `unstable-internals`.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
     VMResult::from_option(checked_memory_offset(memarg.offset, offset), || {
         VMResult::MemoryIndexOutOfRange
@@ -543,17 +553,19 @@ impl fmt::Debug for Memory {
     }
 }
 
+// #202: The raw linear-memory implementation is exposed only through `unstable-internals`.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 impl Memory {
     #[inline(always)]
     fn base_ptr(&self) -> *const u8 {
         self.region.ptr.as_ptr()
     }
 
-    pub fn new(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
+    pub(crate) fn new(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
         Self::new_with_mapping(page_count, max_page_size, false)
     }
 
-    pub fn new_shared(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
+    pub(crate) fn new_shared(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
         Self::new_with_mapping(page_count, max_page_size, true)
     }
 
@@ -928,28 +940,48 @@ impl Memory {
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u8(&mut self, offset: usize, op: AtomicRmwOp, value: u8) -> VMResult<u8> {
+    pub(crate) fn atomic_rmw_u8(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
         let old = vm_try!(self.atomic_load_u8(offset));
         vm_try!(self.atomic_store_u8(offset, op.apply_u8(old, value)));
         VMResult::Success(old)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u16(&mut self, offset: usize, op: AtomicRmwOp, value: u16) -> VMResult<u16> {
+    pub(crate) fn atomic_rmw_u16(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
         let old = vm_try!(self.atomic_load_u16(offset));
         vm_try!(self.atomic_store_u16(offset, op.apply_u16(old, value)));
         VMResult::Success(old)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u32(&mut self, offset: usize, op: AtomicRmwOp, value: u32) -> VMResult<u32> {
+    pub(crate) fn atomic_rmw_u32(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
         let old = vm_try!(self.atomic_load_u32(offset));
         vm_try!(self.atomic_store_u32(offset, op.apply_u32(old, value)));
         VMResult::Success(old)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u64(&mut self, offset: usize, op: AtomicRmwOp, value: u64) -> VMResult<u64> {
+    pub(crate) fn atomic_rmw_u64(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
         let old = vm_try!(self.atomic_load_u64(offset));
         vm_try!(self.atomic_store_u64(offset, op.apply_u64(old, value)));
         VMResult::Success(old)
@@ -1062,12 +1094,12 @@ impl Memory {
 }
 
 #[derive(Debug)]
-pub struct LocalMemoryObject {
+pub(crate) struct LocalMemoryObject {
     memory: Memory,
 }
 
 impl LocalMemoryObject {
-    pub fn new(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
+    pub(crate) fn new(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
         Ok(Self {
             memory: Memory::new(page_count, max_page_size)?,
         })
@@ -1191,22 +1223,42 @@ impl LocalMemoryObject {
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u8(&mut self, offset: usize, op: AtomicRmwOp, value: u8) -> VMResult<u8> {
+    pub(crate) fn atomic_rmw_u8(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
         self.memory.atomic_rmw_u8(offset, op, value)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u16(&mut self, offset: usize, op: AtomicRmwOp, value: u16) -> VMResult<u16> {
+    pub(crate) fn atomic_rmw_u16(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
         self.memory.atomic_rmw_u16(offset, op, value)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u32(&mut self, offset: usize, op: AtomicRmwOp, value: u32) -> VMResult<u32> {
+    pub(crate) fn atomic_rmw_u32(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
         self.memory.atomic_rmw_u32(offset, op, value)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u64(&mut self, offset: usize, op: AtomicRmwOp, value: u64) -> VMResult<u64> {
+    pub(crate) fn atomic_rmw_u64(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
         self.memory.atomic_rmw_u64(offset, op, value)
     }
 
@@ -1281,7 +1333,7 @@ pub struct SharedMemoryObject {
 }
 
 impl SharedMemoryObject {
-    pub fn new(page_count: u32, max_page_size: u32) -> Result<Arc<Self>, MemoryInitError> {
+    pub(crate) fn new(page_count: u32, max_page_size: u32) -> Result<Arc<Self>, MemoryInitError> {
         Ok(Arc::new(Self {
             state: Mutex::new(SharedMemoryState {
                 memory: Memory::new_shared(page_count, max_page_size)?,
@@ -1403,22 +1455,37 @@ impl SharedMemoryObject {
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u8(&self, offset: usize, op: AtomicRmwOp, value: u8) -> VMResult<u8> {
+    pub(crate) fn atomic_rmw_u8(&self, offset: usize, op: AtomicRmwOp, value: u8) -> VMResult<u8> {
         self.state.lock().memory.atomic_rmw_u8(offset, op, value)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u16(&self, offset: usize, op: AtomicRmwOp, value: u16) -> VMResult<u16> {
+    pub(crate) fn atomic_rmw_u16(
+        &self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
         self.state.lock().memory.atomic_rmw_u16(offset, op, value)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u32(&self, offset: usize, op: AtomicRmwOp, value: u32) -> VMResult<u32> {
+    pub(crate) fn atomic_rmw_u32(
+        &self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
         self.state.lock().memory.atomic_rmw_u32(offset, op, value)
     }
 
     #[inline(always)]
-    pub fn atomic_rmw_u64(&self, offset: usize, op: AtomicRmwOp, value: u64) -> VMResult<u64> {
+    pub(crate) fn atomic_rmw_u64(
+        &self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
         self.state.lock().memory.atomic_rmw_u64(offset, op, value)
     }
 
@@ -1460,7 +1527,11 @@ impl SharedMemoryObject {
     }
 
     #[cfg(feature = "threads")]
-    pub fn register_wait32(&self, offset: usize, expected: u32) -> VMResult<AtomicWaitResult> {
+    pub(crate) fn register_wait32(
+        &self,
+        offset: usize,
+        expected: u32,
+    ) -> VMResult<AtomicWaitResult> {
         let mut state = self.state.lock();
         vm_try!(ensure_atomic_alignment(offset, 4));
         let current = vm_try!(state.memory.atomic_load_u32(offset));
@@ -1481,7 +1552,11 @@ impl SharedMemoryObject {
     }
 
     #[cfg(feature = "threads")]
-    pub fn register_wait64(&self, offset: usize, expected: u64) -> VMResult<AtomicWaitResult> {
+    pub(crate) fn register_wait64(
+        &self,
+        offset: usize,
+        expected: u64,
+    ) -> VMResult<AtomicWaitResult> {
         let mut state = self.state.lock();
         vm_try!(ensure_atomic_alignment(offset, 8));
         let current = vm_try!(state.memory.atomic_load_u64(offset));

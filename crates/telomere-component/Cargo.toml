@@ -10,7 +10,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-telomere = { path = "../telomere", default-features = false }
+telomere = { path = "../telomere", default-features = false, features = ["unstable-internals"] }
 thiserror = "2.0.11"
 tracing = { version = "0.1.41" }
 num-derive = "0.4.2"

@@ -1,0 +1,147 @@
+telomere::Completion | always
+telomere::CompletionPayload | always
+telomere::DiagnosticsConfig | always
+telomere::ExecutionDriver | always
+telomere::HostCallPending | always
+telomere::InstanceHandle | always
+telomere::InterruptReason | always
+telomere::IoReadBinaryReader | always
+telomere::JitCacheStats | cfg(feature = "jit")
+telomere::JitConfig | always
+telomere::MAX_CONTROL_NESTING_DEPTH | always
+telomere::MemoryConfig | always
+telomere::MemoryWaitPending | cfg(feature = "threads")
+telomere::MeteringConfig | always
+telomere::MeteringHandle | always
+telomere::Module | always
+telomere::Module::codes | always
+telomere::PendingOp | always
+telomere::ProposalFeature | always
+telomere::Registry | always
+telomere::ResultValue | always
+telomere::RuntimeConfig | always
+telomere::Store | always
+telomere::StoreState | always
+telomere::TokioDriver | always
+telomere::VMResult | always
+telomere::WasmAsyncPending | always
+telomere::WasmParser | always
+telomere::WasmParserError | always
+telomere::WasmValue | always
+telomere::aliasing | always
+telomere::component_support | always
+telomere::component_support::binary | always
+telomere::component_support::binary::BinaryReader | always
+telomere::component_support::binary::IoReadBinaryReader | always
+telomere::component_support::binary::LimitingBinaryReader | always
+telomere::component_support::common | always
+telomere::component_support::common::CoreMemoryHandle | always
+telomere::component_support::common::Export | always
+telomere::component_support::common::ExportDesc | always
+telomere::component_support::common::FuncIdx | always
+telomere::component_support::common::FuncType | always
+telomere::component_support::common::GlobalIdx | always
+telomere::component_support::common::GlobalType | always
+telomere::component_support::common::Import | always
+telomere::component_support::common::ImportDesc | always
+telomere::component_support::common::InstanceHandle | always
+telomere::component_support::common::Limits | always
+telomere::component_support::common::MemArg | always
+telomere::component_support::common::MemIdx | always
+telomere::component_support::common::MemType | always
+telomere::component_support::common::MemoryHandle | always
+telomere::component_support::common::Module | always
+telomere::component_support::common::Mut | always
+telomere::component_support::common::RefType | always
+telomere::component_support::common::ResultType | always
+telomere::component_support::common::ResultValue | always
+telomere::component_support::common::Store | always
+telomere::component_support::common::StoreState | always
+telomere::component_support::common::TableIdx | always
+telomere::component_support::common::TableType | always
+telomere::component_support::common::TypeIdx | always
+telomere::component_support::common::VMResult | always
+telomere::component_support::common::ValType | always
+telomere::component_support::common::WasmValue | always
+telomere::component_support::common::instance_id | always
+telomere::component_support::common::memory_export | always
+telomere::component_support::common::module_exports | always
+telomere::component_support::common::module_function_types | always
+telomere::component_support::common::module_functions | always
+telomere::component_support::common::module_globals | always
+telomere::component_support::common::module_imports | always
+telomere::component_support::common::module_memories | always
+telomere::component_support::common::module_tables | always
+telomere::component_support::common::read_memory | always
+telomere::component_support::common::read_memory_array | always
+telomere::component_support::common::write_memory | always
+telomere::component_support::parser | always
+telomere::component_support::parser::core | always
+telomere::component_support::parser::core::parse_i32 | always
+telomere::component_support::parser::core::parse_name | always
+telomere::component_support::parser::core::parse_u32 | always
+telomere::component_support::parser::core::parse_vec | always
+telomere::component_support::parser::leb128 | always
+telomere::component_support::parser::leb128::compile_i32 | always
+telomere::component_support::runtime | always
+telomere::component_support::runtime::ResultValue | always
+telomere::component_support::runtime::aliasing | always
+telomere::component_support::runtime::instantiate | always
+telomere::component_support::runtime::run_core_export_sync_reentrant | always
+telomere::component_support::runtime::run_module_function | always
+telomere::get_global | always
+telomere::host_abi | always
+telomere::host_abi::AsyncHostFunction | always
+telomere::host_abi::AsyncHostFunctionDefinition | always
+telomere::host_abi::AsyncHostFuture | always
+telomere::host_abi::AsyncNativeModule | always
+telomere::host_abi::CodeSection | always
+telomere::host_abi::ExecuteContext | always
+telomere::host_abi::Func | always
+telomere::host_abi::FunctionBody | always
+telomere::host_abi::HostFunction | always
+telomere::host_abi::HostFunctionDefinition | always
+telomere::host_abi::Instr | always
+telomere::host_abi::LocalReference | always
+telomere::host_abi::Memory | always
+telomere::host_abi::NativeModule | always
+telomere::host_abi::ObjectRef | always
+telomere::host_abi::ReturnSlot | always
+telomere::host_abi::SharedMemoryObject | cfg(feature = "threads")
+telomere::host_abi::SharedWaitRegistration | cfg(feature = "threads")
+telomere::host_abi::Stack | always
+telomere::host_abi::StoreInner | always
+telomere::host_abi::instantiate_native_module | always
+telomere::instantiate | always
+telomere::instantiate_native_async_module | always
+telomere::jit_supported | always
+telomere::link_async_host_function_with_export_name | always
+telomere::link_async_host_function_with_function_idx | always
+telomere::link_host_function_with_export_name | always
+telomere::link_host_function_with_function_idx | always
+telomere::measure_switches | cfg(feature = "measure-switches")
+telomere::run_module_function | always
+telomere::run_module_function_with_driver | always
+telomere::special_function_return | always
+telomere::unstable_internals | cfg(feature = "unstable-internals")
+telomere::unstable_internals::AtomicRmwOperation | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::Op | cfg(feature = "unstable-internals")
+telomere::unstable_internals::Operand | cfg(feature = "unstable-internals")
+telomere::unstable_internals::SharedWaitState | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::ValueSize | cfg(feature = "unstable-internals")
+telomere::unstable_internals::current_function_index | cfg(feature = "unstable-internals")
+telomere::unstable_internals::function_address | cfg(feature = "unstable-internals")
+telomere::unstable_internals::function_call | cfg(feature = "unstable-internals")
+telomere::unstable_internals::function_code_pointer | cfg(feature = "unstable-internals")
+telomere::unstable_internals::function_host_code_pointer | cfg(feature = "unstable-internals")
+telomere::unstable_internals::function_is_host | cfg(feature = "unstable-internals")
+telomere::unstable_internals::function_locals_size | cfg(feature = "unstable-internals")
+telomere::unstable_internals::module_name | cfg(feature = "unstable-internals")
+telomere::unstable_internals::new_shared_memory | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::pending_effect_count | cfg(feature = "unstable-internals")
+telomere::unstable_internals::shared_atomic_rmw_u16 | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::shared_atomic_rmw_u32 | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::shared_atomic_rmw_u64 | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::shared_atomic_rmw_u8 | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::shared_register_wait32 | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::shared_register_wait64 | cfg(feature = "threads") && cfg(feature = "unstable-internals")

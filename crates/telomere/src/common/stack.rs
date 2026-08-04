@@ -1,5 +1,3 @@
-#![allow(private_interfaces)]
-
 #[cfg(feature = "simd")]
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
@@ -77,6 +75,8 @@ fn trusted_read_u128(src: &[u8]) -> u128 {
     unsafe { u128::from_le(src.as_ptr().cast::<u128>().read_unaligned()) }
 }
 
+// #202: SIMD stack traits are intentionally dormant without the optional SIMD runtime.
+#[cfg_attr(not(feature = "simd"), allow(dead_code))]
 pub(crate) trait LaneType
 where
     Self: Sized,
@@ -84,6 +84,7 @@ where
     type BaseType;
     const LANE_SIZE: usize = std::mem::size_of::<Self>() / std::mem::size_of::<Self::BaseType>();
 }
+#[cfg_attr(not(feature = "simd"), allow(unused_macros))]
 macro_rules! impl_lane_type {
     ($target: ty,$base: ty) => {
         impl LaneType for $target {
@@ -207,6 +208,8 @@ impl CallFrameCache {
         }
     }
 
+    // #202: This cached-frame accessor backs the feature-gated raw host ABI.
+    #[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
     pub(crate) fn memory0_handle(self) -> Option<MemoryHandle> {
         match self.memory0_kind {
             CachedMemoryKind::None => None,
@@ -220,7 +223,7 @@ impl CallFrameCache {
     }
 }
 
-pub trait IntoCallFrameCache {
+pub(crate) trait IntoCallFrameCache {
     fn into_call_frame_cache(self, runtime: &StoreInner) -> CallFrameCache;
 }
 
@@ -249,6 +252,8 @@ pub struct LocalReference {
     pub local_top: usize,
     pub local_size: u32,
 }
+// #202: The raw interpreter stack is exposed only through `unstable-internals`.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 impl Stack {
     #[inline(always)]
     unsafe fn local_ptr(local_base: *const u8, local_addr: usize) -> *const u8 {
@@ -982,7 +987,7 @@ impl Stack {
             memory0_raw: info.memory0_raw,
         }
     }
-    pub fn function_call<F: IntoCallFrameCache>(
+    pub(crate) fn function_call<F: IntoCallFrameCache>(
         &mut self,
         param_size: usize,
         local_size: usize,
@@ -1003,7 +1008,7 @@ impl Stack {
         )
     }
 
-    pub fn function_call_cached(
+    pub(crate) fn function_call_cached(
         &mut self,
         param_size: usize,
         local_size: usize,
@@ -1132,7 +1137,9 @@ impl Stack {
             return_pc.resolve(runtime, self, prev_local_reference),
         )
     }
-    pub fn function_return_call(
+    // #202 keeps this wrapper for stack tests and in-crate tail-call evolution.
+    #[allow(dead_code)]
+    pub(crate) fn function_return_call(
         &mut self,
         reference: &LocalReference,
         param_size: usize,
@@ -1142,7 +1149,7 @@ impl Stack {
         self.function_return_call_cached(reference, param_size, local_size, frame)
     }
 
-    pub fn function_return_call_cached(
+    pub(crate) fn function_return_call_cached(
         &mut self,
         reference: &LocalReference,
         param_size: usize,
@@ -1194,6 +1201,8 @@ impl Stack {
         self.top = dst + return_size;
     }
 }
+// #202: Wide stack operations are intentionally dormant without the optional SIMD runtime.
+#[cfg_attr(not(feature = "simd"), allow(dead_code))]
 pub(crate) trait StackOperation<T> {
     fn push(&mut self, v: T) -> VMResult<()>;
     fn pop(&mut self) -> T;
@@ -1218,6 +1227,7 @@ stack_operation!(i32, push_i32, pop_i32);
 stack_operation!(i64, push_i64, pop_i64);
 stack_operation!(f32, push_f32, pop_f32);
 stack_operation!(f64, push_f64, pop_f64);
+#[cfg_attr(not(feature = "simd"), allow(unused_macros))]
 macro_rules! stack_operation_wide {
     ($target: ty) => {
         #[cfg(feature = "simd")]

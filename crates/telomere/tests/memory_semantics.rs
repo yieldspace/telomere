@@ -1,10 +1,12 @@
 mod common;
 
 use common::instantiate_wat;
-use telomere::{run_module_function, Registry, ResultValue, Store, VMResult, WasmValue};
+use telomere::{
+    run_module_function, InstanceHandle, Registry, ResultValue, Store, VMResult, WasmValue,
+};
 
 async fn call_i32(
-    instance: &telomere::common::InstanceHandle,
+    instance: &InstanceHandle,
     store: &Store,
     name: &str,
     args: Vec<WasmValue>,
@@ -20,7 +22,7 @@ async fn call_i32(
 
 #[cfg(feature = "simd")]
 async fn call_v128(
-    instance: &telomere::common::InstanceHandle,
+    instance: &InstanceHandle,
     store: &Store,
     name: &str,
     args: Vec<WasmValue>,

@@ -25,6 +25,7 @@ smallvec.workspace = true
 telomere-jit-codegen = { workspace = true, optional = true }
 
 [dev-dependencies]
+telomere = { path = ".", default-features = false, features = ["unstable-internals"] }
 futures = "0.3.31"
 libtest-mimic = "0.8.2"
 proc-macro2 = "1.0.95"
@@ -55,6 +56,7 @@ threads = ["dep:tokio"]
 vm-profile = []
 vm-diagnostics = []
 measure-switches = []
+unstable-internals = []
 jit = ["dep:telomere-jit-codegen"]
 full = [
     "simd",

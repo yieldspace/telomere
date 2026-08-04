@@ -4,9 +4,12 @@ use std::{env, fs};
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use telomere::{
-    common::{ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, ValType},
-    instantiate, IoReadBinaryReader, Registry, ResultValue, RuntimeConfig, Store, VMResult,
-    WasmParser, WasmValue,
+    component_support::common::{FuncType, ValType},
+    host_abi::{
+        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
+    },
+    instantiate, InstanceHandle, IoReadBinaryReader, Registry, ResultValue, RuntimeConfig, Store,
+    VMResult, WasmParser, WasmValue,
 };
 use tokio::runtime::Runtime;
 
@@ -97,11 +100,7 @@ fn parse_wat(wat: &str) -> telomere::Module {
     parser.parse_module().expect("wat must validate")
 }
 
-async fn instantiate_wat(
-    wat: &str,
-    store: &Store,
-    registry: &Registry,
-) -> telomere::common::InstanceHandle {
+async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
     match instantiate(parse_wat(wat), store, registry).await {
         VMResult::Success(instance) => instance,
         other => panic!("wat module must instantiate: {other:?}"),
@@ -138,7 +137,7 @@ fn benchmark_store(metering: BenchmarkMetering) -> Store {
     }
 }
 
-async fn instantiate_fused_relink_workload(store: &Store) -> telomere::common::InstanceHandle {
+async fn instantiate_fused_relink_workload(store: &Store) -> InstanceHandle {
     let registry = Registry::new();
     let handle = instantiate_wat(FUSED_RELINK_LOOP_WAT, store, &registry).await;
     assert_eq!(
@@ -150,7 +149,7 @@ async fn instantiate_fused_relink_workload(store: &Store) -> telomere::common::I
     handle
 }
 
-async fn run_fused_relink_roundtrip(handle: &telomere::common::InstanceHandle, store: &Store) {
+async fn run_fused_relink_roundtrip(handle: &InstanceHandle, store: &Store) {
     assert_eq!(
         black_box(
             telomere::run_module_function(
@@ -340,7 +339,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         b.to_async(&rt).iter_custom(|iters| async move {
             let store = benchmark_store(metering_mode);
             let mut registry = Registry::new();
-            let host = match telomere::runtime::instantiate_native_module(
+            let host = match instantiate_native_module(
                 NativeModule {
                     functions: vec![HostFunctionDefinition {
                         name: Some("add-one".to_owned()),

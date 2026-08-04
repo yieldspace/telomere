@@ -1,8 +1,8 @@
 pub mod component_model;
 
 use telomere::{
-    common::InstanceHandle, get_global, instantiate, IoReadBinaryReader, Registry, ResultValue,
-    Store, VMResult, WasmParser, WasmValue,
+    get_global, instantiate, InstanceHandle, IoReadBinaryReader, Registry, ResultValue, Store,
+    VMResult, WasmParser, WasmValue,
 };
 use tracing::error;
 use wast::{
@@ -104,7 +104,7 @@ pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
                         panic!("{:?} {:?}", span.linecol_in(text), v);
                     }
                 };
-                tracing::trace!("{:?}", m.elems);
+                tracing::trace!("instantiating parsed module");
                 let inst = instantiate(m, store, registry).await.unwrap();
                 if let Some(name) = name {
                     registry.register(name.name(), inst.clone());
