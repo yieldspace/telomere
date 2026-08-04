@@ -55,16 +55,15 @@ operation, rather than by a default export of the underlying interpreter type.
 
 ### H2: root compatibility carve-out
 
-Six root paths preserve synchronous or asynchronous host-function replacement:
+Five root paths preserve synchronous or asynchronous host-function replacement:
 
 - instantiate_native_async_module
 - link_host_function_with_export_name
 - link_host_function_with_function_idx
 - link_async_host_function_with_export_name
 - link_async_host_function_with_function_idx
-- special_function_return
 
-Nine root paths preserve asynchronous driver and continuation handling:
+Eight root paths preserve asynchronous driver and continuation handling:
 
 - run_module_function_with_driver
 - Completion
@@ -74,7 +73,6 @@ Nine root paths preserve asynchronous driver and continuation handling:
 - MemoryWaitPending (threads only)
 - PendingOp
 - TokioDriver
-- WasmAsyncPending
 
 Module::codes is also public for the existing decoded-AST compatibility
 boundary. Its type is host_abi::CodeSection; the other decoded section types
@@ -86,6 +84,15 @@ unstable-internals remains an explicit maintenance boundary. It is enabled by
 the CLI, component-model consumers, and the crate's self dev-dependency where
 needed. New consumers should prefer S1/S2/H1/H2 and opt in to S3 only when they
 need the raw integration contract.
+
+`special_function_return` and `WasmAsyncPending` are S3 items under
+`unstable-internals`, despite retaining cfg-gated crate-root spellings for
+existing opt-in consumers. The former requires construction of a raw `Instr`
+return sequence, and the default surface exposes no `Instr` construction API.
+The latter has no runtime producer, while `TokioDriver` rejects it as reserved
+future guest-async support. Neither is part of the default host-linking or
+driver carve-out. `CompletionPayload::WasmAsync` remains a type-free reserved
+completion marker, not a supported default driver capability.
 
 ## Public-surface snapshot
 
@@ -135,6 +142,10 @@ fields, or changed signatures on an already exported type.
 warn(unnameable_types), private_interfaces, compilation, and the warning-free
 Clippy job provide complementary checks; cargo public-api would be the
 appropriate future signature-level compatibility tool.
+
+The `host_abi` doctests establish the synchronous index-link/frame-return route
+and the async native-module/custom-driver route. They do not by themselves
+replace the snapshot's full path audit.
 
 Release lib-only builds establish the public-surface closure for a concrete
 feature set. --all-targets builds establish that workspace consumers still

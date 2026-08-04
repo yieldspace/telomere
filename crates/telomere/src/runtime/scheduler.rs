@@ -149,6 +149,7 @@ impl ExecutionDriver for TokioDriver {
             PendingOp::HostCall(op) => self.submit_host_call(op),
             #[cfg(feature = "threads")]
             PendingOp::MemoryWait(op) => self.submit_memory_wait(op),
+            #[cfg(feature = "unstable-internals")]
             PendingOp::WasmAsync(op) => {
                 panic!(
                     "Wasm async pending op is not implemented yet for task {}",

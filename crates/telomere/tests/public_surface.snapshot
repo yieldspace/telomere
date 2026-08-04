@@ -24,7 +24,7 @@ telomere::Store | always
 telomere::StoreState | always
 telomere::TokioDriver | always
 telomere::VMResult | always
-telomere::WasmAsyncPending | always
+telomere::WasmAsyncPending | cfg(feature = "unstable-internals")
 telomere::WasmParser | always
 telomere::WasmParserError | always
 telomere::WasmValue | always
@@ -122,7 +122,7 @@ telomere::link_host_function_with_function_idx | always
 telomere::measure_switches | cfg(feature = "measure-switches")
 telomere::run_module_function | always
 telomere::run_module_function_with_driver | always
-telomere::special_function_return | always
+telomere::special_function_return | cfg(feature = "unstable-internals")
 telomere::unstable_internals | cfg(feature = "unstable-internals")
 telomere::unstable_internals::AtomicRmwOperation | cfg(feature = "threads") && cfg(feature = "unstable-internals")
 telomere::unstable_internals::Op | cfg(feature = "unstable-internals")

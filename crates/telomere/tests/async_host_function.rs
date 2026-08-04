@@ -64,6 +64,7 @@ impl ExecutionDriver for MockDriver {
                     }
                 }));
             }
+            #[cfg(feature = "unstable-internals")]
             PendingOp::WasmAsync(op) => {
                 panic!(
                     "unexpected wasm async pending op for task {} in mock driver",

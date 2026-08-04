@@ -52,6 +52,110 @@
 //!     ResultValue::new(vec![WasmValue::I32(42)])
 //! );
 //! ```
+//!
+//! # Async driver example
+//!
+//! An embedder can define an asynchronous host callback, create a native module,
+//! link it by index and export name, and drive the returned host future through
+//! a custom [`crate::ExecutionDriver`].
+//!
+//! ```
+//! use std::{collections::VecDeque, future::Future, pin::Pin};
+//!
+//! use futures::executor::block_on;
+//! use telomere::{
+//!     component_support::common::{FuncType, ValType},
+//!     host_abi::{AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext},
+//!     instantiate, instantiate_native_async_module, link_async_host_function_with_export_name,
+//!     link_async_host_function_with_function_idx, run_module_function_with_driver, Completion,
+//!     CompletionPayload, ExecutionDriver, HostCallPending, IoReadBinaryReader, PendingOp, Registry,
+//!     ResultValue, Store, TokioDriver, VMResult, WasmParser, WasmValue,
+//! };
+//!
+//! #[derive(Default)]
+//! struct InlineDriver {
+//!     inflight: VecDeque<(u32, AsyncHostFuture)>,
+//! }
+//!
+//! impl ExecutionDriver for InlineDriver {
+//!     fn submit(&mut self, op: PendingOp) {
+//!         match op {
+//!             PendingOp::HostCall(HostCallPending { task_id, future }) => {
+//!                 self.inflight.push_back((task_id, future));
+//!             }
+//!             _ => panic!("this example only drives asynchronous host calls"),
+//!         }
+//!     }
+//!
+//!     fn next_completion<'a>(
+//!         &'a mut self,
+//!     ) -> Pin<Box<dyn Future<Output = Option<Completion>> + 'a>> {
+//!         Box::pin(async move {
+//!             let (task_id, future) = self.inflight.pop_front()?;
+//!             Some(Completion {
+//!                 task_id,
+//!                 payload: CompletionPayload::HostCall {
+//!                     result: future.await,
+//!                 },
+//!             })
+//!         })
+//!     }
+//! }
+//!
+//! fn return_42(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+//!     let slot = ctx.return_slot();
+//!     let (previous_local_reference, return_addr) =
+//!         ctx.stack
+//!             .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+//!     ctx.set_local_reference(previous_local_reference);
+//!     Box::pin(async move {
+//!         slot.write(&42_i32.to_le_bytes());
+//!         VMResult::Success(return_addr)
+//!     })
+//! }
+//!
+//! let _built_in_driver = TokioDriver::new();
+//! let bytes = wat::parse_str(
+//!     r#"(module
+//!         (import "host" "answer" (func $answer (result i32)))
+//!         (func (export "run") (result i32) call $answer))"#,
+//! )
+//! .expect("the inline module is valid WebAssembly");
+//! let mut reader = IoReadBinaryReader::from(&bytes[..]);
+//! let module = WasmParser::new(&mut reader)
+//!     .parse_module()
+//!     .expect("the module parses");
+//! let store = Store::new();
+//! let mut registry = Registry::new();
+//! let host = block_on(instantiate_native_async_module(
+//!     AsyncNativeModule {
+//!         functions: vec![AsyncHostFunctionDefinition {
+//!             name: Some("answer".to_owned()),
+//!             signature: FuncType::new(vec![], vec![ValType::I32]),
+//!             fp: return_42,
+//!         }],
+//!     },
+//!     &store,
+//!     &registry,
+//! ))
+//! .unwrap();
+//! link_async_host_function_with_function_idx(&host, 0, return_42, &store);
+//! link_async_host_function_with_export_name(&host, "answer", return_42, &store);
+//! registry.register("host", host);
+//! let instance = block_on(instantiate(module, &store, &registry)).unwrap();
+//! let mut driver = InlineDriver::default();
+//! let result = block_on(run_module_function_with_driver(
+//!     &instance,
+//!     &store,
+//!     "run",
+//!     &ResultValue::new(vec![]),
+//!     &mut driver,
+//! ));
+//! assert_eq!(
+//!     result.unwrap(),
+//!     ResultValue::new(vec![WasmValue::I32(42)])
+//! );
+//! ```
 
 /// Shared guest memory passed to a custom asynchronous execution driver.
 ///

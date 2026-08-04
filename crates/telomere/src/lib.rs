@@ -188,10 +188,13 @@ pub use runtime::instantiate::link_host_function_with_export_name;
 /// This raw callback ABI remains public for default synchronous host linking;
 /// issue #216 tracks its replacement.
 pub use runtime::instantiate::link_host_function_with_function_idx;
+#[cfg(feature = "unstable-internals")]
 /// Marks the current host call as returning through the runtime's special path.
 ///
-/// This raw interpreter handler remains public for default host linking; issue
-/// #216 tracks its replacement.
+/// This raw interpreter handler is available only for opt-in raw instruction
+/// construction. Default builds expose no public way to construct the required
+/// `Instr` sequence, so it is not part of the default host-linking carve-out.
+/// Issue #216 tracks its replacement.
 pub use runtime::vm::special_function_return;
 
 /// Calls a named exported function using an embedder-provided async driver.
@@ -235,10 +238,12 @@ pub use runtime::PendingOp;
 /// This raw driver remains public for default asynchronous host linking; issue
 /// #216 tracks its replacement.
 pub use runtime::TokioDriver;
+#[cfg(feature = "unstable-internals")]
 /// A reserved pending operation for future guest async support.
 ///
-/// This raw driver value remains public for default asynchronous host linking;
-/// issue #216 tracks its replacement.
+/// No runtime producer currently emits this value, and [`TokioDriver`] rejects
+/// it. It is therefore available only to opt-in integrations that construct raw
+/// pending operations; issue #216 tracks its replacement.
 pub use runtime::WasmAsyncPending;
 
 /// Calls a named exported function using the default Tokio-backed driver.

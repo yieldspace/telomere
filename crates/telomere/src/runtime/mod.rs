@@ -29,6 +29,7 @@ pub use memory_effect::HostCallPending;
 pub use memory_effect::MemoryWaitPending;
 /// Work the runtime asks an [`ExecutionDriver`] to schedule.
 pub use memory_effect::PendingOp;
+#[cfg(feature = "unstable-internals")]
 /// A reserved pending operation for future guest async support.
 pub use memory_effect::WasmAsyncPending;
 /// Trait for integrating runtime pending work with an embedder executor.

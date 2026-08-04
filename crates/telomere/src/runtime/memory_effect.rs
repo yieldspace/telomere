@@ -21,6 +21,7 @@ pub struct MemoryWaitPending {
     pub fp: usize,
 }
 
+#[cfg(feature = "unstable-internals")]
 #[derive(Debug)]
 pub struct WasmAsyncPending {
     pub task_id: u32,
@@ -30,6 +31,7 @@ pub enum PendingOp {
     HostCall(HostCallPending),
     #[cfg(feature = "threads")]
     MemoryWait(MemoryWaitPending),
+    #[cfg(feature = "unstable-internals")]
     #[allow(dead_code)]
     WasmAsync(WasmAsyncPending),
 }
@@ -40,6 +42,7 @@ impl PendingOp {
             Self::HostCall(op) => op.task_id,
             #[cfg(feature = "threads")]
             Self::MemoryWait(op) => op.task_id,
+            #[cfg(feature = "unstable-internals")]
             Self::WasmAsync(op) => op.task_id,
         }
     }
@@ -59,6 +62,7 @@ impl fmt::Debug for PendingOp {
                 .field("timeout_ns", &op.timeout_ns)
                 .field("fp", &op.fp)
                 .finish(),
+            #[cfg(feature = "unstable-internals")]
             Self::WasmAsync(op) => f.debug_tuple("PendingOp::WasmAsync").field(op).finish(),
         }
     }

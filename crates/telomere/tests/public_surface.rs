@@ -56,7 +56,6 @@ const ROOT_HOST_LINKING_CARVE_OUT: &[&str] = &[
     "link_host_function_with_function_idx",
     "link_async_host_function_with_export_name",
     "link_async_host_function_with_function_idx",
-    "special_function_return",
 ];
 
 const ROOT_DRIVER_CARVE_OUT: &[&str] = &[
@@ -68,7 +67,6 @@ const ROOT_DRIVER_CARVE_OUT: &[&str] = &[
     "MemoryWaitPending",
     "PendingOp",
     "TokioDriver",
-    "WasmAsyncPending",
 ];
 
 const HOST_ABI_ALWAYS: &[&str] = &[
@@ -233,7 +231,7 @@ fn required_default_host_carve_outs_are_explicit() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         actual_root_carve_out, expected_root_carve_out,
-        "the six host-linking and nine driver root carve-out paths must retain their reviewed cfg predicates"
+        "the five host-linking and eight driver root carve-out paths must retain their reviewed cfg predicates"
     );
 
     let expected_module_codes = expected_path("telomere::Module::codes", &[]);
@@ -246,6 +244,44 @@ fn required_default_host_carve_outs_are_explicit() {
         actual_module_codes,
         BTreeSet::from([expected_module_codes]),
         "Module::codes is a reviewed default host-linking compatibility field"
+    );
+}
+
+#[test]
+fn special_function_return_is_opt_in_only() {
+    let records = collect_public_surface();
+    let expected = BTreeSet::from([expected_path(
+        "telomere::special_function_return",
+        &["cfg(feature = \"unstable-internals\")"],
+    )]);
+    let actual = records
+        .iter()
+        .filter(|record| record.path == "telomere::special_function_return")
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        actual, expected,
+        "special_function_return is an opt-in raw instruction-construction hook, not a default host-linking path"
+    );
+}
+
+#[test]
+fn wasm_async_pending_is_opt_in_only() {
+    let records = collect_public_surface();
+    let expected = BTreeSet::from([expected_path(
+        "telomere::WasmAsyncPending",
+        &["cfg(feature = \"unstable-internals\")"],
+    )]);
+    let actual = records
+        .iter()
+        .filter(|record| record.path == "telomere::WasmAsyncPending")
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        actual, expected,
+        "WasmAsyncPending is a reserved opt-in pending-operation type, not a default driver path"
     );
 }
 
