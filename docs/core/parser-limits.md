@@ -101,7 +101,13 @@ frame is about 130 KiB, roughly 190 times its 681 B release frame. A limit low
 enough to fit a normal debug test thread would reject valid conformance inputs,
 so it does not resolve #154. The replay harnesses accordingly use 512 KiB only
 in release and retain a 64 MiB debug stack while #154 is addressed separately.
-Instrumented builds are excluded from this contract for the same reason.
+Instrumented builds are excluded from this contract for the same reason. Bisected
+the same way on macOS arm64, an AddressSanitizer build costs about 60 KiB per
+level, roughly 90 times the 681 B release frame: 256 levels need more than 14 MiB
+and 512 levels need between 28 MiB and 32 MiB. A 512-level input therefore fits
+in neither a default 8 MiB thread stack nor a 16 MiB one, so both targets that
+feed guest bytes to these parsers, `parse_core_module` and `decode_component`,
+run their work on a 64 MiB harness thread.
 
 ## Reproducible regression fixtures
 
