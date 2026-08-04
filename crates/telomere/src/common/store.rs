@@ -4,8 +4,8 @@ use super::{
     memory::{AtomicRmwOp, LocalMemoryObject, MemoryInitError, SharedMemoryObject},
     object_ref::ObjectRef,
     AsyncHostFunction, CallFrameCache, Data, Elem, ExportSection, FuncType, GlobalType,
-    HostFunction, Instr, LocalsData, MemType, MeteringConfig, MeteringHandle, Stack, TableType,
-    TypeIdx, VMResult, PAGE_SIZE_MAX,
+    HostFunction, Instr, LocalsData, MemType, MeteringConfig, MeteringHandle, ModuleNames, Stack,
+    TableType, TypeIdx, VMResult, PAGE_SIZE_MAX,
 };
 #[cfg(feature = "jit")]
 use crate::runtime::jit::{CompiledFunction, StoreJitCache};
@@ -126,6 +126,7 @@ pub struct ModuleInstance {
     pub functions: Vec<TypeIdx>,
     pub function_types: Vec<FuncType>,
     pub mems: Vec<MemType>,
+    pub(crate) names: Option<Arc<ModuleNames>>,
 }
 
 #[derive(Debug, Clone)]
@@ -294,11 +295,27 @@ impl Default for MemoryConfig {
 }
 
 #[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Configures optional diagnostic data retained by a [`Store`].
+pub struct DiagnosticsConfig {
+    /// Retains module and function names from parsed WebAssembly `name` sections.
+    pub retain_function_names: bool,
+}
+
+impl Default for DiagnosticsConfig {
+    fn default() -> Self {
+        Self {
+            retain_function_names: true,
+        }
+    }
+}
+
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// Runtime options used to create a [`Store`].
 ///
 /// Use the default unless an embedder needs to bound memory, opt into JIT, or
-/// configure execution metering.
+/// configure execution metering or diagnostics.
 pub struct RuntimeConfig {
     /// JIT settings for this store.
     pub jit: JitConfig,
@@ -306,6 +323,8 @@ pub struct RuntimeConfig {
     pub memory: MemoryConfig,
     /// Fuel and cancellation settings for this store.
     pub metering: MeteringConfig,
+    /// Diagnostic data retained for later reporting.
+    pub diagnostics: DiagnosticsConfig,
 }
 
 #[repr(C, align(4))]
