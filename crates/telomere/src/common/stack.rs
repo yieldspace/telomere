@@ -137,6 +137,17 @@ pub(crate) struct CallStackInfo {
 
 const CALL_STACK_INFO_SIZE: usize = std::mem::size_of::<CallStackInfo>();
 
+/// A defensively decoded call-frame record for cold diagnostic consumers.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StackFrameRecord {
+    pub(crate) code_addr: ObjectRef,
+    pub(crate) code_base: *const Instr,
+    pub(crate) instance: InstanceId,
+    /// The continuation in this frame's caller.
+    pub(crate) return_pc: StablePc,
+    pub(crate) prev: LocalReference,
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CachedMemoryKind {
@@ -892,6 +903,37 @@ impl Stack {
             )
         }
     }
+    /// Returns a frame record only when its packed metadata lies wholly within
+    /// the stack allocation.
+    ///
+    /// Normal execution has already validated these references. This accessor
+    /// is deliberately stricter because diagnostics must not turn a trap into
+    /// an out-of-bounds panic while walking a damaged stack.
+    pub(crate) fn frame_record(&self, reference: &LocalReference) -> Option<StackFrameRecord> {
+        if (reference.local_size as usize) < CALL_STACK_INFO_SIZE {
+            return None;
+        }
+        let frame_end = reference
+            .local_top
+            .checked_add(reference.local_size as usize)?;
+        if frame_end > self.memory.len() {
+            return None;
+        }
+        let info_top = frame_end.checked_sub(CALL_STACK_INFO_SIZE)?;
+        let info_end = info_top.checked_add(CALL_STACK_INFO_SIZE)?;
+        let bytes = self.memory.get(info_top..info_end)?;
+        let info = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<CallStackInfo>()) };
+        Some(StackFrameRecord {
+            code_addr: info.code_addr,
+            code_base: info.code_base,
+            instance: info.instance,
+            return_pc: info.return_pc,
+            prev: LocalReference {
+                local_top: info.prev_local_reference_top,
+                local_size: info.prev_local_reference_size,
+            },
+        })
+    }
     #[inline(always)]
     fn write_call_stack_info_at(&mut self, info_top: usize, info: CallStackInfo) {
         unsafe {
@@ -1290,6 +1332,29 @@ mod tests {
             memory0_kind: kind,
             memory0_raw: raw,
         }
+    }
+
+    #[test]
+    fn frame_record_rejects_sentinel_and_out_of_bounds_references() {
+        let stack = Stack::new(CALL_STACK_INFO_SIZE);
+        assert!(stack
+            .frame_record(&LocalReference {
+                local_top: 0,
+                local_size: 0,
+            })
+            .is_none());
+        assert!(stack
+            .frame_record(&LocalReference {
+                local_top: 1,
+                local_size: CALL_STACK_INFO_SIZE as u32,
+            })
+            .is_none());
+        assert!(stack
+            .frame_record(&LocalReference {
+                local_top: usize::MAX,
+                local_size: CALL_STACK_INFO_SIZE as u32,
+            })
+            .is_none());
     }
 
     #[test]

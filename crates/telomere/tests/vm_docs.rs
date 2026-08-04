@@ -57,7 +57,6 @@ const PRIVATE_UNSAFE_DOC_SURFACE: &[&str] = &[
     "store_internal_shared",
     "store_internal_local_indexed",
     "store_internal_shared_indexed",
-    "trap_func",
 ];
 
 #[test]

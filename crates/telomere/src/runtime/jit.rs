@@ -300,6 +300,7 @@ unsafe fn handle_exit(
         }
         JitNativeExit::TRAP => {
             profile::count_exit(exit.kind);
+            ctx.cont = std::ptr::null();
             abi::vm_result_from_code(exit.value)
         }
         JitNativeExit::KEEP_GOING => {

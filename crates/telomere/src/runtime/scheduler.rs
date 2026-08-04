@@ -1,6 +1,7 @@
 #[cfg(feature = "threads")]
 use super::memory_effect::MemoryWaitPending;
 use super::memory_effect::{Completion, CompletionPayload, HostCallPending, PendingOp};
+use super::trap_context::{capture_trap_context, TrapContext};
 use crate::{
     common::{
         stack::CachedMemoryKind, CallFrameCache, ExecuteContext, LocalReference, StablePc, Stack,
@@ -45,12 +46,14 @@ pub(crate) struct Task {
     pub ready_flag: ReadyFlag,
     pub fp: StablePc,
     pub terminal_result: Option<VMResult<()>>,
+    pub terminal_trap: Option<Box<TrapContext>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct CompletedTask {
     pub stack: Stack,
     pub result: VMResult<()>,
+    pub trap: Option<Box<TrapContext>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,51 +218,71 @@ impl<'a> Scheduler<'a> {
                     task.fp = fp;
                     if task.pending_effects == 0 {
                         if let Some(result) = task.terminal_result.take() {
-                            complete_result = Some(result);
+                            complete_result = Some((result, task.terminal_trap.take()));
                         } else {
                             task.ready_flag = ReadyFlag::Ready;
                             self.ready_count += 1;
                         }
                     }
                 }
-                if let Some(result) = complete_result {
+                if let Some((result, trap)) = complete_result {
                     let task = self.tasks.remove(task_index).unwrap();
                     self.completed_tasks.push(CompletedTask {
                         stack: task.stack,
                         result,
+                        trap,
                     });
                 }
             }
             CompletionPayload::ResumeWithI32 { fp, value } => {
                 let fp = StablePc::from_raw(fp);
+                let push_result = {
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    task.stack.push_i32(value)
+                };
+                let push_result = vm_result_to_unit(push_result);
+                let trap = if push_result.is_err() {
+                    let gc = self.store.lock_gc();
+                    let task = self.tasks.get(task_index).unwrap();
+                    Some(capture_trap_context(
+                        &gc,
+                        &task.stack,
+                        task.local_reference,
+                        None,
+                        &push_result,
+                        task.task_id,
+                    ))
+                } else {
+                    None
+                };
                 let mut complete_result = None;
                 {
                     let task = self.tasks.get_mut(task_index).unwrap();
-                    let push_result = task.stack.push_i32(value);
                     task.pending_effects -= 1;
                     task.fp = fp;
-                    let push_result = vm_result_to_unit(push_result);
                     if task.pending_effects == 0 {
                         if push_result.is_err() {
-                            complete_result = Some(push_result);
+                            complete_result = Some((push_result, trap));
                         } else if let Some(result) = task.terminal_result.take() {
-                            complete_result = Some(result);
+                            complete_result = Some((result, task.terminal_trap.take()));
                         } else {
                             task.ready_flag = ReadyFlag::Ready;
                             self.ready_count += 1;
                         }
                     } else if push_result.is_err() {
                         task.terminal_result = Some(push_result);
+                        task.terminal_trap = trap;
                     } else {
                         task.ready_flag = ReadyFlag::Ready;
                         self.ready_count += 1;
                     }
                 }
-                if let Some(result) = complete_result {
+                if let Some((result, trap)) = complete_result {
                     let task = self.tasks.remove(task_index).unwrap();
                     self.completed_tasks.push(CompletedTask {
                         stack: task.stack,
                         result,
+                        trap,
                     });
                 }
             }
@@ -277,32 +300,54 @@ impl<'a> Scheduler<'a> {
                         task.fp = fp;
                         if task.pending_effects == 0 {
                             if let Some(result) = task.terminal_result.take() {
-                                complete_result = Some(result);
+                                complete_result = Some((result, task.terminal_trap.take()));
                             } else {
                                 task.ready_flag = ReadyFlag::Ready;
                                 self.ready_count += 1;
                             }
                         }
                     }
-                    if let Some(result) = complete_result {
+                    if let Some((result, trap)) = complete_result {
                         let task = self.tasks.remove(task_index).unwrap();
                         self.completed_tasks.push(CompletedTask {
                             stack: task.stack,
                             result,
+                            trap,
                         });
                     }
                 }
                 other => {
-                    let task = self.tasks.get_mut(task_index).unwrap();
-                    task.pending_effects -= 1;
-                    if task.pending_effects == 0 {
+                    let result = vm_result_to_unit(other);
+                    let trap = {
+                        let gc = self.store.lock_gc();
+                        let task = self.tasks.get(task_index).unwrap();
+                        capture_trap_context(
+                            &gc,
+                            &task.stack,
+                            task.local_reference,
+                            None,
+                            &result,
+                            task.task_id,
+                        )
+                    };
+                    let mut complete_result = None;
+                    {
+                        let task = self.tasks.get_mut(task_index).unwrap();
+                        task.pending_effects -= 1;
+                        if task.pending_effects == 0 {
+                            complete_result = Some((result, trap));
+                        } else {
+                            task.terminal_result = Some(result);
+                            task.terminal_trap = Some(trap);
+                        }
+                    }
+                    if let Some((result, trap)) = complete_result {
                         let task = self.tasks.remove(task_index).unwrap();
                         self.completed_tasks.push(CompletedTask {
                             stack: task.stack,
-                            result: vm_result_to_unit(other),
+                            result,
+                            trap: Some(trap),
                         });
-                    } else {
-                        task.terminal_result = Some(vm_result_to_unit(other));
                     }
                 }
             },
@@ -409,6 +454,7 @@ impl<'a> Scheduler<'a> {
                             stack,
                             pending_effects,
                             terminal_result: None,
+                            terminal_trap: None,
                         });
                         if pending_effects == 0 {
                             self.ready_count += 1;
@@ -417,6 +463,7 @@ impl<'a> Scheduler<'a> {
                         self.completed_tasks.push(CompletedTask {
                             stack,
                             result: VMResult::Success(()),
+                            trap: None,
                         });
                     } else {
                         self.tasks.push_back(Task {
@@ -427,14 +474,24 @@ impl<'a> Scheduler<'a> {
                             stack,
                             pending_effects,
                             terminal_result: Some(VMResult::Success(())),
+                            terminal_trap: None,
                         });
                     }
                 }
                 other => {
+                    let trap = capture_trap_context(
+                        gc,
+                        &stack,
+                        local_reference,
+                        Some(cont),
+                        &other,
+                        task_id,
+                    );
                     if pending_effects == 0 {
                         self.completed_tasks.push(CompletedTask {
                             stack,
                             result: other,
+                            trap: Some(trap),
                         });
                     } else {
                         self.tasks.push_back(Task {
@@ -445,6 +502,7 @@ impl<'a> Scheduler<'a> {
                             stack,
                             pending_effects,
                             terminal_result: Some(other),
+                            terminal_trap: Some(trap),
                         });
                     }
                 }
@@ -497,8 +555,14 @@ impl<'a> Scheduler<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, TokioDriver};
-    use crate::VMResult;
+    use super::{
+        Completion, CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, ReadyFlag,
+        Scheduler, Task, TokioDriver,
+    };
+    use crate::{
+        common::{CallFrameCache, LocalReference, StablePc, Stack},
+        Store, VMResult,
+    };
 
     #[tokio::test]
     async fn tokio_driver_completes_host_call_future() {
@@ -514,5 +578,52 @@ mod tests {
             }
             other => panic!("unexpected completion: {other:?}"),
         }
+    }
+
+    #[test]
+    fn resume_i32_stack_overflow_captures_before_completion() {
+        let store = Store::new();
+        let mut stack = Stack::new(std::mem::size_of::<crate::common::stack::CallStackInfo>());
+        let local_reference = match stack.function_call_cached(
+            0,
+            0,
+            CallFrameCache::dummy(),
+            LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            StablePc::from_raw(0),
+        ) {
+            VMResult::Success(local_reference) => local_reference,
+            other => panic!("frame must exactly fill the test stack: {other:?}"),
+        };
+        let mut scheduler = Scheduler::new(&store);
+        scheduler.push(Task {
+            task_id: 7,
+            stack,
+            local_reference,
+            pending_effects: 1,
+            ready_flag: ReadyFlag::NonReady,
+            fp: StablePc::from_raw(0),
+            terminal_result: None,
+            terminal_trap: None,
+        });
+
+        scheduler.apply_completion(Completion {
+            task_id: 7,
+            payload: CompletionPayload::ResumeWithI32 { fp: 0, value: 1 },
+        });
+
+        let completed = scheduler
+            .completed_tasks
+            .pop()
+            .expect("overflowing completion must finish the task");
+        assert!(matches!(completed.result, VMResult::StackOverflow));
+        let context = completed
+            .trap
+            .expect("overflowing completion must carry a trap context");
+        assert!(matches!(&context.result, VMResult::StackOverflow));
+        assert_eq!(context.task_id, 7);
+        assert_eq!(context.frames[0].pc_index, None);
     }
 }

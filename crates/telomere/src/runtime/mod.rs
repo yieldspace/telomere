@@ -8,6 +8,7 @@ pub(crate) mod instantiate;
 pub(crate) mod jit;
 pub(crate) mod memory_effect;
 pub(crate) mod scheduler;
+pub(crate) mod trap_context;
 #[allow(clippy::missing_safety_doc)]
 pub(crate) mod vm;
 /// Values returned by guest functions.
