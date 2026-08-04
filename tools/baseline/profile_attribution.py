@@ -25,6 +25,11 @@ class AttributionParseError(RuntimeError):
 OPERATOR = re.compile(r"op_[A-Za-z0-9_]+")
 DARWIN_WEIGHT = re.compile(r"^\s*(?P<weight>[0-9]+)\s+(?P<body>.+?)\s*$")
 PERF_WEIGHT = re.compile(r"^\s*(?P<weight>[0-9]+(?:\.[0-9]+)?)%\s+(?P<body>.+?)\s*$")
+# Boundaries distinguish canonical Wasm SIMD lane tokens from unrelated names
+# such as ``op_i32_xor``, ``op_i64_extend8_s``, and ``op_f32_max``.
+WASM_SIMD_LANE_TOKEN = re.compile(
+    r"(?:^|_)(?:i8x16|i16x8|i32x4|i64x2|f32x4|f64x2)(?:_|$)"
+)
 
 
 def normalise_symbol(text: str) -> Optional[str]:
@@ -67,7 +72,11 @@ def parse_perf_report(text: str) -> Dict[str, float]:
 
 
 def handler_layout_group(label: str) -> str:
-    """Mirror runtime/vm.rs::handler_descriptor's layout-group precedence."""
+    """Classify profiler labels into the reporting layout-group vocabulary.
+
+    This follows the runtime precedence where applicable, but recognises SIMD
+    through canonical Wasm label tokens rather than any incidental ``x``.
+    """
 
     if label == "op_unreachable":
         return "Traps"
@@ -106,6 +115,8 @@ def handler_layout_group(label: str) -> str:
         return "Atomics"
     if label.startswith("op_call") or label.startswith("op_return_call"):
         return "Call"
+    if label.startswith("op_v128") or WASM_SIMD_LANE_TOKEN.search(label):
+        return "Simd"
     if "_load" in label or "_store" in label:
         return "Memory"
     if label.startswith("op_local_") or label.startswith("op_select") or label == "op_drop":
@@ -116,8 +127,6 @@ def handler_layout_group(label: str) -> str:
         return "Tables"
     if label.startswith("op_ref_"):
         return "Refs"
-    if label.startswith("op_v128") or "x" in label:
-        return "Simd"
     if label.startswith("op_i") or label.startswith("op_f"):
         return "Numeric"
     return "Other"

@@ -14,6 +14,7 @@ sys.path.insert(0, str(HERE))
 from profile_attribution import (  # noqa: E402
     AttributionParseError,
     fold_families,
+    handler_layout_group,
     parse_darwin_sample,
     parse_perf_report,
     table_rows,
@@ -54,6 +55,27 @@ class ProfileAttributionTests(unittest.TestCase):
             list(table_rows(families)),
             ["Numeric\t40\t66.67", "Memory\t15\t25.00", "Call\t5\t8.33"],
         )
+
+    def test_handler_layout_group_uses_canonical_simd_tokens(self) -> None:
+        numeric_labels = (
+            "op_i32_xor",
+            "op_i64_xor",
+            "op_i32_extend8_s",
+            "op_i32_extend16_s",
+            "op_i64_extend8_s",
+            "op_i64_extend16_s",
+            "op_i64_extend32_s",
+            "op_i64_extend_i32_s",
+            "op_i64_extend_i32_u",
+            "op_f32_max",
+            "op_f64_max",
+        )
+        for label in numeric_labels:
+            with self.subTest(label=label):
+                self.assertEqual(handler_layout_group(label), "Numeric")
+
+        self.assertEqual(handler_layout_group("op_v128_load"), "Simd")
+        self.assertEqual(handler_layout_group("op_i32x4_add"), "Simd")
 
     def test_unweighted_symbol_occurrences_fail_closed(self) -> None:
         with self.assertRaises(AttributionParseError):
