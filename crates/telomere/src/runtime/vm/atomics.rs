@@ -2144,6 +2144,7 @@ pub unsafe fn op_memory_atomic_notify_shared(
         .gc
         .shared_memory(ctx.default_shared_memory_id_unchecked())
         .notify_waiters(start, count));
+    vm_checkpoint_n!(ctx, 1 + u64::from(woken));
     vm_try!(ctx.stack.push_u32(woken));
     call_next(tail_code, 1, ctx)
 }
@@ -2195,6 +2196,7 @@ pub unsafe fn op_memory_atomic_notify_indexed_shared(
         .gc
         .shared_memory(ctx.shared_memory_id_at_unchecked(memidx))
         .notify_waiters(start, count));
+    vm_checkpoint_n!(ctx, 1 + u64::from(woken));
     vm_try!(ctx.stack.push_u32(woken));
     call_next(tail_code, 2, ctx)
 }

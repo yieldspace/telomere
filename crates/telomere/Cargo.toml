@@ -27,7 +27,9 @@ telomere-jit-codegen = { workspace = true, optional = true }
 [dev-dependencies]
 futures = "0.3.31"
 libtest-mimic = "0.8.2"
-syn = { version = "2.0.100", features = ["full"] }
+proc-macro2 = "1.0.95"
+quote = "1.0.40"
+syn = { version = "2.0.100", features = ["full", "visit"] }
 tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 wast = { version = "243.0.0", features = ["component-model"] }
 wat = "1.243.0"

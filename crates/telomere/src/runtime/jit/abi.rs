@@ -90,6 +90,8 @@ pub(crate) fn vm_result_code<T>(result: VMResult<T>) -> u64 {
         VMResult::InvalidOperand => 8,
         VMResult::UnalignedAtomic => 9,
         VMResult::Unimplemented => 10,
+        VMResult::FuelExhausted => 12,
+        VMResult::Cancelled => 13,
     }
 }
 
@@ -110,6 +112,8 @@ pub(crate) fn vm_result_from_code(code: u64) -> VMResult<()> {
         8 => VMResult::InvalidOperand,
         9 => VMResult::UnalignedAtomic,
         10 => VMResult::Unimplemented,
+        12 => VMResult::FuelExhausted,
+        13 => VMResult::Cancelled,
         _ => VMResult::InvalidOperand,
     }
 }
@@ -126,5 +130,13 @@ mod tests {
             vm_result_from_code(11),
             VMResult::MemoryAllocationFailed
         ));
+    }
+
+    #[test]
+    fn interruptions_round_trip_through_jit_trap_codes() {
+        assert_eq!(vm_result_code(VMResult::<()>::FuelExhausted), 12);
+        assert_eq!(vm_result_code(VMResult::<()>::Cancelled), 13);
+        assert!(matches!(vm_result_from_code(12), VMResult::FuelExhausted));
+        assert!(matches!(vm_result_from_code(13), VMResult::Cancelled));
     }
 }

@@ -68,6 +68,12 @@ generate_trap_func!(
     VMResult::Unimplemented
 );
 generate_trap_func!(traps_unreachable, TRAPS_UNREACHABLE, VMResult::Unreachable);
+generate_trap_func!(
+    traps_fuel_exhausted,
+    TRAPS_FUEL_EXHAUSTED,
+    VMResult::FuelExhausted
+);
+generate_trap_func!(traps_cancelled, TRAPS_CANCELLED, VMResult::Cancelled);
 
 #[allow(dead_code)]
 #[doc = "Internal helper that maps a `VMResult` trap to its trap instruction.\n"]
@@ -89,6 +95,8 @@ pub(crate) unsafe fn trap_func<T>(res: VMResult<T>) -> *const Instr {
         VMResult::MemoryAllocationFailed => TRAPS_MEMORY_ALLOCATION_FAILED.as_ptr(),
         VMResult::Unimplemented => TRAPS_UNIMPLEMENTED.as_ptr(),
         VMResult::Unreachable => TRAPS_UNREACHABLE.as_ptr(),
+        VMResult::FuelExhausted => TRAPS_FUEL_EXHAUSTED.as_ptr(),
+        VMResult::Cancelled => TRAPS_CANCELLED.as_ptr(),
         VMResult::Success(_) => unreachable!(),
     }
 }

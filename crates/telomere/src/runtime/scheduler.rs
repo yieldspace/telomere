@@ -25,6 +25,8 @@ fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::MemoryAllocationFailed => VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::Unimplemented => VMResult::Unimplemented,
+        VMResult::FuelExhausted => VMResult::FuelExhausted,
+        VMResult::Cancelled => VMResult::Cancelled,
     }
 }
 
@@ -375,8 +377,20 @@ impl<'a> Scheduler<'a> {
                     },
                     cont: fp,
                     task_id,
+                    budget: if self.store.metering_ref().is_some() {
+                        0
+                    } else {
+                        u64::MAX
+                    },
+                    reserved: 0,
+                    budget_epoch: 0,
                 };
                 let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
+                if let Some(metering) = self.store.metering_ref() {
+                    metering.release(ec.reserved, ec.budget, ec.budget_epoch);
+                    ec.reserved = 0;
+                    ec.budget = 0;
+                }
                 (res, ec.cont, ec.local_reference)
             };
             match res {

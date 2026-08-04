@@ -236,6 +236,7 @@ pub unsafe fn op_local_get4_i32_const_add_br_table(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_loop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    vm_checkpoint!(ctx);
     trace!("op_loop: {}", (*tail_code).operand.jump_addr);
 
     let loop_param = (*tail_code).operand.loop_param;
