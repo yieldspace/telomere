@@ -359,8 +359,6 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "futures",
  "libc",
- "num-derive",
- "num-traits",
  "parking_lot",
  "smallvec",
  "telomere-macros",

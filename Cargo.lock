@@ -1079,8 +1079,6 @@ dependencies = [
  "futures",
  "libc",
  "libtest-mimic",
- "num-derive",
- "num-traits",
  "parking_lot",
  "proc-macro2",
  "quote",
