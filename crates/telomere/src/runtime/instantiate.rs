@@ -6,8 +6,8 @@ use crate::{
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
         FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
         ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
-        ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
-        TypeSection,
+        ModuleInstance, ModuleNames, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx,
+        TypeIdx, TypeSection,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
@@ -260,8 +260,14 @@ pub async fn instantiate(
         codes,
         data,
         start,
-        ..
+        name,
     } = m;
+
+    let names = if store.runtime_config().diagnostics.retain_function_names {
+        name.and_then(ModuleNames::from_name_section).map(Arc::new)
+    } else {
+        None
+    };
 
     let mut scheduler = Scheduler::new(store);
     let (addr, has_start) = {
@@ -374,6 +380,7 @@ pub async fn instantiate(
             tables: m_tables.clone(),
             globals: m_globals.clone(),
             mems: mems.clone(),
+            names,
         });
         let inst_id = gc.alloc_instance(InstanceData {
             instance_id,
@@ -760,6 +767,7 @@ pub fn aliasing(
         functions,
         function_types,
         mems: memories,
+        names: None,
     });
     let inst_id_handle = gc.alloc_instance(InstanceData {
         module_addr: mod_addr,
@@ -1474,7 +1482,12 @@ fn dump_materialized_function_if_requested(funcidx: u32, instrs: &[Instr], op_le
 mod tests {
     use super::*;
     use crate::{
-        common::{memory::fail_next_memory_mapping, memory::TestMemoryMappingFailure, PAGE_SIZE},
+        common::{
+            custom_section::{FuncNameSubSec, ModuleNameSubSec, NameSubSection},
+            memory::fail_next_memory_mapping,
+            memory::TestMemoryMappingFailure,
+            PAGE_SIZE,
+        },
         IoReadBinaryReader, WasmParser,
     };
 
@@ -1493,6 +1506,146 @@ mod tests {
             panic!("module must instantiate");
         };
         (store, instance)
+    }
+
+    fn named_module_for_test() -> Module {
+        let mut module = parse_wat_for_test("(module (func))");
+        module.name = Some(NameSubSection {
+            module_name: Some(ModuleNameSubSec("named-module".to_owned())),
+            function_name: Some(FuncNameSubSec(vec![(0, "defined-function".to_owned())])),
+            local_name: None,
+        });
+        module
+    }
+
+    fn names_from_store_for_test(
+        store: &Store,
+        instance: &InstanceHandle,
+    ) -> Option<(Option<String>, Option<String>)> {
+        let gc = store.lock_gc();
+        let instance_addr = instance
+            .object_ref_for_store(store)
+            .expect("instance must belong to store");
+        let module = gc.get_module(gc.get_instance(instance_addr).module_addr);
+        module.names.as_ref().map(|names| {
+            (
+                names.module_name().map(str::to_owned),
+                names.function_name(0).map(str::to_owned),
+            )
+        })
+    }
+
+    #[tokio::test]
+    async fn instantiate_retains_names_by_default_and_drops_them_when_disabled() {
+        assert!(crate::DiagnosticsConfig::default().retain_function_names);
+        assert!(
+            crate::RuntimeConfig::default()
+                .diagnostics
+                .retain_function_names
+        );
+
+        let enabled_store = Store::new();
+        let enabled_registry = Registry::new();
+        let enabled_instance =
+            match instantiate(named_module_for_test(), &enabled_store, &enabled_registry).await {
+                VMResult::Success(instance) => instance,
+                result => panic!("named module must instantiate: {result:?}"),
+            };
+        assert_eq!(
+            names_from_store_for_test(&enabled_store, &enabled_instance),
+            Some((
+                Some("named-module".to_owned()),
+                Some("defined-function".to_owned()),
+            ))
+        );
+
+        let mut config = crate::RuntimeConfig::default();
+        config.diagnostics.retain_function_names = false;
+        let disabled_store = Store::new_with_runtime_config(config);
+        let disabled_registry = Registry::new();
+        let disabled_instance =
+            match instantiate(named_module_for_test(), &disabled_store, &disabled_registry).await {
+                VMResult::Success(instance) => instance,
+                result => panic!("named module must instantiate: {result:?}"),
+            };
+        assert_eq!(
+            names_from_store_for_test(&disabled_store, &disabled_instance),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn native_modules_do_not_retain_debug_names() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let instance = match instantiate_native_module(
+            NativeModule {
+                functions: Vec::new(),
+            },
+            &store,
+            &registry,
+        )
+        .await
+        {
+            VMResult::Success(instance) => instance,
+            result => panic!("native module must instantiate: {result:?}"),
+        };
+
+        assert_eq!(names_from_store_for_test(&store, &instance), None);
+    }
+
+    #[tokio::test]
+    async fn imported_and_defined_functions_share_name_section_index_space() {
+        let store = Store::new();
+        let mut registry = Registry::new();
+        let host = match instantiate(
+            parse_wat_for_test("(module (type (func)) (func (export \"imported\") (type 0)))"),
+            &store,
+            &registry,
+        )
+        .await
+        {
+            VMResult::Success(instance) => instance,
+            result => panic!("host module must instantiate: {result:?}"),
+        };
+        registry.register("host", host);
+
+        let mut module = parse_wat_for_test(
+            "(module (type (func)) (import \"host\" \"imported\" (func (type 0))) (func (type 0)) (func (type 0)))",
+        );
+        module.name = Some(NameSubSection {
+            module_name: Some(ModuleNameSubSec("consumer".to_owned())),
+            function_name: Some(FuncNameSubSec(vec![
+                (1, "first-defined".to_owned()),
+                (2, "second-defined".to_owned()),
+            ])),
+            local_name: None,
+        });
+        let instance = match instantiate(module, &store, &registry).await {
+            VMResult::Success(instance) => instance,
+            result => panic!("consumer module must instantiate: {result:?}"),
+        };
+
+        let gc = store.lock_gc();
+        let instance_addr = instance
+            .object_ref_for_store(&store)
+            .expect("instance must belong to store");
+        let instance_data = gc.get_instance(instance_addr);
+        let funcidxs = instance_data
+            .funcs
+            .iter()
+            .map(|funcaddr| gc.get_func(*funcaddr).funcidx)
+            .collect::<Vec<_>>();
+        let names = gc
+            .get_module(instance_data.module_addr)
+            .names
+            .as_ref()
+            .expect("names must be retained");
+
+        assert_eq!(funcidxs, vec![0, 1, 2]);
+        assert_eq!(names.function_name(0), None);
+        assert_eq!(names.function_name(1), Some("first-defined"));
+        assert_eq!(names.function_name(2), Some("second-defined"));
     }
 
     #[tokio::test]

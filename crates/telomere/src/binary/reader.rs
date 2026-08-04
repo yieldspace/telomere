@@ -293,7 +293,10 @@ impl<R: BinaryReader> BinaryReader for LimitingBinaryReader<'_, R> {
     ///
     /// * `Self::Take<'_>` - A limited view of the reader.
     fn take(&mut self, limit: usize) -> Self::Take<'_> {
-        let limit = self.read_count() + limit;
+        let limit = match self.read_count().checked_add(limit) {
+            Some(limit) => limit.min(self.limit),
+            None => self.limit,
+        };
         LimitingBinaryReader::new(self.reader, limit)
     }
 }
@@ -375,5 +378,110 @@ mod tests {
 
         let result = limiting_reader.read_exact::<4>();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn nested_take_read_slice_stops_at_parent_limit() {
+        use super::*;
+        use std::io::Cursor;
+
+        let data = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+
+        {
+            let mut parent = reader.take(10);
+            let mut child = parent.take(1000);
+            let mut buf = [0xff; 11];
+
+            assert_eq!(child.read_slice(&mut buf).unwrap(), 10);
+            assert_eq!(&buf[..10], &data[..10]);
+            assert_eq!(buf[10], 0xff);
+        }
+
+        assert_eq!(reader.read_count(), 10);
+    }
+
+    #[test]
+    fn nested_take_read_exact_does_not_cross_parent_limit() {
+        use super::*;
+        use std::io::{Cursor, ErrorKind};
+
+        let data = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+
+        {
+            let mut parent = reader.take(10);
+            let mut child = parent.take(1000);
+
+            let error = child.read_exact::<11>().unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+        }
+
+        assert_eq!(reader.read_count(), 0);
+    }
+
+    #[test]
+    fn nested_take_preserves_ancestor_limit_at_three_levels() {
+        use super::*;
+        use std::io::Cursor;
+
+        let data = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+
+        {
+            let mut parent = reader.take(10);
+            let mut child = parent.take(1000);
+            let mut grandchild = child.take(1000);
+            let mut buf = [0; 11];
+
+            assert_eq!(grandchild.read_slice(&mut buf).unwrap(), 10);
+            assert_eq!(&buf[..10], &data[..10]);
+        }
+
+        assert_eq!(reader.read_count(), 10);
+    }
+
+    #[test]
+    fn nested_take_preserves_smaller_child_limit() {
+        use super::*;
+        use std::io::{Cursor, ErrorKind};
+
+        let data = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+
+        {
+            let mut parent = reader.take(10);
+            let mut child = parent.take(4);
+            let mut buf = [0; 10];
+
+            assert_eq!(child.read_slice(&mut buf).unwrap(), 4);
+            assert_eq!(&buf[..4], &data[..4]);
+            assert_eq!(
+                child.read_exact::<1>().unwrap_err().kind(),
+                ErrorKind::UnexpectedEof
+            );
+        }
+
+        assert_eq!(reader.read_count(), 4);
+    }
+
+    #[test]
+    fn nested_take_clamps_overflowing_child_limit() {
+        use super::*;
+        use std::io::Cursor;
+
+        let data = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+
+        {
+            let mut parent = reader.take(10);
+            let mut child = parent.take(usize::MAX);
+            let mut buf = [0; 11];
+
+            assert_eq!(child.read_slice(&mut buf).unwrap(), 10);
+            assert_eq!(&buf[..10], &data[..10]);
+        }
+
+        assert_eq!(reader.read_count(), 10);
     }
 }

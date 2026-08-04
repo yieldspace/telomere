@@ -102,6 +102,7 @@ const SECTION_ORDER: [WasmSectionType; 12] = {
 };
 enum NameData {
     NameSection(NameSubSection),
+    MalformedNameSection,
     Unknown(String),
 }
 /// A streaming parser for one core WebAssembly binary module.
@@ -634,13 +635,41 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     }
     fn parse_namedata(&mut self, size: u32) -> Result<NameData> {
         let (len1, name) = self.parse_name()?;
-        if name == "name" {
-            let mut child_reader = self.reader.take(size.saturating_sub(len1 as u32) as usize);
+        let len1 = u32::try_from(len1).map_err(|_| WasmParserError::InvalidSectionSize)?;
+        let body = size
+            .checked_sub(len1)
+            .ok_or(WasmParserError::InvalidSectionSize)?;
 
-            let subsec = CustomSectionParser::new(&mut child_reader).parse_name_subsec()?;
-            Ok(NameData::NameSection(subsec))
+        if name == "name" {
+            let start = self.reader.read_count();
+            let result = {
+                let body =
+                    usize::try_from(body).map_err(|_| WasmParserError::InvalidSectionSize)?;
+                let mut child_reader = self.reader.take(body);
+                CustomSectionParser::new(&mut child_reader).parse_name_subsec()
+            };
+
+            let consumed = self
+                .reader
+                .read_count()
+                .checked_sub(start)
+                .ok_or(WasmParserError::InvalidSectionSize)?;
+            let consumed =
+                u32::try_from(consumed).map_err(|_| WasmParserError::InvalidSectionSize)?;
+            let remaining = body
+                .checked_sub(consumed)
+                .ok_or(WasmParserError::InvalidSectionSize)?;
+            self.skip_section(remaining)?;
+
+            match result {
+                Ok(subsec) => Ok(NameData::NameSection(subsec)),
+                Err(error) => {
+                    tracing::warn!(?error, "ignoring malformed name custom section");
+                    Ok(NameData::MalformedNameSection)
+                }
+            }
         } else {
-            self.skip_section(size.saturating_sub(len1 as u32))?;
+            self.skip_section(body)?;
             Ok(NameData::Unknown(name))
         }
     }
@@ -968,6 +997,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 WasmSectionType::Unknown(id) => Err(WasmParserError::InvalidSectionType(id))?,
                 WasmSectionType::Custom => match self.parse_section_body(Self::parse_namedata)? {
                     NameData::NameSection(subsec) => name_section = Some(subsec),
+                    NameData::MalformedNameSection => {}
                     NameData::Unknown(name) => {
                         tracing::warn!("encounted unknown custom section: {name}")
                     }

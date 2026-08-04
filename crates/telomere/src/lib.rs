@@ -107,6 +107,8 @@ pub const MAX_CONTROL_NESTING_DEPTH: u32 = 512;
 
 /// Reads core WebAssembly bytes from any value that implements [`std::io::Read`].
 pub use binary::IoReadBinaryReader;
+/// Configures diagnostic metadata retained by a [`Store`].
+pub use common::DiagnosticsConfig;
 /// Parsed runtime instance data; embedders normally retain an [`InstanceHandle`](common::InstanceHandle) instead.
 pub use common::Instance;
 /// Explains why metered guest execution stopped.

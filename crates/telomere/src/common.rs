@@ -14,6 +14,8 @@ use custom_section::NameSubSection;
 use smallvec::SmallVec;
 
 pub use vm_result::VMResult;
+pub(crate) mod debug_names;
+pub(crate) use debug_names::ModuleNames;
 pub(crate) mod memory;
 pub use memory::{
     AtomicRmwOp, LocalMemoryObject, MemArg, Memory, MemoryInitError, MemoryMappingOperation,
@@ -36,10 +38,11 @@ mod object_ref;
 #[warn(missing_docs)]
 pub(crate) mod store;
 pub use object_ref::ObjectRef;
-pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
 pub use store::{
-    InstanceHandle, JitConfig, MemoryConfig, MemoryHandle, RuntimeConfig, Store, StoreState,
+    DiagnosticsConfig, InstanceHandle, JitConfig, MemoryConfig, MemoryHandle, RuntimeConfig, Store,
+    StoreState,
 };
+pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
 use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};
 
 use crate::runtime::scheduler::EffectSupplier;
