@@ -89,6 +89,12 @@ pub mod parser;
 #[allow(missing_docs)]
 pub mod runtime;
 
+/// Resolves the measurement-only optimizer pipeline switch when the
+/// `measure-switches` feature is enabled.
+#[cfg(feature = "measure-switches")]
+#[path = "parser/core/optimizer/measure_switches.rs"]
+pub mod measure_switches;
+
 /// Maximum nesting depth for `block`, `loop`, and `if` instructions accepted by [`WasmParser`].
 ///
 /// This limit implements the optimized-build 512 KiB input-parser stack-budget policy. The root

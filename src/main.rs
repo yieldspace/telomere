@@ -31,8 +31,17 @@ async fn try_main() -> anyhow::Result<ExitCode> {
     let raw_args: Vec<OsString> = std::env::args_os().collect();
     let args = Cli::parse_from(raw_args.clone());
 
-    if let Some(Command::Component(command)) = args.command {
-        return component_cli::run(command).await;
+    #[cfg(feature = "measure-switches")]
+    let optimizer_switch = telomere::measure_switches::resolve()?;
+
+    match args.command {
+        Some(Command::Component(command)) => return component_cli::run(command).await,
+        #[cfg(feature = "measure-switches")]
+        Some(Command::MeasureSwitchesProbe) => {
+            println!(r#"{{"state":"{}"}}"#, optimizer_switch.as_str());
+            return Ok(ExitCode::SUCCESS);
+        }
+        None => {}
     }
 
     let command = args.core_command(&raw_args)?;

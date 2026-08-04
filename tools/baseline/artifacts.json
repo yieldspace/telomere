@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "workloads": [
+    {
+      "name": "coremark",
+      "layer": "L1",
+      "kind": "remote_wasm",
+      "url": "https://wasm3.github.io/wasm-coremark/coremark.wasm",
+      "sha256": "e71e358234e39803a1d27961439d924a69c836dd81c8670bfff7dbb82c097bbe",
+      "filename": "coremark.wasm",
+      "validation": {
+        "kind": "coremark"
+      }
+    },
+    {
+      "name": "loop-50m",
+      "layer": "L2",
+      "kind": "wat",
+      "source": "tools/baseline/loop-50m.wat",
+      "source_sha256": "828af47b80b3b255df63ea05276b8d890962b31c3b5f892d01d166809e7d41a9",
+      "filename": "loop-50m.wasm",
+      "export": "run",
+      "n": 50000000,
+      "validation": {
+        "kind": "exact_stdout",
+        "expected_stdout": "{n}\n"
+      }
+    },
+    {
+      "name": "repeat-fib32",
+      "layer": "L2",
+      "kind": "wat",
+      "source": "tools/baseline/repeat-fib32.wat",
+      "source_sha256": "0b7b97cd1a9cbf4653318e9c46b87b013e2a73b84cdd4e8f9ba37372241752e7",
+      "filename": "repeat-fib32.wasm",
+      "export": "run",
+      "n": 4,
+      "validation": {
+        "kind": "exact_stdout",
+        "expected_stdout": "{n}\n"
+      }
+    },
+    {
+      "name": "f64-kernel",
+      "layer": "L2",
+      "kind": "wat",
+      "source": "tools/baseline/f64-kernel.wat",
+      "source_sha256": "fe987f2df0091bb6f9382fd3350c553a34a909b890e7b635f76683e446f5049e",
+      "filename": "f64-kernel.wasm",
+      "export": "run",
+      "n": 50000000,
+      "validation": {
+        "kind": "exact_stdout",
+        "expected_stdout": "{n}\n"
+      }
+    }
+  ]
+}

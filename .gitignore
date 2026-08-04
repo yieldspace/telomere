@@ -17,6 +17,7 @@ target/
 .idea/
 
 *.wat
+!tools/baseline/*.wat
 !crates/telomere-component/tests/component_model_upstream/precompiled/**/*.wat
 !examples/*.wat
 !fuzz/fixtures/canon_abi.wat

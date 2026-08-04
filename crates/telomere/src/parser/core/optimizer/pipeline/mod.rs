@@ -8,6 +8,8 @@ pub(crate) mod versioning;
 
 use super::{cfg::build_program, InstructionMeta};
 use crate::common::{FuncIdx, FuncType, Instr, LocalsData, LoweredFunction};
+#[cfg(feature = "measure-switches")]
+use crate::measure_switches;
 
 const CODE_SIZE_GROWTH_BUDGET_PCT: usize = 10;
 const CODE_SIZE_GROWTH_BUDGET_ABS: usize = 8;
@@ -23,6 +25,14 @@ pub(super) fn optimize_function(
         .iter()
         .map(|entry| u16::try_from(entry.len).expect("instruction length exceeds u16::MAX"))
         .collect::<Vec<_>>();
+
+    #[cfg(feature = "measure-switches")]
+    if !measure_switches::optimizer_pipeline_enabled() {
+        // The OFF cell deliberately takes the pipeline's normal verifier fallback. This
+        // measurement-only switch is parse-time only and never reaches the dispatch path.
+        return LoweredFunction::from_materialized(instrs, fallback_op_lens);
+    }
+
     let Some(program) = build_program(&instrs, meta) else {
         return LoweredFunction::from_materialized(instrs, fallback_op_lens);
     };

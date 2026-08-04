@@ -28,7 +28,8 @@ the body for the details.
 | [core/metering.md](core/metering.md) | Current | Store-scoped interpreter fuel, accounting, cancellation, and its JIT boundary. |
 | [core/current-optimizer.md](core/current-optimizer.md) | Current snapshot | As-built optimizer behavior, research basis, and remaining fallback families. |
 | [core/jit.md](core/jit.md) | Current | Experimental function-local lazy baseline JIT status, supported targets, diagnostics, and gaps. |
-| [core/coremark-benchmark.md](core/coremark-benchmark.md) | Local benchmark note | Serial CoreMark comparison against WAMR, wasm3, and WasmEdge. |
+| [core/interpreter-baseline.md](core/interpreter-baseline.md) | Current methodology | Interpreter measurement layers, matrix, noise-floor contract, witnesses, and raw-record lifecycle. |
+| [core/coremark-benchmark.md](core/coremark-benchmark.md) | Historical (superseded) | Retained 2026-05-19 CoreMark comparison and its reachability correction. |
 | [core/jit-coverage-audit.md](core/jit-coverage-audit.md) | Audit | Baseline JIT acceptance and lowering coverage at the audit point. |
 | [core/optimizer-family-budgets.md](core/optimizer-family-budgets.md) | Design note | Family selection and specialization budgets. |
 | [core/jump-address-resolution.md](core/jump-address-resolution.md) | Design note | Jump target resolution details. |
@@ -54,7 +55,8 @@ resolution in `ComponentProgram`.
 | Document | Status | Use it for |
 | --- | --- | --- |
 | [benchmarks/footprint.md](benchmarks/footprint.md) | Local measurement | Measured `telomere-cli` binary size, peak RSS, and cold start, plus the reproduction script and the list of unmeasured targets. |
-| [core/coremark-benchmark.md](core/coremark-benchmark.md) | Local benchmark note | Serial CoreMark comparison against WAMR, wasm3, and WasmEdge. |
+| [core/interpreter-baseline.md](core/interpreter-baseline.md) | Current methodology | Reproducible interpreter-baseline procedure and raw-record update rules. |
+| [core/coremark-benchmark.md](core/coremark-benchmark.md) | Historical (superseded) | Retained CoreMark provenance; not a current baseline. |
 
 ## Audits
 
