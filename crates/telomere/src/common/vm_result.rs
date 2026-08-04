@@ -1,5 +1,7 @@
 use super::InterruptReason;
 
+// Adding a payload-carrying variant is subject to the hot-dispatch ABI size guards in
+// `runtime/vm.rs`; see yieldspace/telomere#178.
 #[derive(Debug, Clone)]
 #[must_use]
 /// The result of instantiation or guest execution.

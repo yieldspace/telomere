@@ -509,6 +509,12 @@ enum NumericTransitionCallOutcome {
     Pending,
 }
 
+// See the canonical dispatch ABI explanation and guards in `runtime/vm.rs` (#178).
+const _: () = assert!(
+    std::mem::size_of::<VMResult<NumericTransitionCallOutcome>>() <= 1,
+    "VMResult<NumericTransitionCallOutcome> must stay a scalar return; yieldspace/telomere#127 observed an up-to-35% regression; do not raise this bound (yieldspace/telomere#178)",
+);
+
 #[inline(always)]
 unsafe fn call_target_starts_with_numeric_transition(recipe: CallDispatchCache) -> bool {
     let CallDispatchTarget::Wasm { .. } = recipe.target else {
