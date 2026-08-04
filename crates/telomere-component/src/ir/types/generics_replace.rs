@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 use super::InstanceExportType;
 
+// These instructions model component exports, so their names retain the
+// `Export` prefix used by the decoder transform.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone)]
 pub enum GenericsReplaceDSL {
     ExportCoreModule(String, CoreModuleType),

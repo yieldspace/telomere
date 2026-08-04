@@ -74,6 +74,8 @@ impl<T> GlobalIdx<T> {
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+// Retained conservatively; no current crate path references this alias-index IR.
+#[allow(dead_code)]
 pub enum AliasIdx {
     CoreFunc,
     CoreTable,

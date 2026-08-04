@@ -15,7 +15,13 @@ pub enum ComponentImport {
     Module,
     Component,
     Instance,
+    // `engine.rs` identifies callable imports by this variant but does not
+    // currently need its type ID.
+    #[allow(dead_code)]
     Func(TypeId),
+    // Retained conservatively; the current decoder does not construct resource
+    // imports.
+    #[allow(dead_code)]
     Resource,
 }
 
@@ -28,5 +34,7 @@ pub enum ComponentExport {
         idx: GlobalIdx<Func>,
         type_id: TypeId,
     },
+    // `runtime/env.rs` still matches resource exports during lookup.
+    #[allow(dead_code)]
     Resource(ResourceId),
 }

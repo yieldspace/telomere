@@ -10,10 +10,8 @@
 
 #![warn(missing_docs)]
 
-// The decoder is public for advanced inspection, but is not the embedder API.
-// TODO(#142-followup): document its stable, supported subset before lifting this allow.
-#[allow(missing_docs)]
-pub mod decoder;
+// The decoder is shared by the compiler and runtime, but is not an embedder API.
+pub(crate) mod decoder;
 /// The high-level component compiler and instantiator.
 #[warn(missing_docs)]
 mod engine;
@@ -26,28 +24,27 @@ mod func;
 /// Component instances and their nested exports.
 #[warn(missing_docs)]
 mod instance;
-// The IR is exposed for advanced tooling, not as a documented embedder surface.
-// TODO(#142-followup): document the supported IR contracts before lifting this allow.
-#[allow(missing_docs)]
-pub mod ir;
+// The component IR is an implementation detail shared within this crate.
+pub(crate) mod ir;
 /// Import and export registrations used during instantiation.
 #[warn(missing_docs)]
 mod linker;
 /// The compiled component representation and canonical ABI metadata.
 #[warn(missing_docs)]
 mod program;
-// Component runtime internals are public for tooling but not yet a supported API.
-// TODO(#142-followup): document the supported runtime hooks before lifting this allow.
-#[allow(missing_docs)]
-pub mod runtime;
+// The component runtime is internal to compilation and instantiation.
+pub(crate) mod runtime;
 mod support;
-// Validation internals are public for advanced tooling, not the embedder API.
-// TODO(#142-followup): document the supported validation entry points before lifting this allow.
-#[allow(missing_docs)]
-pub mod validate;
+// This intentional crate-internal alias exposes decoder validation types without
+// making the decoder implementation an embedder API.
+pub(crate) mod validate;
 /// Values passed across a component boundary.
 #[warn(missing_docs)]
 mod value;
+
+#[doc(hidden)]
+#[path = "bindgen_support.rs"]
+pub mod __bindgen;
 
 /// Shared maximum nesting depth of 100 for component sections and component/instance type declarations.
 ///

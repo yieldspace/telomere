@@ -1,11 +1,8 @@
 use crate::support::binary::BinaryReader;
 use crate::support::parser::core::parse_u32;
 use std::ops::Range;
-use telomere::WasmParserError;
-use tracing::trace;
 
 use crate::ir::ComponentSection;
-pub use canon::parse_canon;
 pub use component::parse_component;
 pub use context::ParseContext;
 pub use core::*;
@@ -29,7 +26,8 @@ mod sort;
 mod types;
 mod validator;
 
-pub use validator::ScopeGuard;
+#[cfg(test)]
+mod nesting_depth_tests;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;
 pub type ParseResult<T> = std::result::Result<T, ComponentParseError>;
@@ -89,28 +87,6 @@ pub fn parse_section_type<R: BinaryReader>(
     } else {
         Ok(None)
     }
-}
-
-pub fn parse_vec_map<A, R: BinaryReader, V, E>(
-    env: &mut A,
-    reader: impl FnOnce(&mut A) -> &mut R,
-    mut f: impl FnMut(&mut A) -> std::result::Result<(usize, V), E>,
-    mut map: impl FnMut(&mut A, V),
-) -> std::result::Result<(usize, ()), E>
-where
-    E: From<WasmParserError>,
-{
-    let mut read_bytes = 0;
-
-    let (len_len, len) = parse_u32(reader(env))?;
-    trace!("parse_vec_map: {len_len} {len}");
-    read_bytes += len_len;
-    for _i in 0..len {
-        let (len, v) = f(env)?;
-        map(env, v);
-        read_bytes += len;
-    }
-    Ok((read_bytes, ()))
 }
 
 pub(crate) fn parse_option<R: BinaryReader, T, E>(

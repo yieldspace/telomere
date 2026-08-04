@@ -3,6 +3,8 @@ use crate::ir::types::CoreModuleType;
 use crate::ir::{Component, CoreModule, Func, Instance, TypeId};
 
 #[derive(Debug, Clone, PartialEq)]
+// Retained conservatively; current decoding uses `Sort` rather than `CoreSort`.
+#[allow(dead_code)]
 pub enum CoreSort {
     Module(GlobalIdx<CoreModule>),
 }

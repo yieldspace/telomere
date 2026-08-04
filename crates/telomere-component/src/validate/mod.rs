@@ -1,1 +1,1 @@
-pub use crate::decoder::{ParseState, ScopeGuard, Validator};
+pub use crate::decoder::{ParseState, Validator};
