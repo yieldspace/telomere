@@ -1,0 +1,1095 @@
+{
+  "artifacts": [
+    {
+      "artifact": {
+        "path": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/artifacts/coremark.wasm",
+        "sha256": "e71e358234e39803a1d27961439d924a69c836dd81c8670bfff7dbb82c097bbe",
+        "source": "remote",
+        "url": "https://wasm3.github.io/wasm-coremark/coremark.wasm"
+      },
+      "error": null,
+      "invalid_reason": null,
+      "layer": "L1",
+      "name": "coremark",
+      "status": "ready"
+    },
+    {
+      "artifact": {
+        "compiler_command": [
+          "wasm-tools",
+          "parse",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/tools/baseline/loop-linear.wat",
+          "-o",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/workloads/loop-linear.wasm"
+        ],
+        "path": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/workloads/loop-linear.wasm",
+        "sha256": "ee4d27e257548329b914853ff3a3e80584ed4a09866e5af431c51a5c51861475",
+        "source": "wat",
+        "wat_source": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/tools/baseline/loop-linear.wat",
+        "wat_source_sha256": "290e4abfc5086409b85fd21b3a6cc75feaf759b154e9d9d4f953ef5bae29a0cb"
+      },
+      "error": null,
+      "invalid_reason": null,
+      "layer": "L2",
+      "name": "loop-linear",
+      "status": "ready"
+    },
+    {
+      "artifact": {
+        "compiler_command": [
+          "wasm-tools",
+          "parse",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/tools/baseline/repeat-fib32.wat",
+          "-o",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/workloads/repeat-fib32.wasm"
+        ],
+        "path": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/workloads/repeat-fib32.wasm",
+        "sha256": "d8687e6c2a03c7f8754b285cda1ba5feb5ca92538bd325f262c4637c21345dce",
+        "source": "wat",
+        "wat_source": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/tools/baseline/repeat-fib32.wat",
+        "wat_source_sha256": "0b7b97cd1a9cbf4653318e9c46b87b013e2a73b84cdd4e8f9ba37372241752e7"
+      },
+      "error": null,
+      "invalid_reason": null,
+      "layer": "L2",
+      "name": "repeat-fib32",
+      "status": "ready"
+    },
+    {
+      "artifact": {
+        "compiler_command": [
+          "wasm-tools",
+          "parse",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/tools/baseline/f64-kernel.wat",
+          "-o",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/workloads/f64-kernel.wasm"
+        ],
+        "path": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/workloads/f64-kernel.wasm",
+        "sha256": "ae9561c4243f0a887d48375fa7b24e9dd3de6c27b8f475ef3d7b697bf761c07c",
+        "source": "wat",
+        "wat_source": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/tools/baseline/f64-kernel.wat",
+        "wat_source_sha256": "fe987f2df0091bb6f9382fd3350c553a34a909b890e7b635f76683e446f5049e"
+      },
+      "error": null,
+      "invalid_reason": null,
+      "layer": "L2",
+      "name": "f64-kernel",
+      "status": "ready"
+    }
+  ],
+  "busy_machine_thresholds": {
+    "max_load_rise_1m": 0.5,
+    "max_start_load_1m": 1.2000000000000002
+  },
+  "invalid_reason": "busy_machine",
+  "machine_start": {
+    "cargo_version": "cargo 1.96.0 (30a34c682 2026-05-25)",
+    "commit": "7e477b754612b11260950dc932476c1664bf4fe4",
+    "cpu_model": null,
+    "kernel": "25.5.0",
+    "load_average_1m": 4.44970703125,
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "rustc_version": "rustc 1.96.0 (ac68faa20 2026-05-25)"
+  },
+  "matrix": {
+    "aa_arms": [
+      "default-a",
+      "default-b"
+    ],
+    "arms": {
+      "default-a": {
+        "build": "default",
+        "cell": "default",
+        "optimizer": null
+      },
+      "default-b": {
+        "build": "default",
+        "cell": "default",
+        "optimizer": null
+      },
+      "jit": {
+        "build": "jit",
+        "cell": "jit",
+        "optimizer": null
+      },
+      "jit-opt-off": {
+        "build": "jit-opt",
+        "cell": "jit,opt-off",
+        "optimizer": "off"
+      },
+      "jit-opt-on": {
+        "build": "jit-opt",
+        "cell": "jit,opt-on",
+        "optimizer": null
+      },
+      "opt-off": {
+        "build": "opt",
+        "cell": "opt-off",
+        "optimizer": "off"
+      },
+      "opt-on": {
+        "build": "opt",
+        "cell": "opt-on",
+        "optimizer": null
+      }
+    },
+    "builds": {
+      "default": {
+        "build": "default",
+        "build_action": "reused_after_manifest_verification",
+        "cargo_command": [
+          "cargo",
+          "build",
+          "--locked",
+          "--release",
+          "-p",
+          "telomere-cli",
+          "--target-dir",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/cargo"
+        ],
+        "copied_binary": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/default",
+        "features": [],
+        "sha256": "81956e91c355d28bcdad40c8443ed94fde0a12cf971c2a729337d8557d6eecaf",
+        "witness_a": {
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "telomere",
+            "--target-dir",
+            "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/cargo",
+            "--test",
+            "call_threading",
+            "release_call_loop_keeps_direct_threading"
+          ],
+          "features": [],
+          "status": "pass",
+          "test": "release_call_loop_keeps_direct_threading"
+        }
+      },
+      "jit": {
+        "build": "jit",
+        "build_action": "reused_after_manifest_verification",
+        "cargo_command": [
+          "cargo",
+          "build",
+          "--locked",
+          "--release",
+          "-p",
+          "telomere-cli",
+          "--target-dir",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/cargo",
+          "--features",
+          "jit"
+        ],
+        "copied_binary": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/jit",
+        "features": [
+          "jit"
+        ],
+        "sha256": "b17e95ef33deecc014d31566ae83496fa799a41a98a9dfa2423d0702937c919c",
+        "witness_a": {
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "telomere",
+            "--target-dir",
+            "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/cargo",
+            "--features",
+            "jit",
+            "--test",
+            "call_threading",
+            "release_call_loop_keeps_direct_threading"
+          ],
+          "features": [
+            "jit"
+          ],
+          "status": "pass",
+          "test": "release_call_loop_keeps_direct_threading"
+        }
+      },
+      "jit-opt": {
+        "build": "jit-opt",
+        "build_action": "reused_after_manifest_verification",
+        "cargo_command": [
+          "cargo",
+          "build",
+          "--locked",
+          "--release",
+          "-p",
+          "telomere-cli",
+          "--target-dir",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/cargo",
+          "--features",
+          "jit,measure-switches"
+        ],
+        "copied_binary": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/jit-opt",
+        "features": [
+          "jit",
+          "measure-switches"
+        ],
+        "sha256": "1d4ed5359a9f1bc1a5dc52fcf751ded1b09acfbf7b8e8b5347402a7a84d19af5",
+        "witness_a": {
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "telomere",
+            "--target-dir",
+            "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/cargo",
+            "--features",
+            "jit,measure-switches",
+            "--test",
+            "call_threading",
+            "release_call_loop_keeps_direct_threading"
+          ],
+          "features": [
+            "jit",
+            "measure-switches"
+          ],
+          "status": "pass",
+          "test": "release_call_loop_keeps_direct_threading"
+        }
+      },
+      "opt": {
+        "build": "opt",
+        "build_action": "reused_after_manifest_verification",
+        "cargo_command": [
+          "cargo",
+          "build",
+          "--locked",
+          "--release",
+          "-p",
+          "telomere-cli",
+          "--target-dir",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/cargo",
+          "--features",
+          "measure-switches"
+        ],
+        "copied_binary": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/opt",
+        "features": [
+          "measure-switches"
+        ],
+        "sha256": "3bd57032f072338a42e726bed541ffda5f329387ac9c4960682459a2ec7c5999",
+        "witness_a": {
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "-p",
+            "telomere",
+            "--target-dir",
+            "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/cargo",
+            "--features",
+            "measure-switches",
+            "--test",
+            "call_threading",
+            "release_call_loop_keeps_direct_threading"
+          ],
+          "features": [
+            "measure-switches"
+          ],
+          "status": "pass",
+          "test": "release_call_loop_keeps_direct_threading"
+        }
+      }
+    }
+  },
+  "mode": "first-record",
+  "publishable": false,
+  "quick": false,
+  "schema_version": 1,
+  "status": "invalid",
+  "switch_states": {
+    "default-a": {
+      "build": "default",
+      "cell": "default",
+      "observed_optimizer": null,
+      "probe": "not_applicable",
+      "requested_optimizer": null
+    },
+    "default-b": {
+      "build": "default",
+      "cell": "default",
+      "observed_optimizer": null,
+      "probe": "not_applicable",
+      "requested_optimizer": null
+    },
+    "jit": {
+      "build": "jit",
+      "cell": "jit",
+      "observed_optimizer": null,
+      "probe": "not_applicable",
+      "requested_optimizer": null
+    },
+    "jit-opt-off": {
+      "build": "jit-opt",
+      "cell": "jit,opt-off",
+      "observed_optimizer": "off",
+      "probe": "measure-switches-probe",
+      "probe_stdout": "{\"state\":\"off\"}\n",
+      "requested_optimizer": "off"
+    },
+    "jit-opt-on": {
+      "build": "jit-opt",
+      "cell": "jit,opt-on",
+      "observed_optimizer": "on",
+      "probe": "measure-switches-probe",
+      "probe_stdout": "{\"state\":\"on\"}\n",
+      "requested_optimizer": null
+    },
+    "opt-off": {
+      "build": "opt",
+      "cell": "opt-off",
+      "observed_optimizer": "off",
+      "probe": "measure-switches-probe",
+      "probe_stdout": "{\"state\":\"off\"}\n",
+      "requested_optimizer": "off"
+    },
+    "opt-on": {
+      "build": "opt",
+      "cell": "opt-on",
+      "observed_optimizer": "on",
+      "probe": "measure-switches-probe",
+      "probe_stdout": "{\"state\":\"on\"}\n",
+      "requested_optimizer": null
+    }
+  },
+  "tail_call_witnesses": {
+    "default": {
+      "absolute_contract_passed": true,
+      "architecture": "arm64",
+      "binary": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/default",
+      "binary_sha256": "81956e91c355d28bcdad40c8443ed94fde0a12cf971c2a729337d8557d6eecaf",
+      "contract_passed": true,
+      "disassembler": {
+        "command": [
+          "/usr/bin/otool",
+          "-tvV",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/default"
+        ]
+      },
+      "invalid_reason": null,
+      "mode": "first-record",
+      "probe_coverage": "4 of 4 probes verified",
+      "probes": [
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x10010d810",
+              "dispatch_register": "x2",
+              "instruction": "000000010010d810\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x10010d7f4",
+              "instruction": "000000010010d7f4\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x10010d820",
+              "instruction": "000000010010d820\tbl\t__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            },
+            {
+              "address": "0x10010d834",
+              "instruction": "000000010010d834\tbl\t__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            }
+          ],
+          "excluded_dispatch_transfers": [],
+          "invalid_reason": null,
+          "probe": "op_i32_and",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm7numeric10op_i32_and17hd07c6bbfd5e177abE"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000c1774",
+              "dispatch_register": "x2",
+              "instruction": "00000001000c1774\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            },
+            {
+              "address": "0x1000c1784",
+              "dispatch_register": "x2",
+              "instruction": "00000001000c1784\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [],
+          "excluded_dispatch_transfers": [],
+          "invalid_reason": null,
+          "probe": "op_local_get4_br_if",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm17superinstructions19op_local_get4_br_if17h31dc54f6caea10f5E"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000dc210",
+              "dispatch_register": "x2",
+              "instruction": "00000001000dc210\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000dc1cc",
+              "instruction": "00000001000dc1cc\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000dc1ec",
+              "instruction": "00000001000dc1ec\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            }
+          ],
+          "excluded_dispatch_transfers": [],
+          "invalid_reason": null,
+          "probe": "op_i32_load_const_base",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm6memory22op_i32_load_const_base17hfdd6119df7e4451cE"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000c6b7c",
+              "dispatch_register": "x2",
+              "instruction": "00000001000c6b7c\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000c6ac0",
+              "instruction": "00000001000c6ac0\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000c6c34",
+              "instruction": "00000001000c6c34\tbl\t__RNvNtCs6sq8b9ugfBC_4core9panicking18panic_bounds_check",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            },
+            {
+              "address": "0x1000c6c44",
+              "instruction": "00000001000c6c44\tbl\t__RNvNtCs6sq8b9ugfBC_4core9panicking18panic_bounds_check",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            }
+          ],
+          "excluded_dispatch_transfers": [],
+          "invalid_reason": null,
+          "probe": "op_call",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm4call7op_call17h0daf46dee1f04581E"
+        }
+      ],
+      "relative_comparison": {
+        "regressions": [],
+        "status": "not_requested"
+      },
+      "schema_version": 1,
+      "status": "pass",
+      "witness": "tail_call_form"
+    },
+    "jit": {
+      "absolute_contract_passed": true,
+      "architecture": "arm64",
+      "binary": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/jit",
+      "binary_sha256": "b17e95ef33deecc014d31566ae83496fa799a41a98a9dfa2423d0702937c919c",
+      "contract_passed": true,
+      "disassembler": {
+        "command": [
+          "/usr/bin/otool",
+          "-tvV",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/jit"
+        ]
+      },
+      "invalid_reason": null,
+      "mode": "first-record",
+      "probe_coverage": "4 of 4 probes verified",
+      "probes": [
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x100133ebc",
+              "dispatch_register": "x2",
+              "instruction": "0000000100133ebc\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x100133ecc",
+              "instruction": "0000000100133ecc\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x100133edc",
+              "instruction": "0000000100133edc\tbl\t__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            },
+            {
+              "address": "0x100133ef0",
+              "instruction": "0000000100133ef0\tbl\t__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            }
+          ],
+          "excluded_dispatch_transfers": [
+            {
+              "address": "0x100133e90",
+              "dispatch_register": "x8",
+              "instruction": "0000000100133e90\tblr\tx8",
+              "reason": "returning_indirect_helper_before_tail_dispatch",
+              "ret_reachable_after_transfer": true,
+              "tail_dispatch_address": "0x100133ebc",
+              "tail_dispatch_instruction": "0000000100133ebc\tbr\tx2"
+            }
+          ],
+          "invalid_reason": null,
+          "probe": "op_i32_and",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm7numeric10op_i32_and17h7c6931399f603a83E"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000c54d8",
+              "dispatch_register": "x2",
+              "instruction": "00000001000c54d8\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000c54e4",
+              "instruction": "00000001000c54e4\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            }
+          ],
+          "excluded_dispatch_transfers": [
+            {
+              "address": "0x1000c54b4",
+              "dispatch_register": "x9",
+              "instruction": "00000001000c54b4\tblr\tx9",
+              "reason": "returning_indirect_helper_before_tail_dispatch",
+              "ret_reachable_after_transfer": true,
+              "tail_dispatch_address": "0x1000c54d8",
+              "tail_dispatch_instruction": "00000001000c54d8\tbr\tx2"
+            }
+          ],
+          "invalid_reason": null,
+          "probe": "op_local_get4_br_if",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm17superinstructions19op_local_get4_br_if17hc1d3b393356a9b3fE"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000eb120",
+              "dispatch_register": "x2",
+              "instruction": "00000001000eb120\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000eb0ac",
+              "instruction": "00000001000eb0ac\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000eb0cc",
+              "instruction": "00000001000eb0cc\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000eb128",
+              "instruction": "00000001000eb128\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            }
+          ],
+          "excluded_dispatch_transfers": [
+            {
+              "address": "0x1000eb100",
+              "dispatch_register": "x10",
+              "instruction": "00000001000eb100\tblr\tx10",
+              "reason": "returning_indirect_helper_before_tail_dispatch",
+              "ret_reachable_after_transfer": true,
+              "tail_dispatch_address": "0x1000eb120",
+              "tail_dispatch_instruction": "00000001000eb120\tbr\tx2"
+            }
+          ],
+          "invalid_reason": null,
+          "probe": "op_i32_load_const_base",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm6memory22op_i32_load_const_base17h7f9337b7a85429c9E"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000d2970",
+              "dispatch_register": "x2",
+              "instruction": "00000001000d2970\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000d2894",
+              "instruction": "00000001000d2894\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000d2a2c",
+              "instruction": "00000001000d2a2c\tbl\t__RNvNtCs6sq8b9ugfBC_4core9panicking18panic_bounds_check",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            },
+            {
+              "address": "0x1000d2a40",
+              "instruction": "00000001000d2a40\tbl\t__RNvNtCs6sq8b9ugfBC_4core9panicking18panic_bounds_check",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            }
+          ],
+          "excluded_dispatch_transfers": [
+            {
+              "address": "0x1000d2940",
+              "dispatch_register": "x8",
+              "instruction": "00000001000d2940\tblr\tx8",
+              "reason": "returning_indirect_helper_before_tail_dispatch",
+              "ret_reachable_after_transfer": true,
+              "tail_dispatch_address": "0x1000d2970",
+              "tail_dispatch_instruction": "00000001000d2970\tbr\tx2"
+            }
+          ],
+          "invalid_reason": null,
+          "probe": "op_call",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm4call7op_call17hca6ee629282add31E"
+        }
+      ],
+      "relative_comparison": {
+        "regressions": [],
+        "status": "not_requested"
+      },
+      "schema_version": 1,
+      "status": "pass",
+      "witness": "tail_call_form"
+    },
+    "jit-opt": {
+      "absolute_contract_passed": true,
+      "architecture": "arm64",
+      "binary": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/jit-opt",
+      "binary_sha256": "1d4ed5359a9f1bc1a5dc52fcf751ded1b09acfbf7b8e8b5347402a7a84d19af5",
+      "contract_passed": true,
+      "disassembler": {
+        "command": [
+          "/usr/bin/otool",
+          "-tvV",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/jit-opt"
+        ]
+      },
+      "invalid_reason": null,
+      "mode": "first-record",
+      "probe_coverage": "4 of 4 probes verified",
+      "probes": [
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x100134224",
+              "dispatch_register": "x2",
+              "instruction": "0000000100134224\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x100134234",
+              "instruction": "0000000100134234\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x100134244",
+              "instruction": "0000000100134244\tbl\t__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            },
+            {
+              "address": "0x100134258",
+              "instruction": "0000000100134258\tbl\t__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            }
+          ],
+          "excluded_dispatch_transfers": [
+            {
+              "address": "0x1001341f8",
+              "dispatch_register": "x8",
+              "instruction": "00000001001341f8\tblr\tx8",
+              "reason": "returning_indirect_helper_before_tail_dispatch",
+              "ret_reachable_after_transfer": true,
+              "tail_dispatch_address": "0x100134224",
+              "tail_dispatch_instruction": "0000000100134224\tbr\tx2"
+            }
+          ],
+          "invalid_reason": null,
+          "probe": "op_i32_and",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm7numeric10op_i32_and17hdb28e902dd5dda07E"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000c5840",
+              "dispatch_register": "x2",
+              "instruction": "00000001000c5840\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000c584c",
+              "instruction": "00000001000c584c\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            }
+          ],
+          "excluded_dispatch_transfers": [
+            {
+              "address": "0x1000c581c",
+              "dispatch_register": "x9",
+              "instruction": "00000001000c581c\tblr\tx9",
+              "reason": "returning_indirect_helper_before_tail_dispatch",
+              "ret_reachable_after_transfer": true,
+              "tail_dispatch_address": "0x1000c5840",
+              "tail_dispatch_instruction": "00000001000c5840\tbr\tx2"
+            }
+          ],
+          "invalid_reason": null,
+          "probe": "op_local_get4_br_if",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm17superinstructions19op_local_get4_br_if17h9c7cd192ecb33897E"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000eb488",
+              "dispatch_register": "x2",
+              "instruction": "00000001000eb488\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000eb414",
+              "instruction": "00000001000eb414\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000eb434",
+              "instruction": "00000001000eb434\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000eb490",
+              "instruction": "00000001000eb490\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            }
+          ],
+          "excluded_dispatch_transfers": [
+            {
+              "address": "0x1000eb468",
+              "dispatch_register": "x10",
+              "instruction": "00000001000eb468\tblr\tx10",
+              "reason": "returning_indirect_helper_before_tail_dispatch",
+              "ret_reachable_after_transfer": true,
+              "tail_dispatch_address": "0x1000eb488",
+              "tail_dispatch_instruction": "00000001000eb488\tbr\tx2"
+            }
+          ],
+          "invalid_reason": null,
+          "probe": "op_i32_load_const_base",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm6memory22op_i32_load_const_base17hbe45fe7547bde04eE"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000d2cd8",
+              "dispatch_register": "x2",
+              "instruction": "00000001000d2cd8\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000d2bfc",
+              "instruction": "00000001000d2bfc\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000d2d94",
+              "instruction": "00000001000d2d94\tbl\t__RNvNtCs6sq8b9ugfBC_4core9panicking18panic_bounds_check",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            },
+            {
+              "address": "0x1000d2da8",
+              "instruction": "00000001000d2da8\tbl\t__RNvNtCs6sq8b9ugfBC_4core9panicking18panic_bounds_check",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            }
+          ],
+          "excluded_dispatch_transfers": [
+            {
+              "address": "0x1000d2ca8",
+              "dispatch_register": "x8",
+              "instruction": "00000001000d2ca8\tblr\tx8",
+              "reason": "returning_indirect_helper_before_tail_dispatch",
+              "ret_reachable_after_transfer": true,
+              "tail_dispatch_address": "0x1000d2cd8",
+              "tail_dispatch_instruction": "00000001000d2cd8\tbr\tx2"
+            }
+          ],
+          "invalid_reason": null,
+          "probe": "op_call",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm4call7op_call17hece767bfb116c401E"
+        }
+      ],
+      "relative_comparison": {
+        "regressions": [],
+        "status": "not_requested"
+      },
+      "schema_version": 1,
+      "status": "pass",
+      "witness": "tail_call_form"
+    },
+    "opt": {
+      "absolute_contract_passed": true,
+      "architecture": "arm64",
+      "binary": "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/opt",
+      "binary_sha256": "3bd57032f072338a42e726bed541ffda5f329387ac9c4960682459a2ec7c5999",
+      "contract_passed": true,
+      "disassembler": {
+        "command": [
+          "/usr/bin/otool",
+          "-tvV",
+          "/Users/sizumita/Workspace/yieldspace/telomere/.claude/worktrees/builder-issue-184/target/baseline/bin/opt"
+        ]
+      },
+      "invalid_reason": null,
+      "mode": "first-record",
+      "probe_coverage": "4 of 4 probes verified",
+      "probes": [
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x10010db88",
+              "dispatch_register": "x2",
+              "instruction": "000000010010db88\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x10010db6c",
+              "instruction": "000000010010db6c\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x10010db98",
+              "instruction": "000000010010db98\tbl\t__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            },
+            {
+              "address": "0x10010dbac",
+              "instruction": "000000010010dbac\tbl\t__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            }
+          ],
+          "excluded_dispatch_transfers": [],
+          "invalid_reason": null,
+          "probe": "op_i32_and",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm7numeric10op_i32_and17h390ddcc291f39ea5E"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000c1aec",
+              "dispatch_register": "x2",
+              "instruction": "00000001000c1aec\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            },
+            {
+              "address": "0x1000c1afc",
+              "dispatch_register": "x2",
+              "instruction": "00000001000c1afc\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [],
+          "excluded_dispatch_transfers": [],
+          "invalid_reason": null,
+          "probe": "op_local_get4_br_if",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm17superinstructions19op_local_get4_br_if17hf2d4f2924af3818fE"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000dc588",
+              "dispatch_register": "x2",
+              "instruction": "00000001000dc588\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000dc544",
+              "instruction": "00000001000dc544\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000dc564",
+              "instruction": "00000001000dc564\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            }
+          ],
+          "excluded_dispatch_transfers": [],
+          "invalid_reason": null,
+          "probe": "op_i32_load_const_base",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm6memory22op_i32_load_const_base17h130c75139f441488E"
+        },
+        {
+          "dispatch_exits": [
+            {
+              "address": "0x1000c6ef4",
+              "dispatch_register": "x2",
+              "instruction": "00000001000c6ef4\tbr\tx2",
+              "kind": "tail_branch",
+              "ret_reachable_after_transfer": false
+            }
+          ],
+          "excluded_blocks": [
+            {
+              "address": "0x1000c6e38",
+              "instruction": "00000001000c6e38\tret",
+              "reachable_from_entry": true,
+              "reason": "non_dispatch_return"
+            },
+            {
+              "address": "0x1000c6fac",
+              "instruction": "00000001000c6fac\tbl\t__RNvNtCs6sq8b9ugfBC_4core9panicking18panic_bounds_check",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            },
+            {
+              "address": "0x1000c6fbc",
+              "instruction": "00000001000c6fbc\tbl\t__RNvNtCs6sq8b9ugfBC_4core9panicking18panic_bounds_check",
+              "reachable_from_entry": true,
+              "reason": "known_panic_symbol"
+            }
+          ],
+          "excluded_dispatch_transfers": [],
+          "invalid_reason": null,
+          "probe": "op_call",
+          "status": "pass",
+          "symbol": "__ZN8telomere7runtime2vm4call7op_call17hb93146e78a40bf78E"
+        }
+      ],
+      "relative_comparison": {
+        "regressions": [],
+        "status": "not_requested"
+      },
+      "schema_version": 1,
+      "status": "pass",
+      "witness": "tail_call_form"
+    }
+  },
+  "tool": "measure-interpreter-baseline",
+  "workloads": [
+    {
+      "invalid_reason": "busy_machine",
+      "layer": "L1",
+      "name": "coremark",
+      "status": "not_run"
+    },
+    {
+      "invalid_reason": "busy_machine",
+      "layer": "L2",
+      "name": "loop-linear",
+      "status": "not_run"
+    },
+    {
+      "invalid_reason": "busy_machine",
+      "layer": "L2",
+      "name": "repeat-fib32",
+      "status": "not_run"
+    },
+    {
+      "invalid_reason": "busy_machine",
+      "layer": "L2",
+      "name": "f64-kernel",
+      "status": "not_run"
+    }
+  ]
+}

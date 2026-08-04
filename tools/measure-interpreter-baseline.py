@@ -2,6 +2,7 @@
 """Build, prepare, and measure the interpreter baseline matrix."""
 
 import argparse
+import itertools
 import json
 import math
 import os
@@ -22,12 +23,12 @@ from _measure_support import (
     MeasurementError,
     below_noise_floor,
     coremark_score,
-    counterbalanced_schedule,
     machine_facts,
     noise_floor,
     paired_contrasts,
     paired_slopes,
     sha256_file,
+    williams_schedule,
 )
 
 
@@ -65,6 +66,19 @@ COMPARISONS: Tuple[Tuple[str, str, str], ...] = (
         "jit-opt-on",
         "jit-opt-off",
     ),
+)
+
+SCALE_MULTIPLIERS: Tuple[int, int, int] = (1, 2, 3)
+SCALE_PERMUTATIONS: Tuple[Tuple[int, int, int], ...] = tuple(
+    tuple(permutation) for permutation in itertools.permutations(SCALE_MULTIPLIERS)
+)
+# Each residual set places every scale at every within-block position once. It
+# turns the 12-round, two-of-each-permutation prefix into 5/5/5 scale positions
+# for every arm in a 15-round normal schedule without pretending that all six
+# permutations occur equally often across fifteen rounds.
+SCALE_RESIDUAL_CYCLES: Tuple[Tuple[Tuple[int, int, int], ...], ...] = (
+    ((1, 2, 3), (2, 3, 1), (3, 1, 2)),
+    ((1, 3, 2), (3, 2, 1), (2, 1, 3)),
 )
 
 
@@ -1151,14 +1165,40 @@ def run_one_sample(
     if iterations is not None:
         active_workload["active_iterations"] = iterations
     command = workload_command(binary, active_workload, iterations)
+    load_before = observed_sample_load_average()
     started = time.perf_counter_ns()
     stdout = checked_output(command, measurement_env(requested_optimizer))
     wall_ns = time.perf_counter_ns() - started
+    load_after = observed_sample_load_average()
     metric = validate_workload_stdout(active_workload, stdout)
-    record: Dict[str, object] = {"wall_ns": wall_ns, "command": command}
+    record: Dict[str, object] = {
+        "wall_ns": wall_ns,
+        "command": command,
+        "load_average_1m_before": load_before,
+        "load_average_1m_after": load_after,
+    }
     if metric is not None:
         record["metric"] = metric
     return record
+
+
+def observed_sample_load_average() -> float:
+    """Read one finite load observation or fail closed before publication."""
+
+    try:
+        value = os.getloadavg()[0]
+    except (AttributeError, IndexError, OSError, TypeError) as error:
+        raise BaselineError(
+            "sample_load_unavailable",
+            f"could not read one-minute load average around a sample: {error}",
+        ) from error
+    if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise BaselineError(
+            "sample_load_non_finite",
+            "sample one-minute load average must be finite",
+            observed_load_average_1m=value,
+        )
+    return float(value)
 
 
 def physical_schedule_items(
@@ -1182,6 +1222,188 @@ def physical_schedule_items(
         for multiplier in (1, 2, 3):
             items[f"{arm}@{multiplier}n"] = (arm, n * multiplier)
     return items
+
+
+def scale_permutation_key(permutation: Sequence[int]) -> str:
+    """Render a scale order in the same notation as physical schedule labels."""
+
+    return ",".join(f"{scale}n" for scale in permutation)
+
+
+def scale_position_audit(
+    permutations: Sequence[Sequence[int]], arms: Sequence[str]
+) -> Dict[str, object]:
+    """Audit scale positions both per arm and across the L2 block schedule."""
+
+    base_counts = {
+        f"{scale}n": {str(position + 1): 0 for position in range(3)}
+        for scale in SCALE_MULTIPLIERS
+    }
+    for permutation in permutations:
+        if tuple(permutation) not in SCALE_PERMUTATIONS:
+            raise BaselineError(
+                "invalid_scale_permutation",
+                f"invalid L2 scale permutation {tuple(permutation)!r}",
+            )
+        for position, scale in enumerate(permutation):
+            base_counts[f"{scale}n"][str(position + 1)] += 1
+    values = [count for counts in base_counts.values() for count in counts.values()]
+    minimum = min(values) if values else 0
+    maximum = max(values) if values else 0
+    return {
+        "per_arm_counts": {
+            arm: {
+                scale: dict(position_counts)
+                for scale, position_counts in base_counts.items()
+            }
+            for arm in arms
+        },
+        "per_arm_min": minimum,
+        "per_arm_max": maximum,
+        "per_arm_imbalance": maximum - minimum,
+        "per_arm_exactly_balanced": minimum == maximum,
+    }
+
+
+def l2_scale_permutation_plan(rounds: int, seed: int) -> Dict[str, object]:
+    """Plan adjacent L2 scale orders with an honest 12+3 balance record."""
+
+    if rounds <= 0:
+        raise BaselineError("invalid_rounds", "L2 schedule rounds must be positive")
+    rng = random.Random(seed)
+    full_groups, partial_group_rounds = divmod(rounds, 15)
+    round_permutations: List[Tuple[int, int, int]] = []
+    group_records = []
+    group_count = full_groups + (1 if partial_group_rounds else 0)
+    for group_index in range(group_count):
+        balanced_prefix = list(SCALE_PERMUTATIONS) * 2
+        rng.shuffle(balanced_prefix)
+        residual_cycle = list(SCALE_RESIDUAL_CYCLES[rng.randrange(len(SCALE_RESIDUAL_CYCLES))])
+        rng.shuffle(residual_cycle)
+        group = balanced_prefix + residual_cycle
+        take = 15 if group_index < full_groups else partial_group_rounds
+        start = len(round_permutations)
+        selected = group[:take]
+        round_permutations.extend(selected)
+        prefix_count = min(take, 12)
+        selected_prefix = selected[:prefix_count]
+        group_records.append(
+            {
+                "group": group_index,
+                "round_indices": list(range(start, start + take)),
+                "balanced_prefix_rounds": prefix_count,
+                "balanced_prefix_permutation_counts": {
+                    scale_permutation_key(permutation): selected_prefix.count(permutation)
+                    for permutation in SCALE_PERMUTATIONS
+                },
+                "balanced_prefix_complete": prefix_count == 12,
+                "residual_round_indices": list(
+                    range(start + 12, start + take)
+                )
+                if take > 12
+                else [],
+                "residual_permutations": [
+                    list(permutation) for permutation in selected[12:]
+                ],
+            }
+        )
+
+    permutation_counts = {
+        scale_permutation_key(permutation): round_permutations.count(permutation)
+        for permutation in SCALE_PERMUTATIONS
+    }
+    counts = list(permutation_counts.values())
+    count_minimum = min(counts) if counts else 0
+    count_maximum = max(counts) if counts else 0
+    return {
+        "permutations": round_permutations,
+        "metadata": {
+            "method": "twelve_rounds_each_permutation_twice_plus_seeded_three_round_residual",
+            "seed": seed,
+            "full_fifteen_round_groups": full_groups,
+            "partial_group_rounds": partial_group_rounds,
+            "balanced_prefix_rounds_per_group": 12,
+            "residual_scale_rounds_per_full_group": 3,
+            "permutation_counts_per_round": permutation_counts,
+            "permutation_count_min": count_minimum,
+            "permutation_count_max": count_maximum,
+            "permutation_count_imbalance": count_maximum - count_minimum,
+            "exact_permutation_balance_claimed": False,
+            "groups": group_records,
+        },
+    }
+
+
+def l2_block_schedule(rounds: int, seed: int) -> Dict[str, object]:
+    """Build Williams-ordered arm blocks with adjacent n/2n/3n samples."""
+
+    arms = list(ARM_CONFIGS)
+    arm_plan = williams_schedule(arms, rounds, seed)
+    arm_rows = arm_plan["schedule"]
+    assert isinstance(arm_rows, list)
+    scale_plan = l2_scale_permutation_plan(rounds, seed + 1)
+    scale_orders = scale_plan["permutations"]
+    assert isinstance(scale_orders, list)
+    if len(arm_rows) != len(scale_orders):
+        raise BaselineError(
+            "schedule_length_mismatch",
+            "Williams arm blocks and L2 scale orders have different lengths",
+        )
+    schedule = [
+        [
+            f"{arm}@{scale}n"
+            for arm in arm_row
+            for scale in scale_order
+        ]
+        for arm_row, scale_order in zip(arm_rows, scale_orders)
+    ]
+    scale_metadata = dict(scale_plan["metadata"])
+    scale_metadata["permutation_counts_across_blocks"] = {
+        key: count * len(arms)
+        for key, count in scale_metadata["permutation_counts_per_round"].items()
+    }
+    scale_metadata["per_arm_permutation_counts"] = {
+        arm: dict(scale_metadata["permutation_counts_per_round"])
+        for arm in arms
+    }
+    scale_metadata["position_balance"] = scale_position_audit(scale_orders, arms)
+    arm_metadata = arm_plan["metadata"]
+    assert isinstance(arm_metadata, dict)
+    return {
+        "schedule": schedule,
+        "metadata": {
+            "method": "williams_arm_blocks_with_adjacent_scale_orders",
+            "full_cycles": arm_metadata["full_cycles"],
+            "residual_rounds": arm_metadata["residual_rounds"],
+            "carryover_scope": arm_metadata["balance_audit"]["carryover_scope"],
+            "balance_audit": arm_metadata["balance_audit"],
+            "block_size": 3,
+            "blocks_per_round": len(arms),
+            "scales_per_block": ["1n", "2n", "3n"],
+            "within_block_order": "seeded_permutation",
+            "arm_block_order": arm_metadata,
+            "scale_order": scale_metadata,
+        },
+    }
+
+
+def workload_schedule(
+    workload: Mapping[str, object], rounds: int, seed: int
+) -> Dict[str, object]:
+    """Choose the documented schedule form for one workload layer."""
+
+    if workload.get("layer") == "L1":
+        plan = williams_schedule(list(ARM_CONFIGS), rounds, seed)
+        return {
+            "schedule": plan["schedule"],
+            "metadata": plan["metadata"],
+        }
+    if workload.get("layer") == "L2":
+        return l2_block_schedule(rounds, seed)
+    raise BaselineError(
+        "invalid_workload",
+        f"workload {workload.get('name')} has unsupported layer",
+    )
 
 
 def raw_arm_metrics(
@@ -1335,9 +1557,18 @@ def report_workload(
     """Run one L1 or L2 workload through every physical arm and scale point."""
 
     items = physical_schedule_items(workload)
-    labels = list(items)
-    warmup_schedule = counterbalanced_schedule(labels, warmup, seed + 1) if warmup else []
-    schedule = counterbalanced_schedule(labels, rounds, seed)
+    schedule_plan = workload_schedule(workload, rounds, seed)
+    schedule = schedule_plan["schedule"]
+    assert isinstance(schedule, list)
+    schedule_metadata = schedule_plan["metadata"]
+    if warmup:
+        warmup_plan = workload_schedule(workload, warmup, seed + 1)
+        warmup_schedule = warmup_plan["schedule"]
+        assert isinstance(warmup_schedule, list)
+        warmup_schedule_metadata: Optional[object] = warmup_plan["metadata"]
+    else:
+        warmup_schedule = []
+        warmup_schedule_metadata = None
     samples: Dict[str, object]
     if workload.get("layer") == "L1":
         samples = {arm: [] for arm in ARM_CONFIGS}
@@ -1460,7 +1691,9 @@ def report_workload(
         "warmup_rounds": warmup,
         "schedule_seed": seed,
         "warmup_schedule": warmup_schedule,
+        "warmup_schedule_metadata": warmup_schedule_metadata,
         "schedule": schedule,
+        "schedule_metadata": schedule_metadata,
         "samples": samples,
         "base_metrics": metrics,
         "noise_floor": floor_record,

@@ -176,7 +176,8 @@ class StatisticsContractTests(unittest.TestCase):
 
         self.assertEqual(len(items), len(baseline.ARM_CONFIGS) * 3)
         self.assertEqual(items["opt-off@2n"], ("opt-off", 1_000_000_000))
-        schedule = baseline.counterbalanced_schedule(list(items), rounds=2, seed=184)
+        plan = baseline.l2_block_schedule(rounds=2, seed=184)
+        schedule = plan["schedule"]
         self.assertEqual(sorted(schedule[0]), sorted(items))
         self.assertEqual(sorted(schedule[1]), sorted(items))
         self.assertEqual(
@@ -227,6 +228,160 @@ class StatisticsContractTests(unittest.TestCase):
         self.assertEqual(reported["status"], "reported_delta")
         self.assertIsNotNone(reported["bootstrap_percentile_ci_95"])
         self.assertIn("relative_delta", reported)
+
+
+class L2WilliamsScheduleTests(unittest.TestCase):
+    def test_blocks_keep_all_three_scales_adjacent(self):
+        plan = baseline.l2_block_schedule(rounds=15, seed=184)
+
+        for row in plan["schedule"]:
+            self.assertEqual(len(row), len(baseline.ARM_CONFIGS) * 3)
+            for offset in range(0, len(row), 3):
+                block = row[offset : offset + 3]
+                arms = {label.split("@", 1)[0] for label in block}
+                scales = {label.split("@", 1)[1] for label in block}
+                self.assertEqual(len(arms), 1)
+                self.assertEqual(scales, {"1n", "2n", "3n"})
+
+    def test_arm_blocks_have_exact_full_cycle_balance(self):
+        plan = baseline.l2_block_schedule(rounds=14, seed=184)
+        audit = plan["metadata"]["arm_block_order"]["balance_audit"]
+        coremark = baseline.williams_schedule(
+            list(baseline.ARM_CONFIGS), rounds=14, seed=184
+        )
+
+        self.assertEqual(
+            [
+                [label.split("@", 1)[0] for label in row[::3]]
+                for row in plan["schedule"]
+            ],
+            coremark["schedule"],
+        )
+
+        for arm in baseline.ARM_CONFIGS:
+            self.assertEqual(set(audit["positions"]["counts"][arm].values()), {2})
+            self.assertEqual(
+                set(audit["within_round_directed_carryover"]["counts"][arm].values()),
+                {2},
+            )
+
+    def test_l2_metadata_exposes_cycle_and_boundary_audit_without_exact_claim(self):
+        metadata = baseline.l2_block_schedule(rounds=15, seed=184)["metadata"]
+        boundary = metadata["balance_audit"]["round_boundary_directed_carryover"]
+
+        self.assertEqual(metadata["full_cycles"], 1)
+        self.assertEqual(metadata["residual_rounds"], 1)
+        self.assertEqual(metadata["carryover_scope"], "within_round")
+        self.assertFalse(boundary["exact_balance_claimed"])
+        self.assertEqual(boundary["imbalance"], boundary["max"] - boundary["min"])
+
+    def test_scale_orders_record_balanced_prefix_and_honest_residual(self):
+        plan = baseline.l2_block_schedule(rounds=15, seed=184)
+        scale_order = plan["metadata"]["scale_order"]
+        group = scale_order["groups"][0]
+
+        self.assertEqual(set(group["balanced_prefix_permutation_counts"].values()), {2})
+        self.assertEqual(group["residual_round_indices"], [12, 13, 14])
+        self.assertEqual(len(group["residual_permutations"]), 3)
+        self.assertFalse(scale_order["exact_permutation_balance_claimed"])
+        self.assertEqual(
+            sorted(scale_order["permutation_counts_per_round"].values()),
+            [2, 2, 2, 3, 3, 3],
+        )
+
+    def test_twelve_scale_rounds_use_each_permutation_exactly_twice(self):
+        plan = baseline.l2_scale_permutation_plan(rounds=12, seed=184)
+        metadata = plan["metadata"]
+
+        self.assertEqual(set(metadata["permutation_counts_per_round"].values()), {2})
+        self.assertEqual(metadata["groups"][0]["balanced_prefix_rounds"], 12)
+        self.assertTrue(metadata["groups"][0]["balanced_prefix_complete"])
+        self.assertEqual(metadata["groups"][0]["residual_round_indices"], [])
+
+    def test_fifteen_round_scale_positions_are_exactly_five_per_arm(self):
+        plan = baseline.l2_block_schedule(rounds=15, seed=184)
+        position_balance = plan["metadata"]["scale_order"]["position_balance"]
+
+        self.assertTrue(position_balance["per_arm_exactly_balanced"])
+        for arm in baseline.ARM_CONFIGS:
+            for scale in ("1n", "2n", "3n"):
+                self.assertEqual(
+                    set(position_balance["per_arm_counts"][arm][scale].values()), {5}
+                )
+
+    def test_l2_schedule_is_deterministic_for_normal_and_quick_round_counts(self):
+        self.assertEqual(
+            baseline.l2_block_schedule(rounds=15, seed=184),
+            baseline.l2_block_schedule(rounds=15, seed=184),
+        )
+        quick = baseline.l2_block_schedule(rounds=3, seed=184)
+        metadata = quick["metadata"]["scale_order"]
+        self.assertEqual(quick, baseline.l2_block_schedule(rounds=3, seed=184))
+        self.assertEqual(metadata["full_fifteen_round_groups"], 0)
+        self.assertEqual(metadata["partial_group_rounds"], 3)
+        self.assertFalse(metadata["exact_permutation_balance_claimed"])
+        self.assertFalse(metadata["groups"][0]["balanced_prefix_complete"])
+        self.assertEqual(
+            sum(metadata["groups"][0]["balanced_prefix_permutation_counts"].values()),
+            3,
+        )
+
+    def test_l1_workload_schedule_exposes_williams_metadata(self):
+        workload = baseline.load_manifest(baseline.DEFAULT_MANIFEST)[0]
+        plan = baseline.workload_schedule(workload, rounds=15, seed=184)
+        metadata = plan["metadata"]
+
+        self.assertEqual(metadata["method"], "williams_carryover_balanced_latin_square")
+        self.assertEqual(metadata["carryover_scope"], "within_round")
+        self.assertEqual(metadata["full_cycles"], 1)
+        self.assertEqual(metadata["residual_rounds"], 1)
+
+
+class SampleLoadTests(unittest.TestCase):
+    def test_observed_sample_load_returns_finite_one_minute_value(self):
+        with mock.patch.object(baseline.os, "getloadavg", return_value=(1.25, 0, 0)):
+            self.assertEqual(baseline.observed_sample_load_average(), 1.25)
+
+    def test_observed_sample_load_fails_closed_when_unavailable(self):
+        with mock.patch.object(baseline.os, "getloadavg", side_effect=OSError("no load")):
+            with self.assertRaises(baseline.BaselineError) as unavailable:
+                baseline.observed_sample_load_average()
+        self.assertEqual(unavailable.exception.reason, "sample_load_unavailable")
+
+    def test_observed_sample_load_rejects_missing_load_tuple(self):
+        with mock.patch.object(baseline.os, "getloadavg", return_value=None):
+            with self.assertRaises(baseline.BaselineError) as unavailable:
+                baseline.observed_sample_load_average()
+        self.assertEqual(unavailable.exception.reason, "sample_load_unavailable")
+
+    def test_observed_sample_load_fails_closed_when_non_finite(self):
+        with mock.patch.object(
+            baseline.os, "getloadavg", return_value=(float("nan"), 0, 0)
+        ):
+            with self.assertRaises(baseline.BaselineError) as non_finite:
+                baseline.observed_sample_load_average()
+        self.assertEqual(non_finite.exception.reason, "sample_load_non_finite")
+
+    def test_sample_record_contains_load_before_and_after(self):
+        workload = {
+            "name": "synthetic",
+            "kind": "wat",
+            "artifact": {"path": "/private/tmp/synthetic.wasm"},
+            "export": "run",
+            "validation": {"kind": "exact_stdout", "expected_stdout": "{n}\n"},
+        }
+        with mock.patch.object(
+            baseline.os, "getloadavg", side_effect=[(1.0, 0, 0), (1.5, 0, 0)]
+        ), mock.patch.object(baseline, "checked_output", return_value="7\n"), mock.patch.object(
+            baseline.time, "perf_counter_ns", side_effect=[100, 250]
+        ):
+            sample = baseline.run_one_sample(
+                Path("/private/tmp/telomere-cli"), workload, None, 7
+            )
+
+        self.assertEqual(sample["wall_ns"], 150)
+        self.assertEqual(sample["load_average_1m_before"], 1.0)
+        self.assertEqual(sample["load_average_1m_after"], 1.5)
 
 
 class CompareWitnessContractTests(unittest.TestCase):

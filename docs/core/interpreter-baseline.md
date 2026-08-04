@@ -7,7 +7,10 @@ This document defines the reproducible interpreter-baseline method used by the
 performance track. It is a measurement contract, not a result: a value is
 publishable only when the harness has emitted a valid raw JSON record under
 [`baseline/`](baseline/). The retained 2026-05-19 CoreMark values are historical
-context; see [CoreMark Runtime Comparison](coremark-benchmark.md).
+context; see [CoreMark Runtime Comparison](coremark-benchmark.md). Failed gates,
+environment characterization, and schedule-bias audits remain explicitly
+non-baseline evidence under
+[`measurement-attempts/`](measurement-attempts/README.md).
 
 The method preserves Telomere's chained tail-call dispatch. Measurements record
 its form with witnesses, but do not change the dispatch implementation.
@@ -148,8 +151,28 @@ threshold from an older baseline.
 ### Schedule and samples
 
 - The `default` binary is scheduled twice under distinct A1/A2 labels.
-- Each round contains each arm once in a seeded randomized or counterbalanced
-  order. Fixed round-robin is prohibited because position bias is not noise.
+- CoreMark uses a seven-arm Williams design. Its 14-row full cycle puts every
+  arm in every position twice and every directed **within-row** carryover pair
+  twice. A normal 15-round run is that full cycle plus one seed-selected
+  residual row. `schedule_metadata` records the method, full cycles, residual
+  rounds, selected rows, and the balance audit.
+- The exact carryover claim is deliberately scoped to `within_round`. Rows run
+  sequentially, so the JSON also records every observed round-boundary directed
+  transition, its count range, and max-minus-min imbalance, but never calls
+  those boundaries exactly balanced. The seed chooses among candidate row
+  orders that minimize repeated boundary transitions and selects the residual;
+  both choices remain auditable.
+- L2 uses the same Williams order for seven arm blocks. Each arm block keeps
+  its `n`, `2n`, and `3n` measurements adjacent, with a seeded scale-order
+  permutation inside the block. The first 12 rounds use each of the six scale
+  permutations twice. The remaining three normal-run rounds are an explicit
+  seed-selected residual cycle: this gives each scale each block position five
+  times per arm, but does **not** make all six permutations equally frequent
+  across 15 rounds. JSON records both per-round and per-block counts plus the
+  residual instead of overstating that balance.
+- `--quick` and any other incomplete round count remain deterministic, but
+  metadata marks their full-cycle and residual counts rather than claiming a
+  complete design.
 - A normal baseline run uses 15 interleaved rounds (and one warm-up round), and
   may not use fewer than 10 rounds. A published baseline requires at least 10
   paired contrasts **for every metric, including CoreMark**.
@@ -157,6 +180,10 @@ threshold from an older baseline.
   to three rounds with no warm-up and is always non-publishable.
 - JSON retains raw vectors plus median, minimum, maximum, and count. The
   minimum is diagnostic only, not an estimator.
+- Every timed sample retains the finite one-minute load average observed both
+  immediately before and immediately after its process. An unavailable or
+  non-finite sample load fails the run closed; it is not substituted with the
+  run-level start/end value.
 
 Floors are per metric. L1's base metric is `Iterations/Sec`; L2's is a
 per-arm slope in ns/iteration. Gates operate on a dimensionless symmetric
@@ -204,8 +231,9 @@ quotable delta.
    `--max-load-rise` may override these values; the effective thresholds are
    recorded in JSON.
 4. Let the harness capture its documented one-minute-load checks, platform,
-   CPU model, kernel, commit, Cargo/Rust versions, artifact hashes, and
-   start/end load. Do not replace a rejected run with an unrecorded retry.
+   CPU model, kernel, commit, Cargo/Rust versions, artifact hashes, start/end
+   load, and the before/after load observation for every timed sample. Do not
+   replace a rejected run with an unrecorded retry.
 5. If the host is busy, retain JSON with `invalid_reason` and exit non-zero. A
    contended median is not valid evidence. Every non-zero harness exit still
    emits its JSON record on stdout, so an attempted cell is never silent.

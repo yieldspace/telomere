@@ -19,6 +19,7 @@ from _measure_support import (
     paired_slopes,
     sha256_file,
     symmetric_relative_contrast,
+    williams_schedule,
 )
 
 
@@ -38,6 +39,89 @@ class CounterbalancedScheduleTests(unittest.TestCase):
             counterbalanced_schedule([], rounds=1, seed=1)
         with self.assertRaises(MeasurementError):
             counterbalanced_schedule(["a", "a"], rounds=1, seed=1)
+
+
+class WilliamsScheduleTests(unittest.TestCase):
+    def setUp(self):
+        self.arms = [
+            "default-a",
+            "default-b",
+            "jit",
+            "opt-on",
+            "opt-off",
+            "jit-opt-on",
+            "jit-opt-off",
+        ]
+
+    def test_seven_arm_full_cycle_has_exact_position_and_carryover_balance(self):
+        plan = williams_schedule(self.arms, rounds=14, seed=184)
+        schedule = plan["schedule"]
+        metadata = plan["metadata"]
+        audit = metadata["balance_audit"]
+
+        self.assertEqual(len(schedule), 14)
+        self.assertEqual(metadata["cycle_rows"], 14)
+        self.assertEqual(metadata["full_cycles"], 1)
+        self.assertEqual(metadata["residual_rounds"], 0)
+        self.assertEqual(metadata["carryover_scope"], "within_round")
+        self.assertEqual(audit["carryover_scope"], "within_round")
+        for arm in self.arms:
+            self.assertEqual(
+                set(audit["positions"]["counts"][arm].values()), {2}
+            )
+            self.assertEqual(
+                set(audit["within_round_directed_carryover"]["counts"][arm].values()),
+                {2},
+            )
+        self.assertTrue(audit["positions"]["exactly_balanced"])
+        self.assertTrue(
+            audit["within_round_directed_carryover"]["exactly_balanced"]
+        )
+
+    def test_fifteenth_round_is_explicit_seeded_residual_with_boundary_audit(self):
+        first = williams_schedule(self.arms, rounds=15, seed=184)
+        second = williams_schedule(self.arms, rounds=15, seed=184)
+        metadata = first["metadata"]
+        audit = metadata["balance_audit"]
+
+        self.assertEqual(first, second)
+        self.assertEqual(metadata["full_cycles"], 1)
+        self.assertEqual(metadata["residual_rounds"], 1)
+        self.assertEqual(len(metadata["residual_row_indices"]), 1)
+        self.assertEqual(audit["residual"]["round_indices"], [14])
+        self.assertEqual(len(audit["residual"]["internal_directed_carryover"]), 1)
+        self.assertEqual(
+            len(audit["residual"]["round_boundary_directed_carryover"]), 1
+        )
+        boundary = audit["round_boundary_directed_carryover"]
+        self.assertFalse(boundary["exact_balance_claimed"])
+        self.assertEqual(len(boundary["transitions"]), 14)
+        self.assertEqual(boundary["imbalance"], boundary["max"] - boundary["min"])
+
+    def test_incomplete_schedule_is_deterministic_and_marked_as_residual(self):
+        first = williams_schedule(self.arms, rounds=3, seed=184)
+        second = williams_schedule(self.arms, rounds=3, seed=184)
+
+        self.assertEqual(first, second)
+        metadata = first["metadata"]
+        self.assertEqual(metadata["full_cycles"], 0)
+        self.assertEqual(metadata["residual_rounds"], 3)
+        self.assertEqual(len(metadata["residual_row_indices"]), 3)
+
+    def test_seed_selects_the_row_order_without_changing_full_cycle_balance(self):
+        first = williams_schedule(self.arms, rounds=14, seed=184)
+        second = williams_schedule(self.arms, rounds=14, seed=185)
+
+        self.assertNotEqual(
+            first["metadata"]["cycle_row_order"],
+            second["metadata"]["cycle_row_order"],
+        )
+        for plan in (first, second):
+            audit = plan["metadata"]["balance_audit"]
+            self.assertTrue(audit["positions"]["exactly_balanced"])
+            self.assertTrue(
+                audit["within_round_directed_carryover"]["exactly_balanced"]
+            )
 
 
 class CoremarkTests(unittest.TestCase):

@@ -119,12 +119,22 @@ def peak_rss_samples(
 def counterbalanced_schedule(
     arms: Sequence[str], rounds: int, seed: int
 ) -> List[List[str]]:
-    """Return a reproducible, independently shuffled order for every round.
+    """Return the rows of :func:`williams_schedule` for legacy callers.
 
-    Each arm appears exactly once in each round.  The recorded *seed* makes the
-    order auditable while the independent shuffles prevent a fixed position
-    from being coupled to one particular build cell.
+    The earlier helper independently shuffled each round.  That is unbiased
+    only in expectation and can leave a short realised run badly imbalanced.
+    Keep the list-of-rows API for existing tools while giving it the Williams
+    design used by the interpreter-baseline harness.
     """
+
+    plan = williams_schedule(arms, rounds, seed)
+    schedule = plan["schedule"]
+    assert isinstance(schedule, list)
+    return schedule
+
+
+def _validated_arms(arms: Sequence[str], rounds: int) -> List[str]:
+    """Validate the common input contract for finite treatment schedules."""
 
     normalized_arms = list(arms)
     if not normalized_arms:
@@ -133,14 +143,227 @@ def counterbalanced_schedule(
         raise MeasurementError("counterbalanced schedule arm labels must be unique")
     if rounds <= 0:
         raise MeasurementError("counterbalanced schedule rounds must be positive")
+    return normalized_arms
 
+
+def _williams_rows(arms: Sequence[str]) -> List[List[str]]:
+    """Construct a canonical Williams cycle for an odd or even treatment count.
+
+    The cyclic shifts give a Latin square.  For odd treatment counts, adding
+    the reversed shifts gives the standard 2*n Williams cycle and balances
+    every *directed* within-row first-order carryover exactly twice.
+    """
+
+    normalized_arms = list(arms)
+    count = len(normalized_arms)
+    if count == 1:
+        return [normalized_arms]
+
+    base = [0]
+    next_low = 1
+    next_high = count - 1
+    while len(base) < count:
+        base.append(next_low)
+        next_low += 1
+        if len(base) < count:
+            base.append(next_high)
+            next_high -= 1
+
+    rows = [
+        [normalized_arms[(treatment + shift) % count] for treatment in base]
+        for shift in range(count)
+    ]
+    if count % 2:
+        rows.extend([list(reversed(row)) for row in rows])
+    return rows
+
+
+def _empty_directed_counts(
+    arms: Sequence[str], include_self: bool
+) -> Dict[str, Dict[str, int]]:
+    return {
+        source: {
+            destination: 0
+            for destination in arms
+            if include_self or destination != source
+        }
+        for source in arms
+    }
+
+
+def _count_summary(counts: Dict[str, Dict[str, int]]) -> Dict[str, int]:
+    values = [count for destinations in counts.values() for count in destinations.values()]
+    if not values:
+        return {"min": 0, "max": 0, "imbalance": 0}
+    lower = min(values)
+    upper = max(values)
+    return {"min": lower, "max": upper, "imbalance": upper - lower}
+
+
+def _williams_balance_audit(
+    rows: Sequence[Sequence[str]], arms: Sequence[str], residual_start: int
+) -> Dict[str, object]:
+    """Record exact within-row balance and observational boundary balance.
+
+    Williams balance is a statement about transitions *inside* a design row.
+    The harness runs rows sequentially, so it separately records the actual
+    between-row transitions without claiming they inherit that exact property.
+    """
+
+    positions = {
+        arm: {str(position + 1): 0 for position in range(len(arms))}
+        for arm in arms
+    }
+    within_counts = _empty_directed_counts(arms, include_self=False)
+    boundary_counts = _empty_directed_counts(arms, include_self=True)
+
+    for row in rows:
+        if len(row) != len(arms) or set(row) != set(arms):
+            raise MeasurementError("Williams schedule row does not contain each arm once")
+        for position, arm in enumerate(row):
+            positions[arm][str(position + 1)] += 1
+        for source, destination in zip(row, row[1:]):
+            within_counts[source][destination] += 1
+
+    boundary_transitions = []
+    for round_index, (previous, following) in enumerate(zip(rows, rows[1:])):
+        source = previous[-1]
+        destination = following[0]
+        boundary_counts[source][destination] += 1
+        boundary_transitions.append(
+            {
+                "from_round": round_index,
+                "to_round": round_index + 1,
+                "from": source,
+                "to": destination,
+            }
+        )
+
+    position_values = [count for values in positions.values() for count in values.values()]
+    position_minimum = min(position_values) if position_values else 0
+    position_maximum = max(position_values) if position_values else 0
+    residual_indices = list(range(residual_start, len(rows)))
+    residual_internal = [
+        {
+            "round": round_index,
+            "pairs": [
+                {"from": source, "to": destination}
+                for source, destination in zip(rows[round_index], rows[round_index][1:])
+            ],
+        }
+        for round_index in residual_indices
+    ]
+    residual_boundary = [
+        transition
+        for transition in boundary_transitions
+        if transition["from_round"] >= residual_start
+        or transition["to_round"] >= residual_start
+    ]
+
+    within_summary = _count_summary(within_counts)
+    boundary_summary = _count_summary(boundary_counts)
+    return {
+        "carryover_scope": "within_round",
+        "positions": {
+            "counts": positions,
+            "min": position_minimum,
+            "max": position_maximum,
+            "imbalance": position_maximum - position_minimum,
+            "exactly_balanced": position_minimum == position_maximum,
+        },
+        "within_round_directed_carryover": {
+            "counts": within_counts,
+            **within_summary,
+            "exactly_balanced": within_summary["imbalance"] == 0,
+        },
+        "round_boundary_directed_carryover": {
+            "counts": boundary_counts,
+            "transitions": boundary_transitions,
+            **boundary_summary,
+            "exact_balance_claimed": False,
+        },
+        "residual": {
+            "round_indices": residual_indices,
+            "internal_directed_carryover": residual_internal,
+            "round_boundary_directed_carryover": residual_boundary,
+        },
+    }
+
+
+def _boundary_score(rows: Sequence[Sequence[str]]) -> Tuple[int, int, int]:
+    """Score sequential row boundaries; lower is better and never a claim."""
+
+    counts: Dict[Tuple[str, str], int] = {}
+    for previous, following in zip(rows, rows[1:]):
+        pair = (previous[-1], following[0])
+        counts[pair] = counts.get(pair, 0) + 1
+    if not counts:
+        return (0, 0, 0)
+    duplicate_count = sum(count - 1 for count in counts.values())
+    return (duplicate_count, max(counts.values()), -len(counts))
+
+
+def williams_schedule(
+    arms: Sequence[str], rounds: int, seed: int
+) -> Dict[str, object]:
+    """Return a deterministic Williams schedule plus an honest balance audit.
+
+    The seed selects an order for complete Williams rows and any incomplete
+    residual rows.  It is also used to choose among 512 candidate row orders
+    with the fewest observed round-boundary duplicate transitions.  That is a
+    practical boundary reduction only: the exact carryover guarantee remains
+    explicitly scoped to within-row transitions.
+    """
+
+    normalized_arms = _validated_arms(arms, rounds)
+    cycle = _williams_rows(normalized_arms)
+    cycle_rows = len(cycle)
+    full_cycles, residual_rounds = divmod(rounds, cycle_rows)
     rng = random.Random(seed)
-    schedule = []
-    for _ in range(rounds):
-        order = normalized_arms.copy()
-        rng.shuffle(order)
-        schedule.append(order)
-    return schedule
+    candidate_count = 512
+    best: Optional[Tuple[Tuple[int, int, int], List[int], List[int]]] = None
+    for _ in range(candidate_count):
+        row_order = list(range(cycle_rows))
+        rng.shuffle(row_order)
+        residual_indices = rng.sample(row_order, residual_rounds)
+        candidate_indices = row_order * full_cycles + residual_indices
+        candidate_rows = [cycle[index] for index in candidate_indices]
+        score = _boundary_score(candidate_rows)
+        if best is None or score < best[0]:
+            best = (score, row_order, residual_indices)
+
+    assert best is not None
+    score, row_order, residual_indices = best
+    schedule_indices = row_order * full_cycles + residual_indices
+    schedule = [list(cycle[index]) for index in schedule_indices]
+    residual_start = full_cycles * cycle_rows
+    repetitions = cycle_rows // len(normalized_arms)
+    balance_audit = _williams_balance_audit(schedule, normalized_arms, residual_start)
+    return {
+        "schedule": schedule,
+        "metadata": {
+            "method": "williams_carryover_balanced_latin_square",
+            "seed": seed,
+            "cycle_rows": cycle_rows,
+            "full_cycles": full_cycles,
+            "residual_rounds": residual_rounds,
+            "cycle_row_order": row_order,
+            "residual_row_indices": residual_indices,
+            "carryover_scope": balance_audit["carryover_scope"],
+            "full_cycle_contract": {
+                "position_count_per_arm_position": repetitions,
+                "within_round_directed_carryover_count_per_distinct_pair": repetitions,
+            },
+            "row_ordering": {
+                "method": "seeded_minimum_round_boundary_duplicate_search",
+                "candidate_count": candidate_count,
+                "round_boundary_duplicate_count": score[0],
+                "round_boundary_max_count": score[1],
+                "round_boundary_distinct_pairs": -score[2],
+            },
+            "balance_audit": balance_audit,
+        },
+    }
 
 
 def coremark_score(stdout: str) -> float:

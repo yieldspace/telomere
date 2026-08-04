@@ -1,0 +1,2547 @@
+{
+  "ended_at_utc": "2026-08-04T07:20:54.061792+00:00",
+  "environment_actions": [
+    "other issue pipelines stopped by orchestrator before observation",
+    "no user-owned GUI applications were closed by builder"
+  ],
+  "issue": "yieldspace/telomere#184",
+  "load_gate_applied": false,
+  "load_gate_bypassed_reason": "characterization_not_timing_measurement",
+  "observed_duration_seconds": 300.072,
+  "one_minute_load_summary": {
+    "first": 2.97607421875,
+    "last": 2.41162109375,
+    "maximum": 3.29248046875,
+    "minimum": 1.85546875
+  },
+  "published_baseline_eligible": false,
+  "purpose": "environment_characterization",
+  "requested_duration_seconds": 300,
+  "sample_count": 21,
+  "samples": [
+    {
+      "elapsed_seconds": 0.0,
+      "load_average": {
+        "fifteen_minutes": 3.423828125,
+        "five_minutes": 3.02294921875,
+        "one_minute": 2.97607421875
+      },
+      "sample_index": 0,
+      "timestamp_utc": "2026-08-04T07:15:54.003997+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 45.0,
+          "elapsed": "16-19:49:33",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 24.8,
+          "elapsed": "06:11:06",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 22.8,
+          "elapsed": "06:09:54",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 16.9,
+          "elapsed": "05:49:31",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 12.9,
+          "elapsed": "06:11:07",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 12.0,
+          "elapsed": "06:09:55",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 9.8,
+          "elapsed": "16-19:48:46",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 8.0,
+          "elapsed": "06:11:03",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.9,
+          "elapsed": "16-19:49:06",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 2.4,
+          "elapsed": "16-19:49:31",
+          "memory_percent": 1.4,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/usr/libexec/searchpartyd",
+          "cpu_percent": 2.1,
+          "elapsed": "16-19:49:31",
+          "memory_percent": 0.1,
+          "pid": 591,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 1.5,
+          "elapsed": "16-19:49:33",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 15.008,
+      "load_average": {
+        "fifteen_minutes": 3.369140625,
+        "five_minutes": 2.890625,
+        "one_minute": 2.3837890625
+      },
+      "sample_index": 1,
+      "timestamp_utc": "2026-08-04T07:16:09.010975+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 46.1,
+          "elapsed": "16-19:49:48",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 30.7,
+          "elapsed": "06:10:09",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 13.3,
+          "elapsed": "06:11:22",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 12.1,
+          "elapsed": "06:10:10",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 9.8,
+          "elapsed": "16-19:49:01",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 8.3,
+          "elapsed": "06:11:18",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.8,
+          "elapsed": "16-19:49:21",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN",
+          "cpu_percent": 1.9,
+          "elapsed": "16-19:49:46",
+          "memory_percent": 0.1,
+          "pid": 607,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 1.8,
+          "elapsed": "06:11:22",
+          "memory_percent": 0.2,
+          "pid": 61640,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 1.6,
+          "elapsed": "06:08:36",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          "cpu_percent": 1.2,
+          "elapsed": "06:11:25",
+          "memory_percent": 1.5,
+          "pid": 61464,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 1.1,
+          "elapsed": "05:49:46",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Ss+"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 30.01,
+      "load_average": {
+        "fifteen_minutes": 3.3095703125,
+        "five_minutes": 2.748046875,
+        "one_minute": 1.85546875
+      },
+      "sample_index": 2,
+      "timestamp_utc": "2026-08-04T07:16:24.012328+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 43.4,
+          "elapsed": "16-19:50:03",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 30.8,
+          "elapsed": "06:10:24",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 13.9,
+          "elapsed": "06:11:33",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 12.9,
+          "elapsed": "06:11:37",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 9.9,
+          "elapsed": "06:10:25",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 9.2,
+          "elapsed": "16-19:49:16",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+          "cpu_percent": 6.3,
+          "elapsed": "16-19:49:36",
+          "memory_percent": 1.0,
+          "pid": 1176,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 5.2,
+          "elapsed": "16-19:50:01",
+          "memory_percent": 1.4,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 4.2,
+          "elapsed": "06:11:36",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 2.9,
+          "elapsed": "06:08:51",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.8,
+          "elapsed": "16-19:49:36",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/MacOS/Claude",
+          "cpu_percent": 2.6,
+          "elapsed": "06:10:29",
+          "memory_percent": 1.0,
+          "pid": 65134,
+          "ppid": 1,
+          "state": "R"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 45.008,
+      "load_average": {
+        "fifteen_minutes": 3.3154296875,
+        "five_minutes": 2.79296875,
+        "one_minute": 2.26806640625
+      },
+      "sample_index": 3,
+      "timestamp_utc": "2026-08-04T07:16:39.009585+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 45.8,
+          "elapsed": "16-19:50:18",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 34.5,
+          "elapsed": "06:10:39",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 14.5,
+          "elapsed": "06:11:52",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 11.2,
+          "elapsed": "16-19:49:31",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 10.2,
+          "elapsed": "06:11:48",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 10.0,
+          "elapsed": "06:10:40",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 3.5,
+          "elapsed": "16-19:49:51",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 3.0,
+          "elapsed": "06:09:06",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "ps",
+          "cpu_percent": 2.2,
+          "elapsed": "00:00",
+          "memory_percent": 0.0,
+          "pid": 47390,
+          "ppid": 45746,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 2.2,
+          "elapsed": "06:11:51",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 1.8,
+          "elapsed": "16-19:50:16",
+          "memory_percent": 2.8,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Rs"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 1.5,
+          "elapsed": "16-19:50:18",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 60.008,
+      "load_average": {
+        "fifteen_minutes": 3.2919921875,
+        "five_minutes": 2.7529296875,
+        "one_minute": 2.1953125
+      },
+      "sample_index": 4,
+      "timestamp_utc": "2026-08-04T07:16:54.008748+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 42.3,
+          "elapsed": "16-19:50:33",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Rs"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 16.0,
+          "elapsed": "06:10:54",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 13.4,
+          "elapsed": "06:09:21",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 12.5,
+          "elapsed": "06:10:55",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 7.6,
+          "elapsed": "16-19:49:46",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 4.8,
+          "elapsed": "06:12:06",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 4.8,
+          "elapsed": "06:12:03",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 4.5,
+          "elapsed": "16-19:50:31",
+          "memory_percent": 2.8,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 3.5,
+          "elapsed": "06:12:07",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/usr/libexec/sharingd",
+          "cpu_percent": 2.3,
+          "elapsed": "16-19:50:06",
+          "memory_percent": 0.1,
+          "pid": 1163,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.3,
+          "elapsed": "16-19:50:06",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          "cpu_percent": 1.9,
+          "elapsed": "06:12:10",
+          "memory_percent": 1.5,
+          "pid": 61464,
+          "ppid": 1,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 75.011,
+      "load_average": {
+        "fifteen_minutes": 3.2861328125,
+        "five_minutes": 2.76416015625,
+        "one_minute": 2.3720703125
+      },
+      "sample_index": 5,
+      "timestamp_utc": "2026-08-04T07:17:09.011133+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 45.6,
+          "elapsed": "16-19:50:48",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Rs"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 23.1,
+          "elapsed": "06:11:09",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 18.9,
+          "elapsed": "06:11:10",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 16.6,
+          "elapsed": "06:12:22",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 11.2,
+          "elapsed": "06:12:18",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "R"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 10.6,
+          "elapsed": "16-19:50:01",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 4.9,
+          "elapsed": "06:09:36",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 3.9,
+          "elapsed": "06:12:21",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "R"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.8,
+          "elapsed": "16-19:50:21",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 2.7,
+          "elapsed": "16-19:50:46",
+          "memory_percent": 2.8,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 2.2,
+          "elapsed": "06:11:06",
+          "memory_percent": 1.5,
+          "pid": 65466,
+          "ppid": 65465,
+          "state": "S"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 1.7,
+          "elapsed": "16-19:50:48",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 90.011,
+      "load_average": {
+        "fifteen_minutes": 3.2861328125,
+        "five_minutes": 2.7919921875,
+        "one_minute": 2.5908203125
+      },
+      "sample_index": 6,
+      "timestamp_utc": "2026-08-04T07:17:24.010787+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 42.4,
+          "elapsed": "16-19:51:03",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 21.0,
+          "elapsed": "06:11:24",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 14.1,
+          "elapsed": "06:12:37",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 12.6,
+          "elapsed": "06:11:25",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 9.0,
+          "elapsed": "16-19:50:16",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 8.4,
+          "elapsed": "06:12:33",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 4.0,
+          "elapsed": "06:12:36",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/MacOS/Claude",
+          "cpu_percent": 3.0,
+          "elapsed": "06:11:29",
+          "memory_percent": 1.0,
+          "pid": 65134,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.7,
+          "elapsed": "16-19:50:36",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 2.1,
+          "elapsed": "16-19:51:01",
+          "memory_percent": 1.4,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          "cpu_percent": 1.8,
+          "elapsed": "06:12:40",
+          "memory_percent": 1.5,
+          "pid": 61464,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+          "cpu_percent": 1.7,
+          "elapsed": "16-19:50:36",
+          "memory_percent": 0.3,
+          "pid": 1171,
+          "ppid": 1,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 105.008,
+      "load_average": {
+        "fifteen_minutes": 3.3173828125,
+        "five_minutes": 2.89892578125,
+        "one_minute": 3.14697265625
+      },
+      "sample_index": 7,
+      "timestamp_utc": "2026-08-04T07:17:39.006646+00:00",
+      "top_processes": [
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 70.9,
+          "elapsed": "06:11:39",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 42.0,
+          "elapsed": "16-19:51:18",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Rs"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 11.5,
+          "elapsed": "06:11:40",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 7.9,
+          "elapsed": "16-19:50:31",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 7.7,
+          "elapsed": "06:12:52",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 6.4,
+          "elapsed": "06:12:48",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          "cpu_percent": 3.2,
+          "elapsed": "06:12:55",
+          "memory_percent": 1.5,
+          "pid": 61464,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.2,
+          "elapsed": "16-19:50:51",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN",
+          "cpu_percent": 1.3,
+          "elapsed": "16-19:51:16",
+          "memory_percent": 0.1,
+          "pid": 607,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+          "cpu_percent": 1.2,
+          "elapsed": "16-19:50:51",
+          "memory_percent": 0.3,
+          "pid": 1171,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 1.2,
+          "elapsed": "06:10:06",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 1.0,
+          "elapsed": "16-19:51:18",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 120.01,
+      "load_average": {
+        "fifteen_minutes": 3.328125,
+        "five_minutes": 2.9501953125,
+        "one_minute": 3.29248046875
+      },
+      "sample_index": 8,
+      "timestamp_utc": "2026-08-04T07:17:54.008732+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 45.1,
+          "elapsed": "16-19:51:33",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 21.7,
+          "elapsed": "06:11:54",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 15.6,
+          "elapsed": "06:11:55",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 14.4,
+          "elapsed": "06:13:07",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 9.9,
+          "elapsed": "16-19:50:46",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 9.0,
+          "elapsed": "06:13:03",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 2.9,
+          "elapsed": "06:13:06",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.8,
+          "elapsed": "16-19:51:06",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 2.7,
+          "elapsed": "06:11:51",
+          "memory_percent": 1.5,
+          "pid": 65466,
+          "ppid": 65465,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/MacOS/Claude",
+          "cpu_percent": 2.5,
+          "elapsed": "06:11:59",
+          "memory_percent": 1.0,
+          "pid": 65134,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 1.9,
+          "elapsed": "15:55:29",
+          "memory_percent": 1.0,
+          "pid": 38219,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 1.8,
+          "elapsed": "16-19:51:31",
+          "memory_percent": 1.4,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 135.011,
+      "load_average": {
+        "fifteen_minutes": 3.32177734375,
+        "five_minutes": 2.951171875,
+        "one_minute": 3.208984375
+      },
+      "sample_index": 9,
+      "timestamp_utc": "2026-08-04T07:18:09.008825+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 44.1,
+          "elapsed": "16-19:51:48",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 21.0,
+          "elapsed": "06:12:09",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 18.7,
+          "elapsed": "06:12:10",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 17.0,
+          "elapsed": "06:13:22",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 10.6,
+          "elapsed": "06:13:18",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 10.3,
+          "elapsed": "16-19:51:01",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 3.4,
+          "elapsed": "06:13:21",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.9,
+          "elapsed": "16-19:51:21",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 2.7,
+          "elapsed": "06:12:06",
+          "memory_percent": 1.5,
+          "pid": 65466,
+          "ppid": 65465,
+          "state": "R"
+        },
+        {
+          "command": "/usr/libexec/locationd",
+          "cpu_percent": 2.0,
+          "elapsed": "16-19:51:48",
+          "memory_percent": 0.1,
+          "pid": 413,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 1.9,
+          "elapsed": "15:55:44",
+          "memory_percent": 1.0,
+          "pid": 38219,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 1.7,
+          "elapsed": "16-19:51:46",
+          "memory_percent": 1.4,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 150.004,
+      "load_average": {
+        "fifteen_minutes": 3.3037109375,
+        "five_minutes": 2.91845703125,
+        "one_minute": 2.97802734375
+      },
+      "sample_index": 10,
+      "timestamp_utc": "2026-08-04T07:18:24.001024+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 43.0,
+          "elapsed": "16-19:52:03",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 21.0,
+          "elapsed": "06:12:24",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 17.4,
+          "elapsed": "06:12:25",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 14.6,
+          "elapsed": "06:13:37",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 10.2,
+          "elapsed": "16-19:51:16",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 9.7,
+          "elapsed": "06:13:33",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 3.0,
+          "elapsed": "16-19:51:36",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "R"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 2.7,
+          "elapsed": "06:12:21",
+          "memory_percent": 1.5,
+          "pid": 65466,
+          "ppid": 65465,
+          "state": "S"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 1.8,
+          "elapsed": "15:55:59",
+          "memory_percent": 1.0,
+          "pid": 38219,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 1.6,
+          "elapsed": "16-19:52:03",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          "cpu_percent": 1.4,
+          "elapsed": "06:13:40",
+          "memory_percent": 1.5,
+          "pid": 61464,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+          "cpu_percent": 1.3,
+          "elapsed": "16-19:51:36",
+          "memory_percent": 1.0,
+          "pid": 1176,
+          "ppid": 1,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 165.01,
+      "load_average": {
+        "fifteen_minutes": 3.2509765625,
+        "five_minutes": 2.79052734375,
+        "one_minute": 2.38525390625
+      },
+      "sample_index": 11,
+      "timestamp_utc": "2026-08-04T07:18:39.006184+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 44.7,
+          "elapsed": "16-19:52:18",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Rs"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 15.7,
+          "elapsed": "06:12:39",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 13.8,
+          "elapsed": "06:12:40",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 8.7,
+          "elapsed": "16-19:51:31",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "R"
+        },
+        {
+          "command": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+          "cpu_percent": 7.8,
+          "elapsed": "16-19:51:51",
+          "memory_percent": 1.0,
+          "pid": 1176,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 3.9,
+          "elapsed": "06:13:48",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 3.3,
+          "elapsed": "06:13:52",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 3.0,
+          "elapsed": "06:13:51",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.5,
+          "elapsed": "16-19:51:51",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 1.8,
+          "elapsed": "06:12:36",
+          "memory_percent": 1.5,
+          "pid": 65466,
+          "ppid": 65465,
+          "state": "S"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 1.7,
+          "elapsed": "16-19:52:18",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/usr/libexec/sharingd",
+          "cpu_percent": 1.5,
+          "elapsed": "16-19:51:51",
+          "memory_percent": 0.1,
+          "pid": 1163,
+          "ppid": 1,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 180.01,
+      "load_average": {
+        "fifteen_minutes": 3.22802734375,
+        "five_minutes": 2.75048828125,
+        "one_minute": 2.28076171875
+      },
+      "sample_index": 12,
+      "timestamp_utc": "2026-08-04T07:18:54.005407+00:00",
+      "top_processes": [
+        {
+          "command": "/Users/sizumita/.codex/worktrees/7fd9/dragapult_ai/.venv/bin/python",
+          "cpu_percent": 87.9,
+          "elapsed": "00:05",
+          "memory_percent": 0.9,
+          "pid": 51951,
+          "ppid": 51927,
+          "state": "R"
+        },
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 43.0,
+          "elapsed": "16-19:52:33",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Rs"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 16.6,
+          "elapsed": "06:12:54",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 16.0,
+          "elapsed": "05:52:31",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Rs+"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 13.0,
+          "elapsed": "06:12:55",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 7.2,
+          "elapsed": "16-19:51:46",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 2.5,
+          "elapsed": "06:14:07",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 2.3,
+          "elapsed": "16-19:52:33",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.3,
+          "elapsed": "16-19:52:06",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 2.3,
+          "elapsed": "06:14:03",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+          "cpu_percent": 1.9,
+          "elapsed": "16-19:52:06",
+          "memory_percent": 1.0,
+          "pid": 1176,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 1.8,
+          "elapsed": "06:12:51",
+          "memory_percent": 1.5,
+          "pid": 65466,
+          "ppid": 65465,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 195.002,
+      "load_average": {
+        "fifteen_minutes": 3.2060546875,
+        "five_minutes": 2.71240234375,
+        "one_minute": 2.20556640625
+      },
+      "sample_index": 13,
+      "timestamp_utc": "2026-08-04T07:19:08.996469+00:00",
+      "top_processes": [
+        {
+          "command": "/Users/sizumita/.codex/worktrees/7fd9/dragapult_ai/.venv/bin/python",
+          "cpu_percent": 91.8,
+          "elapsed": "00:20",
+          "memory_percent": 2.0,
+          "pid": 51951,
+          "ppid": 51927,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 43.9,
+          "elapsed": "16-19:52:48",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Rs"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 14.3,
+          "elapsed": "06:13:09",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 13.8,
+          "elapsed": "05:52:46",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 12.7,
+          "elapsed": "06:13:10",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Users/sizumita/.codex/worktrees/7fd9/dragapult_ai/.venv/bin/python",
+          "cpu_percent": 8.6,
+          "elapsed": "00:01",
+          "memory_percent": 0.3,
+          "pid": 52664,
+          "ppid": 51951,
+          "state": "R"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 7.5,
+          "elapsed": "16-19:52:01",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 3.6,
+          "elapsed": "06:14:22",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 3.4,
+          "elapsed": "06:11:36",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.2,
+          "elapsed": "16-19:52:21",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 2.0,
+          "elapsed": "16-19:52:48",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 1.8,
+          "elapsed": "06:14:18",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 210.008,
+      "load_average": {
+        "fifteen_minutes": 3.23681640625,
+        "five_minutes": 2.82421875,
+        "one_minute": 2.841796875
+      },
+      "sample_index": 14,
+      "timestamp_utc": "2026-08-04T07:19:24.001549+00:00",
+      "top_processes": [
+        {
+          "command": "/Users/sizumita/.codex/worktrees/7fd9/dragapult_ai/.venv/bin/python",
+          "cpu_percent": 99.6,
+          "elapsed": "00:35",
+          "memory_percent": 2.2,
+          "pid": 51951,
+          "ppid": 51927,
+          "state": "R"
+        },
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 43.6,
+          "elapsed": "16-19:53:03",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 14.8,
+          "elapsed": "05:53:01",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 13.7,
+          "elapsed": "06:13:24",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 11.8,
+          "elapsed": "06:13:25",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 7.4,
+          "elapsed": "16-19:52:16",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+          "cpu_percent": 6.7,
+          "elapsed": "16-19:52:36",
+          "memory_percent": 1.0,
+          "pid": 1176,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 2.6,
+          "elapsed": "06:14:37",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.4,
+          "elapsed": "16-19:52:36",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 1.7,
+          "elapsed": "16-19:53:01",
+          "memory_percent": 1.4,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 1.7,
+          "elapsed": "06:14:33",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/usr/libexec/sharingd",
+          "cpu_percent": 1.5,
+          "elapsed": "16-19:52:36",
+          "memory_percent": 0.1,
+          "pid": 1163,
+          "ppid": 1,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 225.008,
+      "load_average": {
+        "fifteen_minutes": 3.23828125,
+        "five_minutes": 2.84814453125,
+        "one_minute": 2.94384765625
+      },
+      "sample_index": 15,
+      "timestamp_utc": "2026-08-04T07:19:39.000849+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 43.4,
+          "elapsed": "16-19:53:18",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 16.8,
+          "elapsed": "06:13:39",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 14.6,
+          "elapsed": "06:13:40",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 14.2,
+          "elapsed": "05:53:16",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 9.0,
+          "elapsed": "16-19:52:31",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 6.8,
+          "elapsed": "06:14:52",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 3.5,
+          "elapsed": "06:14:48",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 2.8,
+          "elapsed": "06:14:51",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.7,
+          "elapsed": "16-19:52:51",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 2.0,
+          "elapsed": "16-19:53:16",
+          "memory_percent": 1.4,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          "cpu_percent": 1.9,
+          "elapsed": "06:14:55",
+          "memory_percent": 1.5,
+          "pid": 61464,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/usr/libexec/sharingd",
+          "cpu_percent": 1.3,
+          "elapsed": "16-19:52:51",
+          "memory_percent": 0.1,
+          "pid": 1163,
+          "ppid": 1,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 240.01,
+      "load_average": {
+        "fifteen_minutes": 3.21044921875,
+        "five_minutes": 2.78955078125,
+        "one_minute": 2.654296875
+      },
+      "sample_index": 16,
+      "timestamp_utc": "2026-08-04T07:19:54.002650+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 42.5,
+          "elapsed": "16-19:53:33",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 21.7,
+          "elapsed": "06:13:54",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 18.3,
+          "elapsed": "06:13:55",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 15.9,
+          "elapsed": "05:53:31",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 15.5,
+          "elapsed": "06:15:07",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 12.3,
+          "elapsed": "16-19:52:46",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 9.1,
+          "elapsed": "06:15:03",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          "cpu_percent": 6.1,
+          "elapsed": "06:15:10",
+          "memory_percent": 1.5,
+          "pid": 61464,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 3.3,
+          "elapsed": "16-19:53:06",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 2.6,
+          "elapsed": "16-19:53:31",
+          "memory_percent": 1.4,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 2.4,
+          "elapsed": "06:15:06",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/usr/libexec/trustd",
+          "cpu_percent": 1.9,
+          "elapsed": "02-23:46:23",
+          "memory_percent": 0.1,
+          "pid": 43986,
+          "ppid": 1,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 255.008,
+      "load_average": {
+        "fifteen_minutes": 3.2119140625,
+        "five_minutes": 2.81591796875,
+        "one_minute": 2.810546875
+      },
+      "sample_index": 17,
+      "timestamp_utc": "2026-08-04T07:20:08.999396+00:00",
+      "top_processes": [
+        {
+          "command": "/Users/sizumita/.codex/worktrees/7fd9/dragapult_ai/.venv/bin/python",
+          "cpu_percent": 98.4,
+          "elapsed": "00:15",
+          "memory_percent": 1.8,
+          "pid": 54321,
+          "ppid": 54318,
+          "state": "R"
+        },
+        {
+          "command": "/Users/sizumita/.codex/worktrees/7fd9/dragapult_ai/.venv/bin/python",
+          "cpu_percent": 78.7,
+          "elapsed": "00:15",
+          "memory_percent": 1.7,
+          "pid": 54324,
+          "ppid": 54319,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 43.1,
+          "elapsed": "16-19:53:48",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Rs"
+        },
+        {
+          "command": "/Users/sizumita/.codex/worktrees/7fd9/dragapult_ai/.venv/bin/python",
+          "cpu_percent": 20.3,
+          "elapsed": "00:01",
+          "memory_percent": 0.4,
+          "pid": 54848,
+          "ppid": 54324,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 14.0,
+          "elapsed": "06:14:09",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 12.3,
+          "elapsed": "06:14:10",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 10.2,
+          "elapsed": "05:53:46",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 7.2,
+          "elapsed": "16-19:53:01",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 5.0,
+          "elapsed": "06:15:18",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 4.4,
+          "elapsed": "06:15:22",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.3,
+          "elapsed": "16-19:53:21",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 2.3,
+          "elapsed": "06:14:06",
+          "memory_percent": 1.5,
+          "pid": 65466,
+          "ppid": 65465,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 270.01,
+      "load_average": {
+        "fifteen_minutes": 3.22509765625,
+        "five_minutes": 2.873046875,
+        "one_minute": 3.06005859375
+      },
+      "sample_index": 18,
+      "timestamp_utc": "2026-08-04T07:20:24.001266+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 41.1,
+          "elapsed": "16-19:54:03",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "claude",
+          "cpu_percent": 20.2,
+          "elapsed": "05:54:01",
+          "memory_percent": 1.5,
+          "pid": 19405,
+          "ppid": 1924,
+          "state": "Ss+"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 18.8,
+          "elapsed": "06:14:24",
+          "memory_percent": 2.0,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 15.4,
+          "elapsed": "06:14:25",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 14.8,
+          "elapsed": "06:15:37",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 11.9,
+          "elapsed": "16-19:53:16",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 7.2,
+          "elapsed": "06:15:33",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 3.6,
+          "elapsed": "16-19:53:36",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 3.3,
+          "elapsed": "16-19:54:03",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/usr/libexec/sharingd",
+          "cpu_percent": 2.5,
+          "elapsed": "16-19:53:36",
+          "memory_percent": 0.1,
+          "pid": 1163,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/usr/libexec/dasd",
+          "cpu_percent": 2.4,
+          "elapsed": "16-19:54:03",
+          "memory_percent": 0.1,
+          "pid": 417,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+          "cpu_percent": 1.9,
+          "elapsed": "06:15:40",
+          "memory_percent": 1.5,
+          "pid": 61464,
+          "ppid": 1,
+          "state": "S"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 285.01,
+      "load_average": {
+        "fifteen_minutes": 3.185546875,
+        "five_minutes": 2.78076171875,
+        "one_minute": 2.61572265625
+      },
+      "sample_index": 19,
+      "timestamp_utc": "2026-08-04T07:20:39.000487+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 40.9,
+          "elapsed": "16-19:54:18",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 22.5,
+          "elapsed": "06:14:39",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 17.9,
+          "elapsed": "06:15:52",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 14.1,
+          "elapsed": "06:14:40",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/PrivateFrameworks/CloudKitDaemon.framework/Support/cloudd",
+          "cpu_percent": 12.7,
+          "elapsed": "02-23:47:10",
+          "memory_percent": 0.1,
+          "pid": 43686,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 11.7,
+          "elapsed": "16-19:53:31",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 9.5,
+          "elapsed": "06:15:48",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 9.2,
+          "elapsed": "06:13:06",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/PrivateFrameworks/IDS.framework/identityservicesd.app/Contents/MacOS/identityservicesd",
+          "cpu_percent": 5.9,
+          "elapsed": "16-19:53:52",
+          "memory_percent": 0.2,
+          "pid": 1123,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/usr/libexec/trustd",
+          "cpu_percent": 5.4,
+          "elapsed": "02-23:47:08",
+          "memory_percent": 0.1,
+          "pid": 43986,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 5.4,
+          "elapsed": "06:15:51",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 3.6,
+          "elapsed": "16-19:54:16",
+          "memory_percent": 2.8,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 300.01,
+      "load_average": {
+        "fifteen_minutes": 3.158203125,
+        "five_minutes": 2.7255859375,
+        "one_minute": 2.41162109375
+      },
+      "sample_index": 20,
+      "timestamp_utc": "2026-08-04T07:20:53.999873+00:00",
+      "top_processes": [
+        {
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+          "cpu_percent": 44.5,
+          "elapsed": "16-19:54:33",
+          "memory_percent": 0.6,
+          "pid": 440,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+          "cpu_percent": 23.6,
+          "elapsed": "06:14:54",
+          "memory_percent": 2.1,
+          "pid": 65360,
+          "ppid": 65134,
+          "state": "R"
+        },
+        {
+          "command": "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "cpu_percent": 19.4,
+          "elapsed": "06:14:55",
+          "memory_percent": 0.4,
+          "pid": 65283,
+          "ppid": 65134,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+          "cpu_percent": 17.4,
+          "elapsed": "06:16:07",
+          "memory_percent": 0.5,
+          "pid": 61637,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ScriptMonitor.app/Contents/MacOS/ScriptMonitor",
+          "cpu_percent": 10.6,
+          "elapsed": "16-19:53:46",
+          "memory_percent": 0.0,
+          "pid": 3744,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.182/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+          "cpu_percent": 8.8,
+          "elapsed": "06:16:03",
+          "memory_percent": 3.4,
+          "pid": 61809,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+          "cpu_percent": 2.8,
+          "elapsed": "16-19:54:06",
+          "memory_percent": 0.2,
+          "pid": 1174,
+          "ppid": 1,
+          "state": "S"
+        },
+        {
+          "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+          "cpu_percent": 2.2,
+          "elapsed": "06:16:06",
+          "memory_percent": 3.3,
+          "pid": 61655,
+          "ppid": 61464,
+          "state": "S"
+        },
+        {
+          "command": "/usr/sbin/bluetoothd",
+          "cpu_percent": 2.1,
+          "elapsed": "16-19:54:33",
+          "memory_percent": 0.1,
+          "pid": 431,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Users/sizumita/Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS/claude",
+          "cpu_percent": 2.1,
+          "elapsed": "06:13:21",
+          "memory_percent": 1.3,
+          "pid": 69827,
+          "ppid": 69826,
+          "state": "S"
+        },
+        {
+          "command": "/System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN",
+          "cpu_percent": 2.0,
+          "elapsed": "16-19:54:31",
+          "memory_percent": 0.1,
+          "pid": 607,
+          "ppid": 1,
+          "state": "Ss"
+        },
+        {
+          "command": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+          "cpu_percent": 1.7,
+          "elapsed": "16-19:54:31",
+          "memory_percent": 2.8,
+          "pid": 585,
+          "ppid": 1,
+          "state": "Ss"
+        }
+      ]
+    }
+  ],
+  "sampling_interval_seconds": 15,
+  "schema_version": 1,
+  "started_at_utc": "2026-08-04T07:15:54.003863+00:00",
+  "timing_measurement": false
+}
