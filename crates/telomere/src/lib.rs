@@ -1,4 +1,5 @@
 #![warn(missing_docs)]
+#![warn(unnameable_types)]
 
 //! Core WebAssembly engine for telomere.
 //!
@@ -68,26 +69,31 @@
 //! For a complete standalone crate with feature-ladder commands, see the
 //! [minimal embedder](https://github.com/yieldspace/telomere/tree/main/examples/minimal-embedder).
 
-/// Binary parsing internals are not yet covered by the embedder rustdoc pass.
-/// TODO(#142-followup): document the binary-reader API.
-#[allow(missing_docs)]
-pub mod binary;
-/// Core runtime internals remain intentionally outside the focused embedder surface.
-/// TODO(#142-followup): document the remaining public common types.
-#[allow(missing_docs)]
+#[doc(hidden)]
+pub(crate) mod binary;
 #[macro_use]
-pub mod common;
+#[doc(hidden)]
+pub(crate) mod common;
 /// Component-model adapters form the documented boundary used by component crates.
 #[warn(missing_docs)]
 pub mod component_support;
-/// Parser internals are documented separately from the embedder-facing API.
-/// TODO(#142-followup): document the remaining parser surface.
-#[allow(missing_docs)]
-pub mod parser;
-/// Interpreter and scheduler internals remain outside this focused documentation pass.
-/// TODO(#142-followup): document the remaining runtime surface.
-#[allow(missing_docs)]
-pub mod runtime;
+#[doc(hidden)]
+pub(crate) mod parser;
+#[doc(hidden)]
+pub(crate) mod runtime;
+
+/// Raw host-linking ABI kept public for the default embedding capability.
+///
+/// This compatibility carve-out exposes interpreter representation required by
+/// synchronous and asynchronous host-function linking. It remains public so the
+/// documented support matrix and embedding examples work in default builds; its
+/// eventual closure is tracked by issue #216.
+pub mod host_abi;
+
+/// Unstable interpreter internals for opt-in downstream integrations.
+#[cfg(feature = "unstable-internals")]
+#[doc(hidden)]
+pub mod unstable_internals;
 
 /// Resolves the measurement-only optimizer pipeline switch when the
 /// `measure-switches` feature is enabled.
@@ -109,8 +115,8 @@ pub const MAX_CONTROL_NESTING_DEPTH: u32 = 512;
 pub use binary::IoReadBinaryReader;
 /// Configures diagnostic metadata retained by a [`Store`].
 pub use common::DiagnosticsConfig;
-/// Parsed runtime instance data; embedders normally retain an [`InstanceHandle`](common::InstanceHandle) instead.
-pub use common::Instance;
+/// A cloneable, store-bound handle to an instantiated WebAssembly module.
+pub use common::InstanceHandle;
 /// Explains why metered guest execution stopped.
 pub use common::InterruptReason;
 /// Configures the optional lazy baseline JIT for a [`Store`].
@@ -129,8 +135,6 @@ pub use common::Registry;
 pub use common::ResultValue;
 /// Groups resource and execution settings for a [`Store`].
 pub use common::RuntimeConfig;
-/// The interpreter stack type, exposed for advanced embedding integrations.
-pub use common::Stack;
 /// Guest execution success or a trap/linking failure.
 pub use common::VMResult;
 /// A value crossing the core WebAssembly host/guest boundary.
@@ -149,38 +153,98 @@ pub use runtime::aliasing;
 pub use runtime::get_global;
 /// Instantiates a parsed core WebAssembly module in a store.
 pub use runtime::instantiate;
-/// Instantiates a native module whose host functions return futures.
-pub use runtime::instantiate_native_async_module;
+#[cfg(feature = "jit")]
+/// Statistics for the optional store-local JIT cache.
+///
+/// This remains public because the minimal-embedder JIT configuration uses it
+/// to verify that an enabled workload compiled.
+pub use runtime::jit::JitCacheStats;
 /// Reports whether this build and target can execute the optional JIT.
 pub use runtime::jit_supported;
+
+/// Instantiates a native module whose host functions return futures.
+///
+/// This exposes raw interpreter continuations to preserve default asynchronous
+/// host linking advertised by Telomere's support matrix and embedding examples.
+/// The compatibility carve-out is tracked by issue #216.
+pub use runtime::instantiate::instantiate_native_async_module;
 /// Replaces an exported guest function with an asynchronous host callback.
-pub use runtime::link_async_host_function_with_export_name;
+///
+/// This raw callback ABI remains public for default asynchronous host linking;
+/// issue #216 tracks its replacement.
+pub use runtime::instantiate::link_async_host_function_with_export_name;
 /// Replaces a guest function by index with an asynchronous host callback.
-pub use runtime::link_async_host_function_with_function_idx;
+///
+/// This raw callback ABI remains public for default asynchronous host linking;
+/// issue #216 tracks its replacement.
+pub use runtime::instantiate::link_async_host_function_with_function_idx;
 /// Replaces an exported guest function with a synchronous host callback.
-pub use runtime::link_host_function_with_export_name;
+///
+/// This raw callback ABI remains public for default synchronous host linking;
+/// issue #216 tracks its replacement.
+pub use runtime::instantiate::link_host_function_with_export_name;
 /// Replaces a guest function by index with a synchronous host callback.
-pub use runtime::link_host_function_with_function_idx;
-/// Calls a named exported function using the default Tokio-backed driver.
-pub use runtime::run_module_function;
-/// Calls a named exported function using an embedder-provided async driver.
-pub use runtime::run_module_function_with_driver;
+///
+/// This raw callback ABI remains public for default synchronous host linking;
+/// issue #216 tracks its replacement.
+pub use runtime::instantiate::link_host_function_with_function_idx;
+#[cfg(feature = "unstable-internals")]
 /// Marks the current host call as returning through the runtime's special path.
-pub use runtime::special_function_return;
+///
+/// This raw interpreter handler is available only for opt-in raw instruction
+/// construction. Default builds expose no public way to construct the required
+/// `Instr` sequence, so it is not part of the default host-linking carve-out.
+/// Issue #216 tracks its replacement.
+pub use runtime::vm::special_function_return;
+
+/// Calls a named exported function using an embedder-provided async driver.
+///
+/// This exposes raw continuations so default asynchronous host linking can use
+/// an embedder executor. Issue #216 tracks the compatibility carve-out.
+pub use runtime::run_module_function_with_driver;
 /// A completion delivered by an [`ExecutionDriver`].
+///
+/// This raw driver value remains public for default asynchronous host linking;
+/// issue #216 tracks its replacement.
 pub use runtime::Completion;
 /// The result payload carried by a [`Completion`].
+///
+/// This raw driver value remains public for default asynchronous host linking;
+/// issue #216 tracks its replacement.
 pub use runtime::CompletionPayload;
 /// Integrates pending WebAssembly operations with an embedder's async executor.
+///
+/// This raw driver trait remains public for default asynchronous host linking;
+/// issue #216 tracks its replacement.
 pub use runtime::ExecutionDriver;
 /// A pending asynchronous host-function invocation.
+///
+/// This raw driver value remains public for default asynchronous host linking;
+/// issue #216 tracks its replacement.
 pub use runtime::HostCallPending;
 #[cfg(feature = "threads")]
 /// A pending wait on shared WebAssembly memory.
+///
+/// This raw driver value remains public for default asynchronous host linking
+/// with threads; issue #216 tracks its replacement.
 pub use runtime::MemoryWaitPending;
 /// Work submitted by the runtime to an [`ExecutionDriver`].
+///
+/// This raw driver value remains public for default asynchronous host linking;
+/// issue #216 tracks its replacement.
 pub use runtime::PendingOp;
 /// The default driver for async host calls and shared-memory waits.
+///
+/// This raw driver remains public for default asynchronous host linking; issue
+/// #216 tracks its replacement.
 pub use runtime::TokioDriver;
+#[cfg(feature = "unstable-internals")]
 /// A reserved pending operation for future guest async support.
+///
+/// No runtime producer currently emits this value, and [`TokioDriver`] rejects
+/// it. It is therefore available only to opt-in integrations that construct raw
+/// pending operations; issue #216 tracks its replacement.
 pub use runtime::WasmAsyncPending;
+
+/// Calls a named exported function using the default Tokio-backed driver.
+pub use runtime::run_module_function;

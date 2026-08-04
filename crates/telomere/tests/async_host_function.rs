@@ -9,11 +9,12 @@ use std::{collections::VecDeque, future::Future, pin::Pin};
 #[cfg(feature = "threads")]
 use telomere::MemoryWaitPending;
 use telomere::{
-    common::{
-        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, FuncType,
-        ValType,
+    component_support::common::{FuncType, ValType},
+    get_global,
+    host_abi::{
+        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, Instr,
     },
-    get_global, instantiate_native_async_module, link_async_host_function_with_export_name,
+    instantiate_native_async_module, link_async_host_function_with_export_name,
     link_async_host_function_with_function_idx, link_host_function_with_function_idx, Completion,
     CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, Registry, ResultValue, Store,
     StoreState, VMResult, WasmValue,
@@ -63,6 +64,7 @@ impl ExecutionDriver for MockDriver {
                     }
                 }));
             }
+            #[cfg(feature = "unstable-internals")]
             PendingOp::WasmAsync(op) => {
                 panic!(
                     "unexpected wasm async pending op for task {} in mock driver",
@@ -191,7 +193,7 @@ fn async_fail(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
     })
 }
 
-fn sync_add_two(ctx: &mut ExecuteContext) -> VMResult<*const telomere::common::Instr> {
+fn sync_add_two(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let value = i32::from_le_bytes(
         ctx.stack
             .local_bytes(&ctx.local_reference(), 0, 4)

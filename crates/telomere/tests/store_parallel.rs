@@ -3,12 +3,14 @@ use std::{sync::Arc, thread};
 use futures::executor::block_on;
 use telomere::{
     aliasing, get_global, instantiate, link_host_function_with_export_name,
-    link_host_function_with_function_idx, run_module_function, IoReadBinaryReader, Registry,
-    ResultValue, Store, VMResult, WasmParser, WasmValue,
+    link_host_function_with_function_idx, run_module_function, InstanceHandle, IoReadBinaryReader,
+    Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
 };
 use telomere::{
-    common::{ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule},
-    runtime::instantiate_native_module,
+    component_support::common::FuncType,
+    host_abi::{
+        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
+    },
 };
 
 fn assert_send_sync<T: Send + Sync>() {}
@@ -20,11 +22,7 @@ fn parse_module(wat: &str) -> telomere::Module {
     parser.parse_module().expect("module must parse")
 }
 
-async fn instantiate_wat(
-    wat: &str,
-    store: &Store,
-    registry: &Registry,
-) -> telomere::common::InstanceHandle {
+async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
     instantiate(parse_module(wat), store, registry)
         .await
         .unwrap()
@@ -39,7 +37,7 @@ fn noop_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 #[test]
 fn store_and_instance_handles_are_send_sync() {
     assert_send_sync::<Store>();
-    assert_send_sync::<telomere::common::InstanceHandle>();
+    assert_send_sync::<InstanceHandle>();
     assert_send_sync::<Arc<Store>>();
 }
 

@@ -29,6 +29,8 @@ use crate::{
 };
 use tracing::trace;
 
+// #202: SIMD instruction dispatch is intentionally dormant without the optional SIMD parser.
+#[cfg_attr(not(feature = "simd"), allow(unused_macros))]
 macro_rules! simd_instruction {
     ($code: expr,$ctx: expr, $($name: ident),*) => {
         match ($code) {
@@ -433,6 +435,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         values::parse_memarg(self.reader, natural_align)
     }
 
+    // #202: Atomic parsing is intentionally dormant without the optional threads parser.
+    #[cfg_attr(not(feature = "threads"), allow(dead_code))]
     fn parse_atomic_memarg(&mut self, natural_align_log2: u32) -> Result<(usize, u32, MemArg)> {
         values::parse_memarg_exact(self.reader, natural_align_log2)
     }

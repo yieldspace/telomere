@@ -3,10 +3,15 @@
 mod common;
 
 use common::instantiate_wat;
-use telomere::common::AtomicWaitResult;
+use std::sync::Arc;
 use telomere::{
-    common::{AtomicRmwOp, SharedMemoryObject},
-    run_module_function, Registry, ResultValue, Store, VMResult, WasmValue,
+    host_abi::SharedMemoryObject,
+    run_module_function,
+    unstable_internals::{
+        new_shared_memory, shared_atomic_rmw_u32, shared_register_wait32, AtomicRmwOperation,
+        SharedWaitState,
+    },
+    InstanceHandle, Registry, ResultValue, Store, VMResult, WasmValue,
 };
 
 fn unwrap_success<T: std::fmt::Debug>(result: VMResult<T>) -> T {
@@ -16,8 +21,12 @@ fn unwrap_success<T: std::fmt::Debug>(result: VMResult<T>) -> T {
     }
 }
 
+fn shared_memory() -> Arc<SharedMemoryObject> {
+    unwrap_success(new_shared_memory(1, 1))
+}
+
 async fn call_i32(
-    instance: &telomere::common::InstanceHandle,
+    instance: &InstanceHandle,
     store: &Store,
     name: &str,
     args: Vec<WasmValue>,
@@ -44,7 +53,7 @@ async fn call_i32(
 }
 
 async fn call_i64(
-    instance: &telomere::common::InstanceHandle,
+    instance: &InstanceHandle,
     store: &Store,
     name: &str,
     args: Vec<WasmValue>,
@@ -119,21 +128,21 @@ async fn unshared_wait_traps_and_notify_returns_zero() {
 
 #[tokio::test]
 async fn shared_wait_notify_is_fifo_and_timeout_removes_waiter() {
-    let shared = SharedMemoryObject::new(1, 1).unwrap();
+    let shared = shared_memory();
     unwrap_success(shared.atomic_store_u32(0, 7));
 
     assert!(matches!(
-        unwrap_success(shared.register_wait32(0, 99)),
-        AtomicWaitResult::NotEqual
+        unwrap_success(shared_register_wait32(&shared, 0, 99)),
+        SharedWaitState::NotEqual
     ));
 
-    let first = match unwrap_success(shared.register_wait32(0, 7)) {
-        AtomicWaitResult::Pending(wait) => wait,
-        AtomicWaitResult::NotEqual => panic!("expected pending wait"),
+    let first = match unwrap_success(shared_register_wait32(&shared, 0, 7)) {
+        SharedWaitState::Pending(wait) => wait,
+        SharedWaitState::NotEqual => panic!("expected pending wait"),
     };
-    let second = match unwrap_success(shared.register_wait32(0, 7)) {
-        AtomicWaitResult::Pending(wait) => wait,
-        AtomicWaitResult::NotEqual => panic!("expected pending wait"),
+    let second = match unwrap_success(shared_register_wait32(&shared, 0, 7)) {
+        SharedWaitState::Pending(wait) => wait,
+        SharedWaitState::NotEqual => panic!("expected pending wait"),
     };
 
     assert_eq!(unwrap_success(shared.notify_waiters(0, 1)), 1);
@@ -144,11 +153,16 @@ async fn shared_wait_notify_is_fifo_and_timeout_removes_waiter() {
 
 #[test]
 fn shared_atomic_rmw_cmpxchg_and_alignment_follow_contracts() {
-    let shared = SharedMemoryObject::new(1, 1).unwrap();
+    let shared = shared_memory();
     unwrap_success(shared.atomic_store_u32(0, 0x1111_1111));
 
     assert_eq!(
-        unwrap_success(shared.atomic_rmw_u32(0, AtomicRmwOp::Add, 1)),
+        unwrap_success(shared_atomic_rmw_u32(
+            &shared,
+            0,
+            AtomicRmwOperation::Add,
+            1,
+        )),
         0x1111_1111
     );
     assert_eq!(unwrap_success(shared.atomic_load_u32(0)), 0x1111_1112);

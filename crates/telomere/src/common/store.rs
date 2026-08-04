@@ -119,7 +119,7 @@ impl InstanceMemorySlot {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModuleInstance {
+pub(crate) struct ModuleInstance {
     pub exports: ExportSection,
     pub tables: Vec<TableType>,
     pub globals: Vec<GlobalType>,
@@ -130,7 +130,7 @@ pub struct ModuleInstance {
 }
 
 #[derive(Debug, Clone)]
-pub struct InstanceData {
+pub(crate) struct InstanceData {
     pub instance_id: u32,
     pub module_addr: ObjectRef,
     pub globals: Vec<ObjectRef>,
@@ -186,25 +186,25 @@ impl fmt::Debug for FunctionBody {
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionInstanceData {
-    pub instance: InstanceId,
-    pub funcidx: u32,
-    pub body: FunctionBody,
+pub(crate) struct FunctionInstanceData {
+    pub(crate) instance: InstanceId,
+    pub(crate) funcidx: u32,
+    pub(crate) body: FunctionBody,
 }
 
 impl FunctionInstanceData {
-    pub fn is_host_func(&self) -> bool {
+    pub(crate) fn is_host_func(&self) -> bool {
         matches!(
             self.body,
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_)
         )
     }
 
-    pub fn is_async_host_func(&self) -> bool {
+    pub(crate) fn is_async_host_func(&self) -> bool {
         matches!(self.body, FunctionBody::AsyncHost(_))
     }
 
-    pub fn locals(&self) -> LocalsData {
+    pub(crate) fn locals(&self) -> LocalsData {
         match &self.body {
             FunctionBody::Wasm { locals, .. } => locals.clone(),
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => LocalsData::default(),
@@ -218,7 +218,7 @@ impl FunctionInstanceData {
         }
     }
 
-    pub fn code_pointer(&self) -> Option<*const Instr> {
+    pub(crate) fn code_pointer(&self) -> Option<*const Instr> {
         self.code().map(|code| code.as_ptr())
     }
 
@@ -226,7 +226,7 @@ impl FunctionInstanceData {
         (self.locals(), 0)
     }
 
-    pub fn host_code_pointer(&self) -> HostFunction {
+    pub(crate) fn host_code_pointer(&self) -> HostFunction {
         match self.body {
             FunctionBody::Host(fp) => fp,
             FunctionBody::Wasm { .. } | FunctionBody::AsyncHost(_) => {
@@ -235,7 +235,7 @@ impl FunctionInstanceData {
         }
     }
 
-    pub fn async_host_code_pointer(&self) -> AsyncHostFunction {
+    pub(crate) fn async_host_code_pointer(&self) -> AsyncHostFunction {
         match self.body {
             FunctionBody::AsyncHost(fp) => fp,
             FunctionBody::Wasm { .. } | FunctionBody::Host(_) => {
@@ -1964,12 +1964,17 @@ impl Store {
     }
 
     #[cfg(feature = "jit")]
+    fn jit_cache_stats_impl(&self) -> crate::JitCacheStats {
+        self.jit_cache.stats()
+    }
+
+    #[cfg(feature = "jit")]
     /// Returns a snapshot of the store-local JIT cache.
     ///
     /// This is useful for confirming that a workload compiled after enabling
     /// [`JitConfig`]; it does not force compilation.
-    pub fn jit_cache_stats(&self) -> crate::runtime::jit::JitCacheStats {
-        self.jit_cache.stats()
+    pub fn jit_cache_stats(&self) -> crate::JitCacheStats {
+        self.jit_cache_stats_impl()
     }
 
     #[cfg(feature = "jit")]
@@ -2152,8 +2157,11 @@ mod tests {
         Store, StoreInner, StoreState, VMResult,
     };
     use crate::common::{
-        memory::{fail_next_memory_mapping, TestMemoryMappingFailure},
-        MemoryInitError, MemoryMappingOperation, PAGE_SIZE,
+        memory::{
+            fail_next_memory_mapping, MemoryInitError, MemoryMappingOperation,
+            TestMemoryMappingFailure,
+        },
+        PAGE_SIZE,
     };
 
     fn local_id(handle: MemoryHandle) -> super::LocalMemoryId {

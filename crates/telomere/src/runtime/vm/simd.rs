@@ -9,9 +9,9 @@ use telomere_macros::define_simd_operation;
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::{
-    common::{stack::StackOperation, ExecuteContext, Instr},
+    common::{stack::StackOperation, ExecuteContext, Instr, Stack},
     runtime::vm::call_next,
-    Stack, VMResult,
+    VMResult,
 };
 
 /// Telomere internal SIMD local-memory push helper.

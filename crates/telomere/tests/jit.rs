@@ -7,8 +7,9 @@
     )
 ))]
 use telomere::{
-    common::{ExecuteContext, InstanceHandle, Instr},
-    link_host_function_with_function_idx, Registry, ResultValue, VMResult, WasmValue,
+    host_abi::{ExecuteContext, Instr},
+    link_host_function_with_function_idx, InstanceHandle, Registry, ResultValue, VMResult,
+    WasmValue,
 };
 use telomere::{JitConfig, RuntimeConfig, Store};
 
@@ -197,10 +198,7 @@ fn assert_success_values(result: VMResult<ResultValue>, expected: ResultValue) {
         all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
     )
 ))]
-fn assert_jit_accepted(
-    before: telomere::runtime::jit::JitCacheStats,
-    after: telomere::runtime::jit::JitCacheStats,
-) {
+fn assert_jit_accepted(before: telomere::JitCacheStats, after: telomere::JitCacheStats) {
     assert!(
         after.compiled_functions > before.compiled_functions,
         "expected JIT cache to accept a function, before={before:?} after={after:?}"

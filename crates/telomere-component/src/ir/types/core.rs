@@ -1,6 +1,9 @@
 use crate::decoder::{ComponentParseError, ParseResult};
 use crate::ir::types::CoreSortType;
-use crate::support::common::{ExportDesc, ImportDesc};
+use crate::support::common::{
+    module_exports, module_function_types, module_functions, module_globals, module_imports,
+    module_memories, module_tables, ExportDesc, ImportDesc,
+};
 pub use crate::support::common::{
     FuncType as CoreFuncType, GlobalType as CoreGlobalType, MemType as CoreMemoryType,
     TableType as CoreTableType,
@@ -54,11 +57,16 @@ impl From<CoreModuleType> for CoreInstanceType {
 
 impl From<&Module> for CoreModuleType {
     fn from(value: &Module) -> Self {
+        let function_types = module_function_types(value);
+        let functions = module_functions(value);
+        let tables = module_tables(value);
+        let memories = module_memories(value);
+        let globals = module_globals(value);
         let mut imports = HashMap::<String, HashMap<String, CoreModuleImportType>>::new();
-        value.imports.0.iter().for_each(|x| {
+        module_imports(value).iter().for_each(|x| {
             let value = match x.desc {
                 ImportDesc::TypeIdx(ref idx) => {
-                    let ty = value.fts.0.get(idx.0 as usize).unwrap();
+                    let ty = function_types.get(idx.0 as usize).unwrap();
                     CoreModuleImportType::Func(ty.clone())
                 }
                 ImportDesc::TableType(ref ty) => CoreModuleImportType::Table(*ty),
@@ -73,28 +81,26 @@ impl From<&Module> for CoreModuleType {
                 imports.insert(x.module.clone(), map);
             }
         });
-        let exports = value
-            .exs
-            .0
+        let exports = module_exports(value)
             .iter()
-            .map(|x| {
-                (x.0.clone(), {
-                    match x.1 {
+            .map(|export| {
+                (export.0.clone(), {
+                    match export.1 {
                         ExportDesc::Func(ref idx) => {
-                            let tidx = value.functions.get(idx.0 as usize).unwrap();
-                            let ty = value.fts.0.get(tidx.0 as usize).unwrap();
+                            let tidx = functions.get(idx.0 as usize).unwrap();
+                            let ty = function_types.get(tidx.0 as usize).unwrap();
                             CoreModuleExportType::Func(ty.clone())
                         }
                         ExportDesc::Table(ref idx) => {
-                            let ty = value.tables.get(idx.0 as usize).unwrap();
+                            let ty = tables.get(idx.0 as usize).unwrap();
                             CoreModuleExportType::Table(*ty)
                         }
                         ExportDesc::Mem(ref idx) => {
-                            let ty = value.mems.get(idx.0 as usize).unwrap();
+                            let ty = memories.get(idx.0 as usize).unwrap();
                             CoreModuleExportType::Memory(*ty)
                         }
                         ExportDesc::Global(ref idx) => {
-                            let ty = value.globals.get(idx.0 as usize).unwrap();
+                            let ty = globals.get(idx.0 as usize).unwrap();
                             CoreModuleExportType::Global(*ty)
                         }
                     }

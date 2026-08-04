@@ -12,6 +12,7 @@ use crate::decoder::{
 use crate::ir::types::{CoreModuleType, Type};
 use crate::ir::{ComponentSection, CoreModule, CoreRelation, Relation};
 use crate::support::binary::BinaryReader;
+use crate::support::common::{module_exports, module_imports};
 use crate::support::parser::core::parse_u32;
 use std::collections::HashSet;
 use telomere::WasmParser;
@@ -154,7 +155,7 @@ fn _parse_component(
 
 fn validate_core_module_contract(module: &crate::support::Module) -> ParseResult<()> {
     let mut import_names = HashSet::new();
-    for import in &module.imports.0 {
+    for import in module_imports(module) {
         let key = format!("{}:{}", import.module, import.name);
         if !import_names.insert(key.clone()) {
             return Err(ComponentParseError::TypeMismatch(format!(
@@ -164,7 +165,7 @@ fn validate_core_module_contract(module: &crate::support::Module) -> ParseResult
     }
 
     let mut export_names = HashSet::new();
-    for export in &module.exs.0 {
+    for export in module_exports(module) {
         if !export_names.insert(export.0.clone()) {
             return Err(ComponentParseError::TypeMismatch(format!(
                 "export name `{}` already defined",

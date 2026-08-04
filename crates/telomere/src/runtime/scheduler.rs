@@ -3,10 +3,10 @@ use super::memory_effect::MemoryWaitPending;
 use super::memory_effect::{Completion, CompletionPayload, HostCallPending, PendingOp};
 use crate::{
     common::{
-        stack::CachedMemoryKind, CallFrameCache, ExecuteContext, LocalReference, StablePc,
+        stack::CachedMemoryKind, CallFrameCache, ExecuteContext, LocalReference, StablePc, Stack,
         StoreInner,
     },
-    Stack, Store, VMResult,
+    Store, VMResult,
 };
 use futures::{stream::FuturesUnordered, StreamExt};
 use std::{collections::VecDeque, future::Future, pin::Pin};
@@ -59,7 +59,7 @@ pub(crate) enum SyncRunError {
     Stalled,
 }
 
-pub struct EffectSupplier<'a> {
+pub(crate) struct EffectSupplier<'a> {
     task_id: u32,
     pending_effects: &'a mut u32,
     queue: &'a mut VecDeque<PendingOp>,
@@ -149,6 +149,7 @@ impl ExecutionDriver for TokioDriver {
             PendingOp::HostCall(op) => self.submit_host_call(op),
             #[cfg(feature = "threads")]
             PendingOp::MemoryWait(op) => self.submit_memory_wait(op),
+            #[cfg(feature = "unstable-internals")]
             PendingOp::WasmAsync(op) => {
                 panic!(
                     "Wasm async pending op is not implemented yet for task {}",

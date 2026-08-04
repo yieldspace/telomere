@@ -86,6 +86,8 @@ pub fn parse_memarg<R: BinaryReader>(
     Ok((len + len2 + len3, memidx, MemArg { align, offset }))
 }
 
+// #202: Exact atomic alignment parsing is intentionally dormant without threads support.
+#[cfg_attr(not(feature = "threads"), allow(dead_code))]
 pub fn parse_memarg_exact<R: BinaryReader>(
     reader: &mut R,
     natural_align_log2: u32,

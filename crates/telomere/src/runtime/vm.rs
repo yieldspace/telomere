@@ -1438,6 +1438,8 @@ pub(crate) enum StoreBytes {
     Write2([u8; 2]),
     Write4([u8; 4]),
     Write8([u8; 8]),
+    // #202: 128-bit stores are intentionally dormant without the optional SIMD runtime.
+    #[cfg_attr(not(feature = "simd"), allow(dead_code))]
     Write16([u8; 16]),
 }
 

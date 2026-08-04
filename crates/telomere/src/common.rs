@@ -1,5 +1,3 @@
-#![allow(private_interfaces)]
-
 /// Store-scoped guest execution metering.
 #[warn(missing_docs)]
 mod metering;
@@ -17,16 +15,18 @@ pub use vm_result::VMResult;
 pub(crate) mod debug_names;
 pub(crate) use debug_names::ModuleNames;
 pub(crate) mod memory;
-pub use memory::{
-    AtomicRmwOp, LocalMemoryObject, MemArg, Memory, MemoryInitError, MemoryMappingOperation,
-    SharedMemoryObject,
-};
+pub(crate) use memory::LocalMemoryObject;
+pub use memory::{MemArg, Memory};
+// #202: Atomic implementation types are used only when the optional threads runtime is enabled.
+#[cfg_attr(not(feature = "threads"), allow(unused_imports))]
+pub(crate) use memory::{AtomicRmwOp, SharedMemoryObject};
 #[cfg(feature = "threads")]
-pub use memory::{AtomicWaitResult, SharedWaitRegistration};
+pub(crate) use memory::{AtomicWaitResult, SharedWaitRegistration};
+#[doc(hidden)]
 pub(crate) mod stack;
 use stack::CachedMemoryKind;
 pub(crate) use stack::CallFrameCache;
-pub use stack::{LocalReference, Stack};
+pub(crate) use stack::{LocalReference, Stack};
 /// Import registry used while instantiating a core module.
 #[warn(missing_docs)]
 mod registry;
@@ -35,7 +35,7 @@ pub use registry::Registry;
 #[warn(missing_docs)]
 mod object_ref;
 /// Store configuration and handles exposed through the core embedding API.
-#[warn(missing_docs)]
+#[doc(hidden)]
 pub(crate) mod store;
 pub use object_ref::ObjectRef;
 pub use store::{
@@ -101,7 +101,7 @@ impl ValueSize {
 }
 
 impl ValType {
-    pub fn stack_size(&self) -> ValueSize {
+    fn stack_size_impl(&self) -> ValueSize {
         match self {
             ValType::ExternRef => ValueSize::Byte4,
             ValType::F32 => ValueSize::Byte4,
@@ -111,6 +111,16 @@ impl ValType {
             ValType::I64 => ValueSize::Byte8,
             ValType::V128 => ValueSize::Byte16,
         }
+    }
+
+    #[cfg(feature = "unstable-internals")]
+    pub fn stack_size(&self) -> ValueSize {
+        self.stack_size_impl()
+    }
+
+    #[cfg(not(feature = "unstable-internals"))]
+    pub(crate) fn stack_size(&self) -> ValueSize {
+        self.stack_size_impl()
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +171,8 @@ pub struct TableType {
 #[derive(Debug)]
 pub struct Table(pub TableType);
 impl Table {
+    // #202 keeps the decoded table helper available to in-crate parser paths.
+    #[allow(dead_code)]
     pub fn new(tt: TableType) -> Self {
         Self(tt)
     }
@@ -174,7 +186,7 @@ impl FuncType {
     }
 }
 #[derive(Debug, Clone)]
-pub struct TypeSection(pub Vec<FuncType>);
+pub(crate) struct TypeSection(pub Vec<FuncType>);
 impl TypeSection {
     pub fn get(&self, idx: TypeIdx) -> Option<&FuncType> {
         self.0.get(idx.0 as usize)
@@ -202,7 +214,7 @@ pub struct ImportSection(pub Vec<Import>);
 pub struct FunctionSection(pub Vec<TypeIdx>);
 
 #[derive(Debug, Clone)]
-pub struct ExportSection(pub Vec<Export>);
+pub(crate) struct ExportSection(pub Vec<Export>);
 impl ExportSection {
     pub fn find(&self, name: &str) -> Option<ExportDesc> {
         self.0.iter().find(|it| it.0 == name).map(|it| it.1)
@@ -267,18 +279,18 @@ impl From<RefType> for ValType {
     }
 }
 #[derive(Debug, Clone)]
-pub enum ElemMode {
+pub(crate) enum ElemMode {
     Passive,
     Active(TableIdx, Vec<ConstExpr>),
     Declarative,
 }
 #[derive(Debug, Clone)]
-pub enum ElemInit {
+pub(crate) enum ElemInit {
     FuncIdx(Vec<u32>),
     ConstExpr(Vec<Vec<ConstExpr>>),
 }
 #[derive(Debug, Clone)]
-pub struct Elem {
+pub(crate) struct Elem {
     pub kind: RefType,
     pub init: ElemInit,
     pub mode: ElemMode,
@@ -295,7 +307,7 @@ pub struct Data {
     pub init: Vec<u8>,
     pub mode: DataMode,
 }
-pub enum DataCountVerifier {
+pub(crate) enum DataCountVerifier {
     OnePass(u32),
     Lazy { max_data_idx: Option<u32> },
 }
@@ -305,38 +317,44 @@ pub struct DataSection(pub Vec<Data>);
 #[derive(Clone)]
 /// The parsed core module consumed by [`crate::instantiate`].
 ///
-/// It exposes the decoded sections for advanced embedders, but the usual flow
-/// is to receive it from [`crate::WasmParser::parse_module`].
+/// Its decoded sections are intentionally crate-private; Component Model adapters
+/// use the accessors in [`crate::component_support::common`].
 pub struct Module {
     /// Function signatures from the type section.
-    pub fts: TypeSection,
+    pub(crate) fts: TypeSection,
     /// Complete core function index space: imported function type indices first, then defined functions.
-    pub functions: Vec<TypeIdx>,
+    pub(crate) functions: Vec<TypeIdx>,
     /// Imported tables, memories, globals, and functions.
-    pub imports: ImportSection,
+    pub(crate) imports: ImportSection,
     /// Complete core memory index space: imported memory types first, then defined memories.
-    pub mems: Vec<MemType>,
+    pub(crate) mems: Vec<MemType>,
     /// Complete core global index space: imported global types first, then defined globals.
-    pub globals: Vec<GlobalType>,
+    pub(crate) globals: Vec<GlobalType>,
     /// Initializers for defined globals only, aligned with `globals[imported_global_len..]`.
     ///
     /// `imported_global_len` is the number of global imports in [`Self::imports`], so
     /// `global_init[i]` initializes `globals[imported_global_len + i]`.
-    pub global_init: Vec<ConstExpr>,
+    pub(crate) global_init: Vec<ConstExpr>,
     /// Export declarations indexed by name.
-    pub exs: ExportSection,
+    pub(crate) exs: ExportSection,
     /// Complete core table index space: imported table types first, then defined tables.
-    pub tables: Vec<TableType>,
+    pub(crate) tables: Vec<TableType>,
     /// Element segments for table initialization.
-    pub elems: ElementSection,
+    pub(crate) elems: ElementSection,
     /// Function bodies in definition order.
+    ///
+    /// This exposes [`crate::host_abi::CodeSection`] so default sync/async host
+    /// linking remains compatible with the documented embedding surface. Issue
+    /// #216 tracks the replacement for this raw AST carve-out.
     pub codes: CodeSection,
     /// Data segments for memory initialization.
-    pub data: DataSection,
+    pub(crate) data: DataSection,
     /// Optional function invoked automatically after instantiation.
-    pub start: Option<FuncIdx>,
+    pub(crate) start: Option<FuncIdx>,
     /// Producer-supplied names, when the module includes a `name` custom section.
-    pub name: Option<NameSubSection>,
+    // #202 retains parsed name metadata even though the runtime does not consume it yet.
+    #[allow(dead_code)]
+    pub(crate) name: Option<NameSubSection>,
 }
 /// A native synchronous host function and its core WebAssembly signature.
 pub struct HostFunctionDefinition {
@@ -394,7 +412,7 @@ pub struct Instance {
     pub tables: Vec<ObjectRef>,
 }
 #[derive(Debug, Clone)]
-pub struct Locals {
+pub(crate) struct Locals {
     pub n: u32,
     pub t: ValType,
 }
@@ -410,12 +428,18 @@ pub struct GlobalType(pub ValType, pub Mut);
 pub struct Global(pub GlobalType, pub Vec<ConstExpr>);
 #[derive(Clone)]
 pub struct Func {
-    pub locals: LocalsData,
+    pub(crate) locals: LocalsData,
+    // #202 retains decoded instructions for parser validation and optimizer tests.
+    #[allow(dead_code)]
     pub expr: Vec<Instr>,
+    // #202 retains instruction widths for parser validation and optimizer tests.
+    #[allow(dead_code)]
     pub op_lens: Vec<u16>,
     pub(crate) lowered: Arc<LoweredFunction>,
 }
 impl Func {
+    // #202 retains this parser-test helper outside the normal runtime path.
+    #[allow(dead_code)]
     pub fn local_size(&self) -> usize {
         self.locals.byte_size()
     }
@@ -463,22 +487,24 @@ impl BlockType {
     }
 }
 #[derive(Debug, Clone, Copy)]
-pub struct LoopParam {
+pub(crate) struct LoopParam {
     pub stack_top: u32,
     pub param_size: u32,
 }
 #[derive(Debug, Clone, Copy)]
-pub struct BlockReturn {
+pub(crate) struct BlockReturn {
     pub stack_top: u32,
     pub return_size: u32,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DirectCallTarget {
+pub(crate) struct DirectCallTarget {
     pub funcidx: u32,
     pub funcaddr: u32,
 }
 impl DirectCallTarget {
+    // #202 preserves the instruction-layout helper for future direct-call lowering.
+    #[allow(dead_code)]
     pub const fn from_funcidx(funcidx: u32) -> Self {
         Self {
             funcidx,
@@ -486,6 +512,8 @@ impl DirectCallTarget {
         }
     }
 
+    // #202 preserves the instruction-layout helper for future direct-call lowering.
+    #[allow(dead_code)]
     pub const fn with_funcaddr(self, funcaddr: ObjectRef) -> Self {
         Self {
             funcidx: self.funcidx,
@@ -493,6 +521,8 @@ impl DirectCallTarget {
         }
     }
 
+    // #202 preserves the instruction-layout helper for future direct-call lowering.
+    #[allow(dead_code)]
     pub const fn resolved_funcaddr(self) -> Option<ObjectRef> {
         if self.funcaddr == 0 {
             None
@@ -504,7 +534,7 @@ impl DirectCallTarget {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CallRecipeRef {
+pub(crate) struct CallRecipeRef {
     pub funcidx: u32,
     recipe_slot_plus_one: u32,
 }
@@ -758,6 +788,9 @@ pub union Operand {
     pub i32: i32,
     pub u32: u32,
     pub i64: i64,
+    // Retained as an eight-byte raw operand arm for unstable instruction
+    // construction even though the current lowering path reads `i64` instead.
+    #[allow(dead_code)]
     pub u64: u64,
     pub f32: f32,
     pub f64: f64,
@@ -766,23 +799,76 @@ pub union Operand {
     pub drop_size: u32,
     pub local_addr: u32,
     pub select: u32,
-    pub call_recipe_ref: CallRecipeRef,
-    pub direct_call_target: DirectCallTarget,
+    pub(crate) call_recipe_ref: CallRecipeRef,
+    // #202 retains the raw operand arm although current lowering uses call recipes.
+    #[allow(dead_code)]
+    pub(crate) direct_call_target: DirectCallTarget,
     pub memarg: MemArg,
-    pub block_return: BlockReturn,
-    pub loop_param: LoopParam,
+    pub(crate) block_return: BlockReturn,
+    pub(crate) loop_param: LoopParam,
     pub encoded: [u8; 8],
+    // Retained for the existing raw host-dispatch operand layout; normal
+    // lowering does not read this arm directly.
+    #[allow(dead_code)]
     pub start_host_function: HostFunction,
 }
 
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
 #[derive(Clone, Copy)]
 pub union Instr {
-    pub op: Op,
-    pub operand: Operand,
+    pub(crate) op: Op,
+    pub(crate) operand: Operand,
 }
 unsafe impl Send for Instr {}
 unsafe impl Sync for Instr {}
+
+// Keep the host-continuation record as the same union layout: only the field
+// visibility changes when raw instruction construction moves behind the
+// `unstable-internals` feature.
+const _: [(); std::mem::size_of::<Instr>()] = [(); std::mem::size_of::<Operand>()];
+const _: [(); std::mem::align_of::<Instr>()] = [(); std::mem::align_of::<Operand>()];
+
+impl Instr {
+    /// Constructs an instruction from an internal operand representation.
+    ///
+    /// Available only with the `unstable-internals` feature because operand
+    /// interpretation is coupled to the interpreter implementation.
+    #[cfg(feature = "unstable-internals")]
+    pub const fn from_operand(operand: Operand) -> Self {
+        Self { operand }
+    }
+
+    /// Constructs an instruction from an internal dispatch handler.
+    ///
+    /// Available only with the `unstable-internals` feature because dispatch
+    /// handlers are coupled to the interpreter implementation.
+    #[cfg(feature = "unstable-internals")]
+    pub const fn from_op(op: Op) -> Self {
+        Self { op }
+    }
+
+    /// Reads this instruction as an internal operand representation.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that this union currently contains an operand.
+    /// This is available only with the `unstable-internals` feature.
+    #[cfg(feature = "unstable-internals")]
+    pub const unsafe fn operand(&self) -> Operand {
+        unsafe { self.operand }
+    }
+
+    /// Reads this instruction as an internal dispatch handler.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that this union currently contains a dispatch
+    /// handler. This is available only with the `unstable-internals` feature.
+    #[cfg(feature = "unstable-internals")]
+    pub const unsafe fn op(&self) -> Op {
+        unsafe { self.op }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct MaterializedFunction {
@@ -1125,17 +1211,21 @@ pub enum WasmValue {
     ExternRef(u32),
 }
 #[derive(Debug, Clone, Copy)]
-pub enum ConstExpr {
+pub(crate) enum ConstExpr {
     I32(i32),
     I64(i64),
     F32(f32),
     F64(f64),
+    // #202: Decoded SIMD constants are intentionally dormant without the optional SIMD parser.
+    #[cfg_attr(not(feature = "simd"), allow(dead_code))]
     V128(u128),
     FuncRef(u32),
     RefNull(RefType),
     GlobalGet(u32),
 }
 impl ConstExpr {
+    // #202 keeps this decoded-constant helper for internal parser consumers.
+    #[allow(dead_code, clippy::wrong_self_convention)]
     pub fn to_offset(&self) -> u32 {
         match self {
             Self::I32(v) => *v as u32,
@@ -1164,7 +1254,7 @@ pub struct ExecuteContext<'a> {
     pub(crate) current_frame: CallFrameCache,
     pub store: &'a Store,
     pub gc: &'a mut StoreInner,
-    pub effect: EffectSupplier<'a>,
+    pub(crate) effect: EffectSupplier<'a>,
     pub cont: *const Instr,
     pub task_id: u32,
     /// Checkpoints available before the next cold-path metering grant.
@@ -1275,10 +1365,12 @@ impl ExecuteContext<'_> {
         Some(self.stack.frame_cache(&caller))
     }
 
-    pub fn func(&self) -> &FunctionInstanceData {
+    pub(crate) fn func(&self) -> &FunctionInstanceData {
         self.gc.get_func(self.current_frame.code_addr)
     }
-    pub fn func_by_addr(&self, addr: ObjectRef) -> &FunctionInstanceData {
+    // #202: This raw lookup is reachable only through the feature-gated metadata helpers.
+    #[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
+    pub(crate) fn func_by_addr(&self, addr: ObjectRef) -> &FunctionInstanceData {
         self.gc.get_func(addr)
     }
     pub(crate) fn code(&self) -> *const Instr {
@@ -1286,7 +1378,7 @@ impl ExecuteContext<'_> {
         debug_assert!(!code.is_null(), "wasm frame must have a code base");
         code
     }
-    pub fn module(&self) -> &ModuleInstance {
+    pub(crate) fn module(&self) -> &ModuleInstance {
         self.gc.get_module(self.instance().module_addr)
     }
     pub fn instance_addr(&self) -> ObjectRef {
@@ -1295,7 +1387,7 @@ impl ExecuteContext<'_> {
     pub fn instance_id(&self) -> u32 {
         self.instance().instance_id
     }
-    pub fn instance(&self) -> &InstanceData {
+    pub(crate) fn instance(&self) -> &InstanceData {
         self.gc.instance(self.current_frame.instance)
     }
     pub fn local_reference(&self) -> LocalReference {
@@ -1330,7 +1422,7 @@ impl ExecuteContext<'_> {
     /// # Safety
     /// - The active frame must have a default memory and its cached kind must be `Local`.
     /// - Callers must only use the returned id while `self.current_frame` remains the active frame.
-    pub unsafe fn default_local_memory_id_unchecked(&self) -> LocalMemoryId {
+    pub(crate) unsafe fn default_local_memory_id_unchecked(&self) -> LocalMemoryId {
         debug_assert_eq!(self.current_frame.memory0_kind, CachedMemoryKind::Local);
         unsafe { LocalMemoryId::from_raw_unchecked(self.current_frame.memory0_raw) }
     }
@@ -1340,7 +1432,7 @@ impl ExecuteContext<'_> {
     /// # Safety
     /// - The active frame must have a default memory and its cached kind must be `Shared`.
     /// - Callers must only use the returned id while `self.current_frame` remains the active frame.
-    pub unsafe fn default_shared_memory_id_unchecked(&self) -> SharedMemoryId {
+    pub(crate) unsafe fn default_shared_memory_id_unchecked(&self) -> SharedMemoryId {
         debug_assert_eq!(self.current_frame.memory0_kind, CachedMemoryKind::Shared);
         unsafe { SharedMemoryId::from_raw_unchecked(self.current_frame.memory0_raw) }
     }
@@ -1350,7 +1442,7 @@ impl ExecuteContext<'_> {
     /// # Safety
     /// - A caller frame must exist and its cached default memory kind must be `Local`.
     /// - Callers must only use the returned id while that caller frame remains valid.
-    pub unsafe fn caller_local_memory_id_unchecked(&self) -> LocalMemoryId {
+    pub(crate) unsafe fn caller_local_memory_id_unchecked(&self) -> LocalMemoryId {
         let frame = self
             .caller_frame_cache()
             .expect("caller frame cache required for caller local memory");
@@ -1363,7 +1455,9 @@ impl ExecuteContext<'_> {
     /// # Safety
     /// - A caller frame must exist and its cached default memory kind must be `Shared`.
     /// - Callers must only use the returned id while that caller frame remains valid.
-    pub unsafe fn caller_shared_memory_id_unchecked(&self) -> SharedMemoryId {
+    // #202 retains the shared-memory counterpart of the local-memory helper.
+    #[allow(dead_code)]
+    pub(crate) unsafe fn caller_shared_memory_id_unchecked(&self) -> SharedMemoryId {
         let frame = self
             .caller_frame_cache()
             .expect("caller frame cache required for caller shared memory");
@@ -1376,7 +1470,7 @@ impl ExecuteContext<'_> {
     /// # Safety
     /// - `memidx` must be in-bounds for the active instance memory list.
     /// - The memory at `memidx` must be local.
-    pub unsafe fn local_memory_id_at_unchecked(&self, memidx: u32) -> LocalMemoryId {
+    pub(crate) unsafe fn local_memory_id_at_unchecked(&self, memidx: u32) -> LocalMemoryId {
         let slot = unsafe { self.memory_slot_at(memidx).unwrap_unchecked() };
         debug_assert!(matches!(slot, InstanceMemorySlot::Local(_)));
         match slot {
@@ -1390,7 +1484,7 @@ impl ExecuteContext<'_> {
     /// # Safety
     /// - `memidx` must be in-bounds for the active instance memory list.
     /// - The memory at `memidx` must be shared.
-    pub unsafe fn shared_memory_id_at_unchecked(&self, memidx: u32) -> SharedMemoryId {
+    pub(crate) unsafe fn shared_memory_id_at_unchecked(&self, memidx: u32) -> SharedMemoryId {
         let slot = unsafe { self.memory_slot_at(memidx).unwrap_unchecked() };
         debug_assert!(matches!(slot, InstanceMemorySlot::Shared(_)));
         match slot {
@@ -1398,7 +1492,7 @@ impl ExecuteContext<'_> {
             _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
-    pub fn local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
+    pub(crate) fn local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
         match self.current_frame.memory0_kind {
             CachedMemoryKind::Local => Some(
                 self.gc
@@ -1535,7 +1629,7 @@ impl ExecuteContext<'_> {
             ),
         }
     }
-    pub fn caller_local_reference(&self) -> Option<LocalReference> {
+    pub(crate) fn caller_local_reference(&self) -> Option<LocalReference> {
         (self.local_reference.local_size != 0)
             .then(|| self.stack.previous_local_reference(&self.local_reference))
             .filter(|reference| reference.local_size != 0)
@@ -1543,7 +1637,7 @@ impl ExecuteContext<'_> {
     pub fn caller_memory_addr(&self) -> Option<MemoryHandle> {
         self.caller_frame_cache()?.memory0_handle()
     }
-    pub fn caller_local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
+    pub(crate) fn caller_local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
         let frame = self.caller_frame_cache()?;
         match frame.memory0_kind {
             CachedMemoryKind::Local => Some(
@@ -1622,13 +1716,11 @@ pub fn execute_elem_init_const_expr(
         _ => VMResult::Unlinkable,
     }
 }
-pub const fn word_size<T>() -> usize {
-    std::mem::size_of::<T>() / std::mem::size_of::<u32>()
-}
 #[derive(Debug)]
 pub(crate) struct LocalReassignTable(pub(crate) SmallVec<[(u32, ValType, u32); 8]>);
+#[doc(hidden)]
 #[derive(Default, Debug, Clone)]
-pub struct LocalsData {
+pub(crate) struct LocalsData {
     count_i32: u32,
     count_f32: u32,
     count_func_ref: u32,

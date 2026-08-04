@@ -19,7 +19,14 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- No unreleased entries yet.
+- Curated the default `telomere` embedder surface: module AST representation
+  (except the `host_abi::CodeSection` compatibility exception) and raw
+  `Op`/`Operand` are internal, while the default host-linking compatibility
+  carve-out is documented and frozen through `host_abi` plus the public-surface
+  snapshot. Auxiliary interpreter representations and helpers are opt-in through
+  `unstable-internals`; reduction and replacement of the default-public raw host
+  ABI remain tracked by #216. The documented JIT cache statistics surface stays
+  public with `jit` so the minimal-embedder JIT configuration remains stable.
 
 ### Fixed
 
