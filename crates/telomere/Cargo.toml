@@ -15,7 +15,6 @@ thiserror = "2.0.11"
 tracing = { version = "0.1.41", features = ["release_max_level_off"] }
 num-derive = "0.4.2"
 num-traits = "0.2.19"
-union-find.workspace = true
 telomere-macros.workspace = true
 futures = "0.3.31"
 tokio = { workspace = true, optional = true, default-features = false, features = ["sync", "time"] }

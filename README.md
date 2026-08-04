@@ -97,7 +97,7 @@ execution speed there is a separate, earlier local comparison in
 | `crates/telomere-component-wasi` | WASI 0.2.6 component host provider used by the CLI and tests. |
 | `crates/telomere-component-bindgen` | Proc macro that generates component bindings from WIT. |
 | `crates/telomere-jit-codegen` | Low-level executable memory and target code-emission helpers for the core JIT. |
-| `crates/telomere-macros`, `crates/union-find` | Internal support crates. |
+| `crates/telomere-macros` | Internal support crate. |
 | `docs/` | Architecture notes, audits, and design boundaries. |
 | `examples/` | Small runnable Wasm fixtures with `.wat` sources; see [examples/README.md](examples/README.md). |
 | `examples/minimal-embedder/` | Standalone core, Component Model, and WASI embedding ladder with no CLI dependency topology. |

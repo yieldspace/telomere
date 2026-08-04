@@ -45,7 +45,6 @@ members = [
     "crates/telomere-component-bindgen",
     "crates/telomere-component-wasi",
     "crates/telomere-macros",
-    "crates/union-find",
     "examples/minimal-embedder",
 ]
 
@@ -64,7 +63,6 @@ telomere = { path = "crates/telomere" }
 telomere-jit-codegen = { path = "crates/telomere-jit-codegen" }
 telomere-component = { path = "crates/telomere-component" }
 telomere-component-bindgen = { path = "crates/telomere-component-bindgen" }
-union-find = {path = "crates/union-find"}
 telomere-macros = { path = "crates/telomere-macros" }
 tokio = { version = "1.0", default-features = false }
 getrandom = "0.3.3"
