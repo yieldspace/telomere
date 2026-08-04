@@ -28,7 +28,6 @@ const LOOP_COVERAGE_SOURCES: &[&str] = &[
     "src/runtime/vm/simd.rs",
     "src/runtime/vm/superinstructions.rs",
     "src/runtime/vm/tables.rs",
-    "src/runtime/vm/traps.rs",
 ];
 
 // This is the pre-existing unsafe-doc surface. `superinstructions.rs` is included in
@@ -47,7 +46,6 @@ const VM_UNSAFE_DOC_SOURCES: &[&str] = &[
     "src/runtime/vm/refs.rs",
     "src/runtime/vm/simd.rs",
     "src/runtime/vm/tables.rs",
-    "src/runtime/vm/traps.rs",
 ];
 
 const PRIVATE_UNSAFE_DOC_SURFACE: &[&str] = &[

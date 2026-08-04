@@ -1079,8 +1079,6 @@ dependencies = [
  "futures",
  "libc",
  "libtest-mimic",
- "num-derive",
- "num-traits",
  "parking_lot",
  "proc-macro2",
  "quote",
@@ -1093,7 +1091,6 @@ dependencies = [
  "thiserror 2.0.11",
  "tokio",
  "tracing",
- "union-find",
  "wast",
  "wat",
  "wide",
@@ -1389,10 +1386,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "union-find"
-version = "0.1.0-alpha.1"
 
 [[package]]
 name = "utf8parse"
