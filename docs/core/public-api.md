@@ -96,13 +96,22 @@ completion marker, not a supported default driver capability.
 
 ## Public-surface snapshot
 
-crates/telomere/tests/public_surface.rs parses src/lib.rs, src/host_abi.rs,
-src/component_support.rs, and src/unstable_internals.rs with syn. It also
-parses the root-re-exported Module definition in src/common.rs solely to record
-the reviewed Module::codes field. It expands every explicit public use tree and
+crates/telomere/tests/public_surface.rs has two source passes. Its ordinary
+public-path pass parses the reviewed five-file closure with syn: src/lib.rs,
+src/host_abi.rs, src/component_support.rs, src/unstable_internals.rs, and the
+root-re-exported Module definition in src/common.rs solely to record the
+reviewed Module::codes field. It expands every explicit public use tree and
 public item into a telomere::... path, carries textual #[cfg(...)] predicates
 through nested public modules, sorts the result, and compares it byte-for-byte
 with the single committed crates/telomere/tests/public_surface.snapshot file.
+
+A separate macro-only pass scans all of src/ for #[macro_export] macros and
+records them at the telomere crate root: macro exports hoist there regardless of
+their containing module's visibility. It walks the module tree to preserve
+module cfg predicates, so a macro-bearing file that is not reachable from
+src/lib.rs fails loudly rather than escaping the snapshot. A macro export
+outside module scope also fails loudly instead of guessing the cfg inherited
+from an enclosing item.
 
 The test deliberately reads source rather than the active Cargo feature set, so
 default, no-default, and SIMD-only invocations all compare against the same
@@ -131,6 +140,7 @@ then verify the snapshot without the update environment variable:
       --test public_surface
     cargo test -p telomere --doc --release
     cargo test -p telomere --doc --release --no-default-features
+    cargo test --workspace --release
     cargo fmt --all -- --check
     git diff --check
 
