@@ -318,3 +318,28 @@ jobs:
 
       - name: Test release-size wast conformance
         run: cargo test -p telomere --profile release-size --test wast
+
+  feature-coverage:
+    name: Feature coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: feature-coverage
+
+      - name: Check telomere feature coverage
+        run: cargo check -p telomere --all-features --all-targets
+
+      - name: Check CLI feature coverage
+        run: cargo check --all-features --all-targets
