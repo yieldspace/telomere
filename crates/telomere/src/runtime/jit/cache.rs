@@ -70,7 +70,7 @@ impl StoreJitCache {
         &self,
         funcaddr: ObjectRef,
         body: &FunctionBody,
-        gc: &StoreInner,
+        runtime: &StoreInner,
         max_bytes: u32,
     ) -> VMResult<Arc<CompiledFunction>> {
         profile::count(Counter::CompileAttempt);
@@ -100,19 +100,19 @@ impl StoreJitCache {
         let FunctionBody::Wasm { code, op_lens, .. } = body else {
             return VMResult::Unimplemented;
         };
-        let bytes = match backend::emit_baseline_function(funcaddr, code, op_lens, gc) {
+        let bytes = match backend::emit_baseline_function(funcaddr, code, op_lens, runtime) {
             Ok(bytes) => bytes,
             Err(backend::EmitBaselineError::Verify) => {
                 profile::count(Counter::CompileRejectVerify);
                 trace_compile_reject("verify", 0, 0, max_bytes);
-                gc.mark_jit_rejected_func(funcaddr);
+                runtime.mark_jit_rejected_func(funcaddr);
                 self.mark_rejected(funcaddr);
                 return VMResult::Unimplemented;
             }
             Err(backend::EmitBaselineError::Emit) => {
                 profile::count(Counter::CompileRejectEmit);
                 trace_compile_reject("emit", 0, 0, max_bytes);
-                gc.mark_jit_rejected_func(funcaddr);
+                runtime.mark_jit_rejected_func(funcaddr);
                 self.mark_rejected(funcaddr);
                 return VMResult::Unimplemented;
             }
@@ -122,7 +122,7 @@ impl StoreJitCache {
             Err(_) => {
                 profile::count(Counter::CompileRejectAllocationLen);
                 trace_compile_reject("allocation_len", bytes.len(), 0, max_bytes);
-                gc.mark_jit_rejected_func(funcaddr);
+                runtime.mark_jit_rejected_func(funcaddr);
                 self.mark_rejected(funcaddr);
                 return VMResult::Unimplemented;
             }
@@ -130,7 +130,7 @@ impl StoreJitCache {
         if allocation_len > max_bytes {
             profile::count(Counter::CompileRejectTooLarge);
             trace_compile_reject("too_large", bytes.len(), allocation_len, max_bytes);
-            gc.mark_jit_rejected_func(funcaddr);
+            runtime.mark_jit_rejected_func(funcaddr);
             self.mark_rejected(funcaddr);
             return VMResult::Unimplemented;
         }
@@ -159,7 +159,7 @@ impl StoreJitCache {
             Err(()) => {
                 profile::count(Counter::CompileRejectFromBytes);
                 trace_compile_reject("from_bytes", bytes.len(), allocation_len, max_bytes);
-                gc.mark_jit_rejected_func(funcaddr);
+                runtime.mark_jit_rejected_func(funcaddr);
                 inner.disabled.insert(funcaddr);
                 return VMResult::Unimplemented;
             }

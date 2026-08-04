@@ -7372,12 +7372,12 @@ mod tests {
     fn test_context<'a>(
         stack: &'a mut Stack,
         store: &'a Store,
-        gc: &'a mut StoreInner,
+        runtime: &'a mut StoreInner,
         pending_effects: &'a mut u32,
         queue: &'a mut VecDeque<PendingOp>,
     ) -> ExecuteContext<'a> {
         let MemoryHandle::Local(memory_id) =
-            gc.alloc_local_memory(LocalMemoryObject::new(1, 1).expect("test local memory"))
+            runtime.alloc_local_memory(LocalMemoryObject::new(1, 1).expect("test local memory"))
         else {
             unreachable!("test local memory handle must be local");
         };
@@ -7389,7 +7389,7 @@ mod tests {
         let stack_memory_len = stack.jit_memory_len();
         let stack_top_ptr = stack.jit_top_ptr();
         let local_base_ptr = unsafe { stack.local_area_mut_ptr(&local_reference) };
-        let global_values_ptr = gc.jit_global_values_ptr();
+        let global_values_ptr = runtime.jit_global_values_ptr();
         ExecuteContext {
             stack,
             stack_memory_ptr,
@@ -7397,12 +7397,13 @@ mod tests {
             stack_top_ptr,
             local_reference,
             local_base_ptr,
-            default_local_memory_ptr: gc.local_memory_mut(memory_id).memory_mut() as *mut Memory,
+            default_local_memory_ptr: runtime.local_memory_mut(memory_id).memory_mut()
+                as *mut Memory,
             current_instance_globals_ptr: std::ptr::null(),
             global_values_ptr,
             current_frame: frame(CachedMemoryKind::Local, memory_id.raw()),
             store,
-            gc,
+            gc: runtime,
             effect: EffectSupplier::from_parts(1, pending_effects, queue),
             cont: std::ptr::null(),
             task_id: 1,
@@ -7427,7 +7428,7 @@ mod tests {
     #[test]
     fn load_start_helpers_match_offset_and_index_contracts() {
         let store = Store::new();
-        let mut gc = StoreInner::new();
+        let mut runtime = StoreInner::new();
         let mut pending_effects = 0;
         let mut effects = VecDeque::new();
         let mut stack = Stack::new(32);
@@ -7449,7 +7450,7 @@ mod tests {
         let mut ctx = test_context(
             &mut stack,
             &store,
-            &mut gc,
+            &mut runtime,
             &mut pending_effects,
             &mut effects,
         );
@@ -7467,7 +7468,7 @@ mod tests {
     #[test]
     fn load_start_fail_closes_memory_offset_overflow() {
         let store = Store::new();
-        let mut gc = StoreInner::new();
+        let mut runtime = StoreInner::new();
         let mut pending_effects = 0;
         let mut effects = VecDeque::new();
         let mut stack = Stack::new(16);
@@ -7484,7 +7485,7 @@ mod tests {
         let mut ctx = test_context(
             &mut stack,
             &store,
-            &mut gc,
+            &mut runtime,
             &mut pending_effects,
             &mut effects,
         );

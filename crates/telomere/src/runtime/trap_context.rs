@@ -63,7 +63,7 @@ pub(crate) struct TrapContext {
 #[cold]
 #[inline(never)]
 pub(crate) fn capture_trap_context(
-    gc: &StoreInner,
+    runtime: &StoreInner,
     stack: &Stack,
     local_reference: LocalReference,
     innermost_pc: Option<*const Instr>,
@@ -92,10 +92,10 @@ pub(crate) fn capture_trap_context(
             break;
         };
         let pc = match pending_return_pc {
-            Some(return_pc) => return_pc.resolve_optional(gc, stack, local_reference),
+            Some(return_pc) => return_pc.resolve_optional(runtime, stack, local_reference),
             None => innermost_pc,
         };
-        let (funcidx, kind) = match gc.try_get_func(record.code_addr) {
+        let (funcidx, kind) = match runtime.try_get_func(record.code_addr) {
             Some(function) => {
                 let kind = match &function.body {
                     FunctionBody::Wasm { .. } => TrapFrameKind::Wasm,
@@ -190,7 +190,7 @@ mod tests {
 
     fn take_context(store: &Store) -> Box<TrapContext> {
         store
-            .lock_gc()
+            .lock_runtime_or_panic()
             .take_last_trap()
             .expect("trapping guest call must publish a context")
     }
@@ -198,8 +198,8 @@ mod tests {
     fn assert_innermost_pc_in_range(context: &TrapContext, store: &Store) {
         let frame = context.frames.first().expect("trapping frame must exist");
         let index = frame.pc_index.expect("wasm trap must have a pc index");
-        let gc = store.lock_gc();
-        let function = gc
+        let runtime = store.lock_runtime_or_panic();
+        let function = runtime
             .try_get_func(frame.code_addr)
             .expect("frame must resolve to a function");
         assert!(
@@ -465,7 +465,7 @@ mod tests {
         let succeeded =
             crate::run_module_function(&instance, &store, "ok", &ResultValue::new(vec![])).await;
         assert!(matches!(succeeded, VMResult::Success(_)));
-        assert!(store.lock_gc().take_last_trap().is_none());
+        assert!(store.lock_runtime_or_panic().take_last_trap().is_none());
 
         let trapped =
             crate::run_module_function(&instance, &store, "trap", &ResultValue::new(vec![])).await;
@@ -474,7 +474,7 @@ mod tests {
             crate::run_module_function(&instance, &store, "missing", &ResultValue::new(vec![]))
                 .await;
         assert!(matches!(missing, VMResult::Unlinkable));
-        assert!(store.lock_gc().take_last_trap().is_none());
+        assert!(store.lock_runtime_or_panic().take_last_trap().is_none());
     }
 
     #[tokio::test]
