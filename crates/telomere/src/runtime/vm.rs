@@ -1,6 +1,3 @@
-#[macro_use]
-pub(crate) mod traps;
-
 macro_rules! vm_checkpoint {
     ($ctx:expr) => {{
         match $crate::runtime::vm::checkpoint($ctx) {
