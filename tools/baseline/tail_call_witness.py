@@ -94,7 +94,10 @@ ASSEMBLY = re.compile(r"^(?P<mnemonic>[A-Za-z][A-Za-z0-9_.]*)\s*(?P<operands>.*)
 HEX_BYTES = re.compile(r"^(?:(?:[0-9A-Fa-f]{2,8})\s+)+")
 ARM_REGISTER = re.compile(r"\b(x(?:[0-9]|[12][0-9]|30))\b", re.I)
 X86_REGISTER = re.compile(r"(%(?:r(?:[0-9]+|[a-z]{2,3})|e[a-z]{2}|[abcd]x|[sd]i|[sb]p))\b", re.I)
-ADDRESS_IN_OPERANDS = re.compile(r"(?:0x)?([0-9A-Fa-f]+)")
+# GNU objdump commonly annotates a branch target as ``1050 <return>``.  Require
+# numeric-token boundaries so hex-looking letters in that symbol annotation do
+# not displace the target when selecting the final numeric operand.
+ADDRESS_IN_OPERANDS = re.compile(r"(?<![0-9A-Za-z_])(?:0x)?([0-9A-Fa-f]+)(?![0-9A-Za-z_])")
 
 
 def _format_address(address: int) -> str:
@@ -363,7 +366,9 @@ def _has_recent_dispatch_load(
     The fixed window is intentional.  It excludes long-lived function-pointer
     registers (for example host callbacks in ``op_call``), while accepting the
     short epilogue between ``ldr x2, [tail_code]`` and ``br x2`` emitted by the
-    release compiler.
+    release compiler.  It is a candidate filter rather than conclusive proof:
+    a short-lived returning helper is distinguished later by its post-call
+    CFG path to a separately recognised tail branch.
     """
 
     lower = max(0, index - 12)
@@ -389,6 +394,38 @@ def _ret_reachable_after(
             return True
         pending.extend(successors.get(index, ()))
     return False
+
+
+def _tail_dispatch_reachable_after(
+    start: int,
+    tail_dispatch_indices: Set[int],
+    instructions: Sequence[Instruction],
+    successors: Mapping[int, Sequence[int]],
+) -> Optional[int]:
+    """Return a tail-dispatch index reachable after an indirect call.
+
+    A short-lived function pointer can look exactly like a dispatch pointer:
+    LLVM's JIT instrumentation emits ``ldr xN`` followed by ``blr xN`` before
+    resuming the handler and eventually performing the real ``br xM``
+    dispatch.  That ``blr`` must not be counted as an exit merely because the
+    loaded register resembles one.  The distinction is intentionally CFG
+    based rather than based on physical instruction order: starting at the
+    call's fallthrough, we require a separately recognised direct tail branch
+    to be reachable.  Without that evidence, the indirect call remains a
+    non-tail dispatch exit and fails the absolute contract.
+    """
+
+    pending: deque[int] = deque(successors.get(start, ()))
+    visited: Set[int] = set()
+    while pending:
+        index = pending.popleft()
+        if index in visited or index < 0 or index >= len(instructions):
+            continue
+        visited.add(index)
+        if index in tail_dispatch_indices:
+            return index
+        pending.extend(successors.get(index, ()))
+    return None
 
 
 def _is_panic_call(instruction: Instruction) -> bool:
@@ -429,6 +466,7 @@ def _analyse_probe(function: Optional[Function], probe: str, architecture: str) 
             "symbol": None,
             "status": "witness_unavailable",
             "dispatch_exits": [],
+            "excluded_dispatch_transfers": [],
             "excluded_blocks": [],
             "invalid_reason": "probe_symbol_not_found_or_ambiguous",
         }
@@ -438,13 +476,14 @@ def _analyse_probe(function: Optional[Function], probe: str, architecture: str) 
             "symbol": function.symbol,
             "status": "witness_unavailable",
             "dispatch_exits": [],
+            "excluded_dispatch_transfers": [],
             "excluded_blocks": [],
             "invalid_reason": "probe_has_no_instructions",
         }
 
     successors = _successor_indices(function.instructions, architecture)
     reachable = _reachable_indices(successors, len(function.instructions))
-    exits: List[Dict[str, Any]] = []
+    transfers: List[Dict[str, Any]] = []
     for index in sorted(reachable):
         instruction = function.instructions[index]
         transfer = (
@@ -458,8 +497,9 @@ def _analyse_probe(function: Optional[Function], probe: str, architecture: str) 
         if not _has_recent_dispatch_load(function.instructions, index, architecture, register):
             continue
         tail = mnemonic in {"br", "jmp", "jmpq"}
-        exits.append(
+        transfers.append(
             {
+                "index": index,
                 "address": instruction.address_text,
                 "kind": "tail_branch" if tail else "indirect_call",
                 "dispatch_register": register,
@@ -467,6 +507,46 @@ def _analyse_probe(function: Optional[Function], probe: str, architecture: str) 
                 "ret_reachable_after_transfer": _ret_reachable_after(
                     index, function.instructions, successors
                 ),
+            }
+        )
+
+    tail_dispatch_indices = {
+        transfer["index"] for transfer in transfers if transfer["kind"] == "tail_branch"
+    }
+    exits: List[Dict[str, Any]] = []
+    excluded_dispatch_transfers: List[Dict[str, Any]] = []
+    for transfer in transfers:
+        tail_index = (
+            _tail_dispatch_reachable_after(
+                transfer["index"],
+                tail_dispatch_indices,
+                function.instructions,
+                successors,
+            )
+            if transfer["kind"] == "indirect_call"
+            else None
+        )
+        if tail_index is not None:
+            tail_instruction = function.instructions[tail_index]
+            excluded_dispatch_transfers.append(
+                {
+                    "address": transfer["address"],
+                    "reason": "returning_indirect_helper_before_tail_dispatch",
+                    "instruction": transfer["instruction"],
+                    "dispatch_register": transfer["dispatch_register"],
+                    "tail_dispatch_address": tail_instruction.address_text,
+                    "tail_dispatch_instruction": tail_instruction.raw,
+                    "ret_reachable_after_transfer": transfer[
+                        "ret_reachable_after_transfer"
+                    ],
+                }
+            )
+            continue
+        exits.append(
+            {
+                key: value
+                for key, value in transfer.items()
+                if key != "index"
             }
         )
 
@@ -485,6 +565,7 @@ def _analyse_probe(function: Optional[Function], probe: str, architecture: str) 
         "symbol": function.symbol,
         "status": status,
         "dispatch_exits": exits,
+        "excluded_dispatch_transfers": excluded_dispatch_transfers,
         "excluded_blocks": exclusions,
         "invalid_reason": invalid_reason,
     }
@@ -553,6 +634,7 @@ def _unavailable_record(
             "symbol": None,
             "status": "witness_unavailable",
             "dispatch_exits": [],
+            "excluded_dispatch_transfers": [],
             "excluded_blocks": [],
             "invalid_reason": reason,
         }

@@ -1,5 +1,6 @@
-;; A linear i32 load/add/store workload.  The harness supplies the count; the
-;; published baseline uses 50,000,000 iterations for the #190 sensitivity probe.
+;; A linear i32 load/add/store workload. The harness supplies the count through
+;; the pinned manifest; `run` returns that exact count after every iteration
+;; has exercised the memory-access and branch shape.
 (module
   (memory 1)
 

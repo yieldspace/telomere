@@ -13,14 +13,14 @@
       }
     },
     {
-      "name": "loop-50m",
+      "name": "loop-linear",
       "layer": "L2",
       "kind": "wat",
-      "source": "tools/baseline/loop-50m.wat",
-      "source_sha256": "828af47b80b3b255df63ea05276b8d890962b31c3b5f892d01d166809e7d41a9",
-      "filename": "loop-50m.wasm",
+      "source": "tools/baseline/loop-linear.wat",
+      "source_sha256": "290e4abfc5086409b85fd21b3a6cc75feaf759b154e9d9d4f953ef5bae29a0cb",
+      "filename": "loop-linear.wasm",
       "export": "run",
-      "n": 50000000,
+      "n": 500000000,
       "validation": {
         "kind": "exact_stdout",
         "expected_stdout": "{n}\n"
@@ -34,7 +34,7 @@
       "source_sha256": "0b7b97cd1a9cbf4653318e9c46b87b013e2a73b84cdd4e8f9ba37372241752e7",
       "filename": "repeat-fib32.wasm",
       "export": "run",
-      "n": 4,
+      "n": 24,
       "validation": {
         "kind": "exact_stdout",
         "expected_stdout": "{n}\n"
@@ -48,7 +48,7 @@
       "source_sha256": "fe987f2df0091bb6f9382fd3350c553a34a909b890e7b635f76683e446f5049e",
       "filename": "f64-kernel.wasm",
       "export": "run",
-      "n": 50000000,
+      "n": 500000000,
       "validation": {
         "kind": "exact_stdout",
         "expected_stdout": "{n}\n"

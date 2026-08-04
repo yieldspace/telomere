@@ -70,6 +70,22 @@ class TailCallWitnessParserTests(unittest.TestCase):
                 all(exit_["kind"] == "tail_branch" for exit_ in probe["dispatch_exits"])
             )
 
+    def test_x86_64_returning_helper_before_tail_dispatch_is_excluded(self) -> None:
+        witness = witness_from_fixture(
+            "x86_64-returning-helper-before-tail-dispatch.s", "x86_64"
+        )
+        call_probe = next(probe for probe in witness["probes"] if probe["probe"] == "op_call")
+
+        self.assertTrue(witness["contract_passed"])
+        self.assertEqual([exit_["kind"] for exit_ in call_probe["dispatch_exits"]], ["tail_branch"])
+        self.assertEqual(len(call_probe["excluded_dispatch_transfers"]), 1)
+        helper = call_probe["excluded_dispatch_transfers"][0]
+        self.assertEqual(
+            helper["reason"], "returning_indirect_helper_before_tail_dispatch"
+        )
+        self.assertTrue(helper["ret_reachable_after_transfer"])
+        self.assertIn("jmpq", helper["tail_dispatch_instruction"])
+
     def test_call_and_ret_degradation_fails_the_absolute_contract(self) -> None:
         witness = witness_from_fixture("arm64-degraded-call-ret.s")
         call_probe = next(probe for probe in witness["probes"] if probe["probe"] == "op_call")
@@ -79,6 +95,27 @@ class TailCallWitnessParserTests(unittest.TestCase):
         self.assertEqual(call_probe["status"], "fail")
         self.assertEqual(call_probe["dispatch_exits"][0]["kind"], "indirect_call")
         self.assertTrue(call_probe["dispatch_exits"][0]["ret_reachable_after_transfer"])
+        self.assertEqual(call_probe["excluded_dispatch_transfers"], [])
+
+    def test_returning_helper_before_tail_dispatch_is_excluded_with_evidence(self) -> None:
+        witness = witness_from_fixture("arm64-returning-helper-before-tail-dispatch.s")
+
+        self.assertTrue(witness["contract_passed"])
+        self.assertEqual(witness["probe_coverage"], "4 of 4 probes verified")
+        for probe in witness["probes"]:
+            self.assertEqual(
+                [exit_["kind"] for exit_ in probe["dispatch_exits"]], ["tail_branch"]
+            )
+            self.assertEqual(len(probe["excluded_dispatch_transfers"]), 1)
+            helper = probe["excluded_dispatch_transfers"][0]
+            self.assertEqual(
+                helper["reason"], "returning_indirect_helper_before_tail_dispatch"
+            )
+            self.assertTrue(helper["ret_reachable_after_transfer"])
+            self.assertEqual(
+                helper["tail_dispatch_address"], probe["dispatch_exits"][0]["address"]
+            )
+            self.assertIn("br\tx2", helper["tail_dispatch_instruction"])
 
     def test_physical_tail_cold_panic_is_excluded_without_failing(self) -> None:
         witness = witness_from_fixture("arm64-cold-panic-at-physical-end.s")
@@ -108,6 +145,7 @@ class TailCallWitnessParserTests(unittest.TestCase):
             {exit_["kind"] for exit_ in branch_probe["dispatch_exits"]},
             {"tail_branch", "indirect_call"},
         )
+        self.assertEqual(branch_probe["excluded_dispatch_transfers"], [])
 
     def test_unknown_architecture_fails_closed(self) -> None:
         witness = witness_from_fixture("arm64-healthy.s", "riscv64")

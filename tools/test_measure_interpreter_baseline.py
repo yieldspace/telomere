@@ -119,7 +119,7 @@ class ManifestTests(unittest.TestCase):
         workloads = baseline.load_manifest(baseline.DEFAULT_MANIFEST)
         self.assertEqual(
             [workload["name"] for workload in workloads],
-            ["coremark", "loop-50m", "repeat-fib32", "f64-kernel"],
+            ["coremark", "loop-linear", "repeat-fib32", "f64-kernel"],
         )
         self.assertEqual(
             workloads[0]["sha256"],
@@ -128,10 +128,19 @@ class ManifestTests(unittest.TestCase):
         for workload in workloads[1:]:
             validation = workload["validation"]
             self.assertEqual(validation["expected_stdout"].format(n=7), "7\n")
+            self.assertEqual(workload["export"], "run")
             source = baseline.REPO_ROOT / workload["source"]
             self.assertEqual(
                 baseline.sha256_file(source), workload["source_sha256"]
             )
+        self.assertEqual(
+            {workload["name"]: workload["n"] for workload in workloads[1:]},
+            {
+                "loop-linear": 500_000_000,
+                "repeat-fib32": 24,
+                "f64-kernel": 500_000_000,
+            },
+        )
 
     def test_local_wat_workloads_compile_to_hashed_wasm(self):
         workloads = baseline.load_manifest(baseline.DEFAULT_MANIFEST)
@@ -166,7 +175,7 @@ class StatisticsContractTests(unittest.TestCase):
         items = baseline.physical_schedule_items(workload)
 
         self.assertEqual(len(items), len(baseline.ARM_CONFIGS) * 3)
-        self.assertEqual(items["opt-off@2n"], ("opt-off", 100000000))
+        self.assertEqual(items["opt-off@2n"], ("opt-off", 1_000_000_000))
         schedule = baseline.counterbalanced_schedule(list(items), rounds=2, seed=184)
         self.assertEqual(sorted(schedule[0]), sorted(items))
         self.assertEqual(sorted(schedule[1]), sorted(items))

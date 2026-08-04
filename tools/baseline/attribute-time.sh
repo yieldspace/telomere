@@ -3,9 +3,9 @@
 #
 # Examples:
 #   tools/baseline/attribute-time.sh --seconds 20 -- \
-#     tools/baseline/loop-50m.wasm run 50000000
+#     tools/baseline/loop-linear.wasm run 500000000
 #   tools/baseline/attribute-time.sh --no-build --binary /tmp/telomere-cli -- \
-#     tools/baseline/loop-50m.wasm run 50000000
+#     tools/baseline/loop-linear.wasm run 500000000
 #
 # The generated report intentionally calls the numbers flat *observations*, not
 # timings.  ``sample``/``perf`` are attribution-only inputs; baseline timing

@@ -112,7 +112,7 @@ intended roles are:
 | --- | --- | --- |
 | CoreMark | L1 | Mixed integer/state-machine/matrix workload; its validated `Iterations/Sec` is the metric. |
 | [`repeat-fib32.wat`](../../tools/baseline/repeat-fib32.wat) | L2 | Call-heavy fixed `fib(32)` repeated by `repeat_count`; only the repeat count is linear. Recursive `fib(n)` is not an L2 multiplier. |
-| [`loop-50m.wat`](../../tools/baseline/loop-50m.wat) | L2 | i32 load/add/store loop with branch and memory access; the #190 sensitivity shape. |
+| [`loop-linear.wat`](../../tools/baseline/loop-linear.wat) | L2 | i32 load/add/store loop with branch and memory access; the #190 sensitivity shape. |
 | Float/dense arithmetic workload | L2 | A non-WASI compute kernel, such as [`f64-kernel.wat`](../../tools/baseline/f64-kernel.wat), selected only with manifest source/hash evidence. |
 
 CoreMark is not evidence that a CoreMark-specific rewrite is useful. Sightglass
@@ -222,9 +222,14 @@ invalid if the required witness cannot establish its contract.
 
 Witness B requires every reachable non-error dispatch exit of every probe to be
 an indirect tail branch: `br x<N>` on arm64 or `jmp *%r<N>`/`jmpq *` on x86-64.
-A call/`blr`, or a following `ret`, fails. Cold panic/error blocks are recorded
-as excluded rather than mistaken for the dispatch edge. Unsupported
-architectures and unavailable tools produce `witness_unavailable`, not pass.
+A dispatch candidate that remains a call/`blr`, or has a following `ret`, fails.
+Cold panic/error blocks are recorded as excluded rather than mistaken for the
+dispatch edge. Unsupported architectures and unavailable tools produce
+`witness_unavailable`, not pass.
+Returning indirect helper calls (including JIT-feature builds) are excluded only
+when their post-call fallthrough CFG reaches a separately recognised tail
+dispatch; the JSON retains the helper instruction, tail edge, and exclusion
+reason.
 The record retains raw instructions and reports `probe_coverage: N of N probes
 verified`, never a whole-binary claim.
 
