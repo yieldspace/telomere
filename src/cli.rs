@@ -44,6 +44,9 @@ pub struct Cli {
 pub enum Command {
     /// Run a WASI 0.2 component that exports `wasi:cli/run@0.2.6`.
     Component(ComponentCommand),
+    /// Print the resolved measurement-only optimizer switch state as JSON.
+    #[cfg(feature = "measure-switches")]
+    MeasureSwitchesProbe,
 }
 
 #[derive(Args, Debug, Clone)]

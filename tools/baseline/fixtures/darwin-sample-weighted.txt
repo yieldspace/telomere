@@ -1,0 +1,6 @@
+Sampling process 4242 for 20 seconds with 1 millisecond of run time between samples
+Call graph:
+    40   telomere::runtime::vm::numeric::op_i32_and::h0123456789abcdef
+    15   telomere::runtime::vm::memory::op_i32_load_const_base::h0123456789abcdef
+     5   telomere::runtime::vm::call::op_call::h0123456789abcdef
+This op_i32_and spelling has no leading sample count and must be ignored.

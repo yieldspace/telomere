@@ -22,6 +22,7 @@ full = [
 jit = ["telomere/jit"]
 vm-profile = ["telomere/vm-profile"]
 vm-diagnostics = ["telomere/vm-diagnostics"]
+measure-switches = ["telomere/measure-switches"]
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
@@ -74,6 +75,11 @@ smallvec = "1.14.0"
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+[profile.release-profiling]
+inherits = "release"
+debug = 1
+strip = "none"
 
 [profile.release-size]
 inherits = "release"

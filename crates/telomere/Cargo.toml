@@ -54,6 +54,7 @@ simd = ["wide"]
 threads = ["dep:tokio"]
 vm-profile = []
 vm-diagnostics = []
+measure-switches = []
 jit = ["dep:telomere-jit-codegen"]
 full = [
     "simd",

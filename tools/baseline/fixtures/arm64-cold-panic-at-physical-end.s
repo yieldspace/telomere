@@ -1,0 +1,13 @@
+__ZN8telomere7runtime2vm7numeric10op_i32_and17h1111111111111111E:
+0000000100001000	ldr	x2, [x0], #0x8
+0000000100001004	br	x2
+0000000100001008	bl	__RNvNtNtCs6sq8b9ugfBC_4core5slice5index16slice_index_fail
+__ZN8telomere7runtime2vm17superinstructions19op_local_get4_br_if17h2222222222222222E:
+0000000100001010	ldr	x2, [x0], #0x8
+0000000100001014	br	x2
+__ZN8telomere7runtime2vm6memory22op_i32_load_const_base17h3333333333333333E:
+0000000100001020	ldr	x2, [x0], #0x8
+0000000100001024	br	x2
+__ZN8telomere7runtime2vm4call7op_call17h4444444444444444E:
+0000000100001030	ldr	x2, [x0], #0x8
+0000000100001034	br	x2

@@ -1,0 +1,1681 @@
+{
+  "coremark": {
+    "comparison_position_gaps": {
+      "default_aa": {
+        "absolute_max": 5,
+        "absolute_median": 2,
+        "signed_gaps": [
+          1,
+          -2,
+          -4,
+          -1,
+          3,
+          2,
+          4,
+          5,
+          -1,
+          1,
+          2,
+          -3,
+          -1,
+          2,
+          -3
+        ],
+        "signed_mean": 0.3333333333333333
+      },
+      "jit_feature_interpreter_tax": {
+        "absolute_max": 5,
+        "absolute_median": 2,
+        "signed_gaps": [
+          1,
+          -3,
+          -3,
+          -1,
+          -2,
+          5,
+          2,
+          1,
+          -5,
+          2,
+          4,
+          -1,
+          -1,
+          5,
+          -2
+        ],
+        "signed_mean": 0.13333333333333333
+      },
+      "measure_switches_control": {
+        "absolute_max": 5,
+        "absolute_median": 3,
+        "signed_gaps": [
+          4,
+          -1,
+          2,
+          5,
+          4,
+          -2,
+          3,
+          3,
+          2,
+          3,
+          -3,
+          -4,
+          -5,
+          -1,
+          3
+        ],
+        "signed_mean": 0.8666666666666667
+      },
+      "measure_switches_control_with_jit": {
+        "absolute_max": 6,
+        "absolute_median": 3,
+        "signed_gaps": [
+          6,
+          -5,
+          1,
+          3,
+          1,
+          2,
+          4,
+          2,
+          -4,
+          3,
+          5,
+          -3,
+          -4,
+          6,
+          3
+        ],
+        "signed_mean": 1.3333333333333333
+      },
+      "optimizer_pipeline_upper_bound": {
+        "absolute_max": 5,
+        "absolute_median": 2,
+        "signed_gaps": [
+          -1,
+          -2,
+          -5,
+          -2,
+          -5,
+          1,
+          -4,
+          -4,
+          1,
+          1,
+          1,
+          3,
+          2,
+          2,
+          -4
+        ],
+        "signed_mean": -1.0666666666666667
+      },
+      "optimizer_pipeline_upper_bound_with_jit": {
+        "absolute_max": 6,
+        "absolute_median": 2,
+        "signed_gaps": [
+          -3,
+          -1,
+          2,
+          -2,
+          -4,
+          -6,
+          -3,
+          -3,
+          1,
+          -6,
+          -2,
+          -1,
+          2,
+          -1,
+          1
+        ],
+        "signed_mean": -1.7333333333333334
+      }
+    },
+    "positions": {
+      "global_mean_position_range": [
+        2.1333333333333333,
+        3.8666666666666667
+      ],
+      "labels_with_unvisited_positions": [
+        "jit-opt-on",
+        "opt-on",
+        "jit-opt-off",
+        "default-b",
+        "default-a",
+        "jit"
+      ],
+      "mean_position_by_label": {
+        "default-a": 3.1333333333333333,
+        "default-b": 2.8,
+        "jit": 3.466666666666667,
+        "jit-opt-off": 3.8666666666666667,
+        "jit-opt-on": 2.1333333333333333,
+        "opt-off": 3.3333333333333335,
+        "opt-on": 2.2666666666666666
+      },
+      "position_count_max_by_label": {
+        "default-a": 5,
+        "default-b": 4,
+        "jit": 4,
+        "jit-opt-off": 5,
+        "jit-opt-on": 5,
+        "opt-off": 4,
+        "opt-on": 4
+      },
+      "position_count_min_by_label": {
+        "default-a": 0,
+        "default-b": 0,
+        "jit": 0,
+        "jit-opt-off": 0,
+        "jit-opt-on": 0,
+        "opt-off": 1,
+        "opt-on": 0
+      }
+    },
+    "rounds": 15,
+    "schedule": [
+      [
+        "jit-opt-on",
+        "opt-on",
+        "opt-off",
+        "jit-opt-off",
+        "default-b",
+        "default-a",
+        "jit"
+      ],
+      [
+        "jit",
+        "default-a",
+        "opt-on",
+        "default-b",
+        "opt-off",
+        "jit-opt-on",
+        "jit-opt-off"
+      ],
+      [
+        "opt-on",
+        "jit-opt-off",
+        "default-a",
+        "jit-opt-on",
+        "jit",
+        "opt-off",
+        "default-b"
+      ],
+      [
+        "opt-on",
+        "jit-opt-on",
+        "opt-off",
+        "jit-opt-off",
+        "jit",
+        "default-a",
+        "default-b"
+      ],
+      [
+        "opt-on",
+        "default-b",
+        "jit-opt-on",
+        "jit",
+        "default-a",
+        "opt-off",
+        "jit-opt-off"
+      ],
+      [
+        "jit-opt-on",
+        "default-b",
+        "jit",
+        "default-a",
+        "opt-off",
+        "opt-on",
+        "jit-opt-off"
+      ],
+      [
+        "jit-opt-on",
+        "default-b",
+        "opt-on",
+        "jit-opt-off",
+        "jit",
+        "default-a",
+        "opt-off"
+      ],
+      [
+        "default-b",
+        "jit-opt-on",
+        "opt-on",
+        "jit",
+        "jit-opt-off",
+        "default-a",
+        "opt-off"
+      ],
+      [
+        "opt-off",
+        "opt-on",
+        "jit",
+        "default-a",
+        "default-b",
+        "jit-opt-off",
+        "jit-opt-on"
+      ],
+      [
+        "jit-opt-on",
+        "opt-off",
+        "opt-on",
+        "jit",
+        "default-b",
+        "default-a",
+        "jit-opt-off"
+      ],
+      [
+        "default-b",
+        "jit-opt-on",
+        "default-a",
+        "jit-opt-off",
+        "opt-off",
+        "opt-on",
+        "jit"
+      ],
+      [
+        "default-a",
+        "opt-off",
+        "jit",
+        "default-b",
+        "opt-on",
+        "jit-opt-on",
+        "jit-opt-off"
+      ],
+      [
+        "default-a",
+        "default-b",
+        "jit",
+        "opt-off",
+        "jit-opt-off",
+        "opt-on",
+        "jit-opt-on"
+      ],
+      [
+        "jit-opt-on",
+        "jit-opt-off",
+        "default-b",
+        "opt-off",
+        "default-a",
+        "opt-on",
+        "jit"
+      ],
+      [
+        "opt-on",
+        "jit-opt-off",
+        "jit-opt-on",
+        "default-a",
+        "opt-off",
+        "jit",
+        "default-b"
+      ]
+    ],
+    "seed": 184
+  },
+  "l2_by_workload_seed": {
+    "f64_kernel": {
+      "mean_cumulative_work_units_before_label": {
+        "default-a@1n": 21.933333333333334,
+        "default-a@2n": 19.333333333333332,
+        "default-a@3n": 18.6,
+        "default-b@1n": 20.6,
+        "default-b@2n": 22.2,
+        "default-b@3n": 21.466666666666665,
+        "jit-opt-off@1n": 16,
+        "jit-opt-off@2n": 20.733333333333334,
+        "jit-opt-off@3n": 16.666666666666668,
+        "jit-opt-on@1n": 18.2,
+        "jit-opt-on@2n": 20.666666666666668,
+        "jit-opt-on@3n": 19.133333333333333,
+        "jit@1n": 12.933333333333334,
+        "jit@2n": 22.4,
+        "jit@3n": 23.466666666666665,
+        "opt-off@1n": 19.466666666666665,
+        "opt-off@2n": 15.933333333333334,
+        "opt-off@3n": 21.333333333333332,
+        "opt-on@1n": 14.466666666666667,
+        "opt-on@2n": 19.333333333333332,
+        "opt-on@3n": 22.066666666666666
+      },
+      "position_summary": {
+        "global_mean_position_range": [
+          6.333333333333333,
+          12.333333333333334
+        ],
+        "labels_with_unvisited_positions": [
+          "opt-on@2n",
+          "opt-on@1n",
+          "jit@1n",
+          "jit-opt-off@1n",
+          "jit@2n",
+          "default-b@3n",
+          "opt-off@2n",
+          "jit-opt-off@3n",
+          "jit-opt-on@1n",
+          "opt-off@1n",
+          "default-b@1n",
+          "jit-opt-off@2n",
+          "opt-on@3n",
+          "default-b@2n",
+          "default-a@2n",
+          "jit-opt-on@2n",
+          "default-a@3n",
+          "default-a@1n",
+          "jit-opt-on@3n",
+          "jit@3n",
+          "opt-off@3n"
+        ],
+        "mean_position_by_label": {
+          "default-a@1n": 11.2,
+          "default-a@2n": 10,
+          "default-a@3n": 10.066666666666666,
+          "default-b@1n": 10.266666666666667,
+          "default-b@2n": 11.6,
+          "default-b@3n": 11.133333333333333,
+          "jit-opt-off@1n": 8.066666666666666,
+          "jit-opt-off@2n": 10.6,
+          "jit-opt-off@3n": 8.933333333333334,
+          "jit-opt-on@1n": 9.266666666666667,
+          "jit-opt-on@2n": 10.533333333333333,
+          "jit-opt-on@3n": 10.133333333333333,
+          "jit@1n": 6.333333333333333,
+          "jit@2n": 11.4,
+          "jit@3n": 12.333333333333334,
+          "opt-off@1n": 9.866666666666667,
+          "opt-off@2n": 8.266666666666667,
+          "opt-off@3n": 11,
+          "opt-on@1n": 7.2,
+          "opt-on@2n": 10.133333333333333,
+          "opt-on@3n": 11.666666666666666
+        },
+        "position_count_max_by_label": {
+          "default-a@1n": 4,
+          "default-a@2n": 2,
+          "default-a@3n": 2,
+          "default-b@1n": 3,
+          "default-b@2n": 3,
+          "default-b@3n": 2,
+          "jit-opt-off@1n": 3,
+          "jit-opt-off@2n": 2,
+          "jit-opt-off@3n": 3,
+          "jit-opt-on@1n": 3,
+          "jit-opt-on@2n": 2,
+          "jit-opt-on@3n": 2,
+          "jit@1n": 4,
+          "jit@2n": 2,
+          "jit@3n": 2,
+          "opt-off@1n": 3,
+          "opt-off@2n": 2,
+          "opt-off@3n": 3,
+          "opt-on@1n": 3,
+          "opt-on@2n": 3,
+          "opt-on@3n": 2
+        },
+        "position_count_min_by_label": {
+          "default-a@1n": 0,
+          "default-a@2n": 0,
+          "default-a@3n": 0,
+          "default-b@1n": 0,
+          "default-b@2n": 0,
+          "default-b@3n": 0,
+          "jit-opt-off@1n": 0,
+          "jit-opt-off@2n": 0,
+          "jit-opt-off@3n": 0,
+          "jit-opt-on@1n": 0,
+          "jit-opt-on@2n": 0,
+          "jit-opt-on@3n": 0,
+          "jit@1n": 0,
+          "jit@2n": 0,
+          "jit@3n": 0,
+          "opt-off@1n": 0,
+          "opt-off@2n": 0,
+          "opt-off@3n": 0,
+          "opt-on@1n": 0,
+          "opt-on@2n": 0,
+          "opt-on@3n": 0
+        }
+      },
+      "range_cumulative_work_units_before_label": {
+        "maximum": 23.466666666666665,
+        "minimum": 12.933333333333334
+      },
+      "rounds": 15,
+      "seed": 3184,
+      "within_arm_scale_position_gaps": {
+        "default-a": {
+          "2n_to_3n": {
+            "absolute_max": 19,
+            "absolute_median": 5,
+            "signed_gaps": [
+              -2,
+              9,
+              -4,
+              2,
+              18,
+              -1,
+              6,
+              4,
+              -1,
+              11,
+              -19,
+              -5,
+              -8,
+              -14,
+              3
+            ],
+            "signed_mean": -0.06666666666666667
+          },
+          "n_to_2n": {
+            "absolute_max": 15,
+            "absolute_median": 6,
+            "signed_gaps": [
+              3,
+              5,
+              -10,
+              8,
+              1,
+              15,
+              -3,
+              -6,
+              -12,
+              -4,
+              6,
+              3,
+              7,
+              12,
+              -7
+            ],
+            "signed_mean": 1.2
+          }
+        },
+        "default-b": {
+          "2n_to_3n": {
+            "absolute_max": 19,
+            "absolute_median": 6,
+            "signed_gaps": [
+              8,
+              -1,
+              6,
+              -9,
+              19,
+              4,
+              1,
+              3,
+              -10,
+              13,
+              -7,
+              -6,
+              -9,
+              1,
+              -6
+            ],
+            "signed_mean": 0.4666666666666667
+          },
+          "n_to_2n": {
+            "absolute_max": 17,
+            "absolute_median": 5,
+            "signed_gaps": [
+              -3,
+              4,
+              -3,
+              6,
+              -10,
+              2,
+              -5,
+              -12,
+              1,
+              2,
+              -8,
+              3,
+              -6,
+              -8,
+              17
+            ],
+            "signed_mean": -1.3333333333333333
+          }
+        },
+        "jit": {
+          "2n_to_3n": {
+            "absolute_max": 19,
+            "absolute_median": 9,
+            "signed_gaps": [
+              -15,
+              9,
+              6,
+              -11,
+              6,
+              -11,
+              -1,
+              -19,
+              14,
+              15,
+              2,
+              -13,
+              5,
+              -4,
+              3
+            ],
+            "signed_mean": -0.9333333333333333
+          },
+          "n_to_2n": {
+            "absolute_max": 18,
+            "absolute_median": 9,
+            "signed_gaps": [
+              -2,
+              -12,
+              -7,
+              -9,
+              2,
+              6,
+              -18,
+              5,
+              1,
+              -16,
+              -4,
+              15,
+              -14,
+              -10,
+              -13
+            ],
+            "signed_mean": -5.066666666666666
+          }
+        },
+        "jit-opt-off": {
+          "2n_to_3n": {
+            "absolute_max": 14,
+            "absolute_median": 4,
+            "signed_gaps": [
+              4,
+              7,
+              -1,
+              4,
+              4,
+              -5,
+              5,
+              -4,
+              -3,
+              -4,
+              13,
+              -14,
+              10,
+              4,
+              5
+            ],
+            "signed_mean": 1.6666666666666667
+          },
+          "n_to_2n": {
+            "absolute_max": 15,
+            "absolute_median": 10,
+            "signed_gaps": [
+              -8,
+              -10,
+              10,
+              -12,
+              -14,
+              15,
+              -6,
+              15,
+              4,
+              -3,
+              -12,
+              6,
+              -13,
+              1,
+              -11
+            ],
+            "signed_mean": -2.533333333333333
+          }
+        },
+        "jit-opt-on": {
+          "2n_to_3n": {
+            "absolute_max": 15,
+            "absolute_median": 5,
+            "signed_gaps": [
+              -3,
+              -8,
+              12,
+              -2,
+              -4,
+              4,
+              13,
+              1,
+              -5,
+              -15,
+              11,
+              -8,
+              5,
+              1,
+              4
+            ],
+            "signed_mean": 0.4
+          },
+          "n_to_2n": {
+            "absolute_max": 18,
+            "absolute_median": 9,
+            "signed_gaps": [
+              -7,
+              17,
+              -6,
+              11,
+              -1,
+              4,
+              -15,
+              -10,
+              -1,
+              7,
+              -10,
+              18,
+              -13,
+              -4,
+              -9
+            ],
+            "signed_mean": -1.2666666666666666
+          }
+        },
+        "opt-off": {
+          "2n_to_3n": {
+            "absolute_max": 20,
+            "absolute_median": 6,
+            "signed_gaps": [
+              -14,
+              -15,
+              -2,
+              -8,
+              -6,
+              6,
+              -5,
+              15,
+              6,
+              2,
+              6,
+              8,
+              -20,
+              -9,
+              -5
+            ],
+            "signed_mean": -2.7333333333333334
+          },
+          "n_to_2n": {
+            "absolute_max": 17,
+            "absolute_median": 8,
+            "signed_gaps": [
+              3,
+              8,
+              -8,
+              -7,
+              7,
+              10,
+              -7,
+              -11,
+              -17,
+              7,
+              -1,
+              5,
+              11,
+              16,
+              8
+            ],
+            "signed_mean": 1.6
+          }
+        },
+        "opt-on": {
+          "2n_to_3n": {
+            "absolute_max": 16,
+            "absolute_median": 11,
+            "signed_gaps": [
+              -12,
+              -3,
+              8,
+              -15,
+              5,
+              16,
+              -6,
+              14,
+              3,
+              11,
+              -6,
+              -13,
+              2,
+              -12,
+              -15
+            ],
+            "signed_mean": -1.5333333333333334
+          },
+          "n_to_2n": {
+            "absolute_max": 17,
+            "absolute_median": 8,
+            "signed_gaps": [
+              1,
+              1,
+              -2,
+              12,
+              -6,
+              -12,
+              -5,
+              -6,
+              -17,
+              -8,
+              -10,
+              -5,
+              -11,
+              11,
+              13
+            ],
+            "signed_mean": -2.933333333333333
+          }
+        }
+      }
+    },
+    "loop_linear": {
+      "mean_cumulative_work_units_before_label": {
+        "default-a@1n": 18.8,
+        "default-a@2n": 20.8,
+        "default-a@3n": 20.666666666666668,
+        "default-b@1n": 18.933333333333334,
+        "default-b@2n": 19.466666666666665,
+        "default-b@3n": 17.933333333333334,
+        "jit-opt-off@1n": 22.4,
+        "jit-opt-off@2n": 20.333333333333332,
+        "jit-opt-off@3n": 19.6,
+        "jit-opt-on@1n": 21.733333333333334,
+        "jit-opt-on@2n": 21.333333333333332,
+        "jit-opt-on@3n": 21,
+        "jit@1n": 19.266666666666666,
+        "jit@2n": 24.866666666666667,
+        "jit@3n": 19.533333333333335,
+        "opt-off@1n": 14.133333333333333,
+        "opt-off@2n": 18.4,
+        "opt-off@3n": 18.2,
+        "opt-on@1n": 16.466666666666665,
+        "opt-on@2n": 17.533333333333335,
+        "opt-on@3n": 21.666666666666668
+      },
+      "position_summary": {
+        "global_mean_position_range": [
+          7.066666666666666,
+          12.666666666666666
+        ],
+        "labels_with_unvisited_positions": [
+          "default-a@3n",
+          "opt-off@2n",
+          "opt-off@1n",
+          "opt-on@1n",
+          "jit-opt-off@2n",
+          "jit@1n",
+          "opt-on@2n",
+          "default-b@1n",
+          "opt-on@3n",
+          "default-a@1n",
+          "opt-off@3n",
+          "default-b@2n",
+          "jit-opt-off@3n",
+          "jit-opt-on@1n",
+          "jit@2n",
+          "jit-opt-off@1n",
+          "jit-opt-on@3n",
+          "default-a@2n",
+          "jit@3n",
+          "default-b@3n",
+          "jit-opt-on@2n"
+        ],
+        "mean_position_by_label": {
+          "default-a@1n": 9.266666666666667,
+          "default-a@2n": 10.4,
+          "default-a@3n": 10.533333333333333,
+          "default-b@1n": 9.666666666666666,
+          "default-b@2n": 10.133333333333333,
+          "default-b@3n": 9.466666666666667,
+          "jit-opt-off@1n": 10.933333333333334,
+          "jit-opt-off@2n": 10.133333333333333,
+          "jit-opt-off@3n": 10.066666666666666,
+          "jit-opt-on@1n": 10.8,
+          "jit-opt-on@2n": 10.933333333333334,
+          "jit-opt-on@3n": 11,
+          "jit@1n": 9.533333333333333,
+          "jit@2n": 12.666666666666666,
+          "jit@3n": 10.333333333333334,
+          "opt-off@1n": 7.066666666666666,
+          "opt-off@2n": 9.133333333333333,
+          "opt-off@3n": 9.533333333333333,
+          "opt-on@1n": 8.066666666666666,
+          "opt-on@2n": 9,
+          "opt-on@3n": 11.333333333333334
+        },
+        "position_count_max_by_label": {
+          "default-a@1n": 2,
+          "default-a@2n": 2,
+          "default-a@3n": 3,
+          "default-b@1n": 2,
+          "default-b@2n": 2,
+          "default-b@3n": 3,
+          "jit-opt-off@1n": 3,
+          "jit-opt-off@2n": 3,
+          "jit-opt-off@3n": 4,
+          "jit-opt-on@1n": 2,
+          "jit-opt-on@2n": 2,
+          "jit-opt-on@3n": 2,
+          "jit@1n": 4,
+          "jit@2n": 3,
+          "jit@3n": 3,
+          "opt-off@1n": 3,
+          "opt-off@2n": 3,
+          "opt-off@3n": 3,
+          "opt-on@1n": 2,
+          "opt-on@2n": 2,
+          "opt-on@3n": 2
+        },
+        "position_count_min_by_label": {
+          "default-a@1n": 0,
+          "default-a@2n": 0,
+          "default-a@3n": 0,
+          "default-b@1n": 0,
+          "default-b@2n": 0,
+          "default-b@3n": 0,
+          "jit-opt-off@1n": 0,
+          "jit-opt-off@2n": 0,
+          "jit-opt-off@3n": 0,
+          "jit-opt-on@1n": 0,
+          "jit-opt-on@2n": 0,
+          "jit-opt-on@3n": 0,
+          "jit@1n": 0,
+          "jit@2n": 0,
+          "jit@3n": 0,
+          "opt-off@1n": 0,
+          "opt-off@2n": 0,
+          "opt-off@3n": 0,
+          "opt-on@1n": 0,
+          "opt-on@2n": 0,
+          "opt-on@3n": 0
+        }
+      },
+      "range_cumulative_work_units_before_label": {
+        "maximum": 24.866666666666667,
+        "minimum": 14.133333333333333
+      },
+      "rounds": 15,
+      "seed": 1184,
+      "within_arm_scale_position_gaps": {
+        "default-a": {
+          "2n_to_3n": {
+            "absolute_max": 19,
+            "absolute_median": 7,
+            "signed_gaps": [
+              17,
+              1,
+              6,
+              2,
+              -6,
+              -16,
+              -8,
+              8,
+              19,
+              -6,
+              -3,
+              -13,
+              -5,
+              -7,
+              9
+            ],
+            "signed_mean": -0.13333333333333333
+          },
+          "n_to_2n": {
+            "absolute_max": 14,
+            "absolute_median": 7,
+            "signed_gaps": [
+              -8,
+              -13,
+              -2,
+              -7,
+              -2,
+              10,
+              3,
+              -14,
+              -14,
+              7,
+              8,
+              6,
+              1,
+              10,
+              -2
+            ],
+            "signed_mean": -1.1333333333333333
+          }
+        },
+        "default-b": {
+          "2n_to_3n": {
+            "absolute_max": 17,
+            "absolute_median": 5,
+            "signed_gaps": [
+              -8,
+              7,
+              -17,
+              -4,
+              -5,
+              -1,
+              4,
+              4,
+              6,
+              9,
+              -3,
+              -1,
+              16,
+              5,
+              -2
+            ],
+            "signed_mean": 0.6666666666666666
+          },
+          "n_to_2n": {
+            "absolute_max": 10,
+            "absolute_median": 4,
+            "signed_gaps": [
+              -4,
+              -8,
+              -1,
+              7,
+              -1,
+              6,
+              -7,
+              -6,
+              -2,
+              5,
+              -3,
+              -4,
+              -2,
+              10,
+              3
+            ],
+            "signed_mean": -0.4666666666666667
+          }
+        },
+        "jit": {
+          "2n_to_3n": {
+            "absolute_max": 20,
+            "absolute_median": 8,
+            "signed_gaps": [
+              -4,
+              -14,
+              -5,
+              15,
+              10,
+              -1,
+              -8,
+              10,
+              -1,
+              -1,
+              -6,
+              14,
+              20,
+              14,
+              -8
+            ],
+            "signed_mean": 2.3333333333333335
+          },
+          "n_to_2n": {
+            "absolute_max": 18,
+            "absolute_median": 7,
+            "signed_gaps": [
+              -9,
+              13,
+              -3,
+              -5,
+              -18,
+              -15,
+              5,
+              -6,
+              -6,
+              14,
+              -7,
+              -1,
+              -4,
+              -15,
+              10
+            ],
+            "signed_mean": -3.1333333333333333
+          }
+        },
+        "jit-opt-off": {
+          "2n_to_3n": {
+            "absolute_max": 17,
+            "absolute_median": 6,
+            "signed_gaps": [
+              -8,
+              6,
+              9,
+              -1,
+              1,
+              -6,
+              -17,
+              2,
+              -3,
+              9,
+              -5,
+              8,
+              11,
+              -3,
+              -2
+            ],
+            "signed_mean": 0.06666666666666667
+          },
+          "n_to_2n": {
+            "absolute_max": 11,
+            "absolute_median": 5,
+            "signed_gaps": [
+              11,
+              1,
+              -5,
+              -11,
+              -7,
+              5,
+              8,
+              4,
+              1,
+              -5,
+              4,
+              -3,
+              -3,
+              5,
+              7
+            ],
+            "signed_mean": 0.8
+          }
+        },
+        "jit-opt-on": {
+          "2n_to_3n": {
+            "absolute_max": 18,
+            "absolute_median": 9,
+            "signed_gaps": [
+              4,
+              -8,
+              -15,
+              9,
+              -7,
+              -12,
+              -3,
+              6,
+              -11,
+              18,
+              7,
+              10,
+              -12,
+              -2,
+              15
+            ],
+            "signed_mean": -0.06666666666666667
+          },
+          "n_to_2n": {
+            "absolute_max": 17,
+            "absolute_median": 6,
+            "signed_gaps": [
+              -7,
+              -2,
+              17,
+              -2,
+              -6,
+              3,
+              6,
+              -13,
+              3,
+              -1,
+              6,
+              -12,
+              9,
+              -5,
+              2
+            ],
+            "signed_mean": -0.13333333333333333
+          }
+        },
+        "opt-off": {
+          "2n_to_3n": {
+            "absolute_max": 16,
+            "absolute_median": 7,
+            "signed_gaps": [
+              -9,
+              16,
+              2,
+              -3,
+              -12,
+              -10,
+              5,
+              -1,
+              7,
+              2,
+              7,
+              -12,
+              3,
+              7,
+              -8
+            ],
+            "signed_mean": -0.4
+          },
+          "n_to_2n": {
+            "absolute_max": 14,
+            "absolute_median": 6,
+            "signed_gaps": [
+              1,
+              -14,
+              -8,
+              -1,
+              13,
+              -3,
+              -4,
+              10,
+              -10,
+              5,
+              -2,
+              -7,
+              -6,
+              -8,
+              3
+            ],
+            "signed_mean": -2.066666666666667
+          }
+        },
+        "opt-on": {
+          "2n_to_3n": {
+            "absolute_max": 16,
+            "absolute_median": 8,
+            "signed_gaps": [
+              -2,
+              -6,
+              10,
+              -3,
+              -8,
+              4,
+              -3,
+              -11,
+              13,
+              -3,
+              -16,
+              -11,
+              9,
+              4,
+              -12
+            ],
+            "signed_mean": -2.3333333333333335
+          },
+          "n_to_2n": {
+            "absolute_max": 18,
+            "absolute_median": 10,
+            "signed_gaps": [
+              -3,
+              4,
+              -14,
+              -11,
+              15,
+              -18,
+              10,
+              -2,
+              -8,
+              6,
+              -1,
+              16,
+              -4,
+              -15,
+              11
+            ],
+            "signed_mean": -0.9333333333333333
+          }
+        }
+      }
+    },
+    "repeat_fib32": {
+      "mean_cumulative_work_units_before_label": {
+        "default-a@1n": 23.933333333333334,
+        "default-a@2n": 22.266666666666666,
+        "default-a@3n": 21.666666666666668,
+        "default-b@1n": 22.666666666666668,
+        "default-b@2n": 23.133333333333333,
+        "default-b@3n": 22.8,
+        "jit-opt-off@1n": 19.466666666666665,
+        "jit-opt-off@2n": 17.733333333333334,
+        "jit-opt-off@3n": 20.533333333333335,
+        "jit-opt-on@1n": 24.866666666666667,
+        "jit-opt-on@2n": 21.933333333333334,
+        "jit-opt-on@3n": 16.4,
+        "jit@1n": 26.6,
+        "jit@2n": 17.8,
+        "jit@3n": 13.8,
+        "opt-off@1n": 15.666666666666666,
+        "opt-off@2n": 20.933333333333334,
+        "opt-off@3n": 15.933333333333334,
+        "opt-on@1n": 21.666666666666668,
+        "opt-on@2n": 17.266666666666666,
+        "opt-on@3n": 20.866666666666667
+      },
+      "position_summary": {
+        "global_mean_position_range": [
+          7.066666666666666,
+          12.933333333333334
+        ],
+        "labels_with_unvisited_positions": [
+          "opt-on@3n",
+          "opt-on@2n",
+          "jit@3n",
+          "jit-opt-off@3n",
+          "jit-opt-on@1n",
+          "opt-on@1n",
+          "opt-off@1n",
+          "jit-opt-on@2n",
+          "jit-opt-off@2n",
+          "default-b@3n",
+          "jit@2n",
+          "jit-opt-on@3n",
+          "default-b@1n",
+          "default-b@2n",
+          "opt-off@2n",
+          "default-a@1n",
+          "jit-opt-off@1n",
+          "opt-off@3n",
+          "default-a@3n",
+          "jit@1n",
+          "default-a@2n"
+        ],
+        "mean_position_by_label": {
+          "default-a@1n": 11.466666666666667,
+          "default-a@2n": 11.2,
+          "default-a@3n": 11.133333333333333,
+          "default-b@1n": 10.866666666666667,
+          "default-b@2n": 11.4,
+          "default-b@3n": 11.266666666666667,
+          "jit-opt-off@1n": 9.333333333333334,
+          "jit-opt-off@2n": 8.6,
+          "jit-opt-off@3n": 10.333333333333334,
+          "jit-opt-on@1n": 11.933333333333334,
+          "jit-opt-on@2n": 10.6,
+          "jit-opt-on@3n": 8.2,
+          "jit@1n": 12.933333333333334,
+          "jit@2n": 8.666666666666666,
+          "jit@3n": 7.066666666666666,
+          "opt-off@1n": 7.466666666666667,
+          "opt-off@2n": 10.266666666666667,
+          "opt-off@3n": 8.133333333333333,
+          "opt-on@1n": 10.333333333333334,
+          "opt-on@2n": 8.533333333333333,
+          "opt-on@3n": 10.266666666666667
+        },
+        "position_count_max_by_label": {
+          "default-a@1n": 2,
+          "default-a@2n": 3,
+          "default-a@3n": 2,
+          "default-b@1n": 2,
+          "default-b@2n": 3,
+          "default-b@3n": 2,
+          "jit-opt-off@1n": 3,
+          "jit-opt-off@2n": 2,
+          "jit-opt-off@3n": 2,
+          "jit-opt-on@1n": 2,
+          "jit-opt-on@2n": 3,
+          "jit-opt-on@3n": 2,
+          "jit@1n": 4,
+          "jit@2n": 2,
+          "jit@3n": 3,
+          "opt-off@1n": 2,
+          "opt-off@2n": 3,
+          "opt-off@3n": 2,
+          "opt-on@1n": 2,
+          "opt-on@2n": 4,
+          "opt-on@3n": 3
+        },
+        "position_count_min_by_label": {
+          "default-a@1n": 0,
+          "default-a@2n": 0,
+          "default-a@3n": 0,
+          "default-b@1n": 0,
+          "default-b@2n": 0,
+          "default-b@3n": 0,
+          "jit-opt-off@1n": 0,
+          "jit-opt-off@2n": 0,
+          "jit-opt-off@3n": 0,
+          "jit-opt-on@1n": 0,
+          "jit-opt-on@2n": 0,
+          "jit-opt-on@3n": 0,
+          "jit@1n": 0,
+          "jit@2n": 0,
+          "jit@3n": 0,
+          "opt-off@1n": 0,
+          "opt-off@2n": 0,
+          "opt-off@3n": 0,
+          "opt-on@1n": 0,
+          "opt-on@2n": 0,
+          "opt-on@3n": 0
+        }
+      },
+      "range_cumulative_work_units_before_label": {
+        "maximum": 26.6,
+        "minimum": 13.8
+      },
+      "rounds": 15,
+      "seed": 2184,
+      "within_arm_scale_position_gaps": {
+        "default-a": {
+          "2n_to_3n": {
+            "absolute_max": 19,
+            "absolute_median": 5,
+            "signed_gaps": [
+              2,
+              5,
+              14,
+              -1,
+              5,
+              7,
+              5,
+              -11,
+              -2,
+              -3,
+              -1,
+              -14,
+              -19,
+              12,
+              2
+            ],
+            "signed_mean": 0.06666666666666667
+          },
+          "n_to_2n": {
+            "absolute_max": 16,
+            "absolute_median": 6,
+            "signed_gaps": [
+              -5,
+              -1,
+              -8,
+              13,
+              -3,
+              6,
+              -7,
+              1,
+              12,
+              -16,
+              7,
+              7,
+              5,
+              -2,
+              -5
+            ],
+            "signed_mean": 0.26666666666666666
+          }
+        },
+        "default-b": {
+          "2n_to_3n": {
+            "absolute_max": 20,
+            "absolute_median": 8,
+            "signed_gaps": [
+              4,
+              8,
+              -7,
+              10,
+              -20,
+              -4,
+              -13,
+              -4,
+              -10,
+              17,
+              -12,
+              7,
+              7,
+              -1,
+              20
+            ],
+            "signed_mean": 0.13333333333333333
+          },
+          "n_to_2n": {
+            "absolute_max": 16,
+            "absolute_median": 8,
+            "signed_gaps": [
+              -1,
+              -9,
+              16,
+              5,
+              10,
+              -7,
+              9,
+              5,
+              7,
+              -9,
+              -4,
+              -8,
+              -11,
+              5,
+              -16
+            ],
+            "signed_mean": -0.5333333333333333
+          }
+        },
+        "jit": {
+          "2n_to_3n": {
+            "absolute_max": 12,
+            "absolute_median": 6,
+            "signed_gaps": [
+              8,
+              2,
+              -6,
+              -10,
+              -2,
+              -4,
+              12,
+              -1,
+              11,
+              2,
+              4,
+              8,
+              7,
+              1,
+              -8
+            ],
+            "signed_mean": 1.6
+          },
+          "n_to_2n": {
+            "absolute_max": 12,
+            "absolute_median": 6,
+            "signed_gaps": [
+              9,
+              -4,
+              -4,
+              9,
+              3,
+              7,
+              6,
+              -4,
+              1,
+              8,
+              12,
+              -3,
+              11,
+              3,
+              10
+            ],
+            "signed_mean": 4.266666666666667
+          }
+        },
+        "jit-opt-off": {
+          "2n_to_3n": {
+            "absolute_max": 17,
+            "absolute_median": 5,
+            "signed_gaps": [
+              5,
+              -2,
+              -1,
+              -8,
+              -4,
+              -8,
+              4,
+              13,
+              4,
+              -2,
+              10,
+              -12,
+              -17,
+              1,
+              -9
+            ],
+            "signed_mean": -1.7333333333333334
+          },
+          "n_to_2n": {
+            "absolute_max": 15,
+            "absolute_median": 5,
+            "signed_gaps": [
+              8,
+              -6,
+              -11,
+              4,
+              -3,
+              1,
+              2,
+              -1,
+              -3,
+              7,
+              -6,
+              7,
+              2,
+              -5,
+              15
+            ],
+            "signed_mean": 0.7333333333333333
+          }
+        },
+        "jit-opt-on": {
+          "2n_to_3n": {
+            "absolute_max": 15,
+            "absolute_median": 6,
+            "signed_gaps": [
+              -4,
+              15,
+              -9,
+              14,
+              11,
+              3,
+              -2,
+              -3,
+              -2,
+              -2,
+              6,
+              -13,
+              9,
+              1,
+              12
+            ],
+            "signed_mean": 2.4
+          },
+          "n_to_2n": {
+            "absolute_max": 19,
+            "absolute_median": 4,
+            "signed_gaps": [
+              -3,
+              2,
+              7,
+              4,
+              -1,
+              -19,
+              3,
+              10,
+              12,
+              -2,
+              -7,
+              6,
+              2,
+              5,
+              1
+            ],
+            "signed_mean": 1.3333333333333333
+          }
+        },
+        "opt-off": {
+          "2n_to_3n": {
+            "absolute_max": 15,
+            "absolute_median": 4,
+            "signed_gaps": [
+              -3,
+              15,
+              6,
+              -2,
+              -4,
+              -12,
+              -2,
+              4,
+              4,
+              7,
+              -6,
+              12,
+              4,
+              3,
+              6
+            ],
+            "signed_mean": 2.1333333333333333
+          },
+          "n_to_2n": {
+            "absolute_max": 16,
+            "absolute_median": 7,
+            "signed_gaps": [
+              -8,
+              -7,
+              -9,
+              -4,
+              3,
+              11,
+              -8,
+              -7,
+              -16,
+              10,
+              -5,
+              -5,
+              3,
+              1,
+              -1
+            ],
+            "signed_mean": -2.8
+          }
+        },
+        "opt-on": {
+          "2n_to_3n": {
+            "absolute_max": 18,
+            "absolute_median": 7,
+            "signed_gaps": [
+              1,
+              5,
+              -13,
+              -2,
+              -12,
+              4,
+              -2,
+              -12,
+              7,
+              -13,
+              8,
+              -15,
+              4,
+              18,
+              -4
+            ],
+            "signed_mean": -1.7333333333333334
+          },
+          "n_to_2n": {
+            "absolute_max": 17,
+            "absolute_median": 9,
+            "signed_gaps": [
+              4,
+              -14,
+              14,
+              6,
+              10,
+              -1,
+              -12,
+              6,
+              -4,
+              11,
+              -6,
+              17,
+              4,
+              -17,
+              9
+            ],
+            "signed_mean": 1.8
+          }
+        }
+      }
+    }
+  },
+  "published_baseline_eligible": false,
+  "purpose": "finite_schedule_bias_audit"
+}
