@@ -11,20 +11,19 @@ mod sort;
 mod val;
 use crate::decoder::{ComponentParseError, ParseResult, Validator};
 use crate::ir::{ResourceId, TypeId};
-pub use component_decl::*;
 pub use core::*;
 pub use defval::*;
 pub use export_decl::*;
 pub use func::*;
 pub use generics_replace::GenericsReplaceDSL;
 pub use import_decl::*;
-pub use instance_decl::*;
 pub use primitive::*;
 pub use sort::{CoreSortType, SortType};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 pub use val::*;
 
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub enum Type {
     DefVal(DefValType),

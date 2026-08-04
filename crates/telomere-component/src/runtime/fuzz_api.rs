@@ -33,6 +33,7 @@ static ZERO_MEMORY: [u8; MEMORY_BYTES] = [0; MEMORY_BYTES];
 pub const MAX_FUZZ_MEMORY_IMAGE_BYTES: usize = 4 * 1024;
 
 /// The string-encoding option supplied to the canonical ABI adapter.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FuzzStringEncoding {
     None,
@@ -58,6 +59,7 @@ impl FuzzStringEncoding {
 /// bytes are retained by that worker, and later calls with different bytes fail
 /// rather than accidentally mixing type metadata across fuzz iterations.
 /// `flat_args` is forwarded unchanged to production canonical lifting.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct FuzzCanonicalLiftInput<'a> {
     pub fixture_bytes: &'a [u8],

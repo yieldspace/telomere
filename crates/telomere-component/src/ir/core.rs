@@ -14,6 +14,8 @@ impl std::fmt::Debug for CoreModule {
     }
 }
 
+// Canonical ABI operations use the `Canon` prefix in this internal IR.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug)]
 pub enum CoreFunc {
     CanonLower {

@@ -2,6 +2,7 @@ use crate::decoder::{ComponentParseError, ParseResult, Validator};
 use crate::ir::types::{LabelValType, PrimValType, TypeId, ValType};
 use crate::ir::Label;
 
+#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub enum DefValType {
     Primitive(PrimValType),

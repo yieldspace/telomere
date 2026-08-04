@@ -183,6 +183,7 @@ fn set_once(slot: &mut Option<LitStr>, value: LitStr, name: &str) -> Result<()> 
 
 pub fn expand(input: BindgenInput) -> Result<TokenStream2> {
     let runtime_path = resolve_crate_path("telomere-component");
+    let bindgen_path: syn::Path = parse_quote!(#runtime_path::__bindgen);
     let module_ident = input
         .module
         .as_ref()
@@ -196,6 +197,7 @@ pub fn expand(input: BindgenInput) -> Result<TokenStream2> {
         resolve,
         world_id,
         runtime_path,
+        bindgen_path,
         input.host_mode,
         input.adopt,
         input.strip_interface_version,
@@ -290,6 +292,7 @@ struct Generator {
     resolve: Resolve,
     world_id: WorldId,
     runtime_path: syn::Path,
+    bindgen_path: syn::Path,
     host_mode: HostMode,
     adopt_mappings: Vec<AdoptMapping>,
     strip_interface_version: bool,
@@ -311,6 +314,7 @@ impl Generator {
         resolve: Resolve,
         world_id: WorldId,
         runtime_path: syn::Path,
+        bindgen_path: syn::Path,
         host_mode: HostMode,
         adopt_mappings: Vec<AdoptMapping>,
         strip_interface_version: bool,
@@ -336,6 +340,7 @@ impl Generator {
             resolve,
             world_id,
             runtime_path,
+            bindgen_path,
             host_mode,
             adopt_mappings,
             strip_interface_version,
@@ -712,17 +717,18 @@ impl Generator {
 
     fn generate_internal_support(&self) -> TokenStream2 {
         let runtime = &self.runtime_path;
+        let bindgen = &self.bindgen_path;
         quote! {
             mod __internal {
                 pub fn resolve_defined_type<'a>(
-                    ty: &'a #runtime::ir::types::ValType,
+                    ty: &'a #bindgen::ValType,
                     program: &'a #runtime::ComponentProgram,
-                ) -> Result<&'a #runtime::ir::types::Type, #runtime::ComponentError> {
+                ) -> Result<&'a #bindgen::Type, #runtime::ComponentError> {
                     match ty {
-                        #runtime::ir::types::ValType::Type(type_id) => program
+                        #bindgen::ValType::Type(type_id) => program
                             .get_type(*type_id)
                             .ok_or_else(|| #runtime::ComponentError::Link("type id not found".to_owned())),
-                        #runtime::ir::types::ValType::Primitive(_) => Err(#runtime::ComponentError::Link(
+                        #bindgen::ValType::Primitive(_) => Err(#runtime::ComponentError::Link(
                             "expected defined component type".to_owned(),
                         )),
                     }
@@ -732,18 +738,18 @@ impl Generator {
                     value: T,
                 ) -> Result<Vec<#runtime::ComponentValue>, #runtime::ComponentError>
                 where
-                    T: #runtime::ComponentReturn,
+                    T: #bindgen::ComponentReturn,
                 {
-                    <T as #runtime::ComponentReturn>::into_component_results(value)
+                    <T as #bindgen::ComponentReturn>::into_component_results(value)
                 }
 
                 pub fn lift_function_result<T>(
                     results: Vec<#runtime::ComponentValue>,
                 ) -> Result<T, #runtime::ComponentError>
                 where
-                    T: #runtime::ComponentReturn,
+                    T: #bindgen::ComponentReturn,
                 {
-                    <T as #runtime::ComponentReturn>::from_component_results(results)
+                    <T as #bindgen::ComponentReturn>::from_component_results(results)
                 }
 
                 pub fn missing_host(name: &str) -> #runtime::ComponentError {
@@ -775,6 +781,7 @@ impl Generator {
 
     fn generate_named_type(&self, type_id: TypeId) -> Result<TokenStream2> {
         let runtime = &self.runtime_path;
+        let bindgen = &self.bindgen_path;
         let typedef = &self.resolve.types[type_id];
         let ident = self.type_unique_idents.get(&type_id).unwrap();
 
@@ -861,10 +868,10 @@ impl Generator {
                         }
 
                         fn matches_type(
-                            ty: &#runtime::ir::types::ValType,
+                            ty: &#bindgen::ValType,
                             program: &#runtime::ComponentProgram,
                         ) -> Result<(), #runtime::ComponentError> {
-                            let #runtime::ir::types::Type::DefVal(#runtime::ir::types::DefValType::Record(fields)) =
+                            let #bindgen::Type::DefVal(#bindgen::DefValType::Record(fields)) =
                                 super::__internal::resolve_defined_type(ty, program)?
                             else {
                                 return Err(#runtime::ComponentError::Link(
@@ -904,7 +911,7 @@ impl Generator {
                         }
 
                         fn matches_type(
-                            ty: &#runtime::ir::types::ValType,
+                            ty: &#bindgen::ValType,
                             program: &#runtime::ComponentProgram,
                         ) -> Result<(), #runtime::ComponentError> {
                             <Self as #runtime::LowerComponent>::matches_type(ty, program)
@@ -1029,10 +1036,10 @@ impl Generator {
                         }
 
                         fn matches_type(
-                            ty: &#runtime::ir::types::ValType,
+                            ty: &#bindgen::ValType,
                             program: &#runtime::ComponentProgram,
                         ) -> Result<(), #runtime::ComponentError> {
-                            let #runtime::ir::types::Type::DefVal(#runtime::ir::types::DefValType::Variant(cases)) =
+                            let #bindgen::Type::DefVal(#bindgen::DefValType::Variant(cases)) =
                                 super::__internal::resolve_defined_type(ty, program)?
                             else {
                                 return Err(#runtime::ComponentError::Link(
@@ -1068,7 +1075,7 @@ impl Generator {
                         }
 
                         fn matches_type(
-                            ty: &#runtime::ir::types::ValType,
+                            ty: &#bindgen::ValType,
                             program: &#runtime::ComponentProgram,
                         ) -> Result<(), #runtime::ComponentError> {
                             <Self as #runtime::LowerComponent>::matches_type(ty, program)
@@ -1133,10 +1140,10 @@ impl Generator {
                         }
 
                         fn matches_type(
-                            ty: &#runtime::ir::types::ValType,
+                            ty: &#bindgen::ValType,
                             program: &#runtime::ComponentProgram,
                         ) -> Result<(), #runtime::ComponentError> {
-                            let #runtime::ir::types::Type::DefVal(#runtime::ir::types::DefValType::Variant(cases)) =
+                            let #bindgen::Type::DefVal(#bindgen::DefValType::Variant(cases)) =
                                 super::__internal::resolve_defined_type(ty, program)?
                             else {
                                 return Err(#runtime::ComponentError::Link(
@@ -1172,7 +1179,7 @@ impl Generator {
                         }
 
                         fn matches_type(
-                            ty: &#runtime::ir::types::ValType,
+                            ty: &#bindgen::ValType,
                             program: &#runtime::ComponentProgram,
                         ) -> Result<(), #runtime::ComponentError> {
                             <Self as #runtime::LowerComponent>::matches_type(ty, program)
@@ -1253,10 +1260,10 @@ impl Generator {
                         }
 
                         fn matches_type(
-                            ty: &#runtime::ir::types::ValType,
+                            ty: &#bindgen::ValType,
                             program: &#runtime::ComponentProgram,
                         ) -> Result<(), #runtime::ComponentError> {
-                            let #runtime::ir::types::Type::DefVal(#runtime::ir::types::DefValType::Flags(labels)) =
+                            let #bindgen::Type::DefVal(#bindgen::DefValType::Flags(labels)) =
                                 super::__internal::resolve_defined_type(ty, program)?
                             else {
                                 return Err(#runtime::ComponentError::Link(
@@ -1300,7 +1307,7 @@ impl Generator {
                         }
 
                         fn matches_type(
-                            ty: &#runtime::ir::types::ValType,
+                            ty: &#bindgen::ValType,
                             program: &#runtime::ComponentProgram,
                         ) -> Result<(), #runtime::ComponentError> {
                             <Self as #runtime::LowerComponent>::matches_type(ty, program)
@@ -2434,6 +2441,90 @@ fn is_reserved(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{expand, BindgenInput};
+    use proc_macro2::{TokenStream as TokenStream2, TokenTree};
+    use std::collections::BTreeSet;
+
+    // Adding an item here extends the generated-code runtime contract.
+    const ALLOWED_RUNTIME_ITEMS: &[&str] = &[
+        "__bindgen",
+        "Borrow",
+        "ComponentError",
+        "ComponentExports",
+        "ComponentFuture",
+        "ComponentInstance",
+        "ComponentLinker",
+        "ComponentLinkerInstance",
+        "ComponentProgram",
+        "ComponentValue",
+        "LiftComponent",
+        "LowerComponent",
+        "Own",
+        "Store",
+    ];
+
+    fn runtime_root_items(tokens: &TokenStream2) -> BTreeSet<String> {
+        let mut items = BTreeSet::new();
+        collect_runtime_root_items(tokens.clone(), &mut items);
+        items
+    }
+
+    fn collect_runtime_root_items(tokens: TokenStream2, items: &mut BTreeSet<String>) {
+        let tokens = tokens.into_iter().collect::<Vec<_>>();
+        for token in &tokens {
+            if let TokenTree::Group(group) = token {
+                collect_runtime_root_items(group.stream(), items);
+            }
+        }
+
+        for index in 0..tokens.len() {
+            if let Some(item) = runtime_path_item(&tokens, index) {
+                items.insert(item);
+            }
+        }
+    }
+
+    fn runtime_path_item(tokens: &[TokenTree], index: usize) -> Option<String> {
+        if is_path_separator(tokens, index)
+            && is_path_boundary(tokens, index)
+            && path_ident(tokens, index + 2).as_deref() == Some("telomere_component")
+            && is_path_separator(tokens, index + 3)
+        {
+            return path_ident(tokens, index + 5);
+        }
+        if path_ident(tokens, index).as_deref() == Some("crate")
+            && is_path_separator(tokens, index + 1)
+        {
+            return path_ident(tokens, index + 3);
+        }
+        None
+    }
+
+    fn is_path_separator(tokens: &[TokenTree], index: usize) -> bool {
+        matches!(
+            (tokens.get(index), tokens.get(index + 1)),
+            (Some(TokenTree::Punct(first)), Some(TokenTree::Punct(second)))
+                if first.as_char() == ':' && second.as_char() == ':'
+        )
+    }
+
+    fn is_path_boundary(tokens: &[TokenTree], index: usize) -> bool {
+        match index
+            .checked_sub(1)
+            .and_then(|previous| tokens.get(previous))
+        {
+            Some(TokenTree::Ident(ident)) => {
+                matches!(ident.to_string().as_str(), "as" | "impl" | "mut" | "use")
+            }
+            _ => true,
+        }
+    }
+
+    fn path_ident(tokens: &[TokenTree], index: usize) -> Option<String> {
+        match tokens.get(index) {
+            Some(TokenTree::Ident(ident)) => Some(ident.to_string()),
+            _ => None,
+        }
+    }
 
     #[test]
     fn strip_interface_version_is_opt_in() {
@@ -2549,6 +2640,124 @@ mod tests {
         assert!(
             tokens.contains("allow (missing_docs)"),
             "generated binding module lost its missing_docs allow: {tokens}"
+        );
+    }
+
+    /// Expands representative inline WIT directly and recursively inspects its token paths.
+    ///
+    /// This intentionally avoids `cargo expand` and fixture compilation: the generator output
+    /// itself defines the supported runtime surface contract.
+    #[test]
+    fn generated_code_uses_only_the_supported_runtime_surface() {
+        let input: BindgenInput = syn::parse_str(
+            r##"{
+                inline: r#"
+                    package ex:runtime-surface;
+
+                    interface service {
+                        resource counter {
+                            constructor(seed: u32);
+                            clone: static func(other: borrow<counter>) -> counter;
+                            value: func() -> u32;
+                        }
+                    }
+
+                    interface api {
+                        ping: func() -> string;
+                    }
+
+                    world surface {
+                        record payload {
+                            value: u32,
+                        }
+
+                        variant issue {
+                            missing,
+                            malformed(string),
+                        }
+
+                        enum state {
+                            ready,
+                            done,
+                        }
+
+                        flags modes {
+                            fast,
+                            safe,
+                        }
+
+                        type maybe-payload = option<payload>;
+                        type checked-payload = result<payload, issue>;
+                        type payload-list = list<payload>;
+                        type payload-pair = tuple<state, modes>;
+
+                        import root-in: func(
+                            payload: payload,
+                            issue: issue,
+                            state: state,
+                            modes: modes,
+                            maybe: maybe-payload,
+                            checked: checked-payload,
+                            values: payload-list,
+                            pair: payload-pair,
+                        ) -> checked-payload;
+                        import telomere-component: func();
+                        import service;
+
+                        export root-out: func(
+                            payload: payload,
+                            maybe: maybe-payload,
+                            checked: checked-payload,
+                            values: payload-list,
+                            pair: payload-pair,
+                        ) -> payload;
+                        export api;
+                    }
+                "#,
+                world: "surface",
+                module: "bindings",
+                host_mode: "both"
+            }"##,
+        )
+        .expect("bindgen input should parse");
+
+        let tokens = expand(input).expect("bindgen should expand");
+        let rendered = tokens.to_string();
+        assert!(
+            rendered.contains("fn telomere_component"),
+            "the WIT identifier used to guard path-root detection was not emitted: {rendered}"
+        );
+        assert!(
+            rendered.contains("__bindgen :: ComponentReturn"),
+            "generated bindings must use the bindgen facade for ComponentReturn: {rendered}"
+        );
+        for forbidden in ["telomere_component :: ir :: types", "crate :: ir :: types"] {
+            assert!(
+                !rendered.contains(forbidden),
+                "generated bindings must not expose the runtime IR path `{forbidden}`: {rendered}"
+            );
+        }
+
+        let runtime_items = runtime_root_items(&tokens);
+        let unexpected = runtime_items
+            .iter()
+            .filter(|item| !ALLOWED_RUNTIME_ITEMS.contains(&item.as_str()))
+            .collect::<Vec<_>>();
+        assert!(
+            unexpected.is_empty(),
+            "generated bindings referenced unsupported runtime root items {unexpected:?}; all items: {runtime_items:?}"
+        );
+        let expected_runtime_items = ALLOWED_RUNTIME_ITEMS
+            .iter()
+            .map(|item| (*item).to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            runtime_items, expected_runtime_items,
+            "the representative WIT world must exercise every supported runtime root item"
+        );
+        assert!(
+            !runtime_items.contains("ir") && !runtime_items.contains("ComponentReturn"),
+            "internal runtime paths escaped the bindgen facade: {runtime_items:?}"
         );
     }
 }

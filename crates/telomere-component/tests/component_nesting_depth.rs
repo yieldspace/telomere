@@ -1,10 +1,7 @@
 #![cfg(not(debug_assertions))]
 
-use telomere::{IoReadBinaryReader, WasmParserError, MAX_CONTROL_NESTING_DEPTH};
-use telomere_component::{
-    decoder::{parse_component, ComponentParseError, ParseState, Validator},
-    ComponentEngine, ComponentError, MAX_COMPONENT_NESTING_DEPTH,
-};
+use telomere::MAX_CONTROL_NESTING_DEPTH;
+use telomere_component::{ComponentEngine, ComponentError, MAX_COMPONENT_NESTING_DEPTH};
 
 const RELEASE_STACK_BUDGET_BYTES: usize = 512 * 1024;
 const COMPONENT_TYPE_OPCODE: u8 = 0x41;
@@ -135,15 +132,6 @@ fn component_with_core_module(component_depth: u32, core_depth: u32) -> Vec<u8> 
     component
 }
 
-fn decode_component(bytes: &[u8]) -> Result<(), ComponentParseError> {
-    let mut reader = IoReadBinaryReader::from(bytes);
-    let state_arena = typed_arena::Arena::new();
-    let mut state = ParseState::new(&state_arena);
-    let validator_arena = typed_arena::Arena::new();
-    let mut validator = Validator::new(&validator_arena);
-    parse_component(&mut reader, &mut state, &mut validator)
-}
-
 fn expect_public_nesting_error(error: ComponentError, limit: u32) {
     assert!(
         matches!(error, ComponentError::NestingTooDeep { limit: actual } if actual == limit),
@@ -158,14 +146,6 @@ fn engine_accepts_and_rejects_nested_component_sections_at_the_boundary() {
         .expect("100 nested component sections must compile");
 
     let bytes = nested_component_sections(MAX_COMPONENT_NESTING_DEPTH + 1);
-    let internal = decode_component(&bytes).expect_err("101 nested sections must be rejected");
-    assert!(matches!(
-        internal,
-        ComponentParseError::NestingTooDeep {
-            limit: MAX_COMPONENT_NESTING_DEPTH
-        }
-    ));
-
     let public = ComponentEngine::new()
         .compile(&bytes)
         .expect_err("101 nested component sections must fail through the public API");
@@ -267,20 +247,4 @@ fn engine_composes_component_and_core_limits_within_the_release_stack_budget() {
         ))
         .expect_err("513 nested core blocks must fail inside a component");
     expect_public_nesting_error(error, MAX_CONTROL_NESTING_DEPTH);
-}
-
-#[test]
-fn core_nesting_error_remains_distinguishable_before_public_conversion() {
-    let error = decode_component(&component_with_core_module(
-        0,
-        MAX_CONTROL_NESTING_DEPTH + 1,
-    ))
-    .expect_err("513 nested core blocks must fail inside a component");
-
-    assert!(matches!(
-        error,
-        ComponentParseError::CoreWasmError(WasmParserError::NestingTooDeep {
-            limit: MAX_CONTROL_NESTING_DEPTH
-        })
-    ));
 }

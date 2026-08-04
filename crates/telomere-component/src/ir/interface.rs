@@ -14,6 +14,8 @@ pub enum ExternDesc {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+// Retained conservatively; no current crate path materializes placeholder types.
+#[allow(dead_code)]
 pub enum PlaceholderType {
     Import,
     Export,

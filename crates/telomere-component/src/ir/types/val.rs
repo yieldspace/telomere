@@ -4,6 +4,7 @@ use crate::ir::Label;
 
 use super::{DefValType, Type};
 
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValType {
     Type(TypeId),
