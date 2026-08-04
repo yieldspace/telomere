@@ -131,6 +131,11 @@ custom section's name-length LEB and `name` bytes as part of its payload, plus
 all name subsections; it excludes the section ID and the outer section-size
 LEB. `module bytes` is the complete input module length.
 
+`DWARF section bytes` is the sum of the full encoded bytes of every custom
+section whose custom-section name starts with `.debug_`. Each such total
+includes the section ID, outer section-size LEB, and payload. `module bytes
+excluding DWARF` is exactly `module bytes - DWARF section bytes`.
+
 ## Reproducing the logical-accounting probe
 
 Run the driver from the repository root:
@@ -181,16 +186,31 @@ the recorded driver run:
 retention totals remain `0`; the name-bearing `add` and WASI preview1 fixtures
 are reported beside it rather than substituted for it.
 
-| input | module bytes | name payload bytes | compact payload bytes | compact total logical bytes | compact allocations | Vec-as-is logical bytes | Vec allocations |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| fixture-benchmark | 115 | 0 | 0 | 0 | 0 | 0 | 0 |
-| fixture-add | 335 | 69 | 44 | 116 | 4 | 168 | 3 |
-| fixture-wasi-preview1-hello | 842 | 232 | 125 | 197 | 3 | 336 | 9 |
-| synthetic-f10 | 709 | 646 | 694 | 766 | 4 | 1168 | 12 |
-| synthetic-f100 | 6651 | 6227 | 6815 | 6887 | 4 | 10512 | 102 |
-| synthetic-f1000 | 66930 | 62902 | 68016 | 68088 | 4 | 96784 | 1002 |
-| synthetic-f5000 | 334930 | 314902 | 340016 | 340088 | 4 | 582160 | 5002 |
-| rust-2021-debug-hello | 1541690 | 5868 | 6256 | 6328 | 4 | 11912 | 75 |
+| input | module bytes | DWARF section bytes | module bytes excluding DWARF | name payload bytes | compact payload bytes | compact total logical bytes | compact allocations | Vec-as-is logical bytes | Vec allocations |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fixture-benchmark | 115 | 0 | 115 | 0 | 0 | 0 | 0 | 0 | 0 |
+| fixture-add | 335 | 0 | 335 | 69 | 44 | 116 | 4 | 168 | 3 |
+| fixture-wasi-preview1-hello | 842 | 0 | 842 | 232 | 125 | 197 | 3 | 336 | 9 |
+| synthetic-f10 | 709 | 0 | 709 | 646 | 694 | 766 | 4 | 1168 | 12 |
+| synthetic-f100 | 6651 | 0 | 6651 | 6227 | 6815 | 6887 | 4 | 10512 | 102 |
+| synthetic-f1000 | 66930 | 0 | 66930 | 62902 | 68016 | 68088 | 4 | 96784 | 1002 |
+| synthetic-f5000 | 334930 | 0 | 334930 | 314902 | 340016 | 340088 | 4 | 582160 | 5002 |
+| rust-2021-debug-hello | 1541690 | 1518593 | 23097 | 5868 | 6256 | 6328 | 4 | 11912 | 75 |
+
+The `rust-2021-debug-hello` row needs a separate interpretation. Of its
+`1,541,690` module bytes, `1,518,593` bytes (about `98.5%`) are DWARF custom
+sections outside this issue's scope. Against the `23,097` bytes remaining after
+that exclusion, the `5,868` name-payload bytes are about `25.4%`, comparable to
+the name-payload ratios in the `add` and WASI rows. Both percentages are derived
+from the probe artifact columns (`module bytes`, `DWARF section bytes`, and
+`module bytes excluding DWARF`), not from a performance measurement. The length
+of the temporary build path can change the full-module and DWARF byte counts;
+it does not change the name payload for this generated source.
+
+DWARF symbolication is an explicit non-goal. An embedder that strips DWARF
+before shipping should budget from the roughly `25%` post-strip comparison, not
+the roughly `0.4%` comparison against the full debug module. This is a retained
+byte-budget interpretation only; it does not add a performance number.
 
 ## Interpreter benchmark disposition
 

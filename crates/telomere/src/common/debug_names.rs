@@ -210,14 +210,25 @@ mod tests {
             })
     }
 
-    fn name_section_payload_bytes(bytes: &[u8]) -> Result<usize, String> {
+    struct CustomSectionMetrics {
+        name_section_payload_bytes: usize,
+        dwarf_section_bytes: usize,
+    }
+
+    fn custom_section_metrics(bytes: &[u8]) -> Result<CustomSectionMetrics, String> {
         if bytes.len() < 8 || &bytes[..4] != b"\0asm" {
             return Err("missing WebAssembly header".to_owned());
         }
 
         let mut cursor = 8;
-        let mut total = 0;
+        let mut metrics = CustomSectionMetrics {
+            name_section_payload_bytes: 0,
+            dwarf_section_bytes: 0,
+        };
         while cursor < bytes.len() {
+            // An encoded section starts before its id and ends after its
+            // payload, so this boundary includes the id and outer size LEB.
+            let section_start = cursor;
             let section_id = *bytes
                 .get(cursor)
                 .ok_or_else(|| "missing section id".to_owned())?;
@@ -232,18 +243,49 @@ mod tests {
                 .ok_or_else(|| "truncated section payload".to_owned())?;
 
             if section_id == 0 {
-                let mut name_cursor = 0;
-                let custom_name_length = read_u32_leb(payload, &mut name_cursor)? as usize;
-                let custom_name_end = name_cursor
-                    .checked_add(custom_name_length)
-                    .ok_or_else(|| "custom section name length overflow".to_owned())?;
-                if payload.get(name_cursor..custom_name_end) == Some(b"name".as_slice()) {
-                    total += section_size;
+                let custom_name = custom_section_name(payload)?;
+                if custom_name == "name" {
+                    metrics.name_section_payload_bytes = metrics
+                        .name_section_payload_bytes
+                        .checked_add(section_size)
+                        .ok_or_else(|| "name section payload total overflow".to_owned())?;
+                }
+                if custom_name.starts_with(".debug_") {
+                    // DWARF accounting deliberately includes the section id,
+                    // outer size LEB, and payload: [section_start, payload_end).
+                    let encoded_section_bytes = payload_end
+                        .checked_sub(section_start)
+                        .ok_or_else(|| "encoded section length underflow".to_owned())?;
+                    metrics.dwarf_section_bytes = metrics
+                        .dwarf_section_bytes
+                        .checked_add(encoded_section_bytes)
+                        .ok_or_else(|| "DWARF section total overflow".to_owned())?;
                 }
             }
             cursor = payload_end;
         }
-        Ok(total)
+        Ok(metrics)
+    }
+
+    fn custom_section_name(payload: &[u8]) -> Result<&str, String> {
+        let mut name_cursor = 0;
+        let custom_name_length = read_u32_leb(payload, &mut name_cursor)? as usize;
+        let custom_name_end = name_cursor
+            .checked_add(custom_name_length)
+            .ok_or_else(|| "custom section name length overflow".to_owned())?;
+        let custom_name_bytes = payload
+            .get(name_cursor..custom_name_end)
+            .ok_or_else(|| "truncated custom section name".to_owned())?;
+        std::str::from_utf8(custom_name_bytes)
+            .map_err(|_| "custom section name is not valid UTF-8".to_owned())
+    }
+
+    fn name_section_payload_bytes(bytes: &[u8]) -> Result<usize, String> {
+        Ok(custom_section_metrics(bytes)?.name_section_payload_bytes)
+    }
+
+    fn dwarf_section_bytes(bytes: &[u8]) -> Result<usize, String> {
+        Ok(custom_section_metrics(bytes)?.dwarf_section_bytes)
     }
 
     fn read_u32_leb(bytes: &[u8], cursor: &mut usize) -> Result<u32, String> {
@@ -266,6 +308,8 @@ mod tests {
 
     struct ProbeMetrics {
         module_bytes: usize,
+        dwarf_section_bytes: usize,
+        module_bytes_excluding_dwarf: usize,
         name_section_payload_bytes: usize,
         compact_retained_payload_bytes: usize,
         compact_retained_total_logical_bytes: usize,
@@ -276,14 +320,22 @@ mod tests {
 
     fn probe_metrics(path: &Path) -> Result<ProbeMetrics, String> {
         let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let name_payload_bytes = name_section_payload_bytes(&bytes)?;
+        let module_bytes = bytes.len();
+        let section_metrics = custom_section_metrics(&bytes)?;
+        let name_payload_bytes = section_metrics.name_section_payload_bytes;
+        let dwarf_bytes = section_metrics.dwarf_section_bytes;
+        let module_bytes_excluding_dwarf = module_bytes
+            .checked_sub(dwarf_bytes)
+            .ok_or_else(|| "DWARF section bytes exceed module bytes".to_owned())?;
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
         let module = WasmParser::new(&mut reader)
             .parse_module()
             .map_err(|error| format!("{}: {error}", path.display()))?;
         let Some(name_section) = module.name else {
             return Ok(ProbeMetrics {
-                module_bytes: bytes.len(),
+                module_bytes,
+                dwarf_section_bytes: dwarf_bytes,
+                module_bytes_excluding_dwarf,
                 name_section_payload_bytes: name_payload_bytes,
                 compact_retained_payload_bytes: 0,
                 compact_retained_total_logical_bytes: 0,
@@ -308,7 +360,9 @@ mod tests {
         let vec_allocations = vec_name_section_as_is_allocation_count(&name_section);
         let Some(compact) = ModuleNames::from_name_section(name_section) else {
             return Ok(ProbeMetrics {
-                module_bytes: bytes.len(),
+                module_bytes,
+                dwarf_section_bytes: dwarf_bytes,
+                module_bytes_excluding_dwarf,
                 name_section_payload_bytes: name_payload_bytes,
                 compact_retained_payload_bytes: 0,
                 compact_retained_total_logical_bytes: 0,
@@ -318,7 +372,9 @@ mod tests {
             });
         };
         Ok(ProbeMetrics {
-            module_bytes: bytes.len(),
+            module_bytes,
+            dwarf_section_bytes: dwarf_bytes,
+            module_bytes_excluding_dwarf,
             name_section_payload_bytes: name_payload_bytes,
             compact_retained_payload_bytes: compact.retained_payload_bytes(),
             compact_retained_total_logical_bytes: compact.retained_total_bytes(),
@@ -371,6 +427,38 @@ mod tests {
         Ok(())
     }
 
+    fn append_u32_leb(bytes: &mut Vec<u8>, mut value: usize) {
+        loop {
+            let mut byte = u8::try_from(value & 0x7f).expect("seven bits fit in u8");
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+    }
+
+    fn append_custom_section(
+        bytes: &mut Vec<u8>,
+        name: &[u8],
+        contents: &[u8],
+    ) -> (usize, usize, usize) {
+        let mut payload = Vec::new();
+        append_u32_leb(&mut payload, name.len());
+        payload.extend_from_slice(name);
+        payload.extend_from_slice(contents);
+
+        let section_start = bytes.len();
+        bytes.push(0);
+        append_u32_leb(bytes, payload.len());
+        let payload_bytes = payload.len();
+        bytes.extend_from_slice(&payload);
+        (section_start, payload_bytes, bytes.len())
+    }
+
     const MEASUREMENT_PROBE_STACK_BYTES: usize = 64 * 1024 * 1024;
 
     #[test]
@@ -393,6 +481,41 @@ mod tests {
             ]
         );
         assert!(parse_tsv_probe_manifest("fixture-add").is_err());
+    }
+
+    #[test]
+    fn dwarf_section_bytes_include_encoded_boundaries_and_reject_invalid_names() {
+        let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+        let (_, name_payload_bytes, _) = append_custom_section(&mut wasm, b"name", b"name-payload");
+        let (debug_info_start, _, debug_info_end) =
+            append_custom_section(&mut wasm, b".debug_info", b"info");
+        let (debug_line_start, debug_line_payload_bytes, debug_line_end) =
+            append_custom_section(&mut wasm, b".debug_line", &[0; 200]);
+        append_custom_section(&mut wasm, b"producers", b"not-dwarf");
+
+        let expected_dwarf_bytes =
+            (debug_info_end - debug_info_start) + (debug_line_end - debug_line_start);
+        assert!(debug_line_payload_bytes > 127);
+        assert_eq!(
+            debug_line_end - debug_line_start,
+            1 + 2 + debug_line_payload_bytes,
+            "the full encoded section includes id and a two-byte outer size LEB"
+        );
+        assert_eq!(
+            name_section_payload_bytes(&wasm).expect("valid custom section names"),
+            name_payload_bytes,
+            "name-section accounting remains payload-only"
+        );
+        assert_eq!(
+            dwarf_section_bytes(&wasm).expect("valid custom section names"),
+            expected_dwarf_bytes,
+            "DWARF accounting includes each full encoded custom section"
+        );
+
+        let mut invalid_name = b"\0asm\x01\0\0\0".to_vec();
+        append_custom_section(&mut invalid_name, &[0xff], b"");
+        assert!(custom_section_metrics(&invalid_name).is_err());
+        assert!(dwarf_section_bytes(&invalid_name).is_err());
     }
 
     #[test]
@@ -419,8 +542,10 @@ mod tests {
             let metrics = probe_metrics(&path)
                 .unwrap_or_else(|error| panic!("{label} ({}): {error}", path.display()));
             println!(
-                "DEBUG_NAME_RETENTION_JSON {{\"label\":\"{label}\",\"module_bytes\":{module_bytes},\"name_section_payload_bytes\":{name_section_payload_bytes},\"compact_retained_payload_bytes\":{compact_retained_payload_bytes},\"compact_retained_total_logical_bytes\":{compact_retained_total_logical_bytes},\"compact_live_allocations\":{compact_live_allocations},\"vec_as_is_logical_bytes\":{vec_as_is_logical_bytes},\"vec_live_allocations\":{vec_live_allocations},\"pointer_width_bits\":{pointer_width_bits},\"module_names_size_bytes\":{module_names_size_bytes},\"option_arc_slot_bytes\":{option_arc_slot_bytes},\"arc_header_assumption_bytes\":{arc_header_assumption_bytes}}}",
+                "DEBUG_NAME_RETENTION_JSON {{\"label\":\"{label}\",\"module_bytes\":{module_bytes},\"dwarf_section_bytes\":{dwarf_section_bytes},\"module_bytes_excluding_dwarf\":{module_bytes_excluding_dwarf},\"name_section_payload_bytes\":{name_section_payload_bytes},\"compact_retained_payload_bytes\":{compact_retained_payload_bytes},\"compact_retained_total_logical_bytes\":{compact_retained_total_logical_bytes},\"compact_live_allocations\":{compact_live_allocations},\"vec_as_is_logical_bytes\":{vec_as_is_logical_bytes},\"vec_live_allocations\":{vec_live_allocations},\"pointer_width_bits\":{pointer_width_bits},\"module_names_size_bytes\":{module_names_size_bytes},\"option_arc_slot_bytes\":{option_arc_slot_bytes},\"arc_header_assumption_bytes\":{arc_header_assumption_bytes}}}",
                 module_bytes = metrics.module_bytes,
+                dwarf_section_bytes = metrics.dwarf_section_bytes,
+                module_bytes_excluding_dwarf = metrics.module_bytes_excluding_dwarf,
                 name_section_payload_bytes = metrics.name_section_payload_bytes,
                 compact_retained_payload_bytes = metrics.compact_retained_payload_bytes,
                 compact_retained_total_logical_bytes = metrics.compact_retained_total_logical_bytes,

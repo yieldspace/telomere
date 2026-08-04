@@ -39,6 +39,8 @@ ACCOUNTING_FIELDS = (
 )
 RESULT_FIELDS = (
     "module_bytes",
+    "dwarf_section_bytes",
+    "module_bytes_excluding_dwarf",
     "name_section_payload_bytes",
     "compact_retained_payload_bytes",
     "compact_retained_total_logical_bytes",
@@ -216,16 +218,18 @@ def print_report(records: list[dict[str, Any]]) -> None:
     print("## Results")
     print()
     print(
-        "| input | module bytes | name payload bytes | compact payload bytes | "
-        "compact total logical bytes | compact allocations | Vec-as-is logical bytes | Vec allocations |"
+        "| input | module bytes | DWARF section bytes | module bytes excluding DWARF | "
+        "name payload bytes | compact payload bytes | compact total logical bytes | "
+        "compact allocations | Vec-as-is logical bytes | Vec allocations |"
     )
-    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for record in records:
         print(
-            "| {label} | {module_bytes} | {name_section_payload_bytes} | "
+            "| {label} | {module_bytes} | {dwarf_section_bytes} | "
+            "{module_bytes_excluding_dwarf} | {name_section_payload_bytes} | "
             "{compact_retained_payload_bytes} | {compact_retained_total_logical_bytes} | "
-            "{compact_live_allocations} | {vec_as_is_logical_bytes} | "
-            "{vec_live_allocations} |".format(**record)
+            "{compact_live_allocations} | {vec_as_is_logical_bytes} | {vec_live_allocations} |"
+            .format(**record)
         )
 
 
