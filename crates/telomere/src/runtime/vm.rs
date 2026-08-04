@@ -1467,15 +1467,28 @@ enum CallOutcome {
     Pending,
 }
 
-// Rebase baseline af3e2d9 retains the one-byte `VMResult<()>` layout measured at 0743f16.
-// Keeping the compact tag prevents an accidental payload from turning ordinary VM errors into an
-// aggregate return value.
-const _: () = assert!(std::mem::size_of::<VMResult<()>>() <= 1);
-// Rebase baseline af3e2d9 retains the 16-byte `VMResult<CallOutcome>` layout measured at
-// 0743f16. On the supported direct-threaded targets that preserves the register return used by
-// the tail jump; growing it changes the ABI to an indirect result and reintroduces a call/return
-// epilogue.
-const _: () = assert!(std::mem::size_of::<VMResult<CallOutcome>>() <= 16);
+// Rust return-ABI byte budget for a call-dispatch result that stays in a register pair.
+// Raising this multiplier is not a fix for a failing assertion below.
+const REGISTER_PAIR_RESULT_BYTES: usize = 2 * std::mem::size_of::<*const Instr>();
+
+// `VMResult` returns on the direct-threaded interpreter dispatch path. While adding a
+// payload-carrying variant during yieldspace/telomere#127 / PR #176, the interpreter was observed
+// to become up to 35% slower; this is a historical observation, not a current measurement. On
+// arm64, changing a direct-threaded tail dispatch from a register-pair return to an indirect
+// `sret` return degrades `br x2` into `blr x8` plus `ret`.
+//
+// Do not raise these bounds to accommodate a payload. Put it in an `ExecuteContext` side channel
+// or a boxed/out-of-line context instead. This size guard is an ABI-classification proxy: passing
+// it is not a sufficient condition for ABI safety. The codegen gate belongs to #148, and the
+// `VMResult` redesign belongs to #143; see also yieldspace/telomere#178.
+const _: () = assert!(
+    std::mem::size_of::<VMResult<()>>() <= 1,
+    "VMResult<()> must stay a scalar return; yieldspace/telomere#127 observed an up-to-35% regression; do not raise this bound (yieldspace/telomere#178)",
+);
+const _: () = assert!(
+    std::mem::size_of::<VMResult<CallOutcome>>() <= REGISTER_PAIR_RESULT_BYTES,
+    "VMResult<CallOutcome> must fit a register-pair return; yieldspace/telomere#127 observed an up-to-35% regression; do not raise this bound (yieldspace/telomere#178)",
+);
 
 /// Telomere runtime helper `call_code`.
 ///

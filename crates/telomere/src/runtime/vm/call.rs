@@ -509,6 +509,16 @@ enum NumericTransitionCallOutcome {
     Pending,
 }
 
+// This is not a scalar-ABI boundary. It is an intentionally stricter one-byte tag-only budget,
+// aligned with its sibling `VMResult<()>` on the same hot dispatch path so a payload is detected
+// early. Do not raise this bound; move a payload to an `ExecuteContext` side channel or an
+// out-of-line context instead. See the canonical dispatch ABI explanation in `runtime/vm.rs`
+// (#178).
+const _: () = assert!(
+    std::mem::size_of::<VMResult<NumericTransitionCallOutcome>>() <= 1,
+    "VMResult<NumericTransitionCallOutcome> must stay within its intentional one-byte tag-only budget; yieldspace/telomere#127 observed an up-to-35% regression; do not raise this bound; move payloads to an ExecuteContext side channel or out-of-line context (yieldspace/telomere#178)",
+);
+
 #[inline(always)]
 unsafe fn call_target_starts_with_numeric_transition(recipe: CallDispatchCache) -> bool {
     let CallDispatchTarget::Wasm { .. } = recipe.target else {
