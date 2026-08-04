@@ -1920,19 +1920,24 @@ mod tests {
     #[test]
     fn execute_elem_init_const_expr_fail_closes_numeric_const() {
         let store = Store::new();
-        let mut gc = store.lock_gc();
-        let result =
-            execute_elem_init_const_expr(&mut gc, &[], &[], &[ConstExpr::I32(7)], RefType::FuncRef);
+        let mut runtime = store.lock_runtime_or_panic();
+        let result = execute_elem_init_const_expr(
+            &mut runtime,
+            &[],
+            &[],
+            &[ConstExpr::I32(7)],
+            RefType::FuncRef,
+        );
         assert!(matches!(result, VMResult::Unlinkable));
     }
 
     #[test]
     fn execute_elem_init_const_expr_fail_closes_non_ref_global_get() {
         let store = Store::new();
-        let mut gc = store.lock_gc();
-        let global = gc.new_global_data8(42);
+        let mut runtime = store.lock_runtime_or_panic();
+        let global = runtime.new_global_data8(42);
         let result = execute_elem_init_const_expr(
-            &mut gc,
+            &mut runtime,
             &[global],
             &[],
             &[ConstExpr::GlobalGet(0)],

@@ -242,10 +242,10 @@ impl<'a> Scheduler<'a> {
                 };
                 let push_result = vm_result_to_unit(push_result);
                 let trap = if push_result.is_err() {
-                    let gc = self.store.lock_gc();
+                    let runtime = self.store.lock_runtime_or_panic();
                     let task = self.tasks.get(task_index).unwrap();
                     Some(capture_trap_context(
-                        &gc,
+                        &runtime,
                         &task.stack,
                         task.local_reference,
                         None,
@@ -288,10 +288,10 @@ impl<'a> Scheduler<'a> {
             }
             CompletionPayload::HostCall { result } => match result {
                 VMResult::Success(fp) => {
-                    let gc = self.store.lock_gc();
+                    let runtime = self.store.lock_runtime_or_panic();
                     let fp = {
                         let task = self.tasks.get_mut(task_index).unwrap();
-                        StablePc::from_raw_in_frame(&gc, &task.stack, task.local_reference, fp)
+                        StablePc::from_raw_in_frame(&runtime, &task.stack, task.local_reference, fp)
                     };
                     let mut complete_result = None;
                     {
@@ -319,10 +319,10 @@ impl<'a> Scheduler<'a> {
                 other => {
                     let result = vm_result_to_unit(other);
                     let trap = {
-                        let gc = self.store.lock_gc();
+                        let runtime = self.store.lock_runtime_or_panic();
                         let task = self.tasks.get(task_index).unwrap();
                         capture_trap_context(
-                            &gc,
+                            &runtime,
                             &task.stack,
                             task.local_reference,
                             None,
@@ -357,7 +357,7 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    fn run_ready_tasks_with_gc(&mut self, gc: &mut StoreInner) {
+    fn run_ready_tasks_with_runtime(&mut self, runtime: &mut StoreInner) {
         while self.ready_count != 0 {
             let task = self.tasks.pop_front().unwrap();
             if task.ready_flag == ReadyFlag::NonReady {
@@ -373,7 +373,7 @@ impl<'a> Scheduler<'a> {
                 mut pending_effects,
                 ..
             } = task;
-            let fp = pc.resolve(gc, &stack, local_reference);
+            let fp = pc.resolve(runtime, &stack, local_reference);
             let (res, cont, local_reference) = {
                 let current_frame = if local_reference.local_size as usize
                     >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
@@ -389,22 +389,22 @@ impl<'a> Scheduler<'a> {
                 let current_instance_globals_ptr = if current_frame.code_addr.is_null() {
                     std::ptr::null()
                 } else {
-                    gc.jit_instance_global_addrs_ptr(current_frame.instance)
+                    runtime.jit_instance_global_addrs_ptr(current_frame.instance)
                 };
-                let global_values_ptr = gc.jit_global_values_ptr();
+                let global_values_ptr = runtime.jit_global_values_ptr();
                 let default_local_memory_ptr = match current_frame.memory0_kind {
-                    CachedMemoryKind::Local => {
-                        gc.local_memory_mut(unsafe {
+                    CachedMemoryKind::Local => runtime
+                        .local_memory_mut(unsafe {
                             crate::common::store::LocalMemoryId::from_raw_unchecked(
                                 current_frame.memory0_raw,
                             )
                         })
-                        .memory_mut() as *mut crate::common::Memory
-                    }
+                        .memory_mut()
+                        as *mut crate::common::Memory,
                     CachedMemoryKind::None | CachedMemoryKind::Shared => std::ptr::null_mut(),
                 };
                 let mut ec = ExecuteContext {
-                    gc,
+                    gc: runtime,
                     stack_memory_ptr,
                     stack_memory_len,
                     stack_top_ptr,
@@ -444,7 +444,7 @@ impl<'a> Scheduler<'a> {
                     if !cont.is_null() {
                         self.tasks.push_back(Task {
                             local_reference,
-                            fp: StablePc::from_raw_in_frame(gc, &stack, local_reference, cont),
+                            fp: StablePc::from_raw_in_frame(runtime, &stack, local_reference, cont),
                             ready_flag: if pending_effects == 0 {
                                 ReadyFlag::Ready
                             } else {
@@ -480,7 +480,7 @@ impl<'a> Scheduler<'a> {
                 }
                 other => {
                     let trap = capture_trap_context(
-                        gc,
+                        runtime,
                         &stack,
                         local_reference,
                         Some(cont),
@@ -513,8 +513,8 @@ impl<'a> Scheduler<'a> {
     pub async fn run_with_driver<D: ExecutionDriver>(&mut self, driver: &mut D) {
         while !self.tasks.is_empty() {
             {
-                let mut gc = self.store.lock_gc();
-                self.run_ready_tasks_with_gc(&mut gc);
+                let mut runtime = self.store.lock_runtime_or_panic();
+                self.run_ready_tasks_with_runtime(&mut runtime);
             }
             if self.tasks.is_empty() {
                 break;
@@ -535,9 +535,9 @@ impl<'a> Scheduler<'a> {
         self.run_with_driver(&mut driver).await;
     }
 
-    pub fn run_sync_with_gc(&mut self, gc: &mut StoreInner) -> Result<(), SyncRunError> {
+    pub fn run_sync_with_runtime(&mut self, runtime: &mut StoreInner) -> Result<(), SyncRunError> {
         while !self.tasks.is_empty() {
-            self.run_ready_tasks_with_gc(gc);
+            self.run_ready_tasks_with_runtime(runtime);
             if self.tasks.is_empty() {
                 break;
             }

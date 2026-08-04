@@ -49,10 +49,10 @@ pub(crate) fn emit_baseline_function(
     funcaddr: ObjectRef,
     code: &[Instr],
     op_lens: &[u16],
-    gc: &StoreInner,
+    runtime: &StoreInner,
     plan: &BaselinePlan,
 ) -> Result<Vec<u8>, ()> {
-    let mut emitter = Emitter::new(funcaddr, code, op_lens, gc, plan);
+    let mut emitter = Emitter::new(funcaddr, code, op_lens, runtime, plan);
     emitter.emit()?;
     emitter.finish()
 }
@@ -144,7 +144,7 @@ struct Emitter<'a> {
     funcaddr: ObjectRef,
     wasm: &'a [Instr],
     plan: &'a BaselinePlan,
-    gc: &'a StoreInner,
+    runtime: &'a StoreInner,
     masm: A64BaselineMasm,
     labels: Vec<Option<usize>>,
     fixups: Vec<Fixup>,
@@ -170,14 +170,14 @@ impl<'a> Emitter<'a> {
         funcaddr: ObjectRef,
         wasm: &'a [Instr],
         _op_lens: &[u16],
-        gc: &'a StoreInner,
+        runtime: &'a StoreInner,
         plan: &'a BaselinePlan,
     ) -> Self {
         Self {
             funcaddr,
             wasm,
             plan,
-            gc,
+            runtime,
             masm: A64BaselineMasm::with_capacity(wasm.len() * 16),
             labels: vec![None; wasm.len().saturating_add(1)],
             fixups: Vec::new(),
@@ -2826,28 +2826,28 @@ impl<'a> Emitter<'a> {
                 .call_recipe_ref
         };
         if let Some(recipe_slot) = recipe_ref.resolved_recipe_slot() {
-            if let Some(recipe) = self.gc.call_recipe(recipe_slot) {
+            if let Some(recipe) = self.runtime.call_recipe(recipe_slot) {
                 return Ok(recipe);
             }
         }
-        let current_func = self.gc.get_func(self.funcaddr);
+        let current_func = self.runtime.get_func(self.funcaddr);
         let callee = self
-            .gc
+            .runtime
             .instance(current_func.instance)
             .funcs
             .as_slice()
             .get(recipe_ref.funcidx as usize)
             .copied()
             .ok_or(())?;
-        Ok(self.gc.build_call_recipe(callee))
+        Ok(self.runtime.build_call_recipe(callee))
     }
 
     fn indirect_call_layout_for_operand(&self, operand_index: usize) -> Result<(u32, u32), ()> {
         let expected_typeidx =
             unsafe { self.wasm.get(operand_index + 1).ok_or(())?.operand.u32 as usize };
-        let current_func = self.gc.get_func(self.funcaddr);
-        let instance = self.gc.instance(current_func.instance);
-        let module = self.gc.get_module(instance.module_addr);
+        let current_func = self.runtime.get_func(self.funcaddr);
+        let instance = self.runtime.instance(current_func.instance);
+        let module = self.runtime.get_module(instance.module_addr);
         let functype = module.function_types.get(expected_typeidx).ok_or(())?;
         let param_size = functype.0.iter().map(|ty| ty.stack_size().u32()).sum();
         let return_size = functype.1.iter().map(|ty| ty.stack_size().u32()).sum();

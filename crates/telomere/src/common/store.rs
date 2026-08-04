@@ -2049,6 +2049,25 @@ impl Store {
         })
     }
 
+    /// Runs `f` while holding the store's execution lease.
+    ///
+    /// Reuses the active runtime during same-thread reentry; otherwise acquires
+    /// the runtime lock before running `f`.
+    pub(crate) fn with_active_or_locked_runtime<T>(
+        &self,
+        f: impl FnOnce(&mut StoreInner) -> T,
+    ) -> T {
+        let mut f = Some(f);
+        if let Some(result) = self.with_active_runtime(|runtime| {
+            f.take().expect("with_active_runtime calls f at most once")(runtime)
+        }) {
+            return result;
+        }
+
+        let mut runtime = self.lock_runtime_or_panic();
+        f.take().expect("the active-runtime branch did not run")(&mut runtime)
+    }
+
     pub(crate) fn current_reentry_token(&self) -> Option<StoreReentryToken> {
         self.has_active_runtime_on_current_thread()
             .then(|| StoreReentryToken {
@@ -2087,18 +2106,10 @@ impl Store {
         Arc::downgrade(&self.identity)
     }
 
-    pub(crate) fn lock_gc(&self) -> StoreRuntimeGuard<'_> {
-        self.lock_runtime("lock_gc")
-            .expect("lock_gc is unsupported while the same store execution is already active on this thread")
-    }
-
-    pub(crate) fn with_gc<T>(&self, f: impl FnOnce(&mut StoreInner) -> T) -> T {
-        let mut runtime = self.lock_gc();
-        f(&mut runtime)
-    }
-
-    pub(crate) fn has_active_gc_on_current_thread(&self) -> bool {
-        self.has_active_runtime_on_current_thread()
+    pub(crate) fn lock_runtime_or_panic(&self) -> StoreRuntimeGuard<'_> {
+        self.lock_runtime("lock_runtime_or_panic").expect(
+            "lock_runtime_or_panic is unsupported while the same store execution is already active on this thread",
+        )
     }
 
     pub(crate) fn lock_segments(&self) -> MutexGuard<'_, StoreSegments> {

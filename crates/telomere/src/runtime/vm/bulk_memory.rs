@@ -408,14 +408,14 @@ pub unsafe fn op_mem_copy_indexed_local_local(
     {
         let metering = ctx.store.metering_ref();
         let ExecuteContext {
-            gc,
+            gc: runtime,
             budget,
             reserved,
             budget_epoch,
             ..
         } = ctx;
         vm_try!(
-            gc.copy_memory_local_to_local(dst_memory, src_memory, dst, src, len, || {
+            runtime.copy_memory_local_to_local(dst_memory, src_memory, dst, src, len, || {
                 vm_checkpoint!(metering, budget, reserved, budget_epoch);
                 VMResult::Success(())
             },)
@@ -456,14 +456,14 @@ pub unsafe fn op_mem_copy_indexed_local_shared(
     {
         let metering = ctx.store.metering_ref();
         let ExecuteContext {
-            gc,
+            gc: runtime,
             budget,
             reserved,
             budget_epoch,
             ..
         } = ctx;
         vm_try!(
-            gc.copy_memory_shared_to_local(dst_memory, src_memory, dst, src, len, || {
+            runtime.copy_memory_shared_to_local(dst_memory, src_memory, dst, src, len, || {
                 vm_checkpoint!(metering, budget, reserved, budget_epoch);
                 VMResult::Success(())
             },)
@@ -504,14 +504,14 @@ pub unsafe fn op_mem_copy_indexed_shared_local(
     {
         let metering = ctx.store.metering_ref();
         let ExecuteContext {
-            gc,
+            gc: runtime,
             budget,
             reserved,
             budget_epoch,
             ..
         } = ctx;
         vm_try!(
-            gc.copy_memory_local_to_shared(dst_memory, src_memory, dst, src, len, || {
+            runtime.copy_memory_local_to_shared(dst_memory, src_memory, dst, src, len, || {
                 vm_checkpoint!(metering, budget, reserved, budget_epoch);
                 VMResult::Success(())
             },)
@@ -555,18 +555,23 @@ pub unsafe fn op_mem_copy_indexed_shared_shared(
     {
         let metering = ctx.store.metering_ref();
         let ExecuteContext {
-            gc,
+            gc: runtime,
             budget,
             reserved,
             budget_epoch,
             ..
         } = ctx;
-        vm_try!(
-            gc.copy_memory_shared_to_shared(dst_memory, src_memory, dst, src, len, || {
+        vm_try!(runtime.copy_memory_shared_to_shared(
+            dst_memory,
+            src_memory,
+            dst,
+            src,
+            len,
+            || {
                 vm_checkpoint!(metering, budget, reserved, budget_epoch);
                 VMResult::Success(())
-            },)
-        );
+            },
+        ));
     }
     call_next(tail_code, 2, ctx)
 }

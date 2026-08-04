@@ -93,17 +93,17 @@ unsafe fn table_init_impl(
     let metering = ctx.store.metering();
     let ExecuteContext {
         store,
-        gc,
+        gc: runtime,
         budget,
         reserved,
         budget_epoch,
         ..
     } = ctx;
-    let instance = unsafe { &*gc.get_instance_unchecked(instance_addr) };
+    let instance = unsafe { &*runtime.get_instance_unchecked(instance_addr) };
     let dst_table_addr = instance.tables.as_slice()[dst_table_idx];
     let segments = store.lock_segments();
     let dst_table_len = {
-        let dst_table = gc.get_table(dst_table_addr);
+        let dst_table = runtime.get_table(dst_table_addr);
         dst_table.1.len()
     };
     if dst_pos.checked_add(len).is_none() || dst_pos + len > dst_table_len {
@@ -117,7 +117,7 @@ unsafe fn table_init_impl(
         };
     };
     let reftype = {
-        let dst_table = gc.get_table(dst_table_addr);
+        let dst_table = runtime.get_table(dst_table_addr);
         dst_table.0.reftype
     };
     match &elem.init {
@@ -131,7 +131,7 @@ unsafe fn table_init_impl(
                 .iter()
                 .map(|it| it.get())
                 .collect::<Vec<_>>();
-            let dst_table = gc.get_table(dst_table_addr);
+            let dst_table = runtime.get_table(dst_table_addr);
             let dst = vm_try!(VMResult::from_option(
                 dst_table.1.get_mut(dst_pos..dst_pos + len),
                 || { VMResult::TableIndexOutOfRange }
@@ -148,13 +148,13 @@ unsafe fn table_init_impl(
             for (i, expr) in slice.iter().enumerate() {
                 vm_checkpoint!(metering, budget, reserved, budget_epoch);
                 let res = vm_try!(execute_elem_init_const_expr(
-                    gc,
+                    runtime,
                     instance.globals.as_slice(),
                     instance.funcs.as_slice(),
                     expr,
                     reftype,
                 ));
-                let dst_table = gc.get_table(dst_table_addr);
+                let dst_table = runtime.get_table(dst_table_addr);
                 let dst = vm_try!(VMResult::from_option(
                     dst_table.1.get_mut(dst_pos..dst_pos + len),
                     || { VMResult::TableIndexOutOfRange }

@@ -1988,31 +1988,31 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     driver: &mut D,
 ) -> VMResult<ResultValue> {
     let _dispatch_profile_guard = DispatchProfileRunGuard::new();
-    if store.has_active_gc_on_current_thread() {
+    if store.has_active_runtime_on_current_thread() {
         tracing::error!(
-            "run_module_function is unsupported while the same store GC is already active"
+            "run_module_function is unsupported while the same store execution is already active"
         );
         return VMResult::Unlinkable;
     }
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
-        let mut gc = store.lock_gc();
-        gc.clear_last_trap();
-        let instance = gc.get_instance(vm_try!(VMResult::from_option(
+        let mut runtime = store.lock_runtime_or_panic();
+        runtime.clear_last_trap();
+        let instance = runtime.get_instance(vm_try!(VMResult::from_option(
             instance.object_ref_for_store(store),
             || { VMResult::Unlinkable }
         )));
-        let module_inst = gc.get_module(instance.module_addr);
+        let module_inst = runtime.get_module(instance.module_addr);
         trace!("{:?}", module_inst.exports);
         let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
             let code_addr = *vm_try!(VMResult::from_option(
                 instance.funcs.as_slice().get(idx.0 as usize),
                 || { VMResult::Unlinkable }
             ));
-            let funcinst = gc.get_func(code_addr);
+            let funcinst = runtime.get_func(code_addr);
             let entry_pc = function_entry_pc(store, funcinst);
-            let func_instance = gc.instance(funcinst.instance);
+            let func_instance = runtime.instance(funcinst.instance);
             let frame = CallFrameCache::from_parts(
                 code_addr,
                 funcinst,
@@ -2051,7 +2051,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
                     local_top: 0,
                 },
                 &VM_END as *const Instr,
-                &gc,
+                &runtime,
             ));
 
             scheduler.push(Task {
@@ -2073,40 +2073,40 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     scheduler.run_with_driver(driver).await;
     let ct = scheduler.completed_tasks.pop().unwrap();
     {
-        let mut gc = store.lock_gc();
-        gc.set_last_trap(ct.trap);
+        let mut runtime = store.lock_runtime_or_panic();
+        runtime.set_last_trap(ct.trap);
     }
     vm_try!(ct.result);
     let mut stack = ct.stack;
     VMResult::Success(pop_result_values(&mut stack, &ft.1))
 }
 
-pub(crate) fn run_module_function_sync_with_gc(
+pub(crate) fn run_module_function_sync_with_runtime(
     instance: &InstanceHandle,
     store: &Store,
-    gc: &mut crate::common::StoreInner,
+    runtime: &mut crate::common::StoreInner,
     name: &str,
     args: &ResultValue,
 ) -> Result<VMResult<ResultValue>, SyncRunError> {
     let _dispatch_profile_guard = DispatchProfileRunGuard::new();
-    gc.clear_last_trap();
+    runtime.clear_last_trap();
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
-        let instance = gc.get_instance(match instance.object_ref_for_store(store) {
+        let instance = runtime.get_instance(match instance.object_ref_for_store(store) {
             Some(object_ref) => object_ref,
             None => return Ok(VMResult::Unlinkable),
         });
-        let module_inst = gc.get_module(instance.module_addr);
+        let module_inst = runtime.get_module(instance.module_addr);
         trace!("{:?}", module_inst.exports);
         let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
             let code_addr = match instance.funcs.as_slice().get(idx.0 as usize) {
                 Some(code_addr) => *code_addr,
                 None => return Ok(VMResult::Unlinkable),
             };
-            let funcinst = gc.get_func(code_addr);
+            let funcinst = runtime.get_func(code_addr);
             let entry_pc = function_entry_pc(store, funcinst);
-            let func_instance = gc.instance(funcinst.instance);
+            let func_instance = runtime.instance(funcinst.instance);
             let frame = CallFrameCache::from_parts(
                 code_addr,
                 funcinst,
@@ -2147,7 +2147,7 @@ pub(crate) fn run_module_function_sync_with_gc(
                     local_top: 0,
                 },
                 &VM_END as *const Instr,
-                gc,
+                runtime,
             ) {
                 VMResult::Success(local_reference) => local_reference,
                 other => return Ok(vm_result_err_into_result_value(other)),
@@ -2170,9 +2170,9 @@ pub(crate) fn run_module_function_sync_with_gc(
         ft
     };
 
-    scheduler.run_sync_with_gc(gc)?;
+    scheduler.run_sync_with_runtime(runtime)?;
     let ct = scheduler.completed_tasks.pop().unwrap();
-    gc.set_last_trap(ct.trap);
+    runtime.set_last_trap(ct.trap);
     match ct.result {
         VMResult::Success(()) => {
             let mut stack = ct.stack;
@@ -2238,19 +2238,21 @@ fn read_global_value(bytes: &[u8], ty: ValType) -> Option<WasmValue> {
 /// The handle must belong to `store`, and `name` must select a global export.
 /// Otherwise this returns [`VMResult::Unlinkable`].
 pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMResult<WasmValue> {
-    if store.has_active_gc_on_current_thread() {
-        tracing::error!("get_global is unsupported while the same store GC is already active");
+    if store.has_active_runtime_on_current_thread() {
+        tracing::error!(
+            "get_global is unsupported while the same store execution is already active"
+        );
         return VMResult::Unlinkable;
     }
-    let gc = store.lock_gc();
+    let runtime = store.lock_runtime_or_panic();
 
     let instance = unsafe {
-        &*gc.get_instance_unchecked(vm_try!(VMResult::from_option(
+        &*runtime.get_instance_unchecked(vm_try!(VMResult::from_option(
             instance.object_ref_for_store(store),
             || { VMResult::Unlinkable }
         )))
     };
-    let module_inst = gc.get_module(instance.module_addr);
+    let module_inst = runtime.get_module(instance.module_addr);
     let Some(ExportDesc::Global(idx)) = module_inst.exports.find(name) else {
         return VMResult::Unlinkable;
     };
@@ -2262,7 +2264,7 @@ pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMRes
         module_inst.globals.get(idx.0 as usize),
         || { VMResult::Unlinkable }
     ));
-    let Some(value) = read_global_value(gc.get_global(addr), gt.0) else {
+    let Some(value) = read_global_value(runtime.get_global(addr), gt.0) else {
         return VMResult::Unlinkable;
     };
     VMResult::Success(value)

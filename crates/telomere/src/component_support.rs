@@ -119,6 +119,7 @@ pub mod common {
     ///
     /// The handle is store-bound. The error string distinguishes a foreign
     /// instance, a missing export, a non-memory export, and an invalid index.
+    /// The `String` error is retained pending [issue #143](https://github.com/yieldspace/telomere/issues/143).
     pub fn memory_export(
         instance: &crate::common::InstanceHandle,
         store: &crate::common::Store,
@@ -127,42 +128,23 @@ pub mod common {
         let object_ref = instance
             .object_ref_for_store(store)
             .ok_or_else(|| "instance handle belongs to another store".to_owned())?;
-        store
-            .with_active_runtime(|gc| {
-                let instance = gc.get_instance(object_ref);
-                let module = gc.get_module(instance.module_addr);
-                let crate::common::ExportDesc::Mem(idx) = module
-                    .exports
-                    .find(export_name)
-                    .ok_or_else(|| format!("memory export '{export_name}' is missing"))?
-                else {
-                    return Err(format!("export '{export_name}' is not a memory"));
-                };
-                instance
-                    .mems
-                    .get(idx.0 as usize)
-                    .copied()
-                    .map(|addr| gc.memory_handle(addr))
-                    .ok_or_else(|| "memory index is out of bounds".to_owned())
-            })
-            .unwrap_or_else(|| {
-                let gc = store.lock_gc();
-                let instance = gc.get_instance(object_ref);
-                let module = gc.get_module(instance.module_addr);
-                let crate::common::ExportDesc::Mem(idx) = module
-                    .exports
-                    .find(export_name)
-                    .ok_or_else(|| format!("memory export '{export_name}' is missing"))?
-                else {
-                    return Err(format!("export '{export_name}' is not a memory"));
-                };
-                instance
-                    .mems
-                    .get(idx.0 as usize)
-                    .copied()
-                    .map(|addr| gc.memory_handle(addr))
-                    .ok_or_else(|| "memory index is out of bounds".to_owned())
-            })
+        store.with_active_or_locked_runtime(|runtime| {
+            let instance = runtime.get_instance(object_ref);
+            let module = runtime.get_module(instance.module_addr);
+            let crate::common::ExportDesc::Mem(idx) = module
+                .exports
+                .find(export_name)
+                .ok_or_else(|| format!("memory export '{export_name}' is missing"))?
+            else {
+                return Err(format!("export '{export_name}' is not a memory"));
+            };
+            instance
+                .mems
+                .get(idx.0 as usize)
+                .copied()
+                .map(|addr| runtime.memory_handle(addr))
+                .ok_or_else(|| "memory index is out of bounds".to_owned())
+        })
     }
 
     /// Copies a byte range from a store-owned memory.
@@ -176,34 +158,16 @@ pub mod common {
     ) -> Option<Vec<u8>> {
         let len = u32::try_from(len).ok()?;
         let end = ptr.checked_add(len)? as usize;
-        store
-            .with_active_runtime(|gc| match *memory {
-                crate::common::MemoryHandle::Local(id) => gc
-                    .local_memory(id)
-                    .memory()
-                    .get(ptr as usize..end)
-                    .map(|bytes| bytes.to_vec()),
-                crate::common::MemoryHandle::Shared(id) => {
-                    gc.shared_memory(id).with_memory(|memory| {
-                        memory.get(ptr as usize..end).map(|bytes| bytes.to_vec())
-                    })
-                }
-            })
-            .unwrap_or_else(|| {
-                let gc = store.lock_gc();
-                match *memory {
-                    crate::common::MemoryHandle::Local(id) => gc
-                        .local_memory(id)
-                        .memory()
-                        .get(ptr as usize..end)
-                        .map(|bytes| bytes.to_vec()),
-                    crate::common::MemoryHandle::Shared(id) => {
-                        gc.shared_memory(id).with_memory(|memory| {
-                            memory.get(ptr as usize..end).map(|bytes| bytes.to_vec())
-                        })
-                    }
-                }
-            })
+        store.with_active_or_locked_runtime(|runtime| match *memory {
+            crate::common::MemoryHandle::Local(id) => runtime
+                .local_memory(id)
+                .memory()
+                .get(ptr as usize..end)
+                .map(|bytes| bytes.to_vec()),
+            crate::common::MemoryHandle::Shared(id) => runtime
+                .shared_memory(id)
+                .with_memory(|memory| memory.get(ptr as usize..end).map(|bytes| bytes.to_vec())),
+        })
     }
 
     /// Copies exactly `N` bytes from a store-owned memory.
@@ -217,38 +181,20 @@ pub mod common {
         let len = u32::try_from(N).ok()?;
         let end = ptr.checked_add(len)? as usize;
         let mut out = [0u8; N];
-        store
-            .with_active_runtime(|gc| match *memory {
-                crate::common::MemoryHandle::Local(id) => {
-                    let bytes = gc.local_memory(id).memory().get(ptr as usize..end)?;
+        store.with_active_or_locked_runtime(|runtime| match *memory {
+            crate::common::MemoryHandle::Local(id) => {
+                let bytes = runtime.local_memory(id).memory().get(ptr as usize..end)?;
+                out.copy_from_slice(bytes);
+                Some(out)
+            }
+            crate::common::MemoryHandle::Shared(id) => {
+                runtime.shared_memory(id).with_memory(|memory| {
+                    let bytes = memory.get(ptr as usize..end)?;
                     out.copy_from_slice(bytes);
                     Some(out)
-                }
-                crate::common::MemoryHandle::Shared(id) => {
-                    gc.shared_memory(id).with_memory(|memory| {
-                        let bytes = memory.get(ptr as usize..end)?;
-                        out.copy_from_slice(bytes);
-                        Some(out)
-                    })
-                }
-            })
-            .unwrap_or_else(|| {
-                let gc = store.lock_gc();
-                match *memory {
-                    crate::common::MemoryHandle::Local(id) => {
-                        let bytes = gc.local_memory(id).memory().get(ptr as usize..end)?;
-                        out.copy_from_slice(bytes);
-                        Some(out)
-                    }
-                    crate::common::MemoryHandle::Shared(id) => {
-                        gc.shared_memory(id).with_memory(|memory| {
-                            let bytes = memory.get(ptr as usize..end)?;
-                            out.copy_from_slice(bytes);
-                            Some(out)
-                        })
-                    }
-                }
-            })
+                })
+            }
+        })
     }
 
     /// Writes `bytes` into a store-owned memory.
@@ -266,54 +212,28 @@ pub mod common {
         let Some(end) = ptr.checked_add(len).map(|it| it as usize) else {
             return false;
         };
-        store
-            .with_active_runtime(|gc| match *memory {
-                crate::common::MemoryHandle::Local(id) => {
-                    let Some(slot) = gc
-                        .local_memory_mut(id)
-                        .memory_mut()
-                        .get_mut(ptr as usize..end)
-                    else {
+        store.with_active_or_locked_runtime(|runtime| match *memory {
+            crate::common::MemoryHandle::Local(id) => {
+                let Some(slot) = runtime
+                    .local_memory_mut(id)
+                    .memory_mut()
+                    .get_mut(ptr as usize..end)
+                else {
+                    return false;
+                };
+                slot.copy_from_slice(bytes);
+                true
+            }
+            crate::common::MemoryHandle::Shared(id) => {
+                runtime.shared_memory(id).with_memory(|memory| {
+                    let Some(slot) = memory.get_mut(ptr as usize..end) else {
                         return false;
                     };
                     slot.copy_from_slice(bytes);
                     true
-                }
-                crate::common::MemoryHandle::Shared(id) => {
-                    gc.shared_memory(id).with_memory(|memory| {
-                        let Some(slot) = memory.get_mut(ptr as usize..end) else {
-                            return false;
-                        };
-                        slot.copy_from_slice(bytes);
-                        true
-                    })
-                }
-            })
-            .unwrap_or_else(|| {
-                let mut gc = store.lock_gc();
-                match *memory {
-                    crate::common::MemoryHandle::Local(id) => {
-                        let Some(slot) = gc
-                            .local_memory_mut(id)
-                            .memory_mut()
-                            .get_mut(ptr as usize..end)
-                        else {
-                            return false;
-                        };
-                        slot.copy_from_slice(bytes);
-                        true
-                    }
-                    crate::common::MemoryHandle::Shared(id) => {
-                        gc.shared_memory(id).with_memory(|memory| {
-                            let Some(slot) = memory.get_mut(ptr as usize..end) else {
-                                return false;
-                            };
-                            slot.copy_from_slice(bytes);
-                            true
-                        })
-                    }
-                }
-            })
+                })
+            }
+        })
     }
 }
 
@@ -333,25 +253,22 @@ pub mod runtime {
     /// Component adapters use this narrow synchronous bridge only during an
     /// explicitly authorized reentrant host callback. Ordinary embeddings should
     /// use [`run_module_function`] instead.
+    /// The `String` error is retained pending [issue #143](https://github.com/yieldspace/telomere/issues/143).
     pub fn run_core_export_sync_reentrant(
         instance: &crate::common::InstanceHandle,
         store: &crate::common::Store,
         name: &str,
         args: &crate::runtime::ResultValue,
     ) -> Result<crate::common::VMResult<crate::runtime::ResultValue>, String> {
-        store
-            .with_active_runtime(|gc| {
-                crate::runtime::vm::run_module_function_sync_with_gc(
-                    instance, store, gc, name, args,
-                )
-                .map_err(|error| format!("{error:?}"))
-            })
-            .unwrap_or_else(|| {
-                let mut gc = store.lock_gc();
-                crate::runtime::vm::run_module_function_sync_with_gc(
-                    instance, store, &mut gc, name, args,
-                )
-                .map_err(|error| format!("{error:?}"))
-            })
+        store.with_active_or_locked_runtime(|store_runtime| {
+            crate::runtime::vm::run_module_function_sync_with_runtime(
+                instance,
+                store,
+                store_runtime,
+                name,
+                args,
+            )
+            .map_err(|error| format!("{error:?}"))
+        })
     }
 }
