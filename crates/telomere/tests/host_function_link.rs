@@ -94,6 +94,24 @@ async fn test_print() {
 }
 
 #[tokio::test]
+async fn test_print_by_export_name() {
+    let counter = Box::new(LinkState {
+        counter: AtomicUsize::new(0),
+        host: Mutex::new(None),
+    });
+    let store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const LinkState)
+    });
+    let mut registry = Registry::new();
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
+    registry.register("host", host.clone());
+    *counter.host.lock().unwrap() = Some(host.clone());
+    link_host_function_with_export_name(&host, "print", print, &store);
+    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
+    assert_eq!(counter.counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn test_imported_host_start() {
     let counter = Box::new(LinkState {
         counter: AtomicUsize::new(0),

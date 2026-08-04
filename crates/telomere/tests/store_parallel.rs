@@ -141,6 +141,8 @@ fn store_supports_parallel_calls_via_arc() {
     {
         let store = Arc::clone(&store);
         tasks.push(thread::spawn(move || {
+            // These repeated worker links—not the initial links above—contend with
+            // concurrent `run_module_function` calls; `host_function_link.rs` tests link correctness.
             for _ in 0..32 {
                 link_host_function_with_function_idx(&host, 0, noop_host, store.as_ref());
                 link_host_function_with_export_name(&host, "noop", noop_host, store.as_ref());

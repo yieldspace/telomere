@@ -15,7 +15,7 @@
 //! use futures::executor::block_on;
 //! use telomere::{
 //!     host_abi::{ExecuteContext, Instr},
-//!     instantiate, link_host_function_with_function_idx, run_module_function,
+//!     instantiate, link_host_function_with_export_name, run_module_function,
 //!     IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
 //! };
 //!
@@ -40,7 +40,7 @@
 //!     VMResult::Success(instance) => instance,
 //!     failure => panic!("instantiation failed: {failure:?}"),
 //! };
-//! link_host_function_with_function_idx(&instance, 0, return_42, &store);
+//! link_host_function_with_export_name(&instance, "answer", return_42, &store);
 //! let result = block_on(run_module_function(
 //!     &instance,
 //!     &store,

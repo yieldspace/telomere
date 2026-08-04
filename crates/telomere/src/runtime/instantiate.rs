@@ -840,6 +840,7 @@ pub fn link_host_function_with_export_name(
     } else {
         unreachable!()
     };
+    drop(gc);
     link_host_function_with_function_idx(addr, func_idx, f, store);
 }
 
