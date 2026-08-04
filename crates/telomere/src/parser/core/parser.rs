@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, io, sync::Arc};
 use tracing::trace;
 
 use crate::common::custom_section::NameSubSection;
@@ -100,6 +100,7 @@ const SECTION_ORDER: [WasmSectionType; 12] = {
         Data,
     ]
 };
+const SECTION_SKIP_BUFFER_SIZE: usize = 4 * 1024;
 enum NameData {
     NameSection(NameSubSection),
     MalformedNameSection,
@@ -158,8 +159,26 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         Ok((len + len2 + len3, Import { desc, module, name }))
     }
     fn skip_section(&mut self, size: u32) -> Result<()> {
-        for _idx in 0..size {
-            self.reader.read_exact_one()?;
+        let mut remaining = size as usize;
+        let mut buffer = [0; SECTION_SKIP_BUFFER_SIZE];
+
+        while remaining != 0 {
+            let chunk_len = remaining.min(buffer.len());
+            let mut chunk = &mut buffer[..chunk_len];
+
+            while !chunk.is_empty() {
+                let bytes_read = self.reader.read_slice(chunk)?;
+                if bytes_read == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "section extends past end of input",
+                    )
+                    .into());
+                }
+                chunk = &mut chunk[bytes_read..];
+            }
+
+            remaining -= chunk_len;
         }
         Ok(())
     }
@@ -999,7 +1018,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     NameData::NameSection(subsec) => name_section = Some(subsec),
                     NameData::MalformedNameSection => {}
                     NameData::Unknown(name) => {
-                        tracing::warn!("encounted unknown custom section: {name}")
+                        tracing::warn!("encountered unknown custom section: {name}")
                     }
                 },
                 WasmSectionType::Type => {

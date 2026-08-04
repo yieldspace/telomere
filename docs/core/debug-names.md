@@ -18,7 +18,7 @@ compact representation held by
 
 `ModuleNames::function_name(funcidx)` binary-searches the table and slices the
 blob; `ModuleNames::module_name()` returns the optional module name. This keeps
-the retained function data to one entries allocation and one string allocation,
+the retained function data to one function-entry table allocation and one string allocation,
 rather than retaining a `String` allocation for every function. The `Arc` that
 owns `ModuleNames` and a non-empty module name can add allocations, so the
 observed allocation count is reported with every byte total below.

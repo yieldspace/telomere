@@ -1,4 +1,4 @@
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 
 use futures::executor::block_on;
 use telomere::{
@@ -26,6 +26,34 @@ fn append_section(module: &mut Vec<u8>, id: u8, contents: &[u8]) {
     module.push(id);
     module.push(contents.len() as u8);
     module.extend_from_slice(contents);
+}
+
+fn append_u32_leb(bytes: &mut Vec<u8>, mut value: u32) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        bytes.push(byte);
+        if value == 0 {
+            return;
+        }
+    }
+}
+
+struct ShortRead<'a> {
+    bytes: &'a [u8],
+    max_read: usize,
+}
+
+impl Read for ShortRead<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let len = self.bytes.len().min(self.max_read).min(buf.len());
+        buf[..len].copy_from_slice(&self.bytes[..len]);
+        self.bytes = &self.bytes[len..];
+        Ok(len)
+    }
 }
 
 fn append_answer_sections(module: &mut Vec<u8>) {
@@ -63,6 +91,39 @@ fn append_valid_name_section(module: &mut Vec<u8>) {
             0x00, 0x04, 0x03, b'f', b'o', b'o', // module-name subsection
         ],
     );
+}
+
+fn append_malformed_name_section_with_recovery_bytes(
+    module: &mut Vec<u8>,
+    skip_size: usize,
+    available_recovery_bytes: usize,
+) {
+    assert!(available_recovery_bytes <= skip_size);
+    let declared_size = 5 + 3 + skip_size;
+    module.push(0);
+    append_u32_leb(
+        module,
+        u32::try_from(declared_size).expect("fixture section size must fit in u32"),
+    );
+    module.extend_from_slice(&[
+        0x04, b'n', b'a', b'm', b'e', // custom section name
+        0x00, 0x00, 0x00, // malformed module-name subsection
+    ]);
+    module.resize(module.len() + available_recovery_bytes, 0);
+}
+
+fn module_with_truncated_name_section_after_recovery_skip(
+    available_recovery_bytes: usize,
+) -> Vec<u8> {
+    let declared_skip_size = available_recovery_bytes + 1;
+
+    let mut module = module_header();
+    append_malformed_name_section_with_recovery_bytes(
+        &mut module,
+        declared_skip_size,
+        available_recovery_bytes,
+    );
+    module
 }
 
 #[test]
@@ -153,6 +214,49 @@ fn oversized_outer_name_section_is_a_hard_error() {
         Err(error) => panic!("expected a truncated outer-section error, got {error:?}"),
         Ok(_) => panic!("an oversized custom section must be rejected"),
     }
+}
+
+#[test]
+fn truncated_name_sections_across_skip_chunk_boundary_are_hard_errors() {
+    for available_recovery_bytes in [4 * 1024 - 1, 4 * 1024 + 1] {
+        match parse_module(&module_with_truncated_name_section_after_recovery_skip(
+            available_recovery_bytes,
+        )) {
+            Err(WasmParserError::IoError(error)) => {
+                assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+            }
+            Err(error) => {
+                panic!(
+                    "expected a truncated outer-section error after {available_recovery_bytes} recovery bytes, got {error:?}"
+                )
+            }
+            Ok(_) => {
+                panic!(
+                    "a name section truncated after {available_recovery_bytes} recovery bytes must be rejected"
+                )
+            }
+        }
+    }
+}
+
+#[test]
+fn malformed_name_recovery_fills_skip_chunks_across_short_reads() {
+    let mut bytes = module_header();
+    let skip_size = 4 * 1024 + 1;
+    append_malformed_name_section_with_recovery_bytes(&mut bytes, skip_size, skip_size);
+    append_answer_sections(&mut bytes);
+
+    let mut reader = IoReadBinaryReader::from(ShortRead {
+        bytes: &bytes,
+        max_read: 127,
+    });
+    let module = WasmParser::new(&mut reader)
+        .parse_module()
+        .expect("short reads must not make an intact custom section look truncated");
+
+    assert!(module.name.is_none());
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.exs.0.len(), 1);
 }
 
 #[test]
