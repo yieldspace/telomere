@@ -178,6 +178,79 @@ assigned. On Linux the embedder harness selected `/usr/bin/size -A` and
 `/usr/bin/strip --strip-all` for the release-copy inspection. The JSON records
 the exact per-artifact commands, selected section, and expected output.
 
+### #205 feature-policy staleness and evidence ledger
+
+This ledger is deliberately separate from the #139 measurements. The absolute
+values in the #139 tables below and their measurement-source head
+`b0012a6dc87ce9323e076f74a5e687bb1c3d3d58` are unchanged. It records only
+what a before/after comparison in the same worktree at the same output path
+observed: before `3b1237b` and after the #205 feature-policy change. It does
+not rewrite the historical
+measurements with current-head values.
+
+#### A. macOS arm64 binary evidence: measured
+
+The following deltas are `after - before` in bytes. The size and text
+comparisons use the same worktree and output path before and after. The
+`release` raw-file entries are `stat` values from preserved unstripped
+binaries, so recording them required no additional build. They are comparative
+file-layout evidence, not updated absolute footprint values.
+
+| Profile | Configuration | Raw file delta (B) | Stripped file / File delta (B) | `__TEXT,__text` delta (B) |
+| --- | --- | ---: | ---: | ---: |
+| `release-size` | `wasi` | — | File: -8 | 0 |
+| `release-size` | `wasi-threads` | — | File: -8 | 0 |
+| `release` | `wasi` | -64 | Stripped file: -24 | 0 |
+| `release` | `wasi-threads` | +16 | Stripped file: -8 | 0 |
+
+Do not summarize these cells as an overall direction: raw file sizes moved by
+small amounts in both directions (-64 to +16 bytes).
+
+The `component` control's unstripped artifacts were bit-identical before and
+after, which supports the observed difference being local to the changed WASI
+dependency boundary rather than a workspace-wide build difference. As a build
+determinism control, two full-clean baseline `wasi` builds, each preceded by
+`cargo clean --profile release-size`, also produced bit-identical unstripped
+files.
+
+`/usr/bin/strip` is not a SHA-based comparator here: it produced
+non-bit-identical output from the same unstripped input while retaining the
+same file size. SHA equality is therefore not an acceptance predicate for
+these stripped artifacts; the size comparisons above are robust to that tool
+variance.
+
+At the dependency-report level, the raw tree topology differs in 2 of 7 rows,
+while the normalized package-plus-activated-feature set is identical in all 7
+of 7 rows. The known source change is removal of the direct
+`wasi -> telomere` edge. It is an inference, not a link-map attribution, that
+the small file-size changes come from metadata, symbols, linker layout, or
+unwind layout associated with that edge removal; the measured zero
+`__TEXT,__text` deltas show no code-text change in these four macOS cells.
+
+#### B. Linux binary evidence: unmeasured
+
+The same source-level direct-edge removal is present for the Linux
+`release` and `release-size` `wasi` and `wasi-threads` configurations, but
+the resulting Linux file and text values have not been measured for the #205
+feature-policy change. macOS results must not be extrapolated to Linux.
+
+| Profile | Configurations | Fields | Status |
+| --- | --- | --- | --- |
+| `release-size` | `wasi`, `wasi-threads` | File, `.text` | Unmeasured; no numeric or zero value is inferred. |
+| `release` | `wasi`, `wasi-threads` | Raw file, stripped file, `.text` | Unmeasured; no numeric or zero value is inferred. |
+
+A clean GitHub Actions runner can provide a later remeasurement, but that work
+is not an acceptance criterion for #205.
+
+#### C. RSS and cold-start evidence: not re-derived
+
+No RSS or cold-start result can be derived from the binary comparisons above.
+For all four affected tables—macOS `release`, macOS `release-size`, Linux
+`release`, and Linux `release-size`—those measurements remain unmeasured for
+#205. The [#184](https://github.com/yieldspace/telomere/issues/184) and
+existing indicative/uncontrolled-load caveats remain in force; this ledger
+neither infers a change nor replaces those observations.
+
 ### macOS arm64 — Apple M2 Pro
 
 #### `release` (stripped file size is primary)

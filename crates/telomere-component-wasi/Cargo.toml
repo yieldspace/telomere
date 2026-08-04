@@ -13,16 +13,16 @@ build = "build.rs"
 [dependencies]
 getrandom.workspace = true
 libc.workspace = true
-telomere = { path = "../telomere", default-features = false }
 telomere-component = { path = "../telomere-component", default-features = false }
 telomere-component-bindgen.workspace = true
 
 [dev-dependencies]
 anyhow = { version = "1.0.98", features = ["backtrace"] }
+telomere = { path = "../telomere", default-features = false }
 tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 wat = "1.243.0"
 
 [features]
 default = ["simd", "threads"]
-simd = ["telomere/simd", "telomere-component/simd"]
-threads = ["telomere/threads", "telomere-component/threads"]
+simd = ["telomere-component/simd"]
+threads = ["telomere-component/threads"]

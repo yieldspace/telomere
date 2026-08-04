@@ -13,7 +13,8 @@ autoexamples = false
 [features]
 default = ["full"]
 full = [
-    "telomere/full",
+    "telomere/simd",
+    "telomere/threads",
     "telomere-component/simd",
     "telomere-component/threads",
     "telomere-component-wasi/simd",

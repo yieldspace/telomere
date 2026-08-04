@@ -90,6 +90,80 @@ jobs:
       - name: Test telomere without default features
         run: cargo test -p telomere --release --no-default-features
 
+  manifest-feature-wiring:
+    name: Manifest feature wiring
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: feature-policy
+
+      - name: Check feature wiring
+        run: python3 tools/check-feature-wiring.py
+
+      - name: Assert minimal embedder graph has no Tokio
+        shell: bash
+        run: |
+          set -uo pipefail
+          err="$(mktemp)"
+          trap 'rm -f "$err"' EXIT
+
+          out="$(cargo tree --locked -p telomere-minimal-embedder -e normal \
+            --no-default-features --target all -i tokio 2>"$err")" && rc=0 || rc=$?
+
+          if [[ "$rc" -eq 0 ]]; then
+            if [[ -z "$out" ]]; then
+              exit 0
+            fi
+
+            echo '::error::Tokio unexpectedly appears in the minimal embedder dependency graph'
+            printf '%s\n' "$out"
+            exit 1
+          fi
+
+          if grep -q 'did not match any packages' "$err"; then
+            exit 0
+          fi
+
+          echo "::error::cargo tree guard failed (exit $rc)"
+          cat "$err"
+          exit 1
+
+      - name: Assert the guard can still see Tokio
+        shell: bash
+        run: |
+          set -uo pipefail
+          err="$(mktemp)"
+          trap 'rm -f "$err"' EXIT
+
+          out="$(cargo tree --locked -p telomere-minimal-embedder -e normal \
+            --no-default-features --target all --features threads,wasi -i tokio 2>"$err")" && rc=0 || rc=$?
+
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::cargo tree positive control failed (exit $rc)"
+            cat "$err"
+            exit 1
+          fi
+
+          if [[ -z "$out" ]]; then
+            echo '::error::Tokio positive control produced no inverse dependency tree'
+            cat "$err"
+            exit 1
+          fi
+
+          printf '%s\n' "$out"
+
   jit-native-test:
     name: JIT tests (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

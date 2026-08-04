@@ -19,6 +19,9 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Defined the Cargo feature policy and simplified feature wiring: the CLI keeps
+  its `full` default while forwarding `simd` and `threads` directly, and
+  `telomere` no longer has its redundant `full` alias.
 - Curated the default `telomere` embedder surface: module AST representation
   (except the `host_abi::CodeSection` compatibility exception) and raw
   `Op`/`Operand` are internal, while the default host-linking compatibility
