@@ -145,3 +145,5 @@ telomere::unstable_internals::shared_atomic_rmw_u64 | cfg(feature = "threads") &
 telomere::unstable_internals::shared_atomic_rmw_u8 | cfg(feature = "threads") && cfg(feature = "unstable-internals")
 telomere::unstable_internals::shared_register_wait32 | cfg(feature = "threads") && cfg(feature = "unstable-internals")
 telomere::unstable_internals::shared_register_wait64 | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::vm_try | always
+telomere::with_count | always
