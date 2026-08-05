@@ -731,8 +731,8 @@ pub(crate) fn instr_index_from_base(
 }
 
 #[cfg(feature = "vm-diagnostics")]
-fn dispatch_pc_index(tail_code: *const Instr, ctx: &ExecuteContext<'_>) -> Option<usize> {
-    instr_index_from_base(tail_code, ctx.current_frame.code_base).map(usize::from)
+fn dispatch_pc_index(tail_code: *const Instr, ctx: &ExecuteContext<'_>) -> Option<u32> {
+    instr_index_from_base(tail_code, ctx.current_frame.code_base)
 }
 
 #[cfg(feature = "vm-diagnostics")]
