@@ -38,6 +38,7 @@ issue #106 以降の core runtime は、旧 `MemoryPool` / compacting GC を前�
 
 - `instantiate` / `run_module_function` / `get_global` / host link / aliasing は同じ execution lease の下で直列化される
 - nested sync reentry は component host trampoline から渡す reentry token 経由だけを許可する
+- reentrancy の拒否判定は `Store::lock_runtime` に一元化する。各入口は内部の型付き `StoreExecutionError` を消費し、値を返す API は既存の fail-closed 値を返す。`()` API は内部 `Result` を公開ラッパーで明示的に潰す。これは内部配線の変更であり、公開 API / 公開型は変更しない
 - component support は `MemoryPool` / `ObjectRef` を直接露出せず、memory handle と sync reentry helper を使う
 
 ## Effects

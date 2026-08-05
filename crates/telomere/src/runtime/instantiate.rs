@@ -1,6 +1,7 @@
 use crate::{
     common::{
-        execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
+        execute_elem_init_const_expr,
+        store::{FunctionBody as RuntimeFunctionBody, StoreExecutionError},
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
@@ -244,12 +245,6 @@ pub async fn instantiate(
     store: &Store,
     registry: &Registry,
 ) -> VMResult<InstanceHandle> {
-    if store.has_active_runtime_on_current_thread() {
-        tracing::error!(
-            "instantiate is unsupported while the same store execution is already active"
-        );
-        return VMResult::Unlinkable;
-    }
     let Module {
         fts,
         functions,
@@ -274,7 +269,13 @@ pub async fn instantiate(
 
     let mut scheduler = Scheduler::new(store);
     let (addr, has_start) = {
-        let mut runtime = store.lock_runtime_or_panic();
+        let mut runtime = match store.lock_runtime("instantiate") {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                err.report();
+                return VMResult::Unlinkable;
+            }
+        };
         runtime.clear_last_trap();
         let instance_id = store.new_instance_id();
 
@@ -694,11 +695,13 @@ pub fn aliasing(
     triplets: &[(String, String, String)],
     store: &Store,
 ) -> VMResult<InstanceHandle> {
-    if store.has_active_runtime_on_current_thread() {
-        tracing::error!("aliasing is unsupported while the same store execution is already active");
-        return VMResult::Unlinkable;
-    }
-    let mut runtime = store.lock_runtime_or_panic();
+    let mut runtime = match store.lock_runtime("aliasing") {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            err.report();
+            return VMResult::Unlinkable;
+        }
+    };
     let inst_id = store.new_instance_id();
     let mut functions = vec![];
     let mut function_types = vec![];
@@ -805,16 +808,21 @@ pub fn link_host_function_with_function_idx(
     f: HostFunction,
     store: &Store,
 ) {
-    if store.has_active_runtime_on_current_thread() {
-        tracing::error!(
-            "link_host_function_with_function_idx is unsupported while the same store execution is already active"
-        );
-        return;
+    if let Err(err) = link_host_function_with_function_idx_impl(addr, funcidx, f, store) {
+        err.report();
     }
-    let mut runtime = store.lock_runtime_or_panic();
+}
+
+pub(crate) fn link_host_function_with_function_idx_impl(
+    addr: &InstanceHandle,
+    funcidx: u32,
+    f: HostFunction,
+    store: &Store,
+) -> Result<(), StoreExecutionError> {
+    let mut runtime = store.lock_runtime("link_host_function_with_function_idx")?;
     let Some(object_ref) = addr.object_ref_for_store(store) else {
         tracing::error!("instance handle belongs to another store");
-        return;
+        return Ok(());
     };
     let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
     let funcaddr = instance.funcs.as_slice()[funcidx as usize];
@@ -824,6 +832,7 @@ pub fn link_host_function_with_function_idx(
     }
     let recipe = runtime.build_call_recipe(funcaddr);
     runtime.set_call_recipe_for_func(funcaddr, recipe);
+    Ok(())
 }
 /// Replaces an exported function with a synchronous host callback.
 ///
@@ -835,16 +844,21 @@ pub fn link_host_function_with_export_name(
     f: HostFunction,
     store: &Store,
 ) {
-    if store.has_active_runtime_on_current_thread() {
-        tracing::error!(
-            "link_host_function_with_export_name is unsupported while the same store execution is already active"
-        );
-        return;
+    if let Err(err) = link_host_function_with_export_name_impl(addr, name, f, store) {
+        err.report();
     }
-    let runtime = store.lock_runtime_or_panic();
+}
+
+pub(crate) fn link_host_function_with_export_name_impl(
+    addr: &InstanceHandle,
+    name: &str,
+    f: HostFunction,
+    store: &Store,
+) -> Result<(), StoreExecutionError> {
+    let runtime = store.lock_runtime("link_host_function_with_export_name")?;
     let Some(object_ref) = addr.object_ref_for_store(store) else {
         tracing::error!("instance handle belongs to another store");
-        return;
+        return Ok(());
     };
     let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
     let module = runtime.get_module(instance.module_addr);
@@ -855,7 +869,7 @@ pub fn link_host_function_with_export_name(
         unreachable!()
     };
     drop(runtime);
-    link_host_function_with_function_idx(addr, func_idx, f, store);
+    link_host_function_with_function_idx_impl(addr, func_idx, f, store)
 }
 
 /// Replaces a function in `addr` with an asynchronous host callback by index.
@@ -868,16 +882,21 @@ pub fn link_async_host_function_with_function_idx(
     f: AsyncHostFunction,
     store: &Store,
 ) {
-    if store.has_active_runtime_on_current_thread() {
-        tracing::error!(
-            "link_async_host_function_with_function_idx is unsupported while the same store execution is already active"
-        );
-        return;
+    if let Err(err) = link_async_host_function_with_function_idx_impl(addr, funcidx, f, store) {
+        err.report();
     }
-    let mut runtime = store.lock_runtime_or_panic();
+}
+
+pub(crate) fn link_async_host_function_with_function_idx_impl(
+    addr: &InstanceHandle,
+    funcidx: u32,
+    f: AsyncHostFunction,
+    store: &Store,
+) -> Result<(), StoreExecutionError> {
+    let mut runtime = store.lock_runtime("link_async_host_function_with_function_idx")?;
     let Some(object_ref) = addr.object_ref_for_store(store) else {
         tracing::error!("instance handle belongs to another store");
-        return;
+        return Ok(());
     };
     let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
     let funcaddr = instance.funcs.as_slice()[funcidx as usize];
@@ -887,6 +906,7 @@ pub fn link_async_host_function_with_function_idx(
     }
     let recipe = runtime.build_call_recipe(funcaddr);
     runtime.set_call_recipe_for_func(funcaddr, recipe);
+    Ok(())
 }
 
 /// Replaces an exported function with an asynchronous host callback.
@@ -899,16 +919,21 @@ pub fn link_async_host_function_with_export_name(
     f: AsyncHostFunction,
     store: &Store,
 ) {
-    if store.has_active_runtime_on_current_thread() {
-        tracing::error!(
-            "link_async_host_function_with_export_name is unsupported while the same store execution is already active"
-        );
-        return;
+    if let Err(err) = link_async_host_function_with_export_name_impl(addr, name, f, store) {
+        err.report();
     }
-    let runtime = store.lock_runtime_or_panic();
+}
+
+pub(crate) fn link_async_host_function_with_export_name_impl(
+    addr: &InstanceHandle,
+    name: &str,
+    f: AsyncHostFunction,
+    store: &Store,
+) -> Result<(), StoreExecutionError> {
+    let runtime = store.lock_runtime("link_async_host_function_with_export_name")?;
     let Some(object_ref) = addr.object_ref_for_store(store) else {
         tracing::error!("instance handle belongs to another store");
-        return;
+        return Ok(());
     };
     let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
     let module = runtime.get_module(instance.module_addr);
@@ -919,7 +944,7 @@ pub fn link_async_host_function_with_export_name(
         unreachable!()
     };
     drop(runtime);
-    link_async_host_function_with_function_idx(addr, func_idx, f, store);
+    link_async_host_function_with_function_idx_impl(addr, func_idx, f, store)
 }
 
 #[cfg(test)]

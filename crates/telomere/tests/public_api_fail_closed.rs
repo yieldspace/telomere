@@ -1,13 +1,16 @@
 mod common;
 
 use common::instantiate_wat;
+use std::sync::Mutex;
 use telomere::{
     component_support::{
         common::{memory_export, read_memory},
         runtime::run_core_export_sync_reentrant,
     },
-    get_global, run_module_function, IoReadBinaryReader, Registry, ResultValue, Store, VMResult,
-    WasmParser, WasmParserError, WasmValue,
+    get_global,
+    host_abi::{ExecuteContext, Instr},
+    link_host_function_with_function_idx, run_module_function, InstanceHandle, IoReadBinaryReader,
+    Registry, ResultValue, Store, StoreState, VMResult, WasmParser, WasmParserError, WasmValue,
 };
 
 fn parse_module_err(wat: &str) -> WasmParserError {
@@ -18,6 +21,66 @@ fn parse_module_err(wat: &str) -> WasmParserError {
         Ok(_) => panic!("module must fail to parse"),
         Err(err) => err,
     }
+}
+
+struct ReentrantGetGlobalState {
+    instance: Mutex<Option<InstanceHandle>>,
+}
+
+fn return_from_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let (previous_local_reference, return_address) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
+    ctx.set_local_reference(previous_local_reference);
+    VMResult::Success(return_address)
+}
+
+fn get_global_from_host_callback(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let state = unsafe { ctx.store.state.get::<ReentrantGetGlobalState>() }
+        .expect("reentrant get_global test requires ReentrantGetGlobalState in StoreState");
+    let instance = state
+        .instance
+        .lock()
+        .expect("reentrant get_global instance mutex must not be poisoned")
+        .clone()
+        .expect("reentrant get_global instance must be installed before guest execution");
+
+    assert!(matches!(
+        get_global(&instance, ctx.store, "g"),
+        VMResult::Unlinkable
+    ));
+    return_from_host(ctx)
+}
+
+#[tokio::test]
+async fn get_global_fails_closed_during_host_callback() {
+    let state = Box::leak(Box::new(ReentrantGetGlobalState {
+        instance: Mutex::new(None),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (global (export "g") i32 (i32.const 7))
+          (func $host)
+          (func (export "run") call $host))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    *state
+        .instance
+        .lock()
+        .expect("reentrant get_global instance mutex must not be poisoned") =
+        Some(instance.clone());
+    link_host_function_with_function_idx(&instance, 0, get_global_from_host_callback, &store);
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await,
+        VMResult::Success(values) if values.is_empty()
+    ));
 }
 
 #[tokio::test]

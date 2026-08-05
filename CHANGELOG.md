@@ -23,6 +23,9 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Consolidated internal ad-hoc reentrancy guards around consumption of
+  `lock_runtime`'s typed `Result`; existing fail-closed return values and the
+  public API surface remain unchanged.
 - Defined the Cargo feature policy and simplified feature wiring: the CLI keeps
   its `full` default while forwarding `simd` and `threads` directly, and
   `telomere` no longer has its redundant `full` alias.

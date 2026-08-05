@@ -1900,6 +1900,13 @@ impl fmt::Display for StoreExecutionError {
     }
 }
 
+impl StoreExecutionError {
+    /// Emits the diagnostic for a rejected Store execution entry point.
+    pub(crate) fn report(&self) {
+        tracing::error!("{self}");
+    }
+}
+
 pub(crate) struct StoreRuntimeGuard<'a> {
     guard: MutexGuard<'a, StoreInner>,
     identity: *const (),
@@ -2029,11 +2036,7 @@ impl Store {
     /// a trap should call `take_last_trap()` immediately after the call returns, or serialise guest calls
     /// per `Store`.
     pub fn take_last_trap(&self) -> Option<TrapInfo> {
-        if self.has_active_runtime_on_current_thread() {
-            return None;
-        }
-
-        let mut runtime = self.lock_runtime_or_panic();
+        let mut runtime = self.lock_runtime("take_last_trap").ok()?;
         let context = runtime.take_last_trap()?;
         TrapInfo::from_context(&runtime, &context)
     }
@@ -2081,15 +2084,6 @@ impl Store {
             return Err(StoreExecutionError::ReentrantCallDenied(api_name));
         }
         Ok(self.lock_runtime_unchecked())
-    }
-
-    pub(crate) fn with_runtime<T>(
-        &self,
-        api_name: &'static str,
-        f: impl FnOnce(&mut StoreInner) -> T,
-    ) -> Result<T, StoreExecutionError> {
-        let mut runtime = self.lock_runtime(api_name)?;
-        Ok(f(&mut runtime))
     }
 
     pub(crate) fn with_active_runtime<T>(&self, f: impl FnOnce(&mut StoreInner) -> T) -> Option<T> {
@@ -2182,7 +2176,7 @@ impl Store {
             .is_some_and(|identity| Arc::ptr_eq(&self.identity, &identity))
     }
 
-    pub(crate) fn has_active_runtime_on_current_thread(&self) -> bool {
+    fn has_active_runtime_on_current_thread(&self) -> bool {
         let identity_ptr = Arc::as_ptr(&self.identity);
         ACTIVE_STORE_RUNTIME.with(|active| {
             active
