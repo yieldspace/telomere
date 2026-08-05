@@ -7,6 +7,8 @@ pub(crate) mod instantiate;
 /// Optional lazy baseline JIT support and cache statistics.
 pub(crate) mod jit;
 pub(crate) mod memory_effect;
+#[cfg(test)]
+mod reentrancy_guard;
 pub(crate) mod scheduler;
 pub(crate) mod trap_context;
 #[allow(clippy::missing_safety_doc)]

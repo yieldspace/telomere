@@ -27,6 +27,15 @@ const CALL_PRINT_WAST: &str = r#"
     (invoke "wasm_print")
     "#;
 
+const CALL_PRINT_TWICE_WAST: &str = r#"
+    (module
+      (import "host" "print" (func $print))
+      (func (export "wasm_print") (call $print))
+    )
+    (invoke "wasm_print")
+    (invoke "wasm_print")
+    "#;
+
 struct LinkState {
     counter: AtomicUsize,
     host: Mutex<Option<InstanceHandle>>,
@@ -189,7 +198,7 @@ async fn test_reentrant_link_host_function_with_function_idx_fails_closed() {
     *counter.host.lock().unwrap() = Some(host.clone());
     link_host_function_with_function_idx(&host, 0, relink_by_function_idx, &store);
 
-    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
+    run_wast_with(CALL_PRINT_TWICE_WAST, &store, &mut registry).await;
     assert_eq!(counter.counter.load(Ordering::SeqCst), 0);
 }
 
@@ -208,7 +217,7 @@ async fn test_reentrant_link_host_function_with_export_name_fails_closed() {
     *counter.host.lock().unwrap() = Some(host.clone());
     link_host_function_with_function_idx(&host, 0, relink_by_export_name, &store);
 
-    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
+    run_wast_with(CALL_PRINT_TWICE_WAST, &store, &mut registry).await;
     assert_eq!(counter.counter.load(Ordering::SeqCst), 0);
 }
 

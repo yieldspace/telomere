@@ -1985,16 +1985,16 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     driver: &mut D,
 ) -> VMResult<ResultValue> {
     let _dispatch_profile_guard = DispatchProfileRunGuard::new();
-    if store.has_active_runtime_on_current_thread() {
-        tracing::error!(
-            "run_module_function is unsupported while the same store execution is already active"
-        );
-        return VMResult::Unlinkable;
-    }
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
-        let mut runtime = store.lock_runtime_or_panic();
+        let mut runtime = match store.lock_runtime("run_module_function") {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                err.report();
+                return VMResult::Unlinkable;
+            }
+        };
         runtime.clear_last_trap();
         let instance = runtime.get_instance(vm_try!(VMResult::from_option(
             instance.object_ref_for_store(store),
@@ -2235,13 +2235,13 @@ fn read_global_value(bytes: &[u8], ty: ValType) -> Option<WasmValue> {
 /// The handle must belong to `store`, and `name` must select a global export.
 /// Otherwise this returns [`VMResult::Unlinkable`].
 pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMResult<WasmValue> {
-    if store.has_active_runtime_on_current_thread() {
-        tracing::error!(
-            "get_global is unsupported while the same store execution is already active"
-        );
-        return VMResult::Unlinkable;
-    }
-    let runtime = store.lock_runtime_or_panic();
+    let runtime = match store.lock_runtime("get_global") {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            err.report();
+            return VMResult::Unlinkable;
+        }
+    };
 
     let instance = unsafe {
         &*runtime.get_instance_unchecked(vm_try!(VMResult::from_option(
