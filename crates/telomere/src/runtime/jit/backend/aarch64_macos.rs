@@ -104,7 +104,6 @@ enum EmitControl {
     SkipNextOp,
     SkipOps(usize),
     SkipInstrSlots(usize),
-    Stop,
 }
 
 struct SearchLoopPlan {
@@ -233,7 +232,6 @@ impl<'a> Emitter<'a> {
                         return Err(());
                     }
                 }
-                EmitControl::Stop => break,
             }
         }
         self.return_trap(VMResult::<()>::InvalidOperand);
@@ -2298,7 +2296,12 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::Trap { result } => {
                 self.return_trap(result);
-                return Ok(EmitControl::Stop);
+                // The trap path branches to the epilogue. `InstructionGenerator::push`
+                // drops normal instructions in the lexical unreachable suffix, but an
+                // `end` or `else` can resume an enclosing live path. Incoming branches
+                // flush their stacks before a target, so normalize the cached-register
+                // stack depth and continue emitting to avoid missing that path's labels.
+                self.stack_depth = 0;
             }
             BaselineOp::RuntimeStub {
                 pc_index,

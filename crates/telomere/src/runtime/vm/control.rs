@@ -402,6 +402,10 @@ pub unsafe fn special_function_vm_end(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+// #240 instance fix: In the measured Rust 1.96.0 release/aarch64-darwin build,
+// this one-line constant return was duplicated across CGUs, breaking `fn_addr_eq`
+// identity. That observed compiler behavior is not a Rust language guarantee.
+#[inline(never)]
 pub unsafe fn op_unreachable(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
     VMResult::Unreachable
 }
