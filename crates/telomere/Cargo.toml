@@ -55,7 +55,3 @@ vm-diagnostics = []
 measure-switches = []
 unstable-internals = []
 jit = ["dep:telomere-jit-codegen"]
-full = [
-    "simd",
-    "threads",
-]

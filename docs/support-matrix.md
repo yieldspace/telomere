@@ -175,6 +175,9 @@ from producing output through this runner.
 
 ## Pointers, not duplicate claims
 
+- [Cargo feature policy](cargo-features.md) is the source of truth for library
+  defaults, forwarding, and feature unification; this matrix intentionally
+  repeats none of those claims.
 - [Footprint measurements](benchmarks/footprint.md) are the source of truth for
   the minimal-embedder method, environment, and the explicit boundary that
   Telomere is not in WAMR's size class ([#139](https://github.com/yieldspace/telomere/issues/139)).

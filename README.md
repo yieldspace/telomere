@@ -231,8 +231,9 @@ telomere-cli component <component.wasm> [--dir HOST[:GUEST]] [--env KEY=VALUE] [
 
 ## Cargo features
 
-The root CLI package enables `full` by default, which enables the core Wasm
-`simd` and `threads` proposal features in `crates/telomere`.
+The root CLI package enables `full` by default. `full` aggregates the direct
+core, Component Model, and WASI forwarding needed for the supported CLI
+configuration, including the core Wasm `simd` and `threads` proposal features.
 
 | Feature | Scope | Notes |
 | --- | --- | --- |
@@ -241,6 +242,18 @@ The root CLI package enables `full` by default, which enables the core Wasm
 | `jit` | root CLI and `telomere` | Builds the experimental function-local lazy baseline JIT. Runtime use still requires `--jit` or `RuntimeConfig`. |
 | `vm-profile` | root CLI and `telomere` | Enables VM profile counters used by runtime/JIT diagnostics. |
 | `vm-diagnostics` | root CLI and `telomere` | Enables additional runtime diagnostics. |
+
+For a minimal direct dependency from a project adjacent to this checkout:
+
+```toml
+[dependencies]
+telomere = { path = "../telomere/crates/telomere", default-features = false }
+```
+
+Cargo unifies features across the dependency graph, so every other crate that
+depends on `telomere` must also opt out of defaults; one default-enabled edge
+can re-enable `threads`. The [Cargo feature policy](docs/cargo-features.md)
+defines the library defaults, forwarding rules, and enforcement.
 
 Multi-memory, tail calls, and async runtime support are always enabled; they are
 not separate Cargo features.
@@ -256,8 +269,10 @@ coverage.
 The [support matrix](docs/support-matrix.md) records the conformance-fixture
 meaning of "supported", feature-dependent evidence, named unsupported core
 proposal errors, Component Model canonical ABI coverage, and per-interface WASI
-0.2.6 function coverage. It is the authoritative map for these boundaries;
-this feature list remains the source of truth for Cargo feature selection.
+0.2.6 function coverage. It is the authoritative map for these boundaries. The
+table above remains the supported per-flag list; the
+[Cargo feature policy](docs/cargo-features.md) is the source of truth for
+defaults, forwarding, and minimal dependency graphs.
 
 ## Library entry points
 
