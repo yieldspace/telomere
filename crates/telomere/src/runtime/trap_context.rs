@@ -28,7 +28,8 @@ pub(crate) struct CapturedFrame {
     pub(crate) funcidx: Option<u32>,
     /// Frame zero is the faulting dispatch unit; older entries are return PCs.
     /// Fused interpreter dispatch units report their first instruction.
-    /// Native JIT traps have no justified interpreter attribution and report `None`.
+    /// Native JIT traps recover decoded-instruction attribution through the trap-site table;
+    /// only an unknown site reports `None`.
     pub(crate) pc_index: Option<u32>,
     pub(crate) kind: CapturedFrameKind,
 }

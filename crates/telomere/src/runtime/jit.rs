@@ -140,7 +140,15 @@ pub(crate) unsafe fn run_interpreter_continue_from_jit_call(
                 next = ctx.cont;
             }
             VMResult::Unimplemented => return JitNativeExit::fallback_pc(ctx.cont),
-            other => return JitNativeExit::trap(other),
+            other => {
+                return JitNativeExit {
+                    kind: JitNativeExit::TRAP,
+                    value: abi::encode_trap_value(
+                        abi::TRAP_SITE_INHERIT,
+                        abi::vm_result_code(other),
+                    ),
+                };
+            }
         }
     }
 }
@@ -195,6 +203,7 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
         false
     });
     if too_deep {
+        ctx.cont = std::ptr::null();
         return VMResult::StackOverflow;
     }
     let _entry_guard = JitEntryDepthGuard;
@@ -221,13 +230,41 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
         };
         (compiled, code_base)
     };
-    VMResult::Success(unsafe {
+    let exit = unsafe {
         (compiled.entry())(
             ctx as *mut ExecuteContext<'_>,
             code_base,
             ctx.local_base_ptr,
         )
-    })
+    };
+    VMResult::Success(resolve_trap_site(exit, &compiled, code_base, ctx))
+}
+
+#[cfg(feature = "jit")]
+fn resolve_trap_site(
+    mut exit: JitNativeExit,
+    compiled: &CompiledFunction,
+    code_base: *const Instr,
+    ctx: &mut ExecuteContext<'_>,
+) -> JitNativeExit {
+    if exit.kind != JitNativeExit::TRAP {
+        return exit;
+    }
+
+    match abi::trap_site(exit.value) {
+        abi::TRAP_SITE_UNKNOWN => {
+            ctx.cont = std::ptr::null();
+        }
+        abi::TRAP_SITE_INHERIT => {}
+        site => {
+            ctx.cont = match compiled.trap_site_pc(site) {
+                Some(pc) if !code_base.is_null() => unsafe { code_base.add(pc as usize) },
+                Some(_) | None => std::ptr::null(),
+            };
+            exit.value = abi::encode_trap_value(abi::TRAP_SITE_INHERIT, abi::trap_code(exit.value));
+        }
+    }
+    exit
 }
 
 #[cfg(feature = "jit")]
@@ -276,6 +313,7 @@ unsafe fn handle_exit(
     match exit.kind {
         JitNativeExit::FALLBACK_INDEX => {
             profile::count_exit(exit.kind);
+            ctx.cont = std::ptr::null();
             VMResult::InvalidOperand
         }
         JitNativeExit::FALLBACK_PTR => unsafe {
@@ -300,15 +338,19 @@ unsafe fn handle_exit(
         }
         JitNativeExit::TRAP => {
             profile::count_exit(exit.kind);
-            ctx.cont = std::ptr::null();
-            abi::vm_result_from_code(exit.value)
+            if abi::trap_site(exit.value) != abi::TRAP_SITE_INHERIT {
+                ctx.cont = std::ptr::null();
+            }
+            abi::vm_result_from_code(abi::trap_code(exit.value))
         }
         JitNativeExit::KEEP_GOING => {
             profile::count_exit(exit.kind);
+            ctx.cont = std::ptr::null();
             VMResult::InvalidOperand
         }
         _ => {
             profile::count_exit(exit.kind);
+            ctx.cont = std::ptr::null();
             VMResult::InvalidOperand
         }
     }

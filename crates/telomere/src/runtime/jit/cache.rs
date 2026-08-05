@@ -14,7 +14,7 @@ use crate::common::{
 };
 
 use super::{
-    abi::JitEntry,
+    abi::{JitEntry, TRAP_SITE_FIRST},
     backend,
     profile::{self, Counter},
 };
@@ -62,6 +62,7 @@ enum ActiveTier {
 pub(crate) struct CompiledFunction {
     entry: JitEntry,
     code_size: usize,
+    trap_sites: Box<[u32]>,
     _code: ExecutableCode,
 }
 
@@ -100,8 +101,8 @@ impl StoreJitCache {
         let FunctionBody::Wasm { code, op_lens, .. } = body else {
             return VMResult::Unimplemented;
         };
-        let bytes = match backend::emit_baseline_function(funcaddr, code, op_lens, runtime) {
-            Ok(bytes) => bytes,
+        let artifact = match backend::emit_baseline_function(funcaddr, code, op_lens, runtime) {
+            Ok(artifact) => artifact,
             Err(backend::EmitBaselineError::Verify) => {
                 profile::count(Counter::CompileRejectVerify);
                 trace_compile_reject("verify", 0, 0, max_bytes);
@@ -117,19 +118,44 @@ impl StoreJitCache {
                 return VMResult::Unimplemented;
             }
         };
-        let allocation_len = match CodeArena::allocation_len(bytes.len()) {
+        let code_len = artifact.code.len();
+        let allocation_len = match CodeArena::allocation_len(code_len) {
             Ok(len) => len,
             Err(_) => {
                 profile::count(Counter::CompileRejectAllocationLen);
-                trace_compile_reject("allocation_len", bytes.len(), 0, max_bytes);
+                trace_compile_reject("allocation_len", code_len, 0, max_bytes);
                 runtime.mark_jit_rejected_func(funcaddr);
                 self.mark_rejected(funcaddr);
                 return VMResult::Unimplemented;
             }
         };
-        if allocation_len > max_bytes {
+        let table_size = match artifact
+            .trap_sites
+            .len()
+            .checked_mul(std::mem::size_of::<u32>())
+        {
+            Some(size) => size,
+            None => {
+                profile::count(Counter::CompileRejectTooLarge);
+                trace_compile_reject("trap_table_overflow", code_len, allocation_len, max_bytes);
+                runtime.mark_jit_rejected_func(funcaddr);
+                self.mark_rejected(funcaddr);
+                return VMResult::Unimplemented;
+            }
+        };
+        let total_size = match allocation_len.checked_add(table_size) {
+            Some(size) => size,
+            None => {
+                profile::count(Counter::CompileRejectTooLarge);
+                trace_compile_reject("total_size_overflow", code_len, allocation_len, max_bytes);
+                runtime.mark_jit_rejected_func(funcaddr);
+                self.mark_rejected(funcaddr);
+                return VMResult::Unimplemented;
+            }
+        };
+        if total_size > max_bytes {
             profile::count(Counter::CompileRejectTooLarge);
-            trace_compile_reject("too_large", bytes.len(), allocation_len, max_bytes);
+            trace_compile_reject("too_large", code_len, total_size, max_bytes);
             runtime.mark_jit_rejected_func(funcaddr);
             self.mark_rejected(funcaddr);
             return VMResult::Unimplemented;
@@ -140,12 +166,7 @@ impl StoreJitCache {
         let clock = inner.clock;
         if inner.disabled.contains(&funcaddr) {
             profile::count(Counter::CompileRejectDisabledAfterEmit);
-            trace_compile_reject(
-                "disabled_after_emit",
-                bytes.len(),
-                allocation_len,
-                max_bytes,
-            );
+            trace_compile_reject("disabled_after_emit", code_len, total_size, max_bytes);
             return VMResult::Unimplemented;
         }
         if let Some(cached) = inner.compiled.get_mut(&funcaddr) {
@@ -153,20 +174,24 @@ impl StoreJitCache {
             cached.last_used = clock;
             return VMResult::Success(cached.tiers.active().clone());
         }
-        inner.evict_until(max_bytes.saturating_sub(allocation_len));
-        let compiled = match CompiledFunction::from_bytes(&bytes, &inner.arena) {
+        inner.evict_until(max_bytes.saturating_sub(total_size));
+        let compiled = match CompiledFunction::from_artifact(artifact, &inner.arena) {
             Ok(compiled) => Arc::new(compiled),
             Err(()) => {
                 profile::count(Counter::CompileRejectFromBytes);
-                trace_compile_reject("from_bytes", bytes.len(), allocation_len, max_bytes);
+                trace_compile_reject("from_bytes", code_len, total_size, max_bytes);
                 runtime.mark_jit_rejected_func(funcaddr);
                 inner.disabled.insert(funcaddr);
                 return VMResult::Unimplemented;
             }
         };
         profile::count(Counter::CompileAccepted);
-        profile::add(Counter::CompileBytes, bytes.len() as u64);
-        inner.used_bytes = inner.used_bytes.saturating_add(compiled.code_size());
+        profile::add(Counter::CompileBytes, code_len as u64);
+        debug_assert_eq!(compiled.cache_size(), total_size);
+        inner.used_bytes = inner
+            .used_bytes
+            .checked_add(compiled.cache_size())
+            .expect("JIT cache usage must be bounded by its configured maximum");
         inner.compiled.insert(
             funcaddr,
             CachedFunction {
@@ -198,7 +223,7 @@ impl StoreJitCache {
     fn mark_rejected(&self, funcaddr: ObjectRef) {
         let mut inner = self.inner.lock();
         if let Some(cached) = inner.compiled.remove(&funcaddr) {
-            inner.used_bytes = inner.used_bytes.saturating_sub(cached.tiers.code_size());
+            inner.used_bytes = inner.used_bytes.saturating_sub(cached.tiers.cache_size());
         }
         inner.disabled.insert(funcaddr);
     }
@@ -243,7 +268,7 @@ impl StoreJitCacheInner {
             let Some(cached) = self.compiled.remove(&funcaddr) else {
                 break;
             };
-            self.used_bytes = self.used_bytes.saturating_sub(cached.tiers.code_size());
+            self.used_bytes = self.used_bytes.saturating_sub(cached.tiers.cache_size());
         }
     }
 }
@@ -264,23 +289,27 @@ impl CompiledTiers {
         }
     }
 
-    fn code_size(&self) -> usize {
-        self.baseline.code_size()
-            + self
-                .optimized
-                .as_ref()
-                .map(|compiled| compiled.code_size())
-                .unwrap_or(0)
+    fn cache_size(&self) -> usize {
+        self.baseline
+            .cache_size()
+            .checked_add(
+                self.optimized
+                    .as_ref()
+                    .map(|compiled| compiled.cache_size())
+                    .unwrap_or(0),
+            )
+            .expect("JIT tier cache size must fit in usize")
     }
 }
 
 impl CompiledFunction {
-    fn from_bytes(bytes: &[u8], arena: &CodeArena) -> Result<Self, ()> {
-        let code = arena.allocate(bytes).map_err(|_| ())?;
+    fn from_artifact(artifact: backend::BaselineArtifact, arena: &CodeArena) -> Result<Self, ()> {
+        let code = arena.allocate(&artifact.code).map_err(|_| ())?;
         let entry = unsafe { std::mem::transmute::<usize, JitEntry>(code.ptr() as usize) };
         Ok(Self {
             entry,
             code_size: code.len(),
+            trap_sites: artifact.trap_sites.into_boxed_slice(),
             _code: code,
         })
     }
@@ -289,8 +318,23 @@ impl CompiledFunction {
         self.entry
     }
 
-    fn code_size(&self) -> usize {
+    pub(crate) fn trap_site_pc(&self, site: u64) -> Option<u32> {
+        let index = site.checked_sub(TRAP_SITE_FIRST)?;
+        let index = usize::try_from(index).ok()?;
+        self.trap_sites.get(index).copied()
+    }
+
+    pub(crate) fn table_size(&self) -> usize {
+        self.trap_sites
+            .len()
+            .checked_mul(std::mem::size_of::<u32>())
+            .expect("JIT trap table size must fit in usize")
+    }
+
+    fn cache_size(&self) -> usize {
         self.code_size
+            .checked_add(self.table_size())
+            .expect("JIT compiled function size must fit in usize")
     }
 }
 
@@ -305,7 +349,20 @@ mod tests {
         let tiers = CompiledTiers::baseline(compiled.clone());
 
         assert!(Arc::ptr_eq(tiers.active(), &compiled));
-        assert_eq!(tiers.code_size(), 32);
+        assert_eq!(tiers.cache_size(), 32);
+    }
+
+    #[test]
+    fn compiled_function_trap_table_maps_only_valid_sites() {
+        let compiled = test_compiled_with_trap_sites(32, vec![4, 12]);
+
+        assert_eq!(compiled.table_size(), 8);
+        assert_eq!(compiled.cache_size(), 40);
+        assert_eq!(compiled.trap_site_pc(TRAP_SITE_FIRST - 1), None);
+        assert_eq!(compiled.trap_site_pc(TRAP_SITE_FIRST), Some(4));
+        assert_eq!(compiled.trap_site_pc(TRAP_SITE_FIRST + 1), Some(12));
+        assert_eq!(compiled.trap_site_pc(TRAP_SITE_FIRST + 2), None);
+        assert_eq!(compiled.trap_site_pc(u64::MAX), None);
     }
 
     #[test]
@@ -319,7 +376,7 @@ mod tests {
         {
             let mut inner = cache.inner.lock();
             inner.clock = 2;
-            inner.used_bytes = compiled_a.code_size() + compiled_b.code_size();
+            inner.used_bytes = compiled_a.cache_size() + compiled_b.cache_size();
             inner.compiled.insert(
                 func_a,
                 CachedFunction {
@@ -339,7 +396,7 @@ mod tests {
         assert!(cache.touch_compiled(func_a, &compiled_a));
 
         let mut inner = cache.inner.lock();
-        let target_used_bytes = inner.used_bytes.saturating_sub(compiled_b.code_size());
+        let target_used_bytes = inner.used_bytes.saturating_sub(compiled_b.cache_size());
         inner.evict_until(target_used_bytes);
 
         assert!(inner.compiled.contains_key(&func_a));
@@ -357,7 +414,7 @@ mod tests {
         {
             let mut inner = cache.inner.lock();
             inner.clock = 1;
-            inner.used_bytes = current.code_size();
+            inner.used_bytes = current.cache_size();
             inner.compiled.insert(
                 func,
                 CachedFunction {
@@ -374,10 +431,18 @@ mod tests {
     }
 
     fn test_compiled(code_size: usize) -> Arc<CompiledFunction> {
+        test_compiled_with_trap_sites(code_size, Vec::new())
+    }
+
+    fn test_compiled_with_trap_sites(
+        code_size: usize,
+        trap_sites: Vec<u32>,
+    ) -> Arc<CompiledFunction> {
         let code = ExecutableCode::test_stub(code_size);
         Arc::new(CompiledFunction {
             entry: noop_entry,
             code_size: code.len(),
+            trap_sites: trap_sites.into_boxed_slice(),
             _code: code,
         })
     }

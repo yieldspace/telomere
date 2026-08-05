@@ -12,12 +12,17 @@ pub(crate) enum EmitBaselineError {
     Emit,
 }
 
+pub(crate) struct BaselineArtifact {
+    pub(crate) code: Vec<u8>,
+    pub(crate) trap_sites: Vec<u32>,
+}
+
 pub(crate) fn emit_baseline_function(
     funcaddr: crate::common::ObjectRef,
     code: &[crate::common::Instr],
     op_lens: &[u16],
     runtime: &crate::common::store::StoreInner,
-) -> Result<Vec<u8>, EmitBaselineError> {
+) -> Result<BaselineArtifact, EmitBaselineError> {
     let plan = ops::build_baseline_plan(code, op_lens).map_err(|_| EmitBaselineError::Verify)?;
     emit_baseline_plan(funcaddr, code, op_lens, runtime, &plan).map_err(|_| EmitBaselineError::Emit)
 }
@@ -29,7 +34,7 @@ fn emit_baseline_plan(
     op_lens: &[u16],
     runtime: &crate::common::store::StoreInner,
     plan: &ops::BaselinePlan,
-) -> Result<Vec<u8>, ()> {
+) -> Result<BaselineArtifact, ()> {
     aarch64_macos::emit_baseline_function(funcaddr, code, op_lens, runtime, plan)
 }
 
@@ -40,7 +45,7 @@ fn emit_baseline_plan(
     op_lens: &[u16],
     runtime: &crate::common::store::StoreInner,
     plan: &ops::BaselinePlan,
-) -> Result<Vec<u8>, ()> {
+) -> Result<BaselineArtifact, ()> {
     riscv64::emit_baseline_function(funcaddr, code, op_lens, runtime, plan)
 }
 
@@ -51,7 +56,7 @@ fn emit_baseline_plan(
     op_lens: &[u16],
     runtime: &crate::common::store::StoreInner,
     plan: &ops::BaselinePlan,
-) -> Result<Vec<u8>, ()> {
+) -> Result<BaselineArtifact, ()> {
     x86_64::emit_baseline_function(funcaddr, code, op_lens, runtime, plan)
 }
 
@@ -66,7 +71,7 @@ fn emit_baseline_plan(
     _op_lens: &[u16],
     _runtime: &crate::common::store::StoreInner,
     _plan: &ops::BaselinePlan,
-) -> Result<Vec<u8>, ()> {
+) -> Result<BaselineArtifact, ()> {
     Err(())
 }
 

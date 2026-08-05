@@ -125,6 +125,34 @@ async fn instantiate_jit_wat(wat: &str, store: &Store, registry: &Registry) -> I
         all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
     )
 ))]
+async fn run_trapping_export(
+    wat: &str,
+    store: &Store,
+    selector: i32,
+) -> (VMResult<ResultValue>, telomere::TrapInfo) {
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(wat, store, &registry).await;
+    let result = telomere::run_module_function(
+        &instance,
+        store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(selector)]),
+    )
+    .await;
+    let trap = store
+        .take_last_trap()
+        .expect("trapping guest call must retain trap information");
+    (result, trap)
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 fn host_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let value = i32::from_le_bytes(
         ctx.stack
@@ -2390,6 +2418,187 @@ async fn jit_accepts_current_op_continuation_bridge_without_compile_reject() {
         ResultValue::new(vec![WasmValue::I32(5), WasmValue::I32(8)]),
     );
     assert_jit_accepted(before, after);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_trap_pcs_match_interpreter_for_division_load_and_unreachable() {
+    let wat = r#"
+        (module
+          (memory 1)
+          (func (export "run") (param i32) (result i32)
+            (drop (i32.div_s (i32.const 7) (local.get 0)))
+            (drop (i32.load (local.get 0)))
+            unreachable))
+        "#;
+
+    for selector in [0, 100_000, 1] {
+        let interpreter_store = Store::new();
+        let (interpreter_result, interpreter_trap) =
+            run_trapping_export(wat, &interpreter_store, selector).await;
+
+        let jit_store = jit_store();
+        let before = jit_store.jit_cache_stats();
+        let (jit_result, jit_trap) = run_trapping_export(wat, &jit_store, selector).await;
+        let after = jit_store.jit_cache_stats();
+
+        match selector {
+            0 => {
+                assert!(matches!(interpreter_result, VMResult::InvalidOperand));
+                assert!(matches!(jit_result, VMResult::InvalidOperand));
+                assert_eq!(interpreter_trap.kind, telomere::TrapKind::InvalidOperand);
+                assert_eq!(jit_trap.kind, telomere::TrapKind::InvalidOperand);
+            }
+            100_000 => {
+                assert!(matches!(
+                    interpreter_result,
+                    VMResult::MemoryIndexOutOfRange
+                ));
+                assert!(matches!(jit_result, VMResult::MemoryIndexOutOfRange));
+                assert_eq!(
+                    interpreter_trap.kind,
+                    telomere::TrapKind::MemoryIndexOutOfRange
+                );
+                assert_eq!(jit_trap.kind, telomere::TrapKind::MemoryIndexOutOfRange);
+            }
+            1 => {
+                assert!(matches!(interpreter_result, VMResult::Unreachable));
+                assert!(matches!(jit_result, VMResult::Unreachable));
+                assert_eq!(interpreter_trap.kind, telomere::TrapKind::Unreachable);
+                assert_eq!(jit_trap.kind, telomere::TrapKind::Unreachable);
+            }
+            _ => unreachable!("test inputs are fixed"),
+        }
+
+        assert_eq!(interpreter_trap.frames.len(), 1);
+        assert_eq!(jit_trap.frames.len(), 1);
+        let interpreter_frame = &interpreter_trap.frames[0];
+        let jit_frame = &jit_trap.frames[0];
+        assert_eq!(interpreter_frame.funcidx, Some(0));
+        assert_eq!(jit_frame.funcidx, Some(0));
+        assert_eq!(interpreter_frame.kind, telomere::TrapFrameKind::Wasm);
+        assert_eq!(jit_frame.kind, telomere::TrapFrameKind::Wasm);
+        let interpreter_pc = interpreter_frame
+            .pc_index
+            .expect("interpreter trap must have an innermost pc index");
+        let jit_pc = jit_frame
+            .pc_index
+            .expect("JIT trap must have an innermost pc index");
+        assert_eq!(
+            jit_pc, interpreter_pc,
+            "selector {selector} must retain the same faulting decoded instruction"
+        );
+        assert_jit_accepted(before, after);
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[test]
+fn jit_mixed_wasm_stack_keeps_pcs_across_interpreter_boundaries() {
+    let worker = std::thread::Builder::new()
+        .name("jit-mixed-wasm-stack".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| futures::executor::block_on(jit_mixed_wasm_stack_case()))
+        .expect("mixed-stack test thread must start");
+    worker
+        .join()
+        .expect("mixed-stack test thread must complete");
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+async fn jit_mixed_wasm_stack_case() {
+    const REPEATS: usize = 1024;
+    const CODE_CACHE_MAX_BYTES: u32 = 32 * 1024;
+
+    let large_body = "
+            i32.const 0
+            i32.const 0
+            i32.store
+        "
+    .repeat(REPEATS);
+    let wat = format!(
+        r#"
+        (module $mixed
+          (memory 1)
+          (func $inner
+            {large_body}
+            unreachable)
+          (func $middle
+            call $inner)
+          (func $outer (export "run")
+            {large_body}
+            call $middle))
+        "#,
+    );
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig {
+        enabled: true,
+        code_cache_max_bytes: CODE_CACHE_MAX_BYTES,
+    };
+    let store = Store::new_with_runtime_config(runtime_config);
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(&wat, &store, &registry).await;
+
+    let before = store.jit_cache_stats();
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    let after = store.jit_cache_stats();
+
+    assert!(matches!(result, VMResult::Unreachable));
+    let trap = store
+        .take_last_trap()
+        .expect("mixed Wasm trap must retain trap information");
+    assert_eq!(trap.kind, telomere::TrapKind::Unreachable);
+    assert!(!trap.truncated);
+    assert_eq!(trap.total_frames, 3);
+    assert_eq!(
+        trap.frames
+            .iter()
+            .map(|frame| (frame.funcidx, frame.func_name.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some(0), Some("inner")),
+            (Some(1), Some("middle")),
+            (Some(2), Some("outer")),
+        ]
+    );
+    assert!(
+        trap.frames
+            .iter()
+            .all(|frame| frame.kind == telomere::TrapFrameKind::Wasm && frame.pc_index.is_some()),
+        "interpreter -> JIT -> interpreter must retain every Wasm frame pc"
+    );
+    assert_eq!(
+        after.compiled_functions,
+        before.compiled_functions + 1,
+        "expected only the small middle function to be JIT-accepted, before={before:?} after={after:?}"
+    );
+    assert_eq!(
+        after.rejected_functions,
+        before.rejected_functions + 2,
+        "expected the large Wasm outer and inner functions to be rejected, before={before:?} after={after:?}"
+    );
 }
 
 #[cfg(all(

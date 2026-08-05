@@ -7,7 +7,9 @@ use crate::common::{
     LocalFastRhsShape, LocalReference, LocalUnary32Op, LocalUnary64Op, MemArg, ObjectRef, VMResult,
     PAGE_SIZE,
 };
-use crate::runtime::jit::abi::{vm_result_code, JitNativeExit};
+use crate::runtime::jit::abi::{
+    encode_trap_value, vm_result_code, JitNativeExit, TRAP_SITE_FIRST, TRAP_SITE_UNKNOWN,
+};
 use crate::runtime::jit::profile::{self, Counter};
 use crate::runtime::jit::stubs::{
     atomic_fence as jit_atomic_fence, call_i32_crc16_update16 as jit_call_i32_crc16_update16,
@@ -41,13 +43,15 @@ use telomere_jit_codegen::arch::x86_64::{
     patch_branch as patch_a64_branch, BranchKind, Cond, X64BaselineMasm as A64BaselineMasm,
 };
 
+use super::BaselineArtifact;
+
 pub(crate) fn emit_baseline_function(
     funcaddr: ObjectRef,
     code: &[Instr],
     op_lens: &[u16],
     runtime: &StoreInner,
     plan: &BaselinePlan,
-) -> Result<Vec<u8>, ()> {
+) -> Result<BaselineArtifact, ()> {
     let mut emitter = Emitter::new(funcaddr, code, op_lens, runtime, plan);
     emitter.emit()?;
     emitter.finish()
@@ -145,6 +149,8 @@ struct Emitter<'a> {
     labels: Vec<Option<usize>>,
     fixups: Vec<Fixup>,
     stack_depth: usize,
+    current_pc_index: Option<u32>,
+    trap_sites: Vec<u32>,
 }
 
 impl std::ops::Deref for Emitter<'_> {
@@ -178,6 +184,8 @@ impl<'a> Emitter<'a> {
             labels: vec![None; wasm.len().saturating_add(1)],
             fixups: Vec::new(),
             stack_depth: 0,
+            current_pc_index: None,
+            trap_sites: Vec::new(),
         }
     }
 
@@ -186,6 +194,7 @@ impl<'a> Emitter<'a> {
         let mut op_index = 0usize;
         while let Some(entry) = self.plan.entries().get(op_index) {
             let cursor = entry.pc_index;
+            self.current_pc_index = Some(u32::try_from(cursor).map_err(|_| ())?);
             self.labels[cursor] = Some(self.offset());
             let op = entry.op.clone();
             match self.emit_op_or_runtime(cursor, op)? {
@@ -237,6 +246,7 @@ impl<'a> Emitter<'a> {
                 EmitControl::Stop => break,
             }
         }
+        self.current_pc_index = None;
         self.return_trap(VMResult::<()>::InvalidOperand);
         Ok(())
     }
@@ -2317,7 +2327,7 @@ impl BaselineOpEmitter<'_, '_> {
 }
 
 impl<'a> Emitter<'a> {
-    fn finish(mut self) -> Result<Vec<u8>, ()> {
+    fn finish(mut self) -> Result<BaselineArtifact, ()> {
         let epilogue = self.offset();
         self.restore_and_ret();
         for fixup in &self.fixups {
@@ -2335,7 +2345,11 @@ impl<'a> Emitter<'a> {
             let target = self.resolve_label(fixup.target_index).unwrap_or(epilogue);
             patch_branch(self.masm.as_mut_bytes(), fixup.at, target, fixup.kind)?;
         }
-        Ok(self.masm.into_bytes())
+        let code = self.masm.into_bytes();
+        Ok(BaselineArtifact {
+            code,
+            trap_sites: self.trap_sites,
+        })
     }
 
     fn resolve_label(&self, target_index: usize) -> Option<usize> {
@@ -3340,9 +3354,24 @@ impl<'a> Emitter<'a> {
     }
 
     fn return_trap<T>(&mut self, result: VMResult<T>) {
+        let site = self.record_trap_site();
         self.mov_imm_u64(0, JitNativeExit::TRAP);
-        self.mov_imm_u64(1, vm_result_code(result));
+        self.mov_imm_u64(1, encode_trap_value(site, vm_result_code(result)));
         self.branch_to_epilogue();
+    }
+
+    fn record_trap_site(&mut self) -> u64 {
+        let Some(pc_index) = self.current_pc_index else {
+            return TRAP_SITE_UNKNOWN;
+        };
+        if self.trap_sites.last().copied() != Some(pc_index) {
+            self.trap_sites.push(pc_index);
+        }
+        let index =
+            u64::try_from(self.trap_sites.len() - 1).expect("JIT trap site index must fit in u64");
+        TRAP_SITE_FIRST
+            .checked_add(index)
+            .expect("JIT trap site value must fit in u64")
     }
 
     fn call_ptr(&mut self, ptr: usize) {

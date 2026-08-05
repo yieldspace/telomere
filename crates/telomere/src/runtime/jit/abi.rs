@@ -3,6 +3,23 @@ use crate::common::{ExecuteContext, Instr, VMResult};
 pub(crate) type JitEntry =
     unsafe extern "C" fn(*mut ExecuteContext<'_>, *const Instr, *mut u8) -> JitNativeExit;
 
+const TRAP_CODE_MASK: u64 = 0xff;
+pub(crate) const TRAP_SITE_UNKNOWN: u64 = 0;
+pub(crate) const TRAP_SITE_INHERIT: u64 = 1;
+pub(crate) const TRAP_SITE_FIRST: u64 = 2;
+
+pub(crate) const fn encode_trap_value(site: u64, code: u64) -> u64 {
+    (site << 8) | (code & TRAP_CODE_MASK)
+}
+
+pub(crate) const fn trap_site(value: u64) -> u64 {
+    value >> 8
+}
+
+pub(crate) const fn trap_code(value: u64) -> u64 {
+    value & TRAP_CODE_MASK
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JitNativeExit {
@@ -73,7 +90,7 @@ impl JitNativeExit {
     pub fn trap<T>(result: VMResult<T>) -> Self {
         Self {
             kind: Self::TRAP,
-            value: vm_result_code(result),
+            value: encode_trap_value(TRAP_SITE_UNKNOWN, vm_result_code(result)),
         }
     }
 }
@@ -122,8 +139,35 @@ pub(crate) fn vm_result_from_code(code: u64) -> VMResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{vm_result_code, vm_result_from_code};
+    use super::{
+        encode_trap_value, trap_code, trap_site, vm_result_code, vm_result_from_code,
+        JitNativeExit, TRAP_SITE_FIRST, TRAP_SITE_UNKNOWN,
+    };
     use crate::common::VMResult;
+
+    #[test]
+    fn trap_value_round_trips_code_and_site() {
+        let value = encode_trap_value(TRAP_SITE_FIRST + 7, 13);
+
+        assert_eq!(trap_site(value), TRAP_SITE_FIRST + 7);
+        assert_eq!(trap_code(value), 13);
+    }
+
+    #[test]
+    fn trap_value_preserves_code_zero_in_its_low_byte() {
+        let value = encode_trap_value(TRAP_SITE_FIRST, 0);
+
+        assert_eq!(trap_site(value), TRAP_SITE_FIRST);
+        assert_eq!(trap_code(value), 0);
+    }
+
+    #[test]
+    fn generic_trap_uses_the_unknown_site() {
+        let exit = JitNativeExit::trap(VMResult::<()>::Unreachable);
+
+        assert_eq!(trap_site(exit.value), TRAP_SITE_UNKNOWN);
+        assert_eq!(trap_code(exit.value), 1);
+    }
 
     #[test]
     fn memory_allocation_failed_round_trips_through_jit_trap_code() {

@@ -365,7 +365,7 @@ async fn jit_trap_keeps_caller_pcs_and_golden_frame_sequence() {
             (Some(0), Some("run"))
         ]
     );
-    assert_eq!(info.frames[0].pc_index, None);
+    assert_eq!(info.frames[0].pc_index, Some(0));
     assert!(
         info.frames[1..]
             .iter()
@@ -374,7 +374,7 @@ async fn jit_trap_keeps_caller_pcs_and_golden_frame_sequence() {
     );
     assert_eq!(
         info.to_string(),
-        "trap: unreachable\n  0: jit::f2 (func 2)\n  1: jit::f1 (func 1) @ pc 2\n  2: jit::run (func 0) @ pc 2"
+        "trap: unreachable\n  0: jit::f2 (func 2) @ pc 0\n  1: jit::f1 (func 1) @ pc 2\n  2: jit::run (func 0) @ pc 2"
     );
 }
 
