@@ -68,7 +68,7 @@ workspace's `cargo metadata` view.
 
 [`tools/check-feature-wiring.py`](../tools/check-feature-wiring.py) enforces the
 declared roles, forwarding paths, and normal-edge `default-features = false`
-rule. The [`feature-policy` CI job](../.github/workflows/ci.yaml) runs that
+rule. The [`Manifest feature wiring` CI job](../.github/workflows/ci.yaml) runs that
 checker and structurally verifies the minimal-embedder graph's Tokio boundary,
 including a positive control.
 

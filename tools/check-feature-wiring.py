@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check that workspace feature forwarding follows the telomere policy."""
+"""Check that workspace feature forwarding follows the telomere policy.
+
+No-op aliases compare direct Cargo metadata entry lists only; transitive feature
+expansion is not evaluated.
+"""
 
 import json
 import subprocess
@@ -312,11 +316,12 @@ def validate(actual):
                 )
 
         if role != "unrelated":
-            default_expansion = frozenset(features.get("default", []))
+            default_entries = frozenset(features.get("default", []))
             for feature, entries in features.items():
-                if feature != "default" and frozenset(entries) == default_expansion:
+                if feature != "default" and frozenset(entries) == default_entries:
                     errors.append(
-                        f"{name}: feature {feature} duplicates the default feature expansion"
+                        f"{name}: feature {feature} declares the same direct entry "
+                        "list as default"
                     )
 
     return errors
