@@ -56,6 +56,24 @@ contract. Their opcode ranges are deliberately narrow: an inaccurate proposal
 name is worse than a generic parse error. Reserved values, holes, and adjacent
 proposals remain generic errors.
 
+## Core embedder diagnostics
+
+| Capability | Status | API | Boundary |
+| --- | --- | --- | --- |
+| Captured core trap reporting | Implemented | Root `TrapInfo`, `TrapFrame`, `TrapFrameKind`, `TrapKind`, and `Store::take_last_trap` | An owned, consuming, best-effort diagnostic record for the most recent outermost guest call on the calling thread. Concurrent calls on one `Store` can lose a record but cannot return another thread's record. |
+| Producer debug names in trap frames | Implemented; opt-out | `RuntimeConfig::diagnostics.retain_function_names` | Names are retained by default and symbolized only when the trap is taken. With retention disabled or no name section, names are absent while indices remain. |
+| JIT instruction attribution | Partial by design | `TrapFrame::pc_index` | A native fault reports no frame-zero pc; caller frames retain return-address pcs. Function-level frame identity remains. [#209](https://github.com/yieldspace/telomere/issues/209) owns additive trap-site attribution. |
+
+The complete retrieval, nesting, display, and program-counter contract is
+[trap reporting](core/trap-reporting.md). Its labels are Telomere diagnostics,
+not WAST trap-message strings; [#131](https://github.com/yieldspace/telomere/issues/131)
+owns those strings. This core-only bridge does not alter `VMResult` or core
+call signatures: [#143](https://github.com/yieldspace/telomere/issues/143)
+owns the public error redesign and [#146](https://github.com/yieldspace/telomere/issues/146)
+owns the C ABI mirror. Component-layer trace stitching is outside this matrix's
+current core capability and belongs to
+[#211](https://github.com/yieldspace/telomere/issues/211).
+
 ## Component Model and canonical ABI
 
 ### Canonical functions

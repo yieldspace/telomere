@@ -23,6 +23,7 @@ the body for the details.
 | --- | --- | --- |
 | [core/runtime-memory.md](core/runtime-memory.md) | Current | Store ownership, linear memory, execution lease, and compact runtime representation. |
 | [core/parser-limits.md](core/parser-limits.md) | Current | Parser and component-decoder nesting policy, scope, and embedder-facing limits. |
+| [core/trap-reporting.md](core/trap-reporting.md) | Current | Owned core trap diagnostics, consuming retrieval, names, output format, and JIT program-counter limits. |
 | [support-matrix.md](support-matrix.md) | Current | Core proposal, Component Model canonical ABI, and WASI 0.2.6 support boundaries with source-backed coverage counts. |
 | [core/optimizer.md](core/optimizer.md) | Current | The canonical optimizer pipeline and runtime boundary. |
 | [core/metering.md](core/metering.md) | Current | Store-scoped interpreter fuel, accounting, cancellation, and its JIT boundary. |

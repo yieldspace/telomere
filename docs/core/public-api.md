@@ -24,6 +24,16 @@ and the minimal-embedder JIT configuration use this documented observability
 surface to verify that an enabled workload compiled; it is not part of the raw
 host-linking ABI and therefore does not belong in `host_abi`.
 
+S1 also exposes the cold core-trap diagnostics capability:
+`TrapInfo`, `TrapFrame`, `TrapFrameKind`, `TrapKind`, and
+`Store::take_last_trap`. The record is owned, its retrieval is consuming and
+best-effort on the calling thread, and it leaves `VMResult` plus the existing
+execution signatures unchanged. It is therefore a diagnostic bridge rather
+than the public error redesign: [#143](https://github.com/yieldspace/telomere/issues/143)
+owns that redesign, while [#146](https://github.com/yieldspace/telomere/issues/146)
+owns the corresponding C ABI surface. See [trap reporting](trap-reporting.md)
+for the exact retrieval, formatting, name-retention, and JIT boundaries.
+
 ### H1: default host ABI
 
 host_abi has nineteen always-present paths:
@@ -98,11 +108,13 @@ completion marker, not a supported default driver capability.
 
 crates/telomere/tests/public_surface.rs parses src/lib.rs, src/host_abi.rs,
 src/component_support.rs, and src/unstable_internals.rs with syn. It also
-parses the root-re-exported Module definition in src/common.rs solely to record
-the reviewed Module::codes field. It expands every explicit public use tree and
-public item into a telomere::... path, carries textual #[cfg(...)] predicates
-through nested public modules, sorts the result, and compares it byte-for-byte
-with the single committed crates/telomere/tests/public_surface.snapshot file.
+parses the root-re-exported `Module` definition in src/common.rs and the
+`Store` definition in src/common/store.rs solely to record the reviewed
+`Module::codes` field and `Store::take_last_trap` method. It expands every
+explicit public use tree and public item into a telomere::... path, carries
+textual #[cfg(...)] predicates through nested public modules, sorts the result,
+and compares it byte-for-byte with the single committed
+crates/telomere/tests/public_surface.snapshot file.
 
 The test deliberately reads source rather than the active Cargo feature set, so
 default, no-default, and SIMD-only invocations all compare against the same
@@ -114,8 +126,9 @@ carve-outs.
 
 The guard rejects ungated Operand, Op, the ten non-N6 names above, and every
 decoded *Section name except CodeSection. It separately requires the reviewed
-`telomere::JitCacheStats` path with its `jit` cfg predicate. It also
-rejects a new root public module unless it is deliberately added to the
+`telomere::JitCacheStats` path with its `jit` cfg predicate, plus the four S1
+trap-reporting type paths and the one reviewed `Store::take_last_trap` method.
+It also rejects a new root public module unless it is deliberately added to the
 reviewed parser closure. This catches a broad accidental reopening of the
 interpreter surface while leaving the exact path decision to the snapshot
 review.
@@ -137,7 +150,8 @@ then verify the snapshot without the update environment variable:
 ### What this does and does not prove
 
 The snapshot is a path-level guard. It has one deliberately reviewed field
-exception, Module::codes, but does not detect arbitrary new public methods,
+exception, `Module::codes`, and one deliberately reviewed method exception,
+`Store::take_last_trap`, but does not detect arbitrary new public methods,
 fields, or changed signatures on an already exported type.
 warn(unnameable_types), private_interfaces, compilation, and the warning-free
 Clippy job provide complementary checks; cargo public-api would be the

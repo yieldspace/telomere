@@ -12,6 +12,10 @@ use custom_section::NameSubSection;
 use smallvec::SmallVec;
 
 pub use vm_result::VMResult;
+/// Owned guest-trap diagnostics exposed through the embedding API.
+#[warn(missing_docs)]
+mod trap_info;
+pub use trap_info::{TrapFrame, TrapFrameKind, TrapInfo, TrapKind};
 pub(crate) mod debug_names;
 pub(crate) use debug_names::ModuleNames;
 pub(crate) mod memory;

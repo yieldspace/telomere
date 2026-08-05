@@ -5,10 +5,7 @@
 //! Tail calls replace their caller frame and are therefore intentionally absent.
 
 use crate::{
-    common::{
-        store::{FunctionBody, InstanceId},
-        Instr, LocalReference, ObjectRef, StablePc, Stack, StoreInner,
-    },
+    common::{store::FunctionBody, Instr, LocalReference, ObjectRef, StablePc, Stack, StoreInner},
     runtime::vm::instr_index_from_base,
     VMResult,
 };
@@ -17,8 +14,7 @@ const HEAD_FRAMES: usize = 48;
 const TAIL_FRAMES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Cold diagnostic seam; public exposure is owned by #210.
-pub(crate) enum TrapFrameKind {
+pub(crate) enum CapturedFrameKind {
     Wasm,
     Host,
     AsyncHost,
@@ -26,26 +22,24 @@ pub(crate) enum TrapFrameKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Cold diagnostic seam; public exposure is owned by #210.
-pub(crate) struct TrapFrame {
+pub(crate) struct CapturedFrame {
+    pub(crate) depth: u32,
     pub(crate) code_addr: ObjectRef,
-    pub(crate) instance: InstanceId,
     pub(crate) funcidx: Option<u32>,
     /// Frame zero is the faulting dispatch unit; older entries are return PCs.
     /// Fused interpreter dispatch units report their first instruction.
     /// Native JIT traps have no justified interpreter attribution and report `None`.
     pub(crate) pc_index: Option<u32>,
-    pub(crate) kind: TrapFrameKind,
+    pub(crate) kind: CapturedFrameKind,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // Cold diagnostic seam; public exposure is owned by #210.
 pub(crate) struct TrapContext {
     pub(crate) result: VMResult<()>,
     pub(crate) task_id: u32,
     /// Innermost first. When truncated, this contains the innermost 48 then
     /// the outermost 16 frames. Frames elided by tail calls are not present.
-    pub(crate) frames: Vec<TrapFrame>,
+    pub(crate) frames: Vec<CapturedFrame>,
     pub(crate) total_frames: u32,
     pub(crate) truncated: bool,
 }
@@ -56,7 +50,7 @@ pub(crate) struct TrapContext {
 /// call is already terminating. The bounded walk tolerates malformed raw stack
 /// references by returning the valid prefix rather than panicking.
 ///
-/// Capture allocates a `Box<TrapContext>` and one `Vec<TrapFrame>`, including
+/// Capture allocates a `Box<TrapContext>` and one `Vec<CapturedFrame>`, including
 /// for `MemoryAllocationFailed`: that guest allocation failure is distinct from
 /// the host allocator used here. Host allocator OOM is not recovered into empty
 /// frames; it follows the allocator's normal behavior.
@@ -91,6 +85,9 @@ pub(crate) fn capture_trap_context(
         let Some(record) = stack.frame_record(&local_reference) else {
             break;
         };
+        // `StackFrameRecord` retains this for the runtime stack layout. Trap
+        // reporting deliberately resolves names from the function record instead.
+        let _ = record.instance;
         let pc = match pending_return_pc {
             Some(return_pc) => return_pc.resolve_optional(runtime, stack, local_reference),
             None => innermost_pc,
@@ -98,17 +95,17 @@ pub(crate) fn capture_trap_context(
         let (funcidx, kind) = match runtime.try_get_func(record.code_addr) {
             Some(function) => {
                 let kind = match &function.body {
-                    FunctionBody::Wasm { .. } => TrapFrameKind::Wasm,
-                    FunctionBody::Host(_) => TrapFrameKind::Host,
-                    FunctionBody::AsyncHost(_) => TrapFrameKind::AsyncHost,
+                    FunctionBody::Wasm { .. } => CapturedFrameKind::Wasm,
+                    FunctionBody::Host(_) => CapturedFrameKind::Host,
+                    FunctionBody::AsyncHost(_) => CapturedFrameKind::AsyncHost,
                 };
                 (Some(function.funcidx), kind)
             }
-            None => (None, TrapFrameKind::Unresolved),
+            None => (None, CapturedFrameKind::Unresolved),
         };
-        let frame = TrapFrame {
+        let frame = CapturedFrame {
+            depth: total_frames,
             code_addr: record.code_addr,
-            instance: record.instance,
             funcidx,
             pc_index: pc.and_then(|pc| instr_index_from_base(pc, record.code_base)),
             kind,
@@ -243,7 +240,7 @@ mod tests {
         assert!(context
             .frames
             .iter()
-            .all(|frame| frame.kind == TrapFrameKind::Wasm));
+            .all(|frame| frame.kind == CapturedFrameKind::Wasm));
     }
 
     #[tokio::test]
@@ -387,12 +384,12 @@ mod tests {
         assert!(matches!(&context.result, VMResult::Unreachable));
         assert_eq!(context.task_id, 0);
         assert_eq!(context.frames[0].funcidx, Some(2));
-        assert_eq!(context.frames[0].kind, TrapFrameKind::Wasm);
+        assert_eq!(context.frames[0].kind, CapturedFrameKind::Wasm);
         assert_eq!(context.frames[1].funcidx, Some(0));
-        assert_eq!(context.frames[1].kind, TrapFrameKind::Host);
+        assert_eq!(context.frames[1].kind, CapturedFrameKind::Host);
         assert_eq!(context.frames[1].pc_index, None);
         assert_eq!(context.frames[2].funcidx, Some(1));
-        assert_eq!(context.frames[2].kind, TrapFrameKind::Wasm);
+        assert_eq!(context.frames[2].kind, CapturedFrameKind::Wasm);
     }
 
     #[tokio::test]
@@ -417,7 +414,7 @@ mod tests {
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::Unreachable));
         assert_eq!(context.task_id, 0);
-        assert_eq!(context.frames[0].kind, TrapFrameKind::AsyncHost);
+        assert_eq!(context.frames[0].kind, CapturedFrameKind::AsyncHost);
         assert_eq!(context.frames[0].pc_index, None);
     }
 

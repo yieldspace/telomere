@@ -4,10 +4,11 @@
 //! every feature combination therefore produces the same list, including paths
 //! behind `#[cfg(...)]`. The four parsed files contain the reviewed root,
 //! `host_abi`, component-support, and unstable-internal paths; the dedicated
-//! `Module::codes` compatibility field is read from `common.rs`. `lib.rs` is
-//! also checked so that a new public module cannot make
-//! that source set grow without being reviewed here; the measurement-only
-//! `measure_switches` root is the explicit, non-recursive exception.
+//! `Module::codes` compatibility field and `Store::take_last_trap` method are
+//! read from their defining private sources. `lib.rs` is also checked so that a
+//! new public module cannot make that source set grow without being reviewed
+//! here; the measurement-only `measure_switches` root is the explicit,
+//! non-recursive exception.
 //!
 //! This is a path-level check, not a signature-level API diff. In particular, it
 //! does not notice a new `pub` method on an already exported type. The
@@ -24,8 +25,8 @@ use std::{
 
 use quote::ToTokens;
 use syn::{
-    punctuated::Punctuated, Attribute, Expr, ExprLit, ForeignItem, Item, Lit, Meta, Token, UseTree,
-    Visibility,
+    punctuated::Punctuated, Attribute, Expr, ExprLit, ForeignItem, ImplItem, Item, Lit, Meta,
+    Token, Type, UseTree, Visibility,
 };
 
 const ALLOWED_PUBLIC_MODULES: &[&str] = &[
@@ -245,6 +246,18 @@ fn required_default_host_carve_outs_are_explicit() {
         BTreeSet::from([expected_module_codes]),
         "Module::codes is a reviewed default host-linking compatibility field"
     );
+
+    let expected_store_take_last_trap = expected_path("telomere::Store::take_last_trap", &[]);
+    let actual_store_take_last_trap = records
+        .iter()
+        .filter(|record| record.path == expected_store_take_last_trap.path)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual_store_take_last_trap,
+        BTreeSet::from([expected_store_take_last_trap]),
+        "Store::take_last_trap is the reviewed one-point method-level diagnostic carve-out"
+    );
 }
 
 #[test]
@@ -325,6 +338,7 @@ fn collect_public_surface() -> BTreeSet<PublicPath> {
     let crate_dir = crate_dir();
     let lib = parse_source(&crate_dir, "src/lib.rs");
     let common = parse_source(&crate_dir, "src/common.rs");
+    let store = parse_source(&crate_dir, "src/common/store.rs");
     let component_support = parse_source(&crate_dir, "src/component_support.rs");
     let host_abi = parse_source(&crate_dir, "src/host_abi.rs");
     let unstable_internals = parse_source(&crate_dir, "src/unstable_internals.rs");
@@ -351,6 +365,12 @@ fn collect_public_surface() -> BTreeSet<PublicPath> {
         .map(|record| record.cfg.clone())
         .expect("src/lib.rs must re-export telomere::Module");
     collect_module_codes_field(&common, &module_cfg, &mut records);
+    let store_cfg = records
+        .iter()
+        .find(|record| record.path == "telomere::Store")
+        .map(|record| record.cfg.clone())
+        .expect("src/lib.rs must re-export telomere::Store");
+    collect_store_take_last_trap_method(&store, &store_cfg, &mut records);
     collect_items(
         &component_support.items,
         &["telomere".to_owned(), "component_support".to_owned()],
@@ -489,6 +509,46 @@ fn collect_module_codes_field(
         "codes",
         &module_cfg,
         &codes.attrs,
+    );
+}
+
+fn collect_store_take_last_trap_method(
+    store: &syn::File,
+    store_cfg: &CfgContext,
+    records: &mut BTreeSet<PublicPath>,
+) {
+    let (implementation, method) = store
+        .items
+        .iter()
+        .find_map(|item| {
+            let Item::Impl(implementation) = item else {
+                return None;
+            };
+            let Type::Path(self_type) = implementation.self_ty.as_ref() else {
+                return None;
+            };
+            if !self_type.path.is_ident("Store") {
+                return None;
+            }
+            implementation.items.iter().find_map(|item| match item {
+                ImplItem::Fn(method) if method.sig.ident == "take_last_trap" => {
+                    Some((implementation, method))
+                }
+                _ => None,
+            })
+        })
+        .expect("Store must retain its reviewed take_last_trap method");
+    assert!(
+        is_public(&method.vis),
+        "Store::take_last_trap must remain public for the diagnostic retrieval carve-out"
+    );
+    let store_cfg = store_cfg.with_attributes(&implementation.attrs);
+    record_named(
+        records,
+        &["telomere".to_owned(), "Store".to_owned()],
+        "take_last_trap",
+        &store_cfg,
+        &method.attrs,
     );
 }
 

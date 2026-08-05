@@ -38,12 +38,14 @@ intentional: the diagnostics consumers planned in #207 and #210 require module
 and function names, not local names.
 
 The hand-off seam for #207 and #210 is exactly
-`ModuleNames::module_name()` and `ModuleNames::function_name(funcidx)`, reached
-from the `ModuleInstance` identified by the existing module address. There is
-no dispatch or capture caller for either accessor in this change; the accessors
-are not invoked on those paths. The later work must connect its reporting code
-to these accessors rather than introduce a parallel store lookup or a separate
-name index.
+`ModuleNames::module_name()` and `ModuleNames::function_name(funcidx)`. It now
+has its shipped consumer: [`Store::take_last_trap`](trap-reporting.md) resolves
+a captured frame's code address through the diagnostics-safe store lookup,
+uses the defining function's module, and calls these accessors while building
+the owned `TrapInfo`. It does not follow a stack-derived instance id, introduce
+a parallel name index, or invoke either accessor on the dispatch or capture
+path. That keeps capture index-only and makes symbolization a cold, checked
+read at retrieval time.
 
 ## Retention configuration
 
@@ -66,7 +68,9 @@ With `retain_function_names: false`, instantiation does not create
 `None`. The option is a retention gate, not a parser gate: the parser still
 reads custom sections and applies the same malformed-name recovery described
 below. Apart from that common parser work, the disabled path performs only the
-configuration branch and retains no diagnostic name allocation.
+configuration branch and retains no diagnostic name allocation. A later
+`Store::take_last_trap()` still reports the function index, frame kind, and
+available program counter, but its `module_name` and `func_name` are `None`.
 
 ## Custom-section recovery and reader bounds
 

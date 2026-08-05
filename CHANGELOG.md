@@ -16,6 +16,10 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   proportional precharges for native bulk operations. Fuel exhaustion and
   cancellation are exposed as payload-free `VMResult` variants with
   `InterruptReason` conversion helpers.
+- Owned core trap diagnostics through `TrapInfo`, `TrapFrame`, `TrapKind`, and
+  `Store::take_last_trap`, including optional retained producer names and
+  function-granularity JIT reporting. Existing `VMResult` call signatures are
+  unchanged.
 
 ### Changed
 

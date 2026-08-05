@@ -5,7 +5,7 @@ use super::{
     object_ref::ObjectRef,
     AsyncHostFunction, CallFrameCache, Data, Elem, ExportSection, FuncType, GlobalType,
     HostFunction, Instr, LocalsData, MemType, MeteringConfig, MeteringHandle, ModuleNames, Stack,
-    TableType, TypeIdx, VMResult, PAGE_SIZE_MAX,
+    TableType, TrapInfo, TypeIdx, VMResult, PAGE_SIZE_MAX,
 };
 #[cfg(feature = "jit")]
 use crate::runtime::jit::{CompiledFunction, StoreJitCache};
@@ -435,13 +435,18 @@ pub struct StoreSegments {
     pub elems: HashMap<(u32, u32), Elem>,
 }
 
+struct TrapSlot {
+    owner: std::thread::ThreadId,
+    context: Box<TrapContext>,
+}
+
 #[derive(Default)]
 pub struct StoreInner {
     modules: Vec<ModuleInstance>,
     instances: Vec<InstanceData>,
     funcs: Vec<FunctionInstanceData>,
     call_recipes: Vec<Option<CallRecipe>>,
-    last_trap: Option<Box<TrapContext>>,
+    last_trap: Option<TrapSlot>,
     #[cfg(feature = "jit")]
     jit_rejected_funcs: Vec<AtomicBool>,
     #[cfg(feature = "jit")]
@@ -599,11 +604,21 @@ impl StoreInner {
     }
 
     pub(crate) fn set_last_trap(&mut self, trap: Option<Box<TrapContext>>) {
-        self.last_trap = trap;
+        self.last_trap = trap.map(|context| TrapSlot {
+            owner: std::thread::current().id(),
+            context,
+        });
     }
 
     pub(crate) fn take_last_trap(&mut self) -> Option<Box<TrapContext>> {
-        self.last_trap.take()
+        if self
+            .last_trap
+            .as_ref()
+            .is_some_and(|slot| slot.owner != std::thread::current().id())
+        {
+            return None;
+        }
+        self.last_trap.take().map(|slot| slot.context)
     }
 
     pub(crate) fn clear_last_trap(&mut self) {
@@ -640,6 +655,16 @@ impl StoreInner {
         &self.modules[index]
     }
 
+    /// The diagnostics-safe counterpart to [`Self::get_module`].
+    pub(crate) fn try_get_module(&self, addr: ObjectRef) -> Option<&ModuleInstance> {
+        let raw = addr.get();
+        if raw >> OBJECT_KIND_SHIFT != ObjectKind::Module as u32 {
+            return None;
+        }
+        let index = (raw & OBJECT_INDEX_MASK).checked_sub(1)? as usize;
+        self.modules.get(index)
+    }
+
     pub(crate) fn alloc_instance(&mut self, instance: InstanceData) -> InstanceId {
         let id = InstanceId::from_index(self.instances.len());
         self.instances.push(instance);
@@ -648,6 +673,11 @@ impl StoreInner {
 
     pub(crate) fn instance(&self, id: InstanceId) -> &InstanceData {
         &self.instances[id.index()]
+    }
+
+    /// The diagnostics-safe counterpart to [`Self::instance`].
+    pub(crate) fn try_instance(&self, id: InstanceId) -> Option<&InstanceData> {
+        self.instances.get(id.index())
     }
 
     pub(crate) fn new_instance(&mut self, instance: &InstanceData) -> ObjectRef {
@@ -1980,6 +2010,32 @@ impl Store {
     /// Returns a clone of the Store-scoped metering handle, or `None` when metering is disabled.
     pub fn metering(&self) -> Option<MeteringHandle> {
         self.metering.clone()
+    }
+
+    /// Takes the trap left by the most recent guest call that completed on this thread.
+    ///
+    /// `take_last_trap()` returns the trap that failed the most recent **outermost** guest call
+    /// (`run_module_function`, `run_module_function_with_driver`,
+    /// `component_support::runtime::run_core_export_sync_reentrant`, or `instantiate` including a
+    /// trapping `start` function) **on the calling thread**, and consumes it. It returns `None` when
+    /// that call succeeded, when the trap was already taken, when the trap belongs to another thread,
+    /// and while a guest call is active on the calling thread.
+    ///
+    /// **It is best-effort, not a guarantee that a trap is retrievable.** A `Store` holds one trap slot.
+    /// When guest calls run concurrently on the same `Store` from several threads, another thread's call
+    /// can clear or overwrite the slot between your call trapping and your `take_last_trap()`, so a call
+    /// that genuinely trapped can still yield `None`. What is guaranteed is the *direction* of the
+    /// failure: you may lose your trap, but you are never handed someone else's. Code that must not miss
+    /// a trap should call `take_last_trap()` immediately after the call returns, or serialise guest calls
+    /// per `Store`.
+    pub fn take_last_trap(&self) -> Option<TrapInfo> {
+        if self.has_active_runtime_on_current_thread() {
+            return None;
+        }
+
+        let mut runtime = self.lock_runtime_or_panic();
+        let context = runtime.take_last_trap()?;
+        TrapInfo::from_context(&runtime, &context)
     }
 
     /// Borrows the Store-scoped metering handle without cloning its shared ownership.

@@ -21,8 +21,13 @@ telomere::Registry | always
 telomere::ResultValue | always
 telomere::RuntimeConfig | always
 telomere::Store | always
+telomere::Store::take_last_trap | always
 telomere::StoreState | always
 telomere::TokioDriver | always
+telomere::TrapFrame | always
+telomere::TrapFrameKind | always
+telomere::TrapInfo | always
+telomere::TrapKind | always
 telomere::VMResult | always
 telomere::WasmAsyncPending | cfg(feature = "unstable-internals")
 telomere::WasmParser | always
