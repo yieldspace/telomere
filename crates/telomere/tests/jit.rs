@@ -109,6 +109,25 @@ async fn invoke_jit(wat: &str, name: &str, args: Vec<WasmValue>) -> VMResult<Res
         all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
     )
 ))]
+async fn invoke_interpreter(wat: &str, name: &str, args: Vec<WasmValue>) -> VMResult<ResultValue> {
+    let module = parse_module(wat);
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = match telomere::instantiate(module, &store, &registry).await {
+        VMResult::Success(instance) => instance,
+        other => return other.map(|_| unreachable!()),
+    };
+    telomere::run_module_function(&instance, &store, name, &ResultValue::new(args)).await
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 async fn instantiate_jit_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
     let module = parse_module(wat);
     match telomere::instantiate(module, store, registry).await {
@@ -188,6 +207,29 @@ fn assert_success_values(result: VMResult<ResultValue>, expected: ResultValue) {
         panic!("expected success {expected:?}, got {result:?}");
     };
     assert_eq!(values, expected);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+fn assert_vm_result_matches_interpreter(
+    jit_result: &VMResult<ResultValue>,
+    interpreter_result: &VMResult<ResultValue>,
+) {
+    match (jit_result, interpreter_result) {
+        (VMResult::Success(jit_values), VMResult::Success(interpreter_values)) => {
+            assert_eq!(jit_values, interpreter_values);
+        }
+        (VMResult::Unreachable, VMResult::Unreachable) => {}
+        _ => panic!(
+            "JIT result must match the interpreter, jit={jit_result:?} interpreter={interpreter_result:?}"
+        ),
+    }
 }
 
 #[cfg(all(
@@ -1943,6 +1985,204 @@ async fn jit_br_if_preserves_vm_stack_value_after_continuation_bridge() {
         after_taken.rejected_functions, after_fallthrough.rejected_functions,
         "expected no JIT compile rejection, before={after_fallthrough:?} after={after_taken:?}"
     );
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_br_if_to_block_then_outer_unreachable_matches_interpreter() {
+    const WAT: &str = r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            (block $b
+              (br_if $b (local.get 0))
+              (return (i32.const 1)))
+            unreachable))
+    "#;
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(WAT, &store, &registry).await;
+
+    let before = store.jit_cache_stats();
+    let zero = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    let after_zero = store.jit_cache_stats();
+    let one = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(1)]),
+    )
+    .await;
+    let after_one = store.jit_cache_stats();
+
+    let interpreter_zero = invoke_interpreter(WAT, "run", vec![WasmValue::I32(0)]).await;
+    let interpreter_one = invoke_interpreter(WAT, "run", vec![WasmValue::I32(1)]).await;
+
+    assert_vm_result_matches_interpreter(&zero, &interpreter_zero);
+    assert_vm_result_matches_interpreter(&one, &interpreter_one);
+    assert_success_i32(zero, 1);
+    assert!(matches!(one, VMResult::Unreachable));
+    assert_jit_accepted(before, after_zero);
+    assert_eq!(after_one.compiled_functions, after_zero.compiled_functions);
+    assert_eq!(after_one.rejected_functions, after_zero.rejected_functions);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_br_if_skips_inner_unreachable_to_live_outer_continuation() {
+    const WAT: &str = r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            (block $b
+              (br_if $b (local.get 0))
+              unreachable)
+            i32.const 7))
+    "#;
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(WAT, &store, &registry).await;
+
+    let before = store.jit_cache_stats();
+    let one = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(1)]),
+    )
+    .await;
+    let after_one = store.jit_cache_stats();
+    let zero = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    let after_zero = store.jit_cache_stats();
+
+    let interpreter_one = invoke_interpreter(WAT, "run", vec![WasmValue::I32(1)]).await;
+    let interpreter_zero = invoke_interpreter(WAT, "run", vec![WasmValue::I32(0)]).await;
+
+    assert_vm_result_matches_interpreter(&one, &interpreter_one);
+    assert_vm_result_matches_interpreter(&zero, &interpreter_zero);
+    assert_success_i32(one, 7);
+    assert!(matches!(zero, VMResult::Unreachable));
+    assert_jit_accepted(before, after_one);
+    assert_eq!(after_zero.compiled_functions, after_one.compiled_functions);
+    assert_eq!(after_zero.rejected_functions, after_one.rejected_functions);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_polymorphic_dead_code_after_unreachable_is_accepted() {
+    const WAT: &str = r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            drop
+            unreachable
+            i32.add
+            drop
+            i32.const 3))
+    "#;
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(WAT, &store, &registry).await;
+
+    let before = store.jit_cache_stats();
+    let result = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    let after = store.jit_cache_stats();
+    let interpreter = invoke_interpreter(WAT, "run", vec![WasmValue::I32(0)]).await;
+
+    assert_vm_result_matches_interpreter(&result, &interpreter);
+    assert!(matches!(result, VMResult::Unreachable));
+    assert_jit_accepted(before, after);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_br_if_block_result_with_cached_operand_stack_matches_interpreter() {
+    const WAT: &str = r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            (block $b (result i32)
+              (br_if $b (i32.const 5) (local.get 0))
+              (i32.const 1)
+              (i32.const 2)
+              (i32.const 3)
+              unreachable)))
+    "#;
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(WAT, &store, &registry).await;
+
+    let before = store.jit_cache_stats();
+    let one = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(1)]),
+    )
+    .await;
+    let after_one = store.jit_cache_stats();
+    let zero = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    let after_zero = store.jit_cache_stats();
+
+    let interpreter_one = invoke_interpreter(WAT, "run", vec![WasmValue::I32(1)]).await;
+    let interpreter_zero = invoke_interpreter(WAT, "run", vec![WasmValue::I32(0)]).await;
+
+    assert_vm_result_matches_interpreter(&one, &interpreter_one);
+    assert_vm_result_matches_interpreter(&zero, &interpreter_zero);
+    assert_success_i32(one, 5);
+    assert!(matches!(zero, VMResult::Unreachable));
+    assert_jit_accepted(before, after_one);
+    assert_eq!(after_zero.compiled_functions, after_one.compiled_functions);
+    assert_eq!(after_zero.rejected_functions, after_one.rejected_functions);
 }
 
 #[cfg(all(

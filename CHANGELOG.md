@@ -42,7 +42,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- No unreleased entries yet.
+- Fixed baseline JIT trap emission to continue scanning and emit labels for enclosing live
+  paths with a normalized cached-register stack depth.
 
 ### Removed
 
