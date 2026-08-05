@@ -61,7 +61,6 @@ impl ModuleNames {
     }
 
     /// Returns the producer-supplied module name, when one was retained.
-    #[allow(dead_code)] // Cold diagnostic seam for #207/#210; not reached on a dispatch path yet.
     pub(crate) fn module_name(&self) -> Option<&str> {
         self.module_name.as_deref()
     }
@@ -70,7 +69,6 @@ impl ModuleNames {
     ///
     /// The lookup accepts every `u32`; an out-of-module index simply has no
     /// entry rather than being range-validated against a module declaration.
-    #[allow(dead_code)] // Cold diagnostic seam for #207/#210; not reached on a dispatch path yet.
     pub(crate) fn function_name(&self, funcidx: u32) -> Option<&str> {
         let entry = self
             .function_entries

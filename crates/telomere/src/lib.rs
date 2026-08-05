@@ -32,7 +32,8 @@
 //!         (func (export "add") (param i32 i32) (result i32)
 //!             local.get 0
 //!             local.get 1
-//!             i32.add))"#,
+//!             i32.add)
+//!         (func (export "trap") unreachable))"#,
 //! )
 //! .expect("the inline module is valid WebAssembly");
 //! let mut reader = IoReadBinaryReader::from(&bytes[..]);
@@ -45,18 +46,19 @@
 //!     .build()
 //!     .expect("Tokio runtime builds");
 //!
-//! let result = runtime.block_on(async {
+//! let (instance, result) = runtime.block_on(async {
 //!     let instance = match instantiate(module, &store, &registry).await {
 //!         VMResult::Success(instance) => instance,
 //!         failure => panic!("instantiation failed: {failure:?}"),
 //!     };
-//!     telomere::run_module_function(
+//!     let result = telomere::run_module_function(
 //!         &instance,
 //!         &store,
 //!         "add",
 //!         &ResultValue::new(vec![WasmValue::I32(20), WasmValue::I32(22)]),
 //!     )
-//!     .await
+//!     .await;
+//!     (instance, result)
 //! });
 //! match result {
 //!     VMResult::Success(values) => {
@@ -64,6 +66,15 @@
 //!     }
 //!     failure => panic!("guest call failed: {failure:?}"),
 //! }
+//! let trapped = runtime.block_on(telomere::run_module_function(
+//!     &instance,
+//!     &store,
+//!     "trap",
+//!     &ResultValue::new(vec![]),
+//! ));
+//! assert!(matches!(trapped, VMResult::Unreachable));
+//! let trap = store.take_last_trap().expect("the trap was captured");
+//! assert_eq!(trap.kind, telomere::TrapKind::Unreachable);
 //! ```
 //!
 //! For a complete standalone crate with feature-ladder commands, see the
@@ -135,6 +146,14 @@ pub use common::Registry;
 pub use common::ResultValue;
 /// Groups resource and execution settings for a [`Store`].
 pub use common::RuntimeConfig;
+/// One captured frame in a guest trap report.
+pub use common::TrapFrame;
+/// The runtime category of a captured trap frame.
+pub use common::TrapFrameKind;
+/// Owned diagnostic data for a captured guest trap.
+pub use common::TrapInfo;
+/// A Telomere diagnostic label for a guest trap.
+pub use common::TrapKind;
 /// Guest execution success or a trap/linking failure.
 pub use common::VMResult;
 /// A value crossing the core WebAssembly host/guest boundary.
