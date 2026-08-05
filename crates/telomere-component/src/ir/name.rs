@@ -241,8 +241,11 @@ impl StrongUnique<Self> for PlainName {
                 resource.flat() == label.flat() && method.flat() == label.flat()
             }
             (PlainNameShape::Dotted(_, _), PlainNameShape::Constructor(_)) => false,
-            (PlainNameShape::Dotted(_, _), PlainNameShape::Dotted(_, _)) => {
-                self.flat() == other.flat()
+            (
+                PlainNameShape::Dotted(lhs_resource, lhs_method),
+                PlainNameShape::Dotted(rhs_resource, rhs_method),
+            ) => {
+                lhs_resource.flat() == rhs_resource.flat() && lhs_method.flat() == rhs_method.flat()
             }
         }
     }
@@ -428,6 +431,15 @@ mod tests {
         assert!(!method("foo", "bar").weak_eq(&constructor("foo")));
         assert!(!static_("foo", "bar").weak_eq(&constructor("foo")));
         assert!(method("foo", "bar").weak_eq(&static_("foo", "bar")));
+    }
+
+    #[test]
+    fn test_dotted_plain_name_weak_eq_does_not_join_labels() {
+        let resource_contains_dot = PlainName::Method(Label::new("a.b"), Label::new("c"));
+        let method_contains_dot = PlainName::Method(Label::new("a"), Label::new("b.c"));
+
+        assert!(!resource_contains_dot.weak_eq(&method_contains_dot));
+        assert!(!method_contains_dot.weak_eq(&resource_contains_dot));
     }
 
     #[cfg(feature = "component-gated-feature-async")]
