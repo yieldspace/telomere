@@ -1,5 +1,3 @@
-#[cfg(feature = "component-gated-feature-value-imports-exports")]
-use crate::decoder::parse_value_idx;
 use crate::decoder::{
     parse_component_local_idx, parse_core_module_local_idx, parse_core_sort, parse_func_local_idx,
     parse_instance_local_idx, parse_type_local_idx, ParseContext, ParseResult,

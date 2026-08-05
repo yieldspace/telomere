@@ -417,3 +417,6 @@ jobs:
 
       - name: Check CLI feature coverage
         run: cargo check --all-features --all-targets
+
+      - name: Check component feature coverage
+        run: cargo check -p telomere-component --all-features --all-targets

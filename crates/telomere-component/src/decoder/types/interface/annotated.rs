@@ -64,6 +64,8 @@ fn validate_annotated_plain_name(
 
     match plain {
         PlainName::Plain(_) => Ok(()),
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::Async(_) => Ok(()),
         PlainName::Constructor(resource_name) => {
             let returned = constructor_resource_result(ctx, func_ty).ok_or_else(|| {
                 crate::decoder::ComponentParseError::TypeMismatch(if func_ty.result.is_none() {
@@ -111,6 +113,14 @@ fn validate_annotated_plain_name(
             };
             ensure_same_resource(ctx, borrowed, expected, context)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::AsyncMethod(resource_name, method_name) => validate_annotated_plain_name(
+            ctx,
+            context,
+            original,
+            &PlainName::Method(resource_name.clone(), method_name.clone()),
+            desc,
+        ),
         PlainName::Static(resource_name, _) => {
             if direct_resource_name(ctx, context, resource_name.0.as_str())?.is_some() {
                 Ok(())
@@ -125,6 +135,14 @@ fn validate_annotated_plain_name(
                 })
             }
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PlainName::AsyncStatic(resource_name, method_name) => validate_annotated_plain_name(
+            ctx,
+            context,
+            original,
+            &PlainName::Static(resource_name.clone(), method_name.clone()),
+            desc,
+        ),
     }
 }
 

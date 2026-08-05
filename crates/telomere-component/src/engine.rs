@@ -240,6 +240,14 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
                 indirect_align: 4,
                 fixed_length: None,
             },
+            #[cfg(feature = "component-gated-feature-async")]
+            PrimValType::ErrorContext => ComponentTypeInfo {
+                id: 0,
+                flat_len: 1,
+                indirect_size: 4,
+                indirect_align: 4,
+                fixed_length: None,
+            },
         }
     }
 
@@ -376,4 +384,23 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
             type_info(type_id, types, &mut memo, &mut visiting)
         })
         .collect()
+}
+
+#[cfg(all(test, feature = "component-gated-feature-async"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_context_uses_i32_handle_layout() {
+        let infos = build_type_infos(&[Type::DefVal(DefValType::Primitive(
+            PrimValType::ErrorContext,
+        ))])
+        .expect("error-context metadata should be representable");
+        let info = &infos[0];
+
+        assert_eq!(info.flat_len, 1);
+        assert_eq!(info.indirect_size, 4);
+        assert_eq!(info.indirect_align, 4);
+        assert_eq!(info.fixed_length, None);
+    }
 }
