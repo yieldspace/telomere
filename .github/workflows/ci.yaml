@@ -112,6 +112,9 @@ jobs:
       - name: Check feature wiring
         run: python3 tools/check-feature-wiring.py
 
+      - name: Test feature wiring checker
+        run: python3 tools/test_check_feature_wiring.py
+
       - name: Assert minimal embedder graph has no Tokio
         shell: bash
         run: |
