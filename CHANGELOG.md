@@ -31,6 +31,9 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `unstable-internals`; reduction and replacement of the default-public raw host
   ABI remain tracked by #216. The documented JIT cache statistics surface stays
   public with `jit` so the minimal-embedder JIT configuration remains stable.
+- Extended the public-surface guard to enumerate `#[macro_export]` macros
+  across all of `src/` and freeze the discovered root `vm_try!` and
+  `with_count!` macros in the committed snapshot.
 
 ### Fixed
 
