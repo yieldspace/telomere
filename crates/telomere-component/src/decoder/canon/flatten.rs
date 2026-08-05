@@ -172,5 +172,20 @@ fn flatten_primitive(prim: &PrimValType, out: &mut Vec<CoreValType>) {
             out.push(CoreValType::I32);
             out.push(CoreValType::I32);
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => out.push(CoreValType::I32),
+    }
+}
+
+#[cfg(all(test, feature = "component-gated-feature-async"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_context_flattens_to_i32() {
+        let mut flattened = Vec::new();
+        flatten_primitive(&PrimValType::ErrorContext, &mut flattened);
+
+        assert_eq!(flattened, vec![CoreValType::I32]);
     }
 }

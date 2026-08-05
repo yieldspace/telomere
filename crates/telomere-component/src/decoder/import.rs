@@ -4,7 +4,10 @@ use crate::decoder::types::validate_annotated_import;
 use crate::decoder::{ParseContext, ParseResult};
 use crate::ir::types::{ComponentImportType, Generic, GenericBound, Type};
 use crate::ir::CoreRelation;
-use crate::ir::{ComponentImport, ExternDesc, ParsedImportName, PlainName, Relation, StrongUnique};
+use crate::ir::{
+    ComponentImport, ExternDesc, ParsedImportName, PlainName, PlainNameShape, Relation,
+    StrongUnique,
+};
 use crate::support::binary::BinaryReader;
 
 use super::ComponentParseError;
@@ -151,9 +154,11 @@ fn ensure_concrete_surface_name(name: &crate::ir::ImportName) -> ParseResult<()>
 }
 
 fn plain_labels(plain: &PlainName) -> Vec<&str> {
-    match plain {
-        PlainName::Plain(label) | PlainName::Constructor(label) => vec![label.0.as_str()],
-        PlainName::Method(resource, method) | PlainName::Static(resource, method) => {
+    match plain.shape() {
+        PlainNameShape::Bare(label) | PlainNameShape::Constructor(label) => {
+            vec![label.0.as_str()]
+        }
+        PlainNameShape::Dotted(resource, method) => {
             vec![resource.0.as_str(), method.0.as_str()]
         }
     }

@@ -4,7 +4,9 @@ use crate::decoder::types::parse_externdesc;
 use crate::decoder::types::validate_annotated_export;
 use crate::decoder::{parse_option, ParseContext, ParseResult};
 use crate::ir::types::GenericsReplaceDSL;
-use crate::ir::{ComponentExport, ExternDesc, ParsedExportName, PlainName, Sort, StrongUnique};
+use crate::ir::{
+    ComponentExport, ExternDesc, ParsedExportName, PlainName, PlainNameShape, Sort, StrongUnique,
+};
 use crate::support::binary::BinaryReader;
 
 use super::ComponentParseError;
@@ -217,9 +219,11 @@ fn ensure_concrete_surface_name(name: &crate::ir::ExportName) -> ParseResult<()>
 }
 
 fn plain_labels(plain: &PlainName) -> Vec<&str> {
-    match plain {
-        PlainName::Plain(label) | PlainName::Constructor(label) => vec![label.0.as_str()],
-        PlainName::Method(resource, method) | PlainName::Static(resource, method) => {
+    match plain.shape() {
+        PlainNameShape::Bare(label) | PlainNameShape::Constructor(label) => {
+            vec![label.0.as_str()]
+        }
+        PlainNameShape::Dotted(resource, method) => {
             vec![resource.0.as_str(), method.0.as_str()]
         }
     }

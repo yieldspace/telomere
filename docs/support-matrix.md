@@ -114,19 +114,25 @@ The option behavior is defined by the [canonical-options decoder][canon-options]
 
 ### Cargo-gated Component Model proposals
 
-The following features are declared in the [component crate's Cargo
-features][component-features]. At the verified source snapshot, a source-wide
-`cfg` search finds sites only for `component-gated-feature-value-imports-exports`
-and `component-gated-feature-async`; the other four are declarations only.
+The feature declarations and gated-source inventory in this section were
+separately audited at merge-base
+[`3f44f1210e0808aee8168b96467be10825358572`][gated-proposal-source-commit]
+using the [component crate's Cargo features][gated-proposal-features].
 
 | Feature | Current effect |
 | --- | --- |
-| `component-gated-feature-value-imports-exports` | Enables recognition of the component value section; it does not make every value-import/export workflow complete. |
-| `component-gated-feature-async` | Enables recognition of selected async names and types, but does **not** add a component async runtime. Current sites return named `Unsupported` errors where runtime support is absent. |
-| `component-gated-feature-nested-namespaces-and-packages` | Declared only; no source use at this snapshot. |
-| `component-gated-feature-threading-builtins` | Declared only; no source use at this snapshot. |
-| `component-gated-feature-fixed-length-lists` | Declared only; no source use at this snapshot. |
-| `component-gated-feature-error-context-type` | Declared only; no source use at this snapshot. |
+| `component-gated-feature-value-imports-exports` | Changes component section byte `0x0c` from `InvalidSectionType` to `Unsupported("unsupported component section: Value")`. There is no value index space or value sort, and the section has no decoded value-definition IR. |
+| `component-gated-feature-async` | The decoder recognizes the `error-context` type opcode `0x64`. `[async]`, `[async method]`, and `[async static]` names are rejected by the decoder with named `Unsupported` before IR construction; their corresponding gated `PlainName` variants are defined in the IR but do not occur in decoded components. `stream` (`0x66`) and `future` (`0x65`) are declared but are not decoded. Every canonical ABI path that would move an `error-context` value returns `Unsupported` with the exact message ``canonical ABI for `error-context` is not supported``. |
+| `component-gated-feature-nested-namespaces-and-packages` | Declared only; no source use. |
+| `component-gated-feature-threading-builtins` | Declared only; no source use. |
+| `component-gated-feature-fixed-length-lists` | Declared only; no source use. |
+| `component-gated-feature-error-context-type` | Declared only; no source use. |
+
+`error-context` is gated by `component-gated-feature-async`, not by
+`component-gated-feature-error-context-type`; the latter is inert. The
+`feature-coverage` CI job compiles
+`cargo check -p telomere-component --all-features --all-targets` on every push.
+That compilation guarantee does not implement the gated features.
 
 Async Component Model execution, streams/futures, error-context, and threading
 built-ins remain non-goals for this support boundary. Their broader design and
@@ -220,6 +226,11 @@ proposal-rejection mappings are verified by the
 [`proposal_support` regression tests][proposal-support-tests] in this change;
 this document does not claim a self-referential PR-head commit.
 
+The Cargo-gated proposal section is separately audited at merge-base
+[`3f44f1210e0808aee8168b96467be10825358572`][gated-proposal-source-commit].
+That distinct snapshot applies only to the gated-proposal claims; the baseline,
+canonical ABI, and WASI facts above remain pinned to `2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba`.
+
 The committed baseline was inspected with these exact commands:
 
 ```shell
@@ -227,10 +238,18 @@ git rev-parse 2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba
 git show 2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba:crates/telomere/tests/harnesses/wast.rs | sed -n '19,279p'
 git show 2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba:crates/telomere-component/src/decoder/canon/parse.rs | sed -n '1,37p'
 git show 2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba:crates/telomere-component/src/decoder/canon/options.rs | sed -n '1,128p'
-git grep -n 'component-gated-feature' 2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba -- crates/telomere-component
 git grep -c 'func(' 2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba -- crates/telomere-component-wasi/wit
 git grep -n -E '^impl .*::Host for WasiHost|^    fn ' 2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba -- crates/telomere-component-wasi/src/provider
 git show 2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba:src/core_wasi_preview1.rs | sed -n '338,405p'
+```
+
+The gated proposal section was inspected with these exact commands:
+
+```shell
+git rev-parse 3f44f1210e0808aee8168b96467be10825358572
+git show 3f44f1210e0808aee8168b96467be10825358572:crates/telomere-component/Cargo.toml | sed -n '40,51p'
+git grep -n 'component-gated-feature' 3f44f1210e0808aee8168b96467be10825358572 -- crates/telomere-component
+cargo check -p telomere-component --all-features --all-targets
 ```
 
 Re-run these current-fixture checks to reproduce the proposal and WAST claims:
@@ -249,6 +268,8 @@ cargo test -p telomere --release --no-default-features --test wast
 [canon-functions]: https://github.com/yieldspace/telomere/blob/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component/src/decoder/canon/parse.rs#L5-L37
 [canon-options]: https://github.com/yieldspace/telomere/blob/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component/src/decoder/canon/options.rs#L4-L128
 [component-features]: https://github.com/yieldspace/telomere/blob/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component/Cargo.toml#L41-L51
+[gated-proposal-features]: https://github.com/yieldspace/telomere/blob/3f44f1210e0808aee8168b96467be10825358572/crates/telomere-component/Cargo.toml#L40-L51
+[gated-proposal-source-commit]: https://github.com/yieldspace/telomere/commit/3f44f1210e0808aee8168b96467be10825358572
 [wasi-version]: https://github.com/yieldspace/telomere/blob/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component-wasi/src/lib.rs#L16-L31
 [wasi-wit]: https://github.com/yieldspace/telomere/tree/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component-wasi/wit
 [wasi-provider]: https://github.com/yieldspace/telomere/tree/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component-wasi/src/provider

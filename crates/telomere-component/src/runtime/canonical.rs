@@ -244,6 +244,11 @@ fn lower_value_to_flat(
     }
 }
 
+#[cfg(feature = "component-gated-feature-async")]
+fn unsupported_error_context() -> ComponentError {
+    ComponentError::Unsupported("canonical ABI for `error-context` is not supported".to_owned())
+}
+
 fn lower_primitive(
     value: &ComponentValue,
     prim: &PrimValType,
@@ -265,6 +270,8 @@ fn lower_primitive(
         PrimValType::F64 => vec![WasmValue::F64(expect_f64(value)?)],
         PrimValType::Char => vec![WasmValue::I32(expect_char(value)? as u32 as i32)],
         PrimValType::String => lower_string(value, options, program, store)?,
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => return Err(unsupported_error_context()),
     })
 }
 
@@ -389,6 +396,8 @@ fn lift_primitive(
                 options.string_encoding,
             )?)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => return Err(unsupported_error_context()),
     })
 }
 
@@ -567,6 +576,8 @@ fn memory_abi_for_primitive(prim: &PrimValType) -> MemoryAbiInfo {
             MemoryAbiInfo { size: 8, align: 8 }
         }
         PrimValType::String => MemoryAbiInfo { size: 8, align: 4 },
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => MemoryAbiInfo { size: 4, align: 4 },
     }
 }
 
@@ -717,6 +728,8 @@ fn flat_types_for_primitive(prim: &PrimValType) -> Vec<CoreValType> {
         PrimValType::F32 => vec![CoreValType::F32],
         PrimValType::F64 => vec![CoreValType::F64],
         PrimValType::String => vec![CoreValType::I32, CoreValType::I32],
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => vec![CoreValType::I32],
     }
 }
 
@@ -886,6 +899,10 @@ fn write_primitive_to_memory(
     store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
+    #[cfg(feature = "component-gated-feature-async")]
+    if matches!(prim, PrimValType::ErrorContext) {
+        return Err(unsupported_error_context());
+    }
     let memory = options.memory.as_ref().ok_or_else(|| {
         ComponentError::Runtime("canonical option `memory` is required".to_owned())
     })?;
@@ -921,6 +938,8 @@ fn write_primitive_to_memory(
             let flat = lower_string(value, options, program, store)?;
             write_flat_values(store, memory, ptr, &flat)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => Err(unsupported_error_context()),
     }
 }
 
@@ -963,6 +982,8 @@ fn read_primitive_from_memory(
                 options.string_encoding,
             )?)
         }
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => return Err(unsupported_error_context()),
     })
 }
 
@@ -2277,5 +2298,112 @@ fn expect_handle(value: &ComponentValue) -> Result<u32, ComponentError> {
         _ => Err(ComponentError::InvalidArgument(
             "expected resource handle".to_owned(),
         )),
+    }
+}
+
+#[cfg(all(test, feature = "component-gated-feature-async"))]
+mod tests {
+    use super::*;
+    use crate::support::binary::IoReadBinaryReader;
+    use telomere::WasmParser;
+
+    const MEMORY_MODULE: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x07,
+        0x01, 0x03, b'm', b'e', b'm', 0x02, 0x00,
+    ];
+
+    fn empty_program() -> ComponentProgram {
+        ComponentProgram {
+            type_infos: Vec::new(),
+            imports: Vec::new(),
+            callable_imports: Vec::new(),
+            exports: Vec::new(),
+            callable_exports: Vec::new(),
+            ops: Vec::new(),
+            bytes: Vec::new(),
+            root: Component {
+                imports: HashMap::new(),
+                exports: HashMap::new(),
+            },
+            types: Vec::new().into_boxed_slice(),
+            component_store: HashMap::new(),
+            instance_store: HashMap::new(),
+            func_store: HashMap::new(),
+            core_module_store: HashMap::new(),
+            core_type_store: HashMap::new(),
+            core_instance_store: HashMap::new(),
+            core_func_store: HashMap::new(),
+            core_memory_store: HashMap::new(),
+            core_global_store: HashMap::new(),
+            core_table_store: HashMap::new(),
+        }
+    }
+
+    fn assert_error_context_unsupported(error: ComponentError) {
+        match error {
+            ComponentError::Unsupported(message) => assert_eq!(
+                message,
+                "canonical ABI for `error-context` is not supported"
+            ),
+            other => panic!("expected error-context Unsupported error, got {other:?}"),
+        }
+    }
+
+    fn memory_export(store: &Store) -> CoreExportRef {
+        let mut reader = IoReadBinaryReader::from(MEMORY_MODULE);
+        let module = WasmParser::new(&mut reader)
+            .parse_module()
+            .expect("memory fixture should parse");
+        let instance = match block_on(crate::support::instantiate(module, store, &Registry::new()))
+        {
+            VMResult::Success(instance) => instance,
+            other => panic!("memory fixture should instantiate: {other:?}"),
+        };
+
+        CoreExportRef {
+            instance,
+            export_name: "mem".to_owned(),
+        }
+    }
+
+    #[test]
+    fn error_context_layout_and_value_moves_are_unsupported() {
+        let prim = PrimValType::ErrorContext;
+        let memory_abi = memory_abi_for_primitive(&prim);
+        assert_eq!(memory_abi.size, 4);
+        assert_eq!(memory_abi.align, 4);
+        assert_eq!(flat_types_for_primitive(&prim), vec![CoreValType::I32]);
+
+        let program = empty_program();
+        let store = Store::new();
+        let options = RuntimeCanonicalOptions::default();
+        assert_error_context_unsupported(
+            lower_primitive(&ComponentValue::S32(0), &prim, &options, &store, &program)
+                .expect_err("error-context lowering must be unsupported"),
+        );
+
+        let mut cursor = CoreValueCursor::new(&[]);
+        assert_error_context_unsupported(
+            lift_primitive(&prim, &options, &store, &mut cursor)
+                .expect_err("error-context lifting must be unsupported"),
+        );
+
+        assert_error_context_unsupported(
+            write_primitive_to_memory(
+                &ComponentValue::S32(0),
+                &prim,
+                &options,
+                &program,
+                &store,
+                0,
+            )
+            .expect_err("error-context memory lowering must be unsupported"),
+        );
+
+        let memory = memory_export(&store);
+        assert_error_context_unsupported(
+            read_primitive_from_memory(&prim, &options, &program, &store, &memory, 0)
+                .expect_err("error-context memory lifting must be unsupported"),
+        );
     }
 }

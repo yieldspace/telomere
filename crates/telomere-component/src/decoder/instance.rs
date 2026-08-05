@@ -10,7 +10,7 @@ use crate::ir::types::{
 };
 use crate::ir::{
     Component, ComponentExport, ExportName, ExternDesc, Instance, InstanceImport, ParsedExportName,
-    PlainName, Relation, Sort, StrongUnique,
+    PlainName, PlainNameShape, Relation, Sort, StrongUnique,
 };
 use crate::support::binary::BinaryReader;
 use crate::support::parser::core::{parse_name, parse_vec};
@@ -277,11 +277,11 @@ fn validate_inline_name(name: &ExportName) -> ParseResult<()> {
     let ParsedExportName::Plain(plain) = &name.parsed else {
         return Ok(());
     };
-    match plain {
-        PlainName::Plain(label) | PlainName::Constructor(label) => {
+    match plain.shape() {
+        PlainNameShape::Bare(label) | PlainNameShape::Constructor(label) => {
             ensure_inline_label(&label.0, &name.original)
         }
-        PlainName::Method(resource, method) | PlainName::Static(resource, method) => {
+        PlainNameShape::Dotted(resource, method) => {
             ensure_inline_label(&resource.0, &name.original)?;
             ensure_inline_label(&method.0, &name.original)
         }
