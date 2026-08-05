@@ -59,20 +59,61 @@ fn assert_reentrant_error(error: StoreExecutionError, api_name: &'static str) {
 }
 
 #[test]
-fn run_module_function_with_driver_rejects_reentrant_store() {
+fn run_module_function_uses_its_own_reentrancy_api_name() {
     let (store, instance) = futures::executor::block_on(store_and_instance_for_test());
-    let mut driver = TokioDriver::new();
     let _active = store.lock_runtime_unchecked();
 
-    let result = futures::executor::block_on(vm::run_module_function_with_driver(
-        &instance,
-        &store,
-        "run",
-        &ResultValue::new(vec![]),
-        &mut driver,
-    ));
+    assert_reentrant_error(
+        futures::executor::block_on(vm::run_module_function_result(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![]),
+        ))
+        .expect_err("reentrant call must be rejected"),
+        "run_module_function",
+    );
 
-    assert!(matches!(result, VMResult::Unlinkable));
+    assert!(matches!(
+        futures::executor::block_on(vm::run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![]),
+        )),
+        VMResult::Unlinkable
+    ));
+}
+
+#[test]
+fn run_module_function_with_driver_uses_its_own_reentrancy_api_name() {
+    let (store, instance) = futures::executor::block_on(store_and_instance_for_test());
+    let _active = store.lock_runtime_unchecked();
+
+    let mut driver = TokioDriver::new();
+    assert_reentrant_error(
+        futures::executor::block_on(vm::run_module_function_with_driver_result(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![]),
+            &mut driver,
+        ))
+        .expect_err("reentrant call must be rejected"),
+        "run_module_function_with_driver",
+    );
+
+    let mut driver = TokioDriver::new();
+    assert!(matches!(
+        futures::executor::block_on(vm::run_module_function_with_driver(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![]),
+            &mut driver,
+        )),
+        VMResult::Unlinkable
+    ));
 }
 
 #[test]

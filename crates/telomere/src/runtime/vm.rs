@@ -92,7 +92,9 @@ mod tables;
 #[cfg(feature = "vm-diagnostics")]
 use crate::common::Op;
 use crate::{
-    common::store::{CallDispatchCache, CallDispatchTarget, FunctionInstanceData},
+    common::store::{
+        CallDispatchCache, CallDispatchTarget, FunctionInstanceData, StoreExecutionError,
+    },
     common::{
         execute_elem_init_const_expr, CallFrameCache, ElemInit, ExecuteContext, ExportDesc,
         InstanceHandle, Instr, LocalReference, MemArg, ObjectRef, ResultType, ResultValue,
@@ -1912,6 +1914,9 @@ pub(crate) fn function_entry_pc(store: &Store, funcinst: &FunctionInstanceData) 
     wasm_entry_pc(store)
 }
 
+const RUN_MODULE_FUNCTION_API_NAME: &str = "run_module_function";
+const RUN_MODULE_FUNCTION_WITH_DRIVER_API_NAME: &str = "run_module_function_with_driver";
+
 /// Calls a named function export with the default Tokio-backed execution driver.
 ///
 /// Arguments and results retain WebAssembly order in [`ResultValue`]. Missing
@@ -1968,8 +1973,13 @@ pub async fn run_module_function(
     name: &str,
     args: &ResultValue,
 ) -> VMResult<ResultValue> {
-    let mut driver = TokioDriver::new();
-    run_module_function_with_driver(instance, store, name, args, &mut driver).await
+    match run_module_function_result(instance, store, name, args).await {
+        Ok(result) => result,
+        Err(err) => {
+            err.report();
+            VMResult::Unlinkable
+        }
+    }
 }
 
 /// Calls a named function export with an embedder-provided async driver.
@@ -1984,29 +1994,76 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     args: &ResultValue,
     driver: &mut D,
 ) -> VMResult<ResultValue> {
+    match run_module_function_with_driver_result(instance, store, name, args, driver).await {
+        Ok(result) => result,
+        Err(err) => {
+            err.report();
+            VMResult::Unlinkable
+        }
+    }
+}
+
+pub(super) async fn run_module_function_result(
+    instance: &InstanceHandle,
+    store: &Store,
+    name: &str,
+    args: &ResultValue,
+) -> Result<VMResult<ResultValue>, StoreExecutionError> {
+    let mut driver = TokioDriver::new();
+    run_module_function_with_driver_named(
+        instance,
+        store,
+        name,
+        args,
+        &mut driver,
+        RUN_MODULE_FUNCTION_API_NAME,
+    )
+    .await
+}
+
+pub(super) async fn run_module_function_with_driver_result<D: ExecutionDriver>(
+    instance: &InstanceHandle,
+    store: &Store,
+    name: &str,
+    args: &ResultValue,
+    driver: &mut D,
+) -> Result<VMResult<ResultValue>, StoreExecutionError> {
+    run_module_function_with_driver_named(
+        instance,
+        store,
+        name,
+        args,
+        driver,
+        RUN_MODULE_FUNCTION_WITH_DRIVER_API_NAME,
+    )
+    .await
+}
+
+async fn run_module_function_with_driver_named<D: ExecutionDriver>(
+    instance: &InstanceHandle,
+    store: &Store,
+    name: &str,
+    args: &ResultValue,
+    driver: &mut D,
+    api_name: &'static str,
+) -> Result<VMResult<ResultValue>, StoreExecutionError> {
     let _dispatch_profile_guard = DispatchProfileRunGuard::new();
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
-        let mut runtime = match store.lock_runtime("run_module_function") {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                err.report();
-                return VMResult::Unlinkable;
-            }
-        };
+        let mut runtime = store.lock_runtime(api_name)?;
         runtime.clear_last_trap();
-        let instance = runtime.get_instance(vm_try!(VMResult::from_option(
-            instance.object_ref_for_store(store),
-            || { VMResult::Unlinkable }
-        )));
+        let instance = runtime.get_instance(match instance.object_ref_for_store(store) {
+            Some(object_ref) => object_ref,
+            None => return Ok(VMResult::Unlinkable),
+        });
         let module_inst = runtime.get_module(instance.module_addr);
         trace!("{:?}", module_inst.exports);
         let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
-            let code_addr = *vm_try!(VMResult::from_option(
-                instance.funcs.as_slice().get(idx.0 as usize),
-                || { VMResult::Unlinkable }
-            ));
+            let code_addr = match instance.funcs.as_slice().get(idx.0 as usize) {
+                Some(code_addr) => *code_addr,
+                None => return Ok(VMResult::Unlinkable),
+            };
             let funcinst = runtime.get_func(code_addr);
             let entry_pc = function_entry_pc(store, funcinst);
             let func_instance = runtime.instance(funcinst.instance);
@@ -2020,15 +2077,14 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
                     .and_then(|slot| slot.handle()),
             );
             let mut stack = Stack::new(128 * 1024);
-            let tidx = *vm_try!(VMResult::from_option(
-                module_inst.functions.get(idx.0 as usize),
-                || { VMResult::Unlinkable }
-            ));
-            let ft = vm_try!(VMResult::from_option(
-                module_inst.function_types.get(tidx.0 as usize),
-                || { VMResult::Unlinkable }
-            ))
-            .clone();
+            let tidx = match module_inst.functions.get(idx.0 as usize) {
+                Some(tidx) => *tidx,
+                None => return Ok(VMResult::Unlinkable),
+            };
+            let ft = match module_inst.function_types.get(tidx.0 as usize) {
+                Some(ft) => ft.clone(),
+                None => return Ok(VMResult::Unlinkable),
+            };
             let param_size = result_type_size(&ft.0);
 
             let local_size = if funcinst.is_host_func() {
@@ -2036,10 +2092,13 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
             } else {
                 funcinst.locals().byte_size()
             };
-            vm_try!(push_result_values(&mut stack, &ft.0, args));
+            let push_result = push_result_values(&mut stack, &ft.0, args);
+            if !matches!(push_result, VMResult::Success(())) {
+                return Ok(vm_result_err_into_result_value(push_result));
+            }
 
             tracing::trace!("run_module_function: {name} {local_size}");
-            let local_reference = vm_try!(stack.function_call(
+            let local_reference = match stack.function_call(
                 param_size,
                 local_size,
                 frame,
@@ -2049,7 +2108,10 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
                 },
                 &VM_END as *const Instr,
                 &runtime,
-            ));
+            ) {
+                VMResult::Success(local_reference) => local_reference,
+                other => return Ok(vm_result_err_into_result_value(other)),
+            };
 
             scheduler.push(Task {
                 fp: entry_pc,
@@ -2063,7 +2125,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
             });
             ft
         } else {
-            return VMResult::Unlinkable;
+            return Ok(VMResult::Unlinkable);
         };
         ft
     };
@@ -2073,9 +2135,13 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
         let mut runtime = store.lock_runtime_or_panic();
         runtime.set_last_trap(ct.trap);
     }
-    vm_try!(ct.result);
-    let mut stack = ct.stack;
-    VMResult::Success(pop_result_values(&mut stack, &ft.1))
+    match ct.result {
+        VMResult::Success(()) => {
+            let mut stack = ct.stack;
+            Ok(VMResult::Success(pop_result_values(&mut stack, &ft.1)))
+        }
+        other => Ok(vm_result_err_into_result_value(other)),
+    }
 }
 
 pub(crate) fn run_module_function_sync_with_runtime(
