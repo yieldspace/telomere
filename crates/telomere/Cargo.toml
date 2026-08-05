@@ -48,7 +48,7 @@ default = [
     "simd",
     "threads",
 ]
-simd = ["wide"]
+simd = ["dep:wide"]
 threads = ["dep:tokio"]
 vm-profile = []
 vm-diagnostics = []

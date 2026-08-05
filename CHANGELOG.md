@@ -26,6 +26,8 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Defined the Cargo feature policy and simplified feature wiring: the CLI keeps
   its `full` default while forwarding `simd` and `threads` directly, and
   `telomere` no longer has its redundant `full` alias.
+- Added a `tools/check-feature-wiring.py` lint for bare optional-dependency
+  keys that leak implicit Cargo features.
 - Curated the default `telomere` embedder surface: module AST representation
   (except the `host_abi::CodeSection` compatibility exception) and raw
   `Op`/`Operand` are internal, while the default host-linking compatibility
@@ -44,7 +46,9 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
-- No unreleased entries yet.
+- Removed the implicit `wide` Cargo feature, which existed because `simd`
+  referenced its optional dependency by bare name. Builds using `--features wide`
+  must use `--features simd` instead.
 
 ### Security
 

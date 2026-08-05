@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Check that workspace feature forwarding follows the telomere policy.
 
-No-op aliases compare direct Cargo metadata entry lists only; transitive feature
-expansion is not evaluated.
+Cargo metadata cannot distinguish implicit and explicit same-name features, so
+the checker also reads manifest [features] keys. Local Python 3.9.6 has no
+tomllib, so that reader remains narrow and stdlib-only. No-op aliases compare
+direct Cargo metadata entry lists only; transitive feature expansion is not
+evaluated.
 """
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +55,11 @@ ROLE_MAP = {
 FEATURES = ("simd", "threads")
 VALID_ROLES = frozenset(("definition", "forwarder", "aggregator", "unrelated"))
 REPO_ROOT = Path(__file__).resolve().parent.parent
+FEATURES_SECTION_RE = re.compile(r"^\s*\[features\]\s*(?:#.*)?$")
+TABLE_SECTION_RE = re.compile(r"^\s*\[.*\]\s*(?:#.*)?$")
+FEATURE_KEY_RE = re.compile(
+    r'''^\s*(?P<key>[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')\s*='''
+)
 
 
 def load_metadata():
@@ -163,6 +172,45 @@ def package_features(package):
     return features
 
 
+def declared_feature_names(manifest_path):
+    """Return the feature names written in this manifest's [features] table.
+
+    This intentionally departs from a metadata-only reader: Cargo metadata
+    cannot distinguish an implicit optional-dependency feature from an explicit
+    same-name declaration. The local Python 3.9.6 has no tomllib, so this uses
+    neither tomllib nor a third-party parser. It is not a full TOML parser; it
+    reads only section headers and feature key names. If it under-reads, the
+    metadata-minus-declared implicit set grows and the checker fails red rather
+    than silently accepting a bare optional-dependency reference.
+    """
+    declared = set()
+    in_features = False
+
+    try:
+        with Path(manifest_path).open(encoding="utf-8") as manifest:
+            for line in manifest:
+                stripped = line.lstrip()
+                if not stripped.strip() or stripped.startswith("#"):
+                    continue
+                if TABLE_SECTION_RE.match(line):
+                    in_features = bool(FEATURES_SECTION_RE.match(line))
+                    continue
+                if not in_features:
+                    continue
+
+                match = FEATURE_KEY_RE.match(line)
+                if match is None:
+                    continue
+                key = match.group("key")
+                if key[0] in ("\"", "'"):
+                    key = key[1:-1]
+                declared.add(key)
+    except OSError as error:
+        raise RuntimeError(f"could not read manifest {manifest_path}: {error}") from error
+
+    return declared
+
+
 def package_dependencies(package):
     """Return one package's declared dependency edges after checking their shape."""
     name = package["name"]
@@ -176,6 +224,8 @@ def package_dependencies(package):
         dependency_name = dependency.get("name")
         if not isinstance(dependency_name, str) or not dependency_name:
             raise RuntimeError(f"{name}: cargo metadata has a dependency without a name")
+        if "optional" in dependency and not isinstance(dependency["optional"], bool):
+            raise RuntimeError(f"{name}: cargo metadata has a dependency with invalid optional")
         kind = dependency.get("kind")
         if kind is not None and not isinstance(kind, str):
             raise RuntimeError(f"{name}: cargo metadata has a dependency with an invalid kind")
@@ -188,6 +238,25 @@ def package_dependencies(package):
 def dependency_feature_name(dependency):
     """Return the dependency key used in a Cargo feature forwarding entry."""
     return dependency.get("rename") or dependency["name"]
+
+
+def optional_dependency_errors(name, package, features, declared):
+    """Optional dependencies must be reached through dep: syntax, not a bare name."""
+    implicit = set(features) - declared
+    errors = []
+    for dependency in package_dependencies(package):
+        if not dependency.get("optional") or dependency.get("kind") == "dev":
+            continue
+        key = dependency_feature_name(dependency)
+        if key not in implicit:
+            continue
+        for feature in sorted(feature for feature in declared if key in features[feature]):
+            errors.append(
+                f"{name}: feature {feature} references optional dependency {key} "
+                f"by its bare name, which leaks an implicit {key} feature; "
+                f"write dep:{key}"
+            )
+    return errors
 
 
 def policy_edges(package, family_features):
@@ -248,6 +317,19 @@ def validate(actual):
     """Return every feature-policy violation found in the workspace metadata."""
     roles, errors = declared_roles(actual)
     feature_maps = {name: package_features(package) for name, package in actual.items()}
+    declared_feature_maps = {}
+    for name in sorted(actual):
+        manifest_path = actual[name].get("manifest_path")
+        if not isinstance(manifest_path, str) or not manifest_path:
+            raise RuntimeError(f"{name}: cargo metadata has no manifest path")
+        declared = declared_feature_names(manifest_path)
+        missing_metadata_features = declared - set(feature_maps[name])
+        if missing_metadata_features:
+            raise RuntimeError(
+                f"{name}: manifest declares features absent from cargo metadata: "
+                + ", ".join(sorted(missing_metadata_features))
+            )
+        declared_feature_maps[name] = declared
     family_features = {
         name: frozenset(feature for feature in FEATURES if feature in feature_maps[name])
         for name in actual
@@ -264,6 +346,14 @@ def validate(actual):
                     f"{name}: non-dev dependency {dependency['name']} must set "
                     "default-features = false"
                 )
+        errors.extend(
+            optional_dependency_errors(
+                name,
+                actual[name],
+                feature_maps[name],
+                declared_feature_maps[name],
+            )
+        )
 
     for name in sorted(roles):
         role = roles[name]

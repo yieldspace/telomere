@@ -53,12 +53,11 @@ Every non-dev dependency edge between Telomere-family packages must set
 `default-features = false`. A new workspace package must choose one of these
 roles rather than introducing a separate SIMD or threads policy.
 
-## `wide` compatibility surface
+## `wide` feature removal
 
-Cargo currently exposes an implicit `wide` feature because `simd = ["wide"]`
-uses the optional dependency's bare name. This behavior remains unchanged for
-compatibility. `wide` only enables that dependency; it does not enable `simd`
-and is not a supported configuration knob. Select `simd` instead.
+Optional dependencies are enabled through `dep:` entries, so there is no
+`wide` feature. `simd` is the only supported knob for the optional `wide`
+dependency. Issue #234 removed Cargo's former implicit `wide` feature.
 
 ## Scope and enforcement
 
@@ -67,8 +66,10 @@ on `telomere` with default features and is outside both this policy and the main
 workspace's `cargo metadata` view.
 
 [`tools/check-feature-wiring.py`](../tools/check-feature-wiring.py) enforces the
-declared roles, forwarding paths, and normal-edge `default-features = false`
-rule. The [`Manifest feature wiring` CI job](../.github/workflows/ci.yaml) runs that
+declared roles, forwarding paths, normal-edge `default-features = false` rule,
+and bare-name references from declared features to optional dependencies when
+they leak an implicit optional-dependency feature. The
+[`Manifest feature wiring` CI job](../.github/workflows/ci.yaml) runs that
 checker and structurally verifies the minimal-embedder graph's Tokio boundary,
 including a positive control.
 
