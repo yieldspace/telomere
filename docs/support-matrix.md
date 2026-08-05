@@ -122,7 +122,7 @@ using the [component crate's Cargo features][gated-proposal-features].
 | Feature | Current effect |
 | --- | --- |
 | `component-gated-feature-value-imports-exports` | Changes component section byte `0x0c` from `InvalidSectionType` to `Unsupported("unsupported component section: Value")`. There is no value index space or value sort, and the section has no decoded value-definition IR. |
-| `component-gated-feature-async` | The decoder recognizes the `error-context` type opcode `0x64`. `[async]`, `[async method]`, and `[async static]` names return named `Unsupported` errors and are never represented in the IR. `stream` (`0x66`) and `future` (`0x65`) are declared but are not decoded. Every canonical ABI path that would move an `error-context` value returns `Unsupported` with the exact message ``canonical ABI for `error-context` is not supported``. |
+| `component-gated-feature-async` | The decoder recognizes the `error-context` type opcode `0x64`. `[async]`, `[async method]`, and `[async static]` names are rejected by the decoder with named `Unsupported` before IR construction; their corresponding gated `PlainName` variants are defined in the IR but do not occur in decoded components. `stream` (`0x66`) and `future` (`0x65`) are declared but are not decoded. Every canonical ABI path that would move an `error-context` value returns `Unsupported` with the exact message ``canonical ABI for `error-context` is not supported``. |
 | `component-gated-feature-nested-namespaces-and-packages` | Declared only; no source use. |
 | `component-gated-feature-threading-builtins` | Declared only; no source use. |
 | `component-gated-feature-fixed-length-lists` | Declared only; no source use. |
