@@ -563,7 +563,9 @@ async fn component_typed_integer_bindings_match_wasmtime_reinterpretation() {
         .call(&store, (101,))
         .await
         .expect_err("101 should trap");
-    assert!(matches!(error, ComponentError::Trap(message) if message.contains("unreachable")));
+    assert!(
+        matches!(error, ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable"))
+    );
 
     let retm1 = instance
         .get_typed_func::<(), u8>("retm1-u8")

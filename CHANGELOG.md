@@ -20,9 +20,34 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Store::take_last_trap`, including optional retained producer names and
   function-granularity JIT reporting. Existing `VMResult` call signatures are
   unchanged.
+- `VMResult` and `TrapKind` now implement `Display` (with the WebAssembly
+  spec's trap messages where the spec defines one) and `std::error::Error`,
+  and `TrapInfo` implements `std::error::Error`, so a failed guest call can
+  flow through ordinary error handling. The faulting function for a trap is
+  available from `Store::take_last_trap` as the first `TrapInfo` frame
+  (function index, plus the producer name when a name section exists).
+- `ComponentError::GuestTrap` preserves the core `TrapKind` for guest traps
+  crossing the component boundary, so component-level callers can match on
+  the trap cause instead of parsing a message string.
 
 ### Changed
 
+- **Breaking:** split the spec trap causes out of `VMResult::InvalidOperand`.
+  Integer division/remainder by zero now returns `VMResult::DivideByZero`,
+  signed division overflow returns `VMResult::IntegerOverflow`, and a failed
+  float-to-integer truncation returns `VMResult::InvalidConversion`, in both
+  the interpreter and the JIT; `TrapKind` gained the matching variants.
+  Exhaustive matches on `VMResult` or `TrapKind` must add the three arms.
+  `InvalidOperand` remains for runtime-internal invariant violations, which
+  validated guest execution cannot produce. Migration: replace any arm that
+  relied on `InvalidOperand` covering arithmetic traps with the three new
+  variants (or a wildcard), and prefer matching the new variants or reading
+  `TrapInfo::kind` over comparing message strings. Trap causes raised inside
+  host functions keep their identity across the host-call boundary through
+  these variants, and the captured `TrapInfo` attributes the trap to the
+  host frame; host functions still cannot attach their own error payload,
+  because the public host ABI is a raw function pointer whose only failure
+  channel is `VMResult` (that ABI's redesign is tracked by #216).
 - Consolidated internal ad-hoc reentrancy guards around consumption of
   `lock_runtime`'s typed `Result`; existing fail-closed return values and the
   public API surface remain unchanged.
