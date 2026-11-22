@@ -3588,7 +3588,7 @@ impl<'a> Emitter<'a> {
     fn trap_if_i32_divisor_zero(&mut self, rhs: u8) -> Result<(), ()> {
         self.cmp_w_imm(rhs, 0)?;
         let nonzero_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
-        self.return_trap(VMResult::<()>::InvalidOperand);
+        self.return_trap(VMResult::<()>::DivideByZero);
         let nonzero_target = self.offset();
         patch_branch(
             self.masm.as_mut_bytes(),
@@ -3605,7 +3605,7 @@ impl<'a> Emitter<'a> {
         let lhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
         self.cmp_w_u32(rhs, u32::MAX);
         let rhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
-        self.return_trap(VMResult::<()>::InvalidOperand);
+        self.return_trap(VMResult::<()>::IntegerOverflow);
         let ok_target = self.offset();
         patch_branch(
             self.masm.as_mut_bytes(),
@@ -3626,7 +3626,7 @@ impl<'a> Emitter<'a> {
         self.mov_imm_u64(9, 0);
         self.cmp_x(rhs, 9);
         let nonzero_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
-        self.return_trap(VMResult::<()>::InvalidOperand);
+        self.return_trap(VMResult::<()>::DivideByZero);
         let nonzero_target = self.offset();
         patch_branch(
             self.masm.as_mut_bytes(),
@@ -3644,7 +3644,7 @@ impl<'a> Emitter<'a> {
         self.mov_imm_u64(9, u64::MAX);
         self.cmp_x(rhs, 9);
         let rhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
-        self.return_trap(VMResult::<()>::InvalidOperand);
+        self.return_trap(VMResult::<()>::IntegerOverflow);
         let ok_target = self.offset();
         patch_branch(
             self.masm.as_mut_bytes(),

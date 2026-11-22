@@ -215,6 +215,13 @@ fn vm_result_to_anyhow<T>(
             Err(anyhow::anyhow!("{context}: memory allocation failed"))
         }
         telomere::VMResult::InvalidOperand => Err(anyhow::anyhow!("{context}: invalid operand")),
+        telomere::VMResult::DivideByZero => {
+            Err(anyhow::anyhow!("{context}: integer divide by zero"))
+        }
+        telomere::VMResult::IntegerOverflow => Err(anyhow::anyhow!("{context}: integer overflow")),
+        telomere::VMResult::InvalidConversion => {
+            Err(anyhow::anyhow!("{context}: invalid conversion to integer"))
+        }
         telomere::VMResult::UnalignedAtomic => Err(anyhow::anyhow!("{context}: unaligned atomic")),
         telomere::VMResult::Unimplemented => Err(anyhow::anyhow!("{context}: unimplemented")),
         telomere::VMResult::FuelExhausted => {

@@ -379,7 +379,7 @@ async fn wasi_stdout_handle_can_be_dropped_and_is_released() {
         .await
         .expect_err("writing through a dropped stdout handle should fail");
     assert!(
-        matches!(error, telomere_component::ComponentError::Trap(_)),
+        matches!(error, telomere_component::ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
         "write after drop should trap, got {error:?}"
     );
     assert_eq!(state.stdout(), b"hello from a dropped stream\n");

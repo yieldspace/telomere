@@ -624,7 +624,9 @@ async fn component_runtime_surfaces_post_return_traps() {
         .call(&store, "str", &[])
         .await
         .expect_err("post-return trap should surface");
-    assert!(matches!(error, ComponentError::Trap(message) if message.contains("unreachable")));
+    assert!(
+        matches!(error, ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable"))
+    );
 }
 
 #[tokio::test]
@@ -676,7 +678,9 @@ async fn component_runtime_surfaces_resource_drop_destructor_traps() {
         .call(&store, "run", &[])
         .await
         .expect_err("resource drop trap should surface");
-    assert!(matches!(error, ComponentError::Trap(message) if message.contains("unreachable")));
+    assert!(
+        matches!(error, ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable"))
+    );
 }
 
 fn versioned_instance_component(version: &str) -> Vec<u8> {
@@ -859,7 +863,7 @@ async fn component_runtime_drops_host_provided_resource() {
         .await
         .expect_err("dropping the same handle twice should trap");
     assert!(
-        matches!(error, ComponentError::Trap(_)),
+        matches!(error, ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
         "double drop should trap, got {error:?}"
     );
     assert_eq!(
@@ -873,7 +877,7 @@ async fn component_runtime_drops_host_provided_resource() {
         .await
         .expect_err("dropping a handle that was never issued should trap");
     assert!(
-        matches!(error, ComponentError::Trap(_)),
+        matches!(error, ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
         "dropping an unknown handle should trap, got {error:?}"
     );
     assert_eq!(*dropped.borrow(), vec![100, 101]);

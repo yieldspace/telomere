@@ -354,13 +354,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #254: workflow_dispatch runs 45060131072 and
-45060142935 against the PR branch at commit
-`fb01564eb0d7f252d3b24da100b325d5e7d56796` (the merge of the PR head
-`3420455b6ee3a6614cc397fc8b4023c28c20bdbc` with `main` at
-`4d3b77441d337a6ec8c2586c1e856b1f749be87c`), and pull-request run
-45060031215, which built the same merge tree (`ubuntu-24.04`, Rust
-1.96.0). Every run produced byte-identical sizes: for all fourteen
+against the code of PR #256: workflow_dispatch runs 45065589500 and
+45065600974 against the PR branch at commit
+`ef671abd0df4cb702be537bf12ac8ba4d5745017` (the merge of `main` at
+`14cd8b2d392d342ee3110448ff72d3d01cfec701` into the PR head
+`9cca190edc249e5c4e715c39c0f8ae710cf0d659`, plus the harness-table
+follow-up commit), and pull-request run 45065494772, which built the
+same merge tree (`ubuntu-24.04`, Rust 1.96.0). Every run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
 spread of **0 B** across the three samples. The observed values are the
@@ -368,20 +368,20 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
-| `release` | `baseline` | 345656 | 261679 |
-| `release` | `core` | 1,466,280 | 1,117,239 |
-| `release` | `component` | 2,452,544 | 1,959,303 |
-| `release` | `wasi` | 2,798,520 | 2,221,287 |
-| `release` | `core-nosimd` | 1,277,032 | 978,151 |
-| `release` | `core-jit` | 1,991,488 | 1,542,583 |
-| `release` | `wasi-threads` | 2,978,224 | 2,356,423 |
-| `release-size` | `baseline` | 296384 | 228114 |
-| `release-size` | `core` | 1,073,824 | 756,071 |
-| `release-size` | `component` | 1,604,488 | 1,180,631 |
-| `release-size` | `wasi` | 1,806,808 | 1,317,911 |
-| `release-size` | `core-nosimd` | 965,112 | 681,143 |
-| `release-size` | `core-jit` | 1,487,664 | 1,060,855 |
-| `release-size` | `wasi-threads` | 1,926,360 | 1,399,287 |
+| `release` | `baseline` | 345,656 | 261,679 |
+| `release` | `core` | 1,463,736 | 1,117,511 |
+| `release` | `component` | 2,450,496 | 1,959,447 |
+| `release` | `wasi` | 2,797,056 | 2,221,655 |
+| `release` | `core-nosimd` | 1,273,112 | 976,423 |
+| `release` | `core-jit` | 1,985,408 | 1,543,143 |
+| `release` | `wasi-threads` | 2,982,360 | 2,359,159 |
+| `release-size` | `baseline` | 296,384 | 228,114 |
+| `release-size` | `core` | 1,092,888 | 767,911 |
+| `release-size` | `component` | 1,621,776 | 1,190,871 |
+| `release-size` | `wasi` | 1,817,568 | 1,322,503 |
+| `release-size` | `core-nosimd` | 979,520 | 689,607 |
+| `release-size` | `core-jit` | 1,513,352 | 1,074,839 |
+| `release-size` | `wasi-threads` | 1,957,792 | 1,415,063 |
 
 #### Re-baseline history
 
@@ -515,6 +515,37 @@ release-size stripped file +528..+2,000 B, stripped `.text`
 excludes carry part of the change. The baseline was re-measured on
 the merged code and updated as recorded above, following the
 procedure below.
+
+PR #256 (#143, VMResult std-error surface with distinct trap causes)
+merged current `main` into its branch first; its first CI run on the
+merged tree then tripped the gate on the PR's own change. The PR splits
+the three spec trap causes that `InvalidOperand` used to merge into
+payload-free `DivideByZero` / `IntegerOverflow` / `InvalidConversion`
+variants across the interpreter, the JIT stubs and all three JIT
+backends (the trap-code ABI appends codes 14-16 without renumbering),
+implements `Display` and `std::error::Error` for `VMResult`, `TrapKind`
+and `TrapInfo` (trap variants display as the spec messages), adds
+`ComponentError::GuestTrap` so a guest trap's kind survives the
+component layer, and centralises the `vm_try!` propagation match -
+previously inlined at 1,143 call sites - into one cold
+`VMResult::propagate_failure` function. A follow-up on the merged tree
+classifies float-to-integer truncation failures by `is_nan` in the
+interpreter handlers and the JIT stubs (NaN is an invalid conversion;
+an out-of-range magnitude, including infinities, is an integer
+overflow), which the #131 trap-message table merged from `main`
+asserts separately. Attribution was isolated by measuring current
+`main` alone (workflow_dispatch run 45066161931), which reproduces
+the previous baseline exactly on all 28 gated series. The `baseline`
+configuration is byte-identical in both profiles. In the `release`
+profile the propagation centralisation dominates and the library
+configurations move slightly in both directions (stripped file
+-6,080..+4,136 B; stripped `.text` -1,728..+2,736 B), while in the
+`release-size` profile (`opt-level = "z"`, fat LTO, one codegen unit)
+the new Display/Error surface grows every library configuration
+(stripped file +10,760..+31,432 B; stripped `.text` +4,592..+15,776 B;
+the largest single delta is +1.8% of its series). The baseline was
+re-measured on the merged code and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 

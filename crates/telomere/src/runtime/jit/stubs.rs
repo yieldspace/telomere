@@ -306,6 +306,17 @@ fn value_exit(value: u64) -> JitNativeExit {
     }
 }
 
+/// Classifies a failed float-to-integer truncation the way the spec trap
+/// messages distinguish it: NaN is an invalid conversion, while an
+/// out-of-range magnitude (including infinities) is an integer overflow.
+fn trunc_trap(is_nan: bool) -> JitNativeExit {
+    JitNativeExit::trap(if is_nan {
+        VMResult::<()>::InvalidConversion
+    } else {
+        VMResult::<()>::IntegerOverflow
+    })
+}
+
 pub(crate) extern "C" fn i32_trunc_f32(value: u32, signed: u32) -> JitNativeExit {
     profile::count(Counter::RuntimeFloatHelper);
     let value = f32::from_bits(value);
@@ -313,12 +324,12 @@ pub(crate) extern "C" fn i32_trunc_f32(value: u32, signed: u32) -> JitNativeExit
         if (i32::MIN as f32) <= value && value < (i32::MAX as f32) {
             value as i32 as u32
         } else {
-            return JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+            return trunc_trap(value.is_nan());
         }
     } else if -1.0 < value && value < (u32::MAX as f32) {
         value.trunc() as u32
     } else {
-        return JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+        return trunc_trap(value.is_nan());
     };
     value_exit(u64::from(converted))
 }
@@ -330,12 +341,12 @@ pub(crate) extern "C" fn i32_trunc_f64(value: u64, signed: u32) -> JitNativeExit
         if (i32::MIN as f64) <= value && value <= (i32::MAX as f64) {
             value as i32 as u32
         } else {
-            return JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+            return trunc_trap(value.is_nan());
         }
     } else if -1.0 < value && value <= (u32::MAX as f64) {
         value as u32
     } else {
-        return JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+        return trunc_trap(value.is_nan());
     };
     value_exit(u64::from(converted))
 }
@@ -385,12 +396,12 @@ pub(crate) extern "C" fn i64_trunc_f32(value: u32, signed: u32, saturating: u32)
         if (i64::MIN as f32) <= value && value < (i64::MAX as f32) {
             value as i64 as u64
         } else {
-            return JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+            return trunc_trap(value.is_nan());
         }
     } else if -1.0 < value && value < (u64::MAX as f32) {
         value.trunc() as u64
     } else {
-        return JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+        return trunc_trap(value.is_nan());
     };
     value_exit(converted)
 }
@@ -410,12 +421,12 @@ pub(crate) extern "C" fn i64_trunc_f64(value: u64, signed: u32, saturating: u32)
         if (i64::MIN as f64) <= value && value < (i64::MAX as f64) {
             value as i64 as u64
         } else {
-            return JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+            return trunc_trap(value.is_nan());
         }
     } else if -1.0 < value && value < (u64::MAX as f64) {
         value as u64
     } else {
-        return JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+        return trunc_trap(value.is_nan());
     };
     value_exit(converted)
 }
@@ -1018,6 +1029,9 @@ fn runtime_atomic_start_indexed(
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::MemoryAllocationFailed => VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
+        VMResult::DivideByZero => VMResult::DivideByZero,
+        VMResult::IntegerOverflow => VMResult::IntegerOverflow,
+        VMResult::InvalidConversion => VMResult::InvalidConversion,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
@@ -1257,6 +1271,9 @@ fn unit_result<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::MemoryAllocationFailed => VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
+        VMResult::DivideByZero => VMResult::DivideByZero,
+        VMResult::IntegerOverflow => VMResult::IntegerOverflow,
+        VMResult::InvalidConversion => VMResult::InvalidConversion,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,

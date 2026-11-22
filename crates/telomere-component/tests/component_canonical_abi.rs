@@ -750,7 +750,13 @@ async fn latin1_utf16_load_rejects_an_odd_pointer() {
     // Canonical ABI `load_string_from_range` requires `ptr == align_to(ptr, 2)`:
     // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
     assert!(
-        matches!(error, ComponentError::Trap(_)),
+        matches!(
+            error,
+            ComponentError::GuestTrap {
+                kind: telomere::TrapKind::Unreachable,
+                ..
+            }
+        ),
         "unexpected error: {error}"
     );
     assert!(
@@ -778,7 +784,13 @@ async fn latin1_utf16_store_rejects_a_misaligned_realloc_result() {
     // Canonical ABI `store_string_to_latin1_or_utf16` checks `ptr == align_to(ptr, 2)`:
     // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
     assert!(
-        matches!(error, ComponentError::Trap(_)),
+        matches!(
+            error,
+            ComponentError::GuestTrap {
+                kind: telomere::TrapKind::Unreachable,
+                ..
+            }
+        ),
         "unexpected error: {error}"
     );
 }

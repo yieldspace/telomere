@@ -69,6 +69,9 @@ fn vm_result_name<V>(result: &VMResult<V>) -> &'static str {
         VMResult::Unlinkable => "Unlinkable",
         VMResult::MemoryAllocationFailed => "MemoryAllocationFailed",
         VMResult::InvalidOperand => "InvalidOperand",
+        VMResult::DivideByZero => "DivideByZero",
+        VMResult::IntegerOverflow => "IntegerOverflow",
+        VMResult::InvalidConversion => "InvalidConversion",
         VMResult::Unimplemented => "Unimplemented",
         VMResult::FuelExhausted => "FuelExhausted",
         VMResult::Cancelled => "Cancelled",
@@ -110,9 +113,9 @@ fn assert_trap_message<V>(
         }
         "uninitialized element" => matches!(result, VMResult::TableUninitialized),
         "indirect call type mismatch" => matches!(result, VMResult::CallIndirectInvalidType),
-        "integer divide by zero" | "integer overflow" | "invalid conversion to integer" => {
-            matches!(result, VMResult::InvalidOperand)
-        }
+        "integer divide by zero" => matches!(result, VMResult::DivideByZero),
+        "integer overflow" => matches!(result, VMResult::IntegerOverflow),
+        "invalid conversion to integer" => matches!(result, VMResult::InvalidConversion),
         "unaligned atomic" => matches!(result, VMResult::UnalignedAtomic),
         "call stack exhausted" => matches!(result, VMResult::StackOverflow),
         _ => panic!(
