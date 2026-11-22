@@ -236,3 +236,151 @@ async fn wasi_linker_sync_lowers_get_stdout_owned_resource() {
 
     assert!(matches!(result.as_slice(), [ComponentValue::Own(_)]));
 }
+
+fn compile_stdout_drop_component() -> Vec<u8> {
+    wat::parse_str(
+        r#"
+(component
+  (type $ty-wasi:io/error@0.2.6
+    (instance
+      (export "error" (type (sub resource)))
+    )
+  )
+  (import "wasi:io/error@0.2.6" (instance $wasi:io/error@0.2.6 (type $ty-wasi:io/error@0.2.6)))
+  (alias export $wasi:io/error@0.2.6 "error" (type $error))
+
+  (type $ty-wasi:io/streams@0.2.6
+    (instance
+      (export "output-stream" (type (sub resource)))
+      (alias outer 1 $error (type $streams-error))
+      (export "error" (type (eq $streams-error)))
+      (type $own-error (own $streams-error))
+      (type $stream-error
+        (variant
+          (case "last-operation-failed" $own-error)
+          (case "closed")
+        )
+      )
+      (export "stream-error" (type (eq $stream-error)))
+      (type $borrow-stream (borrow 0))
+      (type $bytes (list u8))
+      (type $write-result (result (error $stream-error)))
+      (export "[method]output-stream.blocking-write-and-flush"
+        (func
+          (param "self" $borrow-stream)
+          (param "contents" $bytes)
+          (result $write-result)
+        )
+      )
+    )
+  )
+  (import "wasi:io/streams@0.2.6" (instance $wasi:io/streams@0.2.6 (type $ty-wasi:io/streams@0.2.6)))
+  (alias export $wasi:io/streams@0.2.6 "output-stream" (type $output-stream))
+  (alias export $wasi:io/streams@0.2.6 "[method]output-stream.blocking-write-and-flush" (func $write))
+
+  (type $ty-wasi:cli/stdout@0.2.6
+    (instance
+      (alias outer 1 $output-stream (type $stdout-output-stream))
+      (export "output-stream" (type (eq $stdout-output-stream)))
+      (export "get-stdout" (func (result (own $stdout-output-stream))))
+    )
+  )
+  (import "wasi:cli/stdout@0.2.6" (instance $wasi:cli/stdout@0.2.6 (type $ty-wasi:cli/stdout@0.2.6)))
+  (alias export $wasi:cli/stdout@0.2.6 "get-stdout" (func $get-stdout))
+
+  (core module $memmod
+    (memory (export "mem") 1)
+    (global $bump (mut i32) (i32.const 4096))
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      (local $p i32)
+      (local.set $p (global.get $bump))
+      (global.set $bump (i32.add (local.get $p) (local.get 3)))
+      (local.get $p)
+    )
+    (data (i32.const 0) "hello from a dropped stream\n")
+  )
+  (core instance $meminst (instantiate $memmod))
+  (alias core export $meminst "mem" (core memory $mem))
+  (alias core export $meminst "realloc" (core func $realloc))
+
+  (core func $get-lower (canon lower (func $get-stdout)))
+  (core func $write-lower (canon lower (func $write) (memory $mem) (realloc $realloc)))
+  (core func $drop (canon resource.drop $output-stream))
+
+  (core module $caller
+    (import "" "get" (func $get (result i32)))
+    (import "" "write" (func $write (param i32 i32 i32 i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "write-and-drop") (result i32)
+      (local $h i32)
+      (local.set $h (call $get))
+      (call $write (local.get $h) (i32.const 0) (i32.const 28) (i32.const 1024))
+      (call $drop (local.get $h))
+      (i32.const 0)
+    )
+    (func (export "write-after-drop") (result i32)
+      (local $h i32)
+      (local.set $h (call $get))
+      (call $drop (local.get $h))
+      (call $write (local.get $h) (i32.const 0) (i32.const 28) (i32.const 1024))
+      (i32.const 0)
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "get" (func $get-lower))
+        (export "write" (func $write-lower))
+        (export "drop" (func $drop))
+      ))
+    )
+  )
+  (func (export "write-and-drop") (result s32)
+    (canon lift (core func $caller "write-and-drop"))
+  )
+  (func (export "write-after-drop") (result s32)
+    (canon lift (core func $caller "write-after-drop"))
+  )
+)
+"#,
+    )
+    .expect("stdout drop component wat must parse")
+}
+
+#[tokio::test]
+async fn wasi_stdout_handle_can_be_dropped_and_is_released() {
+    let bytes = compile_stdout_drop_component();
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let state = WasiState::builder().build();
+    let mut linker = ComponentLinker::new();
+    add_to_linker_sync(&mut linker, state.clone())
+        .expect("wasi linker registration should succeed");
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let result = instance
+        .call(&store, "write-and-drop", &[])
+        .await
+        .expect("writing to stdout and dropping its handle should succeed");
+    assert_eq!(result, vec![ComponentValue::S32(0)]);
+    assert_eq!(state.stdout(), b"hello from a dropped stream\n");
+
+    // The drop must actually release the host-side stream: writing through
+    // the same handle afterwards fails in the provider because the entry is
+    // gone. A no-op drop would let this call succeed.
+    let error = instance
+        .call(&store, "write-after-drop", &[])
+        .await
+        .expect_err("writing through a dropped stdout handle should fail");
+    assert!(
+        matches!(error, telomere_component::ComponentError::Trap(_)),
+        "write after drop should trap, got {error:?}"
+    );
+    assert_eq!(state.stdout(), b"hello from a dropped stream\n");
+}

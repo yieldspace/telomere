@@ -31,15 +31,13 @@ intentional, and the CI packaging guard keeps that boundary in place. See
 [RELEASING.md](RELEASING.md) for the tag, version, changelog, and future
 publishing policy.
 
-The JIT is experimental. The WASI surfaces are partial, and two gaps are worth
-knowing before you evaluate the Component Model path: components produced by
-current Rust `wasm32-wasip2` export `wasi:cli/run@0.2.0` while the CLI looks up
-`wasi:cli/run@0.2.6` exactly, and canonical `resource.drop` is not yet available
-for host-provided resources. Components can call host imports that return owned
-resource handles, including `wasi:cli/stdout.get-stdout`, and call
-`output-stream.blocking-write-and-flush`; see the runnable
-[`wasi-component-stdout` fixture](examples/wasi-component-stdout.wat). The
-remaining resource-lifecycle constraint is documented in
+The JIT is experimental and the WASI surfaces are partial. On the Component
+Model path, export lookup applies the ecosystem's semver rules rather than
+requiring an exact version match, and components can call host imports that
+return owned resource handles, including `wasi:cli/stdout.get-stdout`, call
+`output-stream.blocking-write-and-flush`, and release the handle again with
+canonical `resource.drop`; see the runnable
+[`wasi-component-stdout` fixture](examples/wasi-component-stdout.wat) and
 [examples/README.md](examples/README.md). The bundled arguments sample reports
 its result through the exit status so that it stays focused on argument passing.
 
@@ -337,9 +335,7 @@ through `WasiState`.
 Known gaps on these paths, with reproductions, are collected in
 [examples/README.md](examples/README.md): the preview1 runner does not implement
 `environ_get`/`environ_sizes_get` (so a stock `wasm32-wasip1` Rust binary will
-not run), component export lookup is exact-version rather than
-semver-compatible, and host-provided Component Model resources cannot yet be
-released through `resource.drop`.
+not run).
 
 ## Security
 

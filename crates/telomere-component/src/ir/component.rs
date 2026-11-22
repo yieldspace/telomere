@@ -14,7 +14,10 @@ pub struct Component {
 pub enum ComponentImport {
     Module,
     Component,
-    Instance,
+    // The declared type is retained so the runtime can map the instance's
+    // resource exports back to their `ResourceId`s (needed to route
+    // `canon resource.drop` for host-provided resources).
+    Instance(TypeId),
     // `engine.rs` identifies callable imports by this variant but does not
     // currently need its type ID.
     #[allow(dead_code)]
