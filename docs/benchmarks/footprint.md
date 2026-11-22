@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #251: workflow_dispatch runs 45051812925 and
-45051827578 against the PR branch at commit
-`871ecfabacc14d43045d295960fbd062c24f53b8` (the merge of the PR head
-`848e64b853e66e1cf769c2321ef17adbfe4b2e29` with `main` at
-`e46cd8d66dfcf415f5a0a9521a52e70f5a9cf376`), and pull-request run
-45051722003, which built the same merge tree (`ubuntu-24.04`, Rust
+against the code of PR #252: workflow_dispatch runs 45054630647 and
+45054643208 against the PR branch at commit
+`eebf876bce0385f3ac556d0051a577b6d8958c77` (the merge of the PR head
+`f816ff188c499161530081913ee69d10ad20f1c3` with `main` at
+`07f9a49120bf4d465c1704692a496f4e2f108bb0`), and pull-request run
+45054539493, which built the same merge tree (`ubuntu-24.04`, Rust
 1.96.0). Every run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
@@ -369,19 +369,19 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345656 | 261679 |
-| `release` | `core` | 1465472 | 1116631 |
-| `release` | `component` | 2434656 | 1943703 |
-| `release` | `wasi` | 2772760 | 2199175 |
-| `release` | `core-nosimd` | 1276464 | 977751 |
-| `release` | `core-jit` | 1990680 | 1541975 |
-| `release` | `wasi-threads` | 2952448 | 2334295 |
+| `release` | `core` | 1,465,400 | 1,116,407 |
+| `release` | `component` | 2,434,600 | 1,943,479 |
+| `release` | `wasi` | 2,772,688 | 2,198,951 |
+| `release` | `core-nosimd` | 1,276,392 | 977,527 |
+| `release` | `core-jit` | 1,990,608 | 1,541,751 |
+| `release` | `wasi-threads` | 2,952,360 | 2,334,071 |
 | `release-size` | `baseline` | 296384 | 228114 |
-| `release-size` | `core` | 1070816 | 753175 |
-| `release-size` | `component` | 1591448 | 1169303 |
-| `release-size` | `wasi` | 1789520 | 1303879 |
-| `release-size` | `core-nosimd` | 963480 | 679623 |
-| `release-size` | `core-jit` | 1484656 | 1057959 |
-| `release-size` | `wasi-threads` | 1909216 | 1385399 |
+| `release-size` | `core` | 1,071,936 | 754,135 |
+| `release-size` | `component` | 1,592,568 | 1,170,263 |
+| `release-size` | `wasi` | 1,790,640 | 1,304,839 |
+| `release-size` | `core-nosimd` | 964,584 | 680,567 |
+| `release-size` | `core-jit` | 1,485,760 | 1,058,903 |
+| `release-size` | `wasi-threads` | 1,910,336 | 1,386,359 |
 
 #### Re-baseline history
 
@@ -444,6 +444,27 @@ release-size +1,760 B / +992 B). The `baseline` configuration, which
 links no library code, is unchanged. The baseline was re-measured on
 the merged code and updated as recorded above, following the procedure
 below.
+
+PR #252 (#170, parse time grows cubically with block nesting) merged
+current `main` into its branch first; its first CI run on the merged
+tree then tripped the gate on the PR's own change. The change rewrites
+two optimizer analysis passes in
+`crates/telomere/src/parser/core/optimizer/pipeline/analysis.rs`:
+`compute_loop_depth` becomes a dominator-tree prefix sum accumulated in
+one reverse-postorder pass, and `compute_loop_parents` is inverted from
+an all-pairs scan to a single pass over each loop's members; the PR's
+only other change is a criterion bench, which is not linked into the
+embedder. The parser/optimizer is part of the telomere library linked
+into every embedder configuration except `baseline`, so the deltas are
+nearly uniform across library configurations and the `baseline`
+configuration is unchanged: in the `release` profile the library
+configurations shrink slightly (stripped `.text` -224 B in all six;
+stripped file -72 B, `wasi-threads` -88 B, `component` -56 B), while in
+the `release-size` profile (`opt-level = "z"`, fat LTO, one codegen
+unit) they grow (stripped file +1,120 B and stripped `.text` +960 B,
+with `core-nosimd` and `core-jit` at +1,104 B / +944 B). The baseline
+was re-measured on the merged code and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
