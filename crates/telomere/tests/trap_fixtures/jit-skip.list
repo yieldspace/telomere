@@ -1,0 +1,12 @@
+# JIT differential skip list for the trap-diagnostics fixture corpus.
+#
+# One entry per line:  <fixture-name>: <reason>
+#
+# A listed fixture still runs on the interpreter; only the JIT pass is
+# skipped. An entry is justified only when the JIT cannot compile the
+# fixture at all (never because its trace disagrees — a disagreement is a
+# bug the corpus exists to catch). Entries naming unknown fixtures, and
+# fixtures that fail under the JIT without an entry, fail the runner.
+#
+# Currently empty: every fixture in the corpus compiles and runs under the
+# JIT on the targets probed when the corpus was added (Linux x86_64).

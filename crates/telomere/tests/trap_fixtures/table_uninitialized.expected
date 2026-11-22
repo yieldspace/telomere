@@ -1,0 +1,5 @@
+# Trap-diagnostics expectation for `table_uninitialized`. Format: see README.md in this directory.
+kind: table uninitialized
+truncated: false
+total-frames: 1
+frame 0: func=0 name=run module=table_uninitialized kind=wasm pc=2

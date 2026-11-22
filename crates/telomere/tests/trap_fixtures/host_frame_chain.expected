@@ -1,0 +1,6 @@
+# Trap-diagnostics expectation for `host_frame_chain`. Format: see README.md in this directory.
+kind: unreachable
+truncated: false
+total-frames: 2
+frame 0: func=0 name=host module=host_frame_chain kind=host pc=-
+frame 1: func=1 name=outer module=host_frame_chain kind=wasm pc=2

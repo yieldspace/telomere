@@ -1,0 +1,5 @@
+# Trap-diagnostics expectation for `indirect_type_mismatch`. Format: see README.md in this directory.
+kind: call indirect invalid type
+truncated: false
+total-frames: 1
+frame 0: func=1 name=run module=indirect_type_mismatch kind=wasm pc=2
