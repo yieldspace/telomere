@@ -354,13 +354,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #256: workflow_dispatch runs 45065589500 and
-45065600974 against the PR branch at commit
-`ef671abd0df4cb702be537bf12ac8ba4d5745017` (the merge of `main` at
-`14cd8b2d392d342ee3110448ff72d3d01cfec701` into the PR head
-`9cca190edc249e5c4e715c39c0f8ae710cf0d659`, plus the harness-table
-follow-up commit), and pull-request run 45065494772, which built the
-same merge tree (`ubuntu-24.04`, Rust 1.96.0). Every run produced byte-identical sizes: for all fourteen
+against the code of PR #257: workflow_dispatch runs 45072019203 and
+45072026952 against the PR branch at commit
+`e13eaf7a43a3bcf1f39e1eaded3d767ce294cd44` (the merge of `main` at
+`9b4d3f3c4e5d65407796399251c639937090b918` into the PR head
+`862bbe2db450ceaa82115de0f2356a83f2aa8170`), and pull-request run
+45071971685, which built the same merge tree (`ubuntu-24.04`, Rust
+1.96.0). Every run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
 spread of **0 B** across the three samples. The observed values are the
@@ -369,19 +369,19 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,463,736 | 1,117,511 |
-| `release` | `component` | 2,450,496 | 1,959,447 |
-| `release` | `wasi` | 2,797,056 | 2,221,655 |
-| `release` | `core-nosimd` | 1,273,112 | 976,423 |
-| `release` | `core-jit` | 1,985,408 | 1,543,143 |
-| `release` | `wasi-threads` | 2,982,360 | 2,359,159 |
+| `release` | `core` | 1,459,424 | 1,113,687 |
+| `release` | `component` | 2,445,928 | 1,955,927 |
+| `release` | `wasi` | 2,792,488 | 2,218,135 |
+| `release` | `core-nosimd` | 1,269,032 | 972,711 |
+| `release` | `core-jit` | 1,983,688 | 1,541,047 |
+| `release` | `wasi-threads` | 2,978,384 | 2,355,975 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,092,888 | 767,911 |
-| `release-size` | `component` | 1,621,776 | 1,190,871 |
-| `release-size` | `wasi` | 1,817,568 | 1,322,503 |
-| `release-size` | `core-nosimd` | 979,520 | 689,607 |
-| `release-size` | `core-jit` | 1,513,352 | 1,074,839 |
-| `release-size` | `wasi-threads` | 1,957,792 | 1,415,063 |
+| `release-size` | `core` | 1,085,560 | 763,527 |
+| `release-size` | `component` | 1,613,632 | 1,185,655 |
+| `release-size` | `wasi` | 1,809,408 | 1,317,287 |
+| `release-size` | `core-nosimd` | 972,272 | 685,287 |
+| `release-size` | `core-jit` | 1,505,640 | 1,069,671 |
+| `release-size` | `wasi-threads` | 1,949,648 | 1,409,847 |
 
 #### Re-baseline history
 
@@ -546,6 +546,33 @@ the new Display/Error surface grows every library configuration
 the largest single delta is +1.8% of its series). The baseline was
 re-measured on the merged code and updated as recorded above,
 following the procedure below.
+
+PR #257 (#186, reserve validated max operand depth at frame entry)
+merged current `main` into its branch first. The change computes the
+validated maximum operand depth at parse time in
+`pipeline::optimize_function` from the type checker's stack snapshots,
+stores it as `LoweredFunction.max_operand_bytes` carried into
+`CallRecipe`, checks `frame_end + bound` against the stack length once
+at frame entry on every frame-construction path (overflow still traps
+`StackOverflow`, only detected earlier), and removes the per-push
+bounds checks from the seven `_fast` push functions in
+`crates/telomere/src/common/stack.rs`, each of which now carries a
+debug_assert and the reservation invariant it relies on; checked
+pushes remain on non-frame paths (embedder staging, scheduler resume,
+host in-place results). Attribution was isolated by measuring current
+`main` alone (workflow_dispatch run 45072035005), which reproduces
+the previous baseline exactly on all 28 gated series. The `baseline`
+configuration is byte-identical in both profiles (4 of 28 gated
+series unchanged), and every library configuration shrinks in both
+profiles — the `_fast` pushes are inlined into handlers across the
+library, so their removed checks outweigh the single entry check and
+the added field (release stripped file -1,720..-4,568 B, stripped
+`.text` -2,096..-3,824 B; release-size stripped file -7,248..-8,160 B,
+stripped `.text` -4,320..-5,216 B). No series grows, so unlike the
+re-baselines above the gate had already passed on the merged tree;
+the baseline was re-measured on the merged code and updated as
+recorded above, following the procedure below, so the recorded
+numbers keep tracking the code on `main`.
 
 ### Threshold derivation
 
