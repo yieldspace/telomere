@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions 'Embedder footprint' runs for PR #254 (branch fix/131-wast-harness-assertions at commit fb01564eb0d7f252d3b24da100b325d5e7d56796, the merge of the PR head 3420455b6ee3a6614cc397fc8b4023c28c20bdbc with main 4d3b77441d337a6ec8c2586c1e856b1f749be87c; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45060131072 and 45060142935 against the branch and pull-request run 45060031215, which built the same merge tree, produced byte-identical sizes for every gated series",
-    "commit": "fb01564eb0d7f252d3b24da100b325d5e7d56796",
+    "summary": "GitHub Actions ‘Embedder footprint’ runs for PR #256 (branch fix/143-vmresult-error-context at commit ef671abd0df4cb702be537bf12ac8ba4d5745017, the merge of main 14cd8b2d392d342ee3110448ff72d3d01cfec701 into the PR head 9cca190edc249e5c4e715c39c0f8ae710cf0d659 plus the harness-table follow-up commit; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45065589500 and 45065600974 against the branch and pull-request run 45065494772, which built the same merge tree, produced byte-identical sizes for every gated series",
+    "commit": "ef671abd0df4cb702be537bf12ac8ba4d5745017",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45060131072,
-      45060142935
+      45065589500,
+      45065600974
     ],
     "cross_check_run_ids": [
-      45060031215
+      45065494772
     ],
-    "derivation": "Re-baseline for PR #254 (#131, wast harness spec fidelity). The PR strengthens the wast test harness (trap/invalid reason matching, result arity, bit-exact NaN patterns) and fixes the real defects that strengthening surfaced, all of them in the telomere core library: the parser's memarg alignment check is unified on natural_align_log2 (values.rs, instruction.rs, simd_instruction.rs), the type checker now produces UnknownLabel, unknown export indices return their per-kind error variants (parser.rs), and the interpreter's rounding paths quiet signaling NaNs (runtime/vm/numeric.rs, simd.rs, superinstructions.rs). The harness changes themselves are test-only and are not linked into the embedder. Because the core library is linked into every embedder configuration except baseline, the baseline configuration is byte-identical in both profiles (4 of 28 gated series unchanged) and the growth is near-uniform across the library configurations: in the release profile, stripped file +640..+880 B and stripped .text +624..+832 B; in the release-size profile, stripped file +528..+2,000 B and stripped .text +576..+2,048 B. core-nosimd grows the least in release-size (+528 B / +576 B) because the SIMD parser and runtime paths it excludes carry part of the change. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, 'Size regression gate (#164)'."
+    "derivation": "Re-baseline for PR #256 (#143, VMResult std-error surface with distinct trap causes). The PR splits the three spec trap causes that InvalidOperand used to merge into payload-free DivideByZero / IntegerOverflow / InvalidConversion variants across the interpreter, the JIT stubs and all three JIT backends (the trap-code ABI appends codes 14-16 without renumbering), implements Display and std::error::Error for VMResult / TrapKind / TrapInfo with the spec trap messages, adds ComponentError::GuestTrap so a guest trap kind survives the component layer, and centralises the vm_try! propagation match (previously inlined at 1,143 call sites) into one cold VMResult::propagate_failure function. A follow-up on the merged tree classifies float-to-integer truncation failures by is_nan in the interpreter handlers and the JIT stubs (NaN is an invalid conversion; an out-of-range magnitude, including infinities, is an integer overflow), which the #131 trap-message table merged from main asserts separately. Attribution was isolated by measuring current main (14cd8b2) alone (workflow_dispatch run 45066161931): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR’s own. The baseline configuration, which links no library code, is byte-identical in both profiles (4 of 28 gated series unchanged). In the release profile the propagation centralisation dominates and the library configurations move slightly in both directions (stripped file -6,080..+4,136 B; stripped .text -1,728..+2,736 B). In the release-size profile (opt-level z, fat LTO, one codegen unit) the new Display/Error surface is inlined across the library and every library configuration grows (stripped file +10,760..+31,432 B; stripped .text +4,592..+15,776 B; the largest single delta is +1.8% of its series, release-size core stripped file). Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, ‘Size regression gate (#164)’."
   },
   "thresholds": {
     "release": {
@@ -30,62 +30,62 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1466280,
-          "threshold": 1466280
+          "baseline": 1463736,
+          "threshold": 1463736
         },
         "stripped_text_bytes": {
-          "baseline": 1117239,
-          "threshold": 1117239
+          "baseline": 1117511,
+          "threshold": 1117511
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2452544,
-          "threshold": 2452544
+          "baseline": 2450496,
+          "threshold": 2450496
         },
         "stripped_text_bytes": {
-          "baseline": 1959303,
-          "threshold": 1959303
+          "baseline": 1959447,
+          "threshold": 1959447
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2798520,
-          "threshold": 2798520
+          "baseline": 2797056,
+          "threshold": 2797056
         },
         "stripped_text_bytes": {
-          "baseline": 2221287,
-          "threshold": 2221287
+          "baseline": 2221655,
+          "threshold": 2221655
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1277032,
-          "threshold": 1277032
+          "baseline": 1273112,
+          "threshold": 1273112
         },
         "stripped_text_bytes": {
-          "baseline": 978151,
-          "threshold": 978151
+          "baseline": 976423,
+          "threshold": 976423
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1991488,
-          "threshold": 1991488
+          "baseline": 1985408,
+          "threshold": 1985408
         },
         "stripped_text_bytes": {
-          "baseline": 1542583,
-          "threshold": 1542583
+          "baseline": 1543143,
+          "threshold": 1543143
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2978224,
-          "threshold": 2978224
+          "baseline": 2982360,
+          "threshold": 2982360
         },
         "stripped_text_bytes": {
-          "baseline": 2356423,
-          "threshold": 2356423
+          "baseline": 2359159,
+          "threshold": 2359159
         }
       }
     },
@@ -102,62 +102,62 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1073824,
-          "threshold": 1073824
+          "baseline": 1092888,
+          "threshold": 1092888
         },
         "stripped_text_bytes": {
-          "baseline": 756071,
-          "threshold": 756071
+          "baseline": 767911,
+          "threshold": 767911
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1604488,
-          "threshold": 1604488
+          "baseline": 1621776,
+          "threshold": 1621776
         },
         "stripped_text_bytes": {
-          "baseline": 1180631,
-          "threshold": 1180631
+          "baseline": 1190871,
+          "threshold": 1190871
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1806808,
-          "threshold": 1806808
+          "baseline": 1817568,
+          "threshold": 1817568
         },
         "stripped_text_bytes": {
-          "baseline": 1317911,
-          "threshold": 1317911
+          "baseline": 1322503,
+          "threshold": 1322503
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 965112,
-          "threshold": 965112
+          "baseline": 979520,
+          "threshold": 979520
         },
         "stripped_text_bytes": {
-          "baseline": 681143,
-          "threshold": 681143
+          "baseline": 689607,
+          "threshold": 689607
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1487664,
-          "threshold": 1487664
+          "baseline": 1513352,
+          "threshold": 1513352
         },
         "stripped_text_bytes": {
-          "baseline": 1060855,
-          "threshold": 1060855
+          "baseline": 1074839,
+          "threshold": 1074839
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1926360,
-          "threshold": 1926360
+          "baseline": 1957792,
+          "threshold": 1957792
         },
         "stripped_text_bytes": {
-          "baseline": 1399287,
-          "threshold": 1399287
+          "baseline": 1415063,
+          "threshold": 1415063
         }
       }
     }
