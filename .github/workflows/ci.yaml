@@ -30,6 +30,28 @@ jobs:
       - name: Test
         run: cargo test --verbose --release --workspace
 
+  debug-wast-test:
+    name: Debug-profile wast tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      # Guards the #154 dev-profile contract: without it the debug wast
+      # suite aborts with a host stack overflow (plain cargo test breaks).
+      - name: Test wast in the debug profile
+        run: cargo test --verbose -p telomere --test wast
+
   minimal-embedder:
     name: Standalone minimal embedder
     runs-on: ubuntu-latest

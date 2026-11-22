@@ -96,17 +96,49 @@ outside this parser-recursion change and belong to #120.
 
 ## Debug builds and #154
 
-This contract is optimized-build only. In an unoptimized build, `parse_inst`'s
-frame is about 130 KiB, roughly 190 times its 681 B release frame. A limit low
-enough to fit a normal debug test thread would reject valid conformance inputs,
-so it does not resolve #154. The replay harnesses accordingly use 512 KiB only
-in release and retain a 64 MiB debug stack while #154 is addressed separately.
-Instrumented builds are excluded from this contract for the same reason. Bisected
-the same way on macOS arm64, an AddressSanitizer build costs about 60 KiB per
-level, roughly 90 times the 681 B release frame: 256 levels need more than 14 MiB
-and 512 levels need between 28 MiB and 32 MiB. A 512-level input therefore fits
-in neither a default 8 MiB thread stack nor a 16 MiB one, so both targets that
-feed guest bytes to these parsers, `parse_core_module` and `decode_component`,
+This contract is stated for optimized code generation, and the workspace
+enforces that precondition for the `telomere` crate in dev builds too: the
+root `Cargo.toml` carries a `[profile.dev.package.telomere]` override
+(`opt-level = 3`, `debug-assertions = false`). #154 measured why a plain
+opt-level 0 dev build cannot work:
+
+- `parse_inst`'s frame is about 130 KiB, roughly 190 times its 681 B release
+  frame. A depth limit low enough to fit a normal debug test thread would
+  reject valid conformance inputs, so bounding the depth cannot fix debug.
+- The direct-threaded dispatch tail-calls every handler into the next one.
+  Without sibling-call optimisation each dispatched instruction leaves one
+  host frame live until the enclosing guest call returns, so host stack use
+  grows with the number of executed instructions, not with nesting depth:
+  a flat 10,000-iteration loop already overflows a 16 MiB thread, a
+  1,000,000-iteration loop overflows 2 GiB, and the wast suite aborted on
+  `call.wast`, `memory_copy.wast`, and the tail-call fixtures. This is the
+  same mechanism family as #114 (reliance on an optimisation stable Rust
+  does not guarantee); #114 remains the issue that owns removing the
+  reliance, while #154 owns making the debug profile behave per contract.
+
+With the override in place, dev builds of the interpreter behave like the
+release contract above: the parser frames return to release scale (the
+`control_nesting_depth` tests, including the 512 KiB budget test, now run
+in both profiles), and dispatch keeps a flat host stack over arbitrarily
+long executions. One measured residual remains in debug builds: long
+`return_call` chains still leave a small host cost per step (the
+1,000,000-step tail-call fixtures need between 64 MiB and 256 MiB), so the
+wast harness runs the suite on a documented 512 MiB runner thread
+(`WAST_RUNNER_STACK_BYTES` in `tests/harnesses/wast.rs`). The fuzz
+replay harnesses likewise retain their 64 MiB debug stack. A CI job
+(`Debug-profile wast tests`) runs the wast suite in the debug profile so
+this contract cannot regress silently.
+
+Embedders building the crate with their own dev profile do not inherit the
+workspace override: a fully unoptimized build of the interpreter still has
+the frame sizes above, and executing guests from such a build needs a host
+stack sized accordingly. Instrumented builds are excluded from this
+contract for the same reason. Bisected the same way on macOS arm64, an
+AddressSanitizer build costs about 60 KiB per level, roughly 90 times the
+681 B release frame: 256 levels need more than 14 MiB and 512 levels need
+between 28 MiB and 32 MiB. A 512-level input therefore fits in neither a
+default 8 MiB thread stack nor a 16 MiB one, so both targets that feed
+guest bytes to these parsers, `parse_core_module` and `decode_component`,
 run their work on a 64 MiB harness thread.
 
 ## Reproducible regression fixtures
