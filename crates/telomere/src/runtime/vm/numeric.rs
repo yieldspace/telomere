@@ -43,6 +43,7 @@ pub(crate) fn crc16_update16_bits(data: u32, mut crc: u32) -> u32 {
 /// # Safety
 /// - `tail_code` must point to the data local, crc local, and function-return target operands.
 /// - The active frame must match the validated lowered shape selected by the optimizer.
+#[inline(never)]
 pub unsafe fn op_i32_crc16_update16(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -68,10 +69,20 @@ pub unsafe fn op_i32_crc16_update16(
 /// # Safety
 /// - `tail_code` must point to the data local, crc local, and function-return target operands.
 /// - The active frame must match the wrapper shape selected by the instantiator.
+#[inline(never)]
 pub unsafe fn op_i32_crc16_update16_masked(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_i32_crc16_update16` (the `& 0xffff` mask is provably redundant), whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     profile_numeric_family("op_i32_crc16_update16_masked");
     let data_local = (*tail_code).operand.local_addr as usize;
     let crc_local = (*tail_code.add(1)).operand.local_addr as usize;
@@ -98,6 +109,7 @@ pub unsafe fn op_i32_crc16_update16_masked(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = (*tail_code).operand.i32;
     trace!("op_i32_const: {v}");
@@ -120,6 +132,7 @@ pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let _ = ctx.stack.reduce_top_i32_add();
     trace!("op_i32_add");
@@ -141,6 +154,7 @@ pub unsafe fn op_i32_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let _ = ctx.stack.reduce_top_i32_sub();
     trace!("op_i32_sub");
@@ -162,6 +176,7 @@ pub unsafe fn op_i32_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_clz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     vm_try!(ctx.stack.push_i64(a.leading_zeros().into()));
@@ -184,6 +199,7 @@ pub unsafe fn op_i64_clz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_ctz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     vm_try!(ctx.stack.push_i64(a.trailing_zeros().into()));
@@ -206,6 +222,7 @@ pub unsafe fn op_i64_ctz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_popcnt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     vm_try!(ctx.stack.push_i64(a.count_ones().into()));
@@ -228,6 +245,7 @@ pub unsafe fn op_i64_popcnt(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     let b = ctx.stack.pop_i64();
@@ -252,6 +270,7 @@ pub unsafe fn op_i64_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_i64_const");
     vm_try!(ctx.stack.push_i64((*tail_code).operand.i64));
@@ -273,6 +292,7 @@ pub unsafe fn op_i64_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_const");
     vm_try!(ctx.stack.push_f32((*tail_code).operand.f32));
@@ -294,7 +314,17 @@ pub unsafe fn op_f32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_i64_const`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     trace!("op_f64_const");
     vm_try!(ctx.stack.push_f64((*tail_code).operand.f64));
     call_next(tail_code, 1, ctx)
@@ -315,6 +345,7 @@ pub unsafe fn op_f64_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_lt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_lt");
     let b = ctx.stack.pop_f32();
@@ -338,6 +369,7 @@ pub unsafe fn op_f32_lt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_gt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_gt");
     let b = ctx.stack.pop_f32();
@@ -388,6 +420,7 @@ pub fn quiet_nan_f64(value: f64) -> f64 {
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_sqrt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_sqrt");
     let a = ctx.stack.pop_f32();
@@ -410,6 +443,7 @@ pub unsafe fn op_f32_sqrt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_add");
     let b = ctx.stack.pop_f32();
@@ -433,6 +467,7 @@ pub unsafe fn op_f32_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_sub");
     let a = ctx.stack.pop_f32();
@@ -456,6 +491,7 @@ pub unsafe fn op_f32_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_mul");
     let b = ctx.stack.pop_f32();
@@ -479,6 +515,7 @@ pub unsafe fn op_f32_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_div(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_div");
     let b = ctx.stack.pop_f32();
@@ -502,6 +539,7 @@ pub unsafe fn op_f32_div(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_min(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_min");
     let b = ctx.stack.pop_f32();
@@ -532,6 +570,7 @@ pub unsafe fn op_f32_min(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_max(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_max");
     let b = ctx.stack.pop_f32();
@@ -562,6 +601,7 @@ pub unsafe fn op_f32_max(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_copysign(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_copysign");
     let b = ctx.stack.pop_f32();
@@ -585,6 +625,7 @@ pub unsafe fn op_f32_copysign(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_add");
     let b = ctx.stack.pop_f64();
@@ -608,6 +649,7 @@ pub unsafe fn op_f64_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_sub");
     let a = ctx.stack.pop_f64();
@@ -631,6 +673,7 @@ pub unsafe fn op_f64_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_mul");
     let b = ctx.stack.pop_f64();
@@ -654,6 +697,7 @@ pub unsafe fn op_f64_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_div(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_div");
     let b = ctx.stack.pop_f64();
@@ -677,6 +721,7 @@ pub unsafe fn op_f64_div(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_min(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_min");
     let b = ctx.stack.pop_f64();
@@ -707,6 +752,7 @@ pub unsafe fn op_f64_min(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_max(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_max");
     let b = ctx.stack.pop_f64();
@@ -737,6 +783,7 @@ pub unsafe fn op_f64_max(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_copysign(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_copysign");
     let b = ctx.stack.pop_f64();
@@ -760,6 +807,7 @@ pub unsafe fn op_f64_copysign(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_wrap_i64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_i32_wrap_i64");
     let a = ctx.stack.pop_i64();
@@ -782,6 +830,7 @@ pub unsafe fn op_i32_wrap_i64(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_trunc_f32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -810,6 +859,7 @@ pub unsafe fn op_i32_trunc_f32_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_trunc_f32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -838,6 +888,7 @@ pub unsafe fn op_i32_trunc_f32_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_trunc_f64_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -866,6 +917,7 @@ pub unsafe fn op_i32_trunc_f64_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_trunc_f64_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -894,6 +946,7 @@ pub unsafe fn op_i32_trunc_f64_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_trunc_f32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -922,6 +975,7 @@ pub unsafe fn op_i64_trunc_f32_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_trunc_f32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -950,6 +1004,7 @@ pub unsafe fn op_i64_trunc_f32_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_trunc_f64_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -978,6 +1033,7 @@ pub unsafe fn op_i64_trunc_f64_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_trunc_f64_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1006,6 +1062,7 @@ pub unsafe fn op_i64_trunc_f64_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_trunc_sat_f32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1030,6 +1087,7 @@ pub unsafe fn op_i32_trunc_sat_f32_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_trunc_sat_f32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1054,6 +1112,7 @@ pub unsafe fn op_i32_trunc_sat_f32_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_trunc_sat_f64_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1078,6 +1137,7 @@ pub unsafe fn op_i32_trunc_sat_f64_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_trunc_sat_f64_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1102,6 +1162,7 @@ pub unsafe fn op_i32_trunc_sat_f64_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_trunc_sat_f32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1126,6 +1187,7 @@ pub unsafe fn op_i64_trunc_sat_f32_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_trunc_sat_f32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1150,6 +1212,7 @@ pub unsafe fn op_i64_trunc_sat_f32_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_trunc_sat_f64_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1174,6 +1237,7 @@ pub unsafe fn op_i64_trunc_sat_f64_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_trunc_sat_f64_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1198,6 +1262,7 @@ pub unsafe fn op_i64_trunc_sat_f64_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     let b = ctx.stack.pop_i64();
@@ -1220,6 +1285,7 @@ pub unsafe fn op_i64_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_extend_i32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1244,6 +1310,7 @@ pub unsafe fn op_i64_extend_i32_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_extend_i32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1268,6 +1335,7 @@ pub unsafe fn op_i64_extend_i32_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_convert_i32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1292,6 +1360,7 @@ pub unsafe fn op_f32_convert_i32_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_convert_i32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1316,6 +1385,7 @@ pub unsafe fn op_f32_convert_i32_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_convert_i64_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1340,6 +1410,7 @@ pub unsafe fn op_f32_convert_i64_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_convert_i64_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1364,6 +1435,7 @@ pub unsafe fn op_f32_convert_i64_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_demote_f64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_f32(a as f32));
@@ -1385,6 +1457,7 @@ pub unsafe fn op_f32_demote_f64(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_convert_i32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1409,6 +1482,7 @@ pub unsafe fn op_f64_convert_i32_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_convert_i32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1433,6 +1507,7 @@ pub unsafe fn op_f64_convert_i32_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_convert_i64_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1457,6 +1532,7 @@ pub unsafe fn op_f64_convert_i64_s(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_convert_i64_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1481,6 +1557,7 @@ pub unsafe fn op_f64_convert_i64_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_promote_f32(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1505,6 +1582,7 @@ pub unsafe fn op_f64_promote_f32(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     vm_try!(ctx.stack.push_f32(a.abs()));
@@ -1526,6 +1604,7 @@ pub unsafe fn op_f32_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     vm_try!(ctx.stack.push_f32(-a));
@@ -1547,6 +1626,7 @@ pub unsafe fn op_f32_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.ceil())));
@@ -1568,6 +1648,7 @@ pub unsafe fn op_f32_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.floor())));
@@ -1589,6 +1670,7 @@ pub unsafe fn op_f32_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.trunc())));
@@ -1610,6 +1692,7 @@ pub unsafe fn op_f32_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_nearest(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.round_ties_even())));
@@ -1631,6 +1714,7 @@ pub unsafe fn op_f32_nearest(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.ceil())));
@@ -1652,6 +1736,7 @@ pub unsafe fn op_f64_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.floor())));
@@ -1673,6 +1758,7 @@ pub unsafe fn op_f64_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.trunc())));
@@ -1694,6 +1780,7 @@ pub unsafe fn op_f64_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_nearest(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.round_ties_even())));
@@ -1715,6 +1802,7 @@ pub unsafe fn op_f64_nearest(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_f64(a.abs()));
@@ -1736,6 +1824,7 @@ pub unsafe fn op_f64_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_f64(-a));
@@ -1757,6 +1846,7 @@ pub unsafe fn op_f64_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_sqrt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.sqrt())));
@@ -1778,6 +1868,7 @@ pub unsafe fn op_f64_sqrt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     let b = ctx.stack.pop_f32();
@@ -1800,6 +1891,7 @@ pub unsafe fn op_f32_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     let b = ctx.stack.pop_f32();
@@ -1822,6 +1914,7 @@ pub unsafe fn op_f32_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_le(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f32();
     let a = ctx.stack.pop_f32();
@@ -1844,6 +1937,7 @@ pub unsafe fn op_f32_le(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_ge(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f32();
     let a = ctx.stack.pop_f32();
@@ -1866,6 +1960,7 @@ pub unsafe fn op_f32_ge(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f64();
     let a = ctx.stack.pop_f64();
@@ -1888,6 +1983,7 @@ pub unsafe fn op_f64_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f64();
     let a = ctx.stack.pop_f64();
@@ -1910,6 +2006,7 @@ pub unsafe fn op_f64_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_lt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f64();
     let a = ctx.stack.pop_f64();
@@ -1932,6 +2029,7 @@ pub unsafe fn op_f64_lt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_gt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f64();
     let a = ctx.stack.pop_f64();
@@ -1954,6 +2052,7 @@ pub unsafe fn op_f64_gt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_le(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f64();
     let a = ctx.stack.pop_f64();
@@ -1976,6 +2075,7 @@ pub unsafe fn op_f64_le(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_ge(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f64();
     let a = ctx.stack.pop_f64();
@@ -1998,6 +2098,7 @@ pub unsafe fn op_f64_ge(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_ctz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u32().trailing_zeros();
     vm_try!(ctx.stack.push_u32(v));
@@ -2019,6 +2120,7 @@ pub unsafe fn op_i32_ctz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_clz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u32().leading_zeros();
     vm_try!(ctx.stack.push_u32(v));
@@ -2040,6 +2142,7 @@ pub unsafe fn op_i32_clz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_popcnt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u32().count_ones();
     vm_try!(ctx.stack.push_u32(v));
@@ -2061,6 +2164,7 @@ pub unsafe fn op_i32_popcnt(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i32();
     let b = ctx.stack.pop_i32();
@@ -2085,6 +2189,7 @@ pub unsafe fn op_i32_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_div_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i32();
     let b = ctx.stack.pop_i32();
@@ -2111,6 +2216,7 @@ pub unsafe fn op_i32_div_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_div_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_u32();
     let b = ctx.stack.pop_u32();
@@ -2137,6 +2243,7 @@ pub unsafe fn op_i32_div_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_div_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     let b = ctx.stack.pop_i64();
@@ -2163,6 +2270,7 @@ pub unsafe fn op_i64_div_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_div_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_u64();
     let b = ctx.stack.pop_u64();
@@ -2189,6 +2297,7 @@ pub unsafe fn op_i64_div_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2211,6 +2320,7 @@ pub unsafe fn op_i64_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_or(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2233,6 +2343,7 @@ pub unsafe fn op_i64_or(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2255,6 +2366,7 @@ pub unsafe fn op_i64_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     let b = ctx.stack.pop_i64();
@@ -2279,6 +2391,7 @@ pub unsafe fn op_i64_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_rem_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i32();
     let a = ctx.stack.pop_i32();
@@ -2304,6 +2417,7 @@ pub unsafe fn op_i32_rem_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_rem_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -2329,6 +2443,7 @@ pub unsafe fn op_i32_rem_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_rem_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i64();
     let a = ctx.stack.pop_i64();
@@ -2354,6 +2469,7 @@ pub unsafe fn op_i64_rem_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_rem_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2379,6 +2495,7 @@ pub unsafe fn op_i64_rem_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -2401,6 +2518,7 @@ pub unsafe fn op_i32_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_or(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -2423,6 +2541,7 @@ pub unsafe fn op_i32_or(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -2447,6 +2566,7 @@ pub unsafe fn op_i32_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - The decoded operands must describe locals validated as 4-byte values.
 /// - This handler must not keep borrows, locks, or guards alive across
 ///   `call_next`.
+#[inline(never)]
 pub unsafe fn op_i32_select_bit_step4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2469,6 +2589,7 @@ pub unsafe fn op_i32_select_bit_step4(
 ///   requirements.
 /// - This handler must not keep borrows, locks, or guards alive across
 ///   `call_next`.
+#[inline(never)]
 pub unsafe fn op_i32_select_bit_step4_run(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2546,6 +2667,7 @@ unsafe fn i32_select_bit_step4_at(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_shl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i32();
     let a = ctx.stack.pop_i32();
@@ -2568,6 +2690,7 @@ pub unsafe fn op_i32_shl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_shr_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i32();
     let a = ctx.stack.pop_i32();
@@ -2590,6 +2713,7 @@ pub unsafe fn op_i32_shr_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_shr_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -2612,6 +2736,7 @@ pub unsafe fn op_i32_shr_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_rotl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -2634,6 +2759,7 @@ pub unsafe fn op_i32_rotl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_rotr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -2656,6 +2782,7 @@ pub unsafe fn op_i32_rotr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_rotl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2678,6 +2805,7 @@ pub unsafe fn op_i64_rotl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_rotr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2700,6 +2828,7 @@ pub unsafe fn op_i64_rotr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_shl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i64();
     let a = ctx.stack.pop_i64();
@@ -2722,6 +2851,7 @@ pub unsafe fn op_i64_shl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_shr_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i64();
     let a = ctx.stack.pop_i64();
@@ -2744,6 +2874,7 @@ pub unsafe fn op_i64_shr_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_shr_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2766,6 +2897,7 @@ pub unsafe fn op_i64_shr_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_eqz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_u32();
     vm_try!(ctx.stack.push_u32(u32::from(a == 0)));
@@ -2787,6 +2919,7 @@ pub unsafe fn op_i32_eqz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_eqz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_u64();
     let r = u32::from(a == 0);
@@ -2810,6 +2943,7 @@ pub unsafe fn op_i64_eqz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2832,6 +2966,7 @@ pub unsafe fn op_i64_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2854,6 +2989,7 @@ pub unsafe fn op_i64_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_lt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i64();
     let a = ctx.stack.pop_i64();
@@ -2876,6 +3012,7 @@ pub unsafe fn op_i64_lt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_lt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2898,6 +3035,7 @@ pub unsafe fn op_i64_lt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_gt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i64();
     let a = ctx.stack.pop_i64();
@@ -2920,6 +3058,7 @@ pub unsafe fn op_i64_gt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_gt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2942,6 +3081,7 @@ pub unsafe fn op_i64_gt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_le_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i64();
     let a = ctx.stack.pop_i64();
@@ -2964,6 +3104,7 @@ pub unsafe fn op_i64_le_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_le_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -2986,6 +3127,7 @@ pub unsafe fn op_i64_le_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_ge_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i64();
     let a = ctx.stack.pop_i64();
@@ -3008,6 +3150,7 @@ pub unsafe fn op_i64_ge_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_ge_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -3030,6 +3173,7 @@ pub unsafe fn op_i64_ge_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_u32();
     let b = ctx.stack.pop_u32();
@@ -3054,6 +3198,7 @@ pub unsafe fn op_i32_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_u32();
     let b = ctx.stack.pop_u32();
@@ -3078,6 +3223,7 @@ pub unsafe fn op_i32_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_le_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i32();
     let a = ctx.stack.pop_i32();
@@ -3102,6 +3248,7 @@ pub unsafe fn op_i32_le_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_le_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -3126,6 +3273,7 @@ pub unsafe fn op_i32_le_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_lt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i32();
     let a = ctx.stack.pop_i32();
@@ -3150,6 +3298,7 @@ pub unsafe fn op_i32_lt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_lt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -3174,6 +3323,7 @@ pub unsafe fn op_i32_lt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_gt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i32();
     let a = ctx.stack.pop_i32();
@@ -3198,6 +3348,7 @@ pub unsafe fn op_i32_gt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_gt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -3222,6 +3373,7 @@ pub unsafe fn op_i32_gt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_ge_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_i32();
     let a = ctx.stack.pop_i32();
@@ -3246,6 +3398,7 @@ pub unsafe fn op_i32_ge_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_ge_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -3270,6 +3423,7 @@ pub unsafe fn op_i32_ge_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_extend8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u32();
     let v = i8::from_le_bytes([v as u8]);
@@ -3292,6 +3446,7 @@ pub unsafe fn op_i32_extend8_s(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_extend16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u32();
     let v = i16::from_le_bytes([v as u8, (v >> 8) as u8]);
@@ -3314,6 +3469,7 @@ pub unsafe fn op_i32_extend16_s(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_extend8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u64();
     let v = i8::from_le_bytes([v as u8]);
@@ -3336,6 +3492,7 @@ pub unsafe fn op_i64_extend8_s(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_extend16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u64();
     let v = i16::from_le_bytes([v as u8, (v >> 8) as u8]);
@@ -3358,6 +3515,7 @@ pub unsafe fn op_i64_extend16_s(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_extend32_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u64();
     let v = i32::from_le_bytes([v as u8, (v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]);
