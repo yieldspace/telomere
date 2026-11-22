@@ -669,6 +669,33 @@ impl RuntimeEnv {
     }
 }
 
+/// Resolves the export key to use for a lookup against a component's own
+/// exports.
+///
+/// Exact names win. On a miss, a semver-compatible export on the same
+/// version track is accepted (see [`name_match`]), so a component exporting
+/// `wasi:cli/run@0.2.0` satisfies a lookup for `wasi:cli/run@0.2.6`. When the
+/// component exports the same interface only at an incompatible version, the
+/// error names both the requested name and the version that was found.
+fn resolve_component_export_key(
+    component: &Component,
+    name: &str,
+) -> Result<String, ComponentError> {
+    if component.exports.contains_key(name) {
+        return Ok(name.to_owned());
+    }
+    let available = component.exports.keys().map(String::as_str);
+    if let Some(matched) = name_match::compatible_export_name(name, available.clone()) {
+        return Ok(matched.to_owned());
+    }
+    if let Some(found) = name_match::incompatible_export_name(name, available) {
+        return Err(ComponentError::ExportNotFound(format!(
+            "{name} (found incompatible version {found})"
+        )));
+    }
+    Err(ComponentError::ExportNotFound(name.to_owned()))
+}
+
 impl RuntimeComponentInstance {
     fn new_component(component: Component, env: Rc<RuntimeEnv>) -> Self {
         Self {
@@ -691,7 +718,10 @@ impl RuntimeComponentInstance {
             return Ok(export);
         }
         let export = match &self.source {
-            RuntimeComponentSource::Component(component) => match component.exports.get(name) {
+            RuntimeComponentSource::Component(component) => match component
+                .exports
+                .get(&resolve_component_export_key(component, name)?)
+            {
                 Some(ComponentExport::Component(idx)) => {
                     RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
                 }

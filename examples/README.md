@@ -113,7 +113,7 @@ wasm-tools validate --features all examples/wasi-component-stdout.wasm
 ```
 
 They are committed as `.wat` sources rather than generated from Rust because of
-the two toolchain gaps described next.
+the toolchain gap described next.
 
 ## Why these fixtures use WAT sources
 
@@ -138,21 +138,23 @@ inside that set.
 
 ### The component sample cannot come from `wasm32-wasip2`
 
-Two separate issues:
+One remaining issue, and one that is fixed:
 
-1. **Export version.** A `wasm32-wasip2` build from current Rust imports the
-   `@0.2.6` WASI interfaces but exports `wasi:cli/run@0.2.0`. The CLI looks up
-   `wasi:cli/run@0.2.6` exactly, so such a component is rejected:
+1. **Export version (fixed).** A `wasm32-wasip2` build from current Rust
+   imports the `@0.2.6` WASI interfaces but may export `wasi:cli/run` at an
+   older patch version such as `@0.2.0`. Component export lookup now applies
+   the ecosystem's semver rules instead of requiring an exact version match:
+   versions on the same track (the same major, or the same minor within
+   `0.x`) resolve to each other, so such a component runs. Genuinely
+   incompatible versions are still rejected, with an error that names both
+   the version that was found and the version that was expected:
 
    ```text
    failed to invoke `wasi:cli/run.run`
 
    Caused by:
-       export not found: wasi:cli/run@0.2.6
+       export not found: wasi:cli/run@0.2.6 (found incompatible version wasi:cli/run@0.3.0)
    ```
-
-   Telomere does not currently do semver-compatible interface matching on
-   component exports.
 
 2. **Host-provided resource destruction is still unavailable.** Components can
    lower a WASI import whose result is an owned resource handle - for example
@@ -169,4 +171,5 @@ Two separate issues:
    `wasi-component-args.wat` uses. Unresolved imports are reported cleanly
    (`export not found: ...`).
 
-Both points are reproducible from a clean checkout with the commands above.
+The remaining point is reproducible from a clean checkout with the commands
+above.

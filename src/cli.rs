@@ -13,7 +13,8 @@ by i32 arguments to call that export, or pass `--` to run the module as a WASI \
 preview1 command with the following arguments as guest argv.
 
 Use the `component` subcommand for WASI 0.2 components that export \
-`wasi:cli/run@0.2.6`.",
+`wasi:cli/run` at a version semver-compatible with the bundled WASI 0.2.6 \
+bindings (for example `wasi:cli/run@0.2.0`).",
     args_conflicts_with_subcommands = true,
     arg_required_else_help = true
 )]
@@ -42,7 +43,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Run a WASI 0.2 component that exports `wasi:cli/run@0.2.6`.
+    /// Run a WASI 0.2 component that exports `wasi:cli/run` (semver-compatible versions accepted).
     Component(ComponentCommand),
     /// Print the resolved measurement-only optimizer switch state as JSON.
     #[cfg(feature = "measure-switches")]

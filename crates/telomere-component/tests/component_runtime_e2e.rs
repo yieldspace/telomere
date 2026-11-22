@@ -678,3 +678,78 @@ async fn component_runtime_surfaces_resource_drop_destructor_traps() {
         .expect_err("resource drop trap should surface");
     assert!(matches!(error, ComponentError::Trap(message) if message.contains("unreachable")));
 }
+
+fn versioned_instance_component(version: &str) -> Vec<u8> {
+    compile_component(&format!(
+        r#"
+(component
+  (type $get-func (func (result s32)))
+
+  (core module $get-core
+    (func (export "get") (result i32)
+      i32.const 42)
+  )
+  (core instance $get-core-inst (instantiate $get-core))
+  (func $get (type $get-func)
+    (canon lift (core func $get-core-inst "get")))
+
+  (instance $iface-export
+    (export "get" (func $get))
+  )
+  (export "test:pkg/iface@{version}" (instance $iface-export))
+)
+"#
+    ))
+}
+
+#[tokio::test]
+async fn component_export_lookup_accepts_semver_compatible_version() {
+    // The component exports the interface at 0.2.0; the caller asks for
+    // 0.2.6. Both are on the 0.2.x track, so the lookup resolves (#117).
+    let bytes = versioned_instance_component("0.2.0");
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let store = telomere::Store::new();
+    let linker = ComponentLinker::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let result = instance
+        .get_instance("test:pkg/iface@0.2.6")
+        .call(&store, "get", &[])
+        .await
+        .expect("semver-compatible export lookup should succeed");
+    assert_eq!(result, vec![ComponentValue::S32(42)]);
+}
+
+#[tokio::test]
+async fn component_export_lookup_rejects_incompatible_version_with_found_and_expected() {
+    // 0.3.0 is a different track from the requested 0.2.6, so the lookup is
+    // still rejected, and the error names both versions (#117).
+    let bytes = versioned_instance_component("0.3.0");
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let store = telomere::Store::new();
+    let linker = ComponentLinker::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let error = instance
+        .get_instance("test:pkg/iface@0.2.6")
+        .call(&store, "get", &[])
+        .await
+        .expect_err("incompatible export version must be rejected");
+    let message = error.to_string();
+    assert!(
+        message.contains("test:pkg/iface@0.2.6"),
+        "error should name the expected version: {message}"
+    );
+    assert!(
+        message.contains("test:pkg/iface@0.3.0"),
+        "error should name the found version: {message}"
+    );
+}
