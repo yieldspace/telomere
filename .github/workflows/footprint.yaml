@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - "crates/**"
       - "examples/minimal-embedder/**"
       - "tools/**"
       - "Cargo.toml"
@@ -44,6 +45,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/measure-embedder-footprint.py --profile release-size | tee footprint-release-size.json
+
+      - name: Check embedder size regression gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/check-embedder-size.py footprint-release.json footprint-release-size.json
 
       - name: Upload footprint measurements
         uses: actions/upload-artifact@v4

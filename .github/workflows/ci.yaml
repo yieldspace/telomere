@@ -121,6 +121,9 @@ jobs:
       - name: Test JIT test coverage checker
         run: python3 tools/test_check_jit_test_coverage.py
 
+      - name: Test embedder size gate checker
+        run: python3 tools/test_check_embedder_size.py
+
       - name: Assert minimal embedder graph has no Tokio
         shell: bash
         run: |

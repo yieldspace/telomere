@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "source": {
+    "summary": "GitHub Actions 'Embedder footprint' runs on commit 6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca (main, 2026-11-23, ubuntu-24.04, Rust 1.96.0): 9 workflow_dispatch runs produced byte-identical sizes for every configuration, and the same values were observed in pull-request runs 45040469086 and 45042402374",
+    "commit": "6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca",
+    "date": "2026-11-23",
+    "runner": "ubuntu-24.04",
+    "toolchain": "1.96.0",
+    "sample_size": 9,
+    "run_ids": [
+      45044278139,
+      45044284439,
+      45044292377,
+      45044299824,
+      45044306442,
+      45044313442,
+      45044315747,
+      45044322491,
+      45044331637
+    ],
+    "cross_check_run_ids": [
+      45040469086,
+      45042402374
+    ],
+    "derivation": "Run-to-run spread was 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text), so each threshold equals its observed baseline exactly (baseline + 0). Any growth therefore requires an intentional re-baseline; see docs/benchmarks/footprint.md, 'Size regression gate (#164)'."
+  },
+  "thresholds": {
+    "release": {
+      "baseline": {
+        "stripped_file_bytes": {
+          "baseline": 345656,
+          "threshold": 345656
+        },
+        "stripped_text_bytes": {
+          "baseline": 261679,
+          "threshold": 261679
+        }
+      },
+      "core": {
+        "stripped_file_bytes": {
+          "baseline": 1464664,
+          "threshold": 1464664
+        },
+        "stripped_text_bytes": {
+          "baseline": 1116215,
+          "threshold": 1116215
+        }
+      },
+      "component": {
+        "stripped_file_bytes": {
+          "baseline": 2426704,
+          "threshold": 2426704
+        },
+        "stripped_text_bytes": {
+          "baseline": 1936471,
+          "threshold": 1936471
+        }
+      },
+      "wasi": {
+        "stripped_file_bytes": {
+          "baseline": 2764848,
+          "threshold": 2764848
+        },
+        "stripped_text_bytes": {
+          "baseline": 2191943,
+          "threshold": 2191943
+        }
+      },
+      "core-nosimd": {
+        "stripped_file_bytes": {
+          "baseline": 1275656,
+          "threshold": 1275656
+        },
+        "stripped_text_bytes": {
+          "baseline": 977335,
+          "threshold": 977335
+        }
+      },
+      "core-jit": {
+        "stripped_file_bytes": {
+          "baseline": 1989760,
+          "threshold": 1989760
+        },
+        "stripped_text_bytes": {
+          "baseline": 1541447,
+          "threshold": 1541447
+        }
+      },
+      "wasi-threads": {
+        "stripped_file_bytes": {
+          "baseline": 2928840,
+          "threshold": 2928840
+        },
+        "stripped_text_bytes": {
+          "baseline": 2316199,
+          "threshold": 2316199
+        }
+      }
+    },
+    "release-size": {
+      "baseline": {
+        "stripped_file_bytes": {
+          "baseline": 296384,
+          "threshold": 296384
+        },
+        "stripped_text_bytes": {
+          "baseline": 228114,
+          "threshold": 228114
+        }
+      },
+      "core": {
+        "stripped_file_bytes": {
+          "baseline": 1070672,
+          "threshold": 1070672
+        },
+        "stripped_text_bytes": {
+          "baseline": 753079,
+          "threshold": 753079
+        }
+      },
+      "component": {
+        "stripped_file_bytes": {
+          "baseline": 1587728,
+          "threshold": 1587728
+        },
+        "stripped_text_bytes": {
+          "baseline": 1166055,
+          "threshold": 1166055
+        }
+      },
+      "wasi": {
+        "stripped_file_bytes": {
+          "baseline": 1785888,
+          "threshold": 1785888
+        },
+        "stripped_text_bytes": {
+          "baseline": 1300647,
+          "threshold": 1300647
+        }
+      },
+      "core-nosimd": {
+        "stripped_file_bytes": {
+          "baseline": 963336,
+          "threshold": 963336
+        },
+        "stripped_text_bytes": {
+          "baseline": 679527,
+          "threshold": 679527
+        }
+      },
+      "core-jit": {
+        "stripped_file_bytes": {
+          "baseline": 1484528,
+          "threshold": 1484528
+        },
+        "stripped_text_bytes": {
+          "baseline": 1057927,
+          "threshold": 1057927
+        }
+      },
+      "wasi-threads": {
+        "stripped_file_bytes": {
+          "baseline": 1893728,
+          "threshold": 1893728
+        },
+        "stripped_text_bytes": {
+          "baseline": 1374583,
+          "threshold": 1374583
+        }
+      }
+    }
+  }
+}

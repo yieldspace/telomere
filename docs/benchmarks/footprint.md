@@ -344,6 +344,87 @@ the byte deltas above are modest comparative observations that make optional
 layers visible. #138's value is the no-Tokio dependency topology and supported
 embeddability boundary; the no-threads configurations prove that path.
 
+## Size regression gate (#164)
+
+#139 measured the minimal-embedder ladder but shipped no gate, because a
+threshold such as "measured + 15%" would have been invented rather than
+derived: nobody had observed the run-to-run variance of the measurement on
+CI. #164 supplies that observation first and derives the threshold from it.
+
+### Observed run-to-run variance
+
+On 2026-11-23, the `Embedder footprint` workflow was dispatched nine times
+against the identical commit `6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca` of
+`main` (GitHub Actions run IDs 45044278139, 45044284439, 45044292377,
+45044299824, 45044306442, 45044313442, 45044315747, 45044322491, 45044331637;
+`ubuntu-24.04`, Rust 1.96.0). Every run produced byte-identical sizes: for
+all fourteen profile/configuration rows, the raw file size, the `.text`
+size, the stripped file size, and the stripped `.text` size each have a
+run-to-run spread of **0 B** across the nine samples. The same values were
+also observed in the pull-request runs 45040469086 and 45042402374, whose
+library code is identical, giving eleven agreeing observations per series.
+The observed values are the baselines in the table below (stripped file /
+stripped `.text`, in bytes).
+
+| Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
+| --- | --- | ---: | ---: |
+| `release` | `baseline` | 345656 | 261679 |
+| `release` | `core` | 1464664 | 1116215 |
+| `release` | `component` | 2426704 | 1936471 |
+| `release` | `wasi` | 2764848 | 2191943 |
+| `release` | `core-nosimd` | 1275656 | 977335 |
+| `release` | `core-jit` | 1989760 | 1541447 |
+| `release` | `wasi-threads` | 2928840 | 2316199 |
+| `release-size` | `baseline` | 296384 | 228114 |
+| `release-size` | `core` | 1070672 | 753079 |
+| `release-size` | `component` | 1587728 | 1166055 |
+| `release-size` | `wasi` | 1785888 | 1300647 |
+| `release-size` | `core-nosimd` | 963336 | 679527 |
+| `release-size` | `core-jit` | 1484528 | 1057927 |
+| `release-size` | `wasi-threads` | 1893728 | 1374583 |
+
+### Threshold derivation
+
+With an observed spread of 0 B, the derived headroom over the baseline is
+0 B: each threshold in `tools/embedder-size-baseline.json` equals its
+observed baseline exactly. This is the "measured + N%" form with N = 0,
+where N follows from the observed spread rather than being picked in
+advance. A consequence is that any size growth — including growth caused
+by a toolchain or runner-image change rather than by code — trips the gate
+and forces a human to look; that is the intent, and the re-baseline
+procedure below is the way through it.
+
+### How the gate runs
+
+`tools/check-embedder-size.py` compares the stripped file size and stripped
+`.text` size of every configuration in the two JSON files the footprint
+workflow already produces against the thresholds, and fails with the
+measured size, the threshold, and the baseline source for each violation.
+The footprint workflow runs it as the "Check embedder size regression gate"
+step, so the workflow now fails when a gated size grows. The workflow also
+triggers on `crates/**` changes, not only on measurement-tooling changes,
+so a library change cannot grow the binary without the gate running. Peak
+RSS and cold start are not gated: #139 records them as indicative on shared
+runners, so they cannot carry a threshold. The checker's unit tests are
+`tools/test_check_embedder_size.py`, wired into the CI feature-wiring job.
+
+### Updating the baseline when growth is intentional
+
+1. Make the change that grows (or shrinks) the binary, and say in the pull
+   request description that the growth is intentional and why.
+2. Take a fresh measurement of the exact code in the pull request: run the
+   `Embedder footprint` workflow on the pull request (or dispatch it
+   against the branch) and download the `embedder-footprint` artifact.
+3. Update `tools/embedder-size-baseline.json` in the same pull request: set
+   each changed row's `baseline` and `threshold` to the newly measured
+   stripped sizes, and rewrite the `source` block to name the new commit,
+   run IDs, date, and sample size the values came from. If the new values
+   rest on repeated runs, record the observed spread in `source.derivation`
+   and set the threshold to baseline + that spread; do not add headroom
+   that no measurement supports.
+4. Update the table in this section to match, so the recorded numbers and
+   the enforced numbers cannot drift apart silently.
+
 ## Size-oriented release profile
 
 The `release-size` profile inherits `release` and uses `opt-level = "z"`, fat
