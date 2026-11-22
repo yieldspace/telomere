@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 #[cfg(feature = "threads")]
-use crate::common::{SharedMemoryObject, SharedWaitRegistration};
+use crate::common::{MeteringHandle, SharedMemoryObject, SharedWaitRegistration};
 use crate::{common::AsyncHostFuture, VMResult};
 
 pub struct HostCallPending {
@@ -19,6 +19,14 @@ pub struct MemoryWaitPending {
     pub wait: SharedWaitRegistration,
     pub timeout_ns: i64,
     pub fp: usize,
+    /// The producing store's metering handle, when metering is enabled.
+    ///
+    /// Drivers pass this to
+    /// [`SharedWaitRegistration::wait_result_interruptible`] so that
+    /// [`MeteringHandle::interrupt`] wakes the parked guest (#177). It is
+    /// `None` for stores without metering, whose waits can only resolve
+    /// by notify or timeout.
+    pub interrupt: Option<MeteringHandle>,
 }
 
 #[cfg(feature = "unstable-internals")]
@@ -81,6 +89,12 @@ pub enum CompletionPayload {
     // #202: Shared-memory wait completion is intentionally dormant without threads support.
     #[cfg_attr(not(feature = "threads"), allow(dead_code))]
     ResumeWithI32 { fp: usize, value: i32 },
+    /// A pending shared-memory wait was cut short by
+    /// [`MeteringHandle::interrupt`] (#177). The task terminates with
+    /// [`VMResult::Cancelled`] instead of resuming with a wait result
+    /// code, exactly as if it had been stopped at a metering checkpoint.
+    #[cfg_attr(not(feature = "threads"), allow(dead_code))]
+    Interrupted,
     HostCall {
         result: VMResult<*const crate::common::Instr>,
     },

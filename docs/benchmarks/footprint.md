@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #250: workflow_dispatch runs 45049989641 and
-45050025929 against the PR branch at commit
-`b8eb7bf4ce5cec847431a4bef04bfeefceddbb6b` (the merge of the PR head
-`e450be821b6d628fc91f7ae9f81977e1ce8caae7` with `main` at
-`2b650a24baab9d240cdb05868415eea4e3cf85b2`), and pull-request run
-45047955830, which built the same merge tree (`ubuntu-24.04`, Rust
+against the code of PR #251: workflow_dispatch runs 45051812925 and
+45051827578 against the PR branch at commit
+`871ecfabacc14d43045d295960fbd062c24f53b8` (the merge of the PR head
+`848e64b853e66e1cf769c2321ef17adbfe4b2e29` with `main` at
+`e46cd8d66dfcf415f5a0a9521a52e70f5a9cf376`), and pull-request run
+45051722003, which built the same merge tree (`ubuntu-24.04`, Rust
 1.96.0). Every run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
@@ -369,19 +369,19 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345656 | 261679 |
-| `release` | `core` | 1464456 | 1116023 |
-| `release` | `component` | 2433656 | 1943095 |
-| `release` | `wasi` | 2771744 | 2198567 |
-| `release` | `core-nosimd` | 1275448 | 977143 |
-| `release` | `core-jit` | 1989664 | 1541367 |
-| `release` | `wasi-threads` | 2948928 | 2331911 |
+| `release` | `core` | 1465472 | 1116631 |
+| `release` | `component` | 2434656 | 1943703 |
+| `release` | `wasi` | 2772760 | 2199175 |
+| `release` | `core-nosimd` | 1276464 | 977751 |
+| `release` | `core-jit` | 1990680 | 1541975 |
+| `release` | `wasi-threads` | 2952448 | 2334295 |
 | `release-size` | `baseline` | 296384 | 228114 |
-| `release-size` | `core` | 1070408 | 752903 |
-| `release-size` | `component` | 1591024 | 1169031 |
-| `release-size` | `wasi` | 1789096 | 1303607 |
-| `release-size` | `core-nosimd` | 963056 | 679351 |
-| `release-size` | `core-jit` | 1484264 | 1057703 |
-| `release-size` | `wasi-threads` | 1907456 | 1384407 |
+| `release-size` | `core` | 1070816 | 753175 |
+| `release-size` | `component` | 1591448 | 1169303 |
+| `release-size` | `wasi` | 1789520 | 1303879 |
+| `release-size` | `core-nosimd` | 963480 | 679623 |
+| `release-size` | `core-jit` | 1484656 | 1057959 |
+| `release-size` | `wasi-threads` | 1909216 | 1385399 |
 
 #### Re-baseline history
 
@@ -421,6 +421,29 @@ delta pattern. The baseline was re-measured on the merged code and
 updated as recorded above, following the procedure below. The PR's other
 build change, `[profile.dev.package.telomere]` in `Cargo.toml`, applies to
 dev profiles only and cannot affect these numbers.
+
+PR #251 (#177, `interrupt()` wakes a guest parked in an indefinite
+`memory.atomic.wait`) merged current `main` into its branch first; its
+first CI run on the merged tree then tripped the gate on the PR's own
+change. The change adds the interrupt wake path to the telomere
+library: a fourth waiter state (`INTERRUPTED`) claimed by CAS and
+`wait_result_interruptible` racing notify / timeout / interrupt in
+`crates/telomere/src/common/memory.rs`, the `Interrupted` completion
+plumbing in `runtime/memory_effect.rs` and `runtime/scheduler.rs`, and
+— compiled only under the threads feature — the broadcast `Notify` in
+`common/metering.rs` (`interrupt()` broadcasts after storing the flag;
+waiters register interest and re-check the flag so no wakeup is lost).
+Because the library is linked into every embedder configuration except
+`baseline`, the growth is nearly uniform (release stripped `.text`
++608 B in core, component, wasi, core-nosimd and core-jit; stripped
+file +1,016 B, component +1,000 B; release-size stripped `.text`
++272 B, core-jit +256 B; stripped file +392..+424 B) and largest in
+`wasi-threads`, where the threads-only metering broadcast path lands
+(release +3,520 B stripped file / +2,384 B stripped `.text`;
+release-size +1,760 B / +992 B). The `baseline` configuration, which
+links no library code, is unchanged. The baseline was re-measured on
+the merged code and updated as recorded above, following the procedure
+below.
 
 ### Threshold derivation
 

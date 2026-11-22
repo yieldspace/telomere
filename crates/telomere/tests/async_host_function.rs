@@ -55,13 +55,18 @@ impl ExecutionDriver for MockDriver {
                 wait,
                 timeout_ns,
                 fp,
+                interrupt,
             }) => {
                 self.inflight.push_back(Box::pin(async move {
-                    let value = wait.wait_result(shared, timeout_ns).await;
-                    Completion {
-                        task_id,
-                        payload: CompletionPayload::ResumeWithI32 { fp, value },
-                    }
+                    let payload = match wait
+                        .wait_result_interruptible(shared, timeout_ns, interrupt)
+                        .await
+                    {
+                        VMResult::Success(value) => CompletionPayload::ResumeWithI32 { fp, value },
+                        VMResult::Cancelled => CompletionPayload::Interrupted,
+                        _ => unreachable!("memory wait resolves only with a code or cancellation"),
+                    };
+                    Completion { task_id, payload }
                 }));
             }
             #[cfg(feature = "unstable-internals")]
