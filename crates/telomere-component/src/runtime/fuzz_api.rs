@@ -5,13 +5,13 @@
 //! fixture for type metadata only; it never instantiates the component fixture
 //! or executes guest code.
 
+use super::block_on;
 use super::canonical::{lift_component_args, program_func_type};
 use super::{CoreExportRef, RuntimeCanonicalOptions};
 use crate::ir::CanonicalStringEncoding;
 use crate::support::binary::IoReadBinaryReader;
 use crate::support::{instantiate, Registry, Store, VMResult};
 use crate::{ComponentEngine, ComponentError, ComponentProgram, ComponentValue};
-use futures::executor::block_on;
 use std::cell::RefCell;
 use telomere::{WasmParser, WasmValue};
 

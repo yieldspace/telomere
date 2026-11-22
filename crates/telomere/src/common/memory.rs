@@ -146,24 +146,40 @@ impl SharedWaitRegistration {
         self.address
     }
 
+    /// Waits for a notify on this registration and reports the
+    /// `memory.atomic.wait` result code: 0 when notified, 2 when the
+    /// timeout elapsed.
+    ///
+    /// A negative `timeout_ns` waits indefinitely. A non-negative timeout
+    /// is armed on a detached timer thread rather than an executor timer,
+    /// so this future can be driven by any executor — with or without a
+    /// Tokio runtime — and never panics for lack of a reactor (#151).
     pub async fn wait_result(self, shared: Arc<SharedMemoryObject>, timeout_ns: i64) -> i32 {
         if timeout_ns < 0 {
             self.waiter.wait().await;
             return 0;
         }
 
-        let wait = std::pin::pin!(self.waiter.wait());
-        let timeout = std::pin::pin!(tokio::time::sleep(Duration::from_nanos(timeout_ns as u64)));
-        match futures::future::select(wait, timeout).await {
-            futures::future::Either::Left(((), _)) => 0,
-            futures::future::Either::Right(((), _)) => {
-                if self.waiter.try_mark_timed_out() {
-                    shared.remove_waiter(self.address, self.waiter.id());
-                    2
-                } else {
-                    0
-                }
+        // #151: tokio::time::sleep panics ("no reactor running") when the
+        // embedder drives execution outside a Tokio runtime, and nothing in
+        // the driver contract requires one. Mark the waiter as timed out
+        // from a detached timer thread and wake it through the same Notify
+        // a real notify uses; if a notify wins the race, the mark attempt
+        // fails and the thread leaves the wait untouched.
+        let timer_waiter = Arc::clone(&self.waiter);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_nanos(timeout_ns as u64));
+            if timer_waiter.try_mark_timed_out() {
+                timer_waiter.notify.notify_one();
             }
+        });
+
+        self.waiter.wait().await;
+        if self.waiter.is_timed_out() {
+            shared.remove_waiter(self.address, self.waiter.id());
+            2
+        } else {
+            0
         }
     }
 }
@@ -232,6 +248,10 @@ impl SharedWaiter {
 
     fn is_waiting(&self) -> bool {
         self.state.load(Ordering::Acquire) == Self::WAITING
+    }
+
+    fn is_timed_out(&self) -> bool {
+        self.state.load(Ordering::Acquire) == Self::TIMED_OUT
     }
 }
 
@@ -1933,5 +1953,61 @@ mod tests {
             assert!(!state.wait_queues.contains_key(&8));
         }
         assert_eq!(shared.notify_waiters(8, 1).unwrap(), 0);
+    }
+    #[cfg(feature = "threads")]
+    #[test]
+    fn shared_wait_timeout_completes_on_non_tokio_executor() {
+        // #151: a non-negative timeout used to be implemented with
+        // tokio::time::sleep, which panics ("no reactor running") when an
+        // embedder drives execution outside a Tokio runtime. Drive every
+        // wait below with futures::executor::block_on — no Tokio reactor —
+        // and require each wait to complete normally instead of panicking.
+        let shared = SharedMemoryObject::new(1, 1).unwrap();
+        assert!(matches!(
+            shared.atomic_store_u32(0, 7),
+            VMResult::Success(())
+        ));
+        let register =
+            |shared: &Arc<SharedMemoryObject>| match shared.register_wait32(0, 7).unwrap() {
+                AtomicWaitResult::Pending(wait) => wait,
+                AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+            };
+
+        // A finite timeout expires on its own and reports the timed-out
+        // result (2), removing the waiter from the queue.
+        let timed_out = register(&shared);
+        assert_eq!(
+            futures::executor::block_on(timed_out.wait_result(shared.clone(), 1_000_000)),
+            2
+        );
+        {
+            let state = shared.state.lock();
+            assert!(!state.wait_queues.contains_key(&0));
+        }
+
+        // A zero timeout also resolves as timed out when nobody notifies.
+        let zero = register(&shared);
+        assert_eq!(
+            futures::executor::block_on(zero.wait_result(shared.clone(), 0)),
+            2
+        );
+
+        // A waiter notified before its (long) timeout elapses still reports
+        // the notified result (0).
+        let notified = register(&shared);
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
+        assert_eq!(
+            futures::executor::block_on(notified.wait_result(shared.clone(), 60_000_000_000)),
+            0
+        );
+
+        // timeout = -1 keeps its existing behavior: it waits indefinitely
+        // and resolves as notified (0) once a notify lands.
+        let indefinite = register(&shared);
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
+        assert_eq!(
+            futures::executor::block_on(indefinite.wait_result(shared.clone(), -1)),
+            0
+        );
     }
 }

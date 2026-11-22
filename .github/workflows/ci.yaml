@@ -143,6 +143,9 @@ jobs:
       - name: Test JIT test coverage checker
         run: python3 tools/test_check_jit_test_coverage.py
 
+      - name: Test embedder size gate checker
+        run: python3 tools/test_check_embedder_size.py
+
       - name: Assert minimal embedder graph has no Tokio
         shell: bash
         run: |
@@ -230,7 +233,9 @@ jobs:
         run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test jit
 
       - name: JIT-gated tests outside the jit and wast targets
-        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test trap_info --test metering
+        env:
+          TELOMERE_TRAP_FIXTURES_REQUIRE_JIT: "1"
+        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test trap_info --test metering --test trap_fixtures
 
       - name: JIT CLI smoke test
         shell: bash

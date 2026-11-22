@@ -197,7 +197,42 @@ mod tests {
         assert_eq!(exit, ExitCode::from(1));
     }
 
+    #[tokio::test]
+    async fn component_runner_accepts_semver_compatible_run_export_version() {
+        // Stock wasm32-wasip2 components export `wasi:cli/run@0.2.0` while the
+        // CLI looks up the bundled bindings version; both are on the 0.2.x
+        // track, so the component runs (#117).
+        let bytes = wat::parse_str(command_component_wat_versioned(0, "0.2.0"))
+            .expect("component wat must parse");
+        let exit = run_component_bytes(&bytes, Path::new("guest.component.wasm"), &command())
+            .await
+            .expect("component with a compatible run export version should run");
+        assert_eq!(exit, ExitCode::SUCCESS);
+    }
+
+    #[tokio::test]
+    async fn component_runner_rejects_incompatible_run_export_version() {
+        let bytes = wat::parse_str(command_component_wat_versioned(0, "0.3.0"))
+            .expect("component wat must parse");
+        let error = run_component_bytes(&bytes, Path::new("guest.component.wasm"), &command())
+            .await
+            .expect_err("component with an incompatible run export version must fail");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("wasi:cli/run@0.2.6"),
+            "error should name the expected version: {message}"
+        );
+        assert!(
+            message.contains("wasi:cli/run@0.3.0"),
+            "error should name the found version: {message}"
+        );
+    }
+
     fn command_component_wat(discriminant: i32) -> String {
+        command_component_wat_versioned(discriminant, "0.2.6")
+    }
+
+    fn command_component_wat_versioned(discriminant: i32, version: &str) -> String {
         format!(
             r#"
 (component
@@ -216,7 +251,7 @@ mod tests {
   (instance $run-export
     (export "run" (func $run))
   )
-  (export "wasi:cli/run@0.2.6" (instance $run-export))
+  (export "wasi:cli/run@{version}" (instance $run-export))
 )
 "#
         )

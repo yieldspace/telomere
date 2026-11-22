@@ -344,6 +344,104 @@ the byte deltas above are modest comparative observations that make optional
 layers visible. #138's value is the no-Tokio dependency topology and supported
 embeddability boundary; the no-threads configurations prove that path.
 
+## Size regression gate (#164)
+
+#139 measured the minimal-embedder ladder but shipped no gate, because a
+threshold such as "measured + 15%" would have been invented rather than
+derived: nobody had observed the run-to-run variance of the measurement on
+CI. #164 supplies that observation first and derives the threshold from it.
+
+### Observed run-to-run variance
+
+On 2026-11-23, the `Embedder footprint` workflow was dispatched three
+times against the identical commit `4f16369ab6eddce110693de4f3ee7fdd9d49a936`
+of `main` (GitHub Actions run IDs 45046421655, 45046431017, 45046440246;
+`ubuntu-24.04`, Rust 1.96.0). Every run produced byte-identical sizes: for
+all fourteen profile/configuration rows, the raw file size, the `.text`
+size, the stripped file size, and the stripped `.text` size each have a
+run-to-run spread of **0 B** across the three samples. Pull-request run
+45045344668 (PR #248), which built the merge commit of that PR into this
+same `main` commit, measured the same values for every configuration its
+gate step flagged. The observed values are the baselines in the table
+below (stripped file / stripped `.text`, in bytes).
+
+| Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
+| --- | --- | ---: | ---: |
+| `release` | `baseline` | 345656 | 261679 |
+| `release` | `core` | 1464456 | 1116039 |
+| `release` | `component` | 2433656 | 1943111 |
+| `release` | `wasi` | 2771744 | 2198583 |
+| `release` | `core-nosimd` | 1275448 | 977159 |
+| `release` | `core-jit` | 1989584 | 1541319 |
+| `release` | `wasi-threads` | 2948928 | 2331927 |
+| `release-size` | `baseline` | 296384 | 228114 |
+| `release-size` | `core` | 1070488 | 752951 |
+| `release-size` | `component` | 1591008 | 1169031 |
+| `release-size` | `wasi` | 1789080 | 1303607 |
+| `release-size` | `core-nosimd` | 963136 | 679399 |
+| `release-size` | `core-jit` | 1484232 | 1057687 |
+| `release-size` | `wasi-threads` | 1907440 | 1384407 |
+
+#### Re-baseline history
+
+The original baseline was measured on 2026-11-23 against commit
+`6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca` (nine dispatches, spread 0 B).
+Before PR #248 could merge, `main` absorbed PR #247 (#117,
+semver-compatible export lookup, adding `runtime/name_match.rs`) and
+PR #246 (#167, executor-drive rework), both of which add code to
+`telomere-component`. The first CI run of PR #248 therefore tripped its
+own gate: a pull-request run builds the merge commit with current `main`,
+not the branch point, so the gate correctly measured the merged code. The
+growth is confined to the configurations that include the component
+runtime (`component`, `wasi`, `wasi-threads`; release/component stripped
+file +6,952 B, release/wasi-threads +20,088 B). Over the same interval the
+core configurations shrank slightly (release/core stripped file -208 B,
+the net effect of PR #244 (#175) and PR #245 (#151)) and the `baseline`
+configuration did not change. The baseline was re-measured on current
+`main` and updated as recorded above, following the procedure below.
+
+### Threshold derivation
+
+With an observed spread of 0 B, the derived headroom over the baseline is
+0 B: each threshold in `tools/embedder-size-baseline.json` equals its
+observed baseline exactly. This is the "measured + N%" form with N = 0,
+where N follows from the observed spread rather than being picked in
+advance. A consequence is that any size growth — including growth caused
+by a toolchain or runner-image change rather than by code — trips the gate
+and forces a human to look; that is the intent, and the re-baseline
+procedure below is the way through it.
+
+### How the gate runs
+
+`tools/check-embedder-size.py` compares the stripped file size and stripped
+`.text` size of every configuration in the two JSON files the footprint
+workflow already produces against the thresholds, and fails with the
+measured size, the threshold, and the baseline source for each violation.
+The footprint workflow runs it as the "Check embedder size regression gate"
+step, so the workflow now fails when a gated size grows. The workflow also
+triggers on `crates/**` changes, not only on measurement-tooling changes,
+so a library change cannot grow the binary without the gate running. Peak
+RSS and cold start are not gated: #139 records them as indicative on shared
+runners, so they cannot carry a threshold. The checker's unit tests are
+`tools/test_check_embedder_size.py`, wired into the CI feature-wiring job.
+
+### Updating the baseline when growth is intentional
+
+1. Make the change that grows (or shrinks) the binary, and say in the pull
+   request description that the growth is intentional and why.
+2. Take a fresh measurement of the exact code in the pull request: run the
+   `Embedder footprint` workflow on the pull request (or dispatch it
+   against the branch) and download the `embedder-footprint` artifact.
+3. Update `tools/embedder-size-baseline.json` in the same pull request: set
+   each changed row's `baseline` and `threshold` to the newly measured
+   stripped sizes, and rewrite the `source` block to name the new commit,
+   run IDs, date, and sample size the values came from. If the new values
+   rest on repeated runs, record the observed spread in `source.derivation`
+   and set the threshold to baseline + that spread; do not add headroom
+   that no measurement supports.
+4. Update the table in this section to match, so the recorded numbers and
+   the enforced numbers cannot drift apart silently.
+
 ## Size-oriented release profile
 
 The `release-size` profile inherits `release` and uses `opt-level = "z"`, fat

@@ -100,6 +100,13 @@ type DriverFuture = Pin<Box<dyn Future<Output = Completion>>>;
 /// Implement this trait to connect asynchronous host functions to an embedder's
 /// executor. The driver must eventually return a completion for every submitted
 /// operation unless the surrounding guest call is deliberately cancelled.
+///
+/// Neither this trait nor the built-in [`TokioDriver`] requires a Tokio
+/// runtime or any other specific executor: embedders may drive the execution
+/// future with any executor (for example `futures::executor::block_on`), and
+/// timed shared-memory waits do not depend on an executor-provided timer.
+/// Host futures submitted by the embedder keep whatever executor requirements
+/// they themselves have.
 pub trait ExecutionDriver {
     /// Submits a pending host call or shared-memory wait for asynchronous execution.
     fn submit(&mut self, op: PendingOp);
@@ -111,8 +118,11 @@ pub trait ExecutionDriver {
 #[derive(Default)]
 /// The built-in driver for async host calls and shared-memory waits.
 ///
-/// It polls submitted futures directly, so callers must invoke the surrounding
-/// execution future from a Tokio runtime or another compatible async context.
+/// It polls submitted futures directly. Despite the name it requires no
+/// Tokio runtime: the surrounding execution future may be driven by any
+/// executor, and timed shared-memory waits arm a detached timer thread
+/// instead of an executor timer, so `memory.atomic.wait` timeouts behave
+/// the same everywhere.
 pub struct TokioDriver {
     inflight: FuturesUnordered<DriverFuture>,
 }
