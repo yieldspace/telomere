@@ -3,12 +3,34 @@ mod common;
 use common::instantiate_wat;
 use telomere::{run_module_function, Registry, ResultValue, Store, VMResult, WasmValue};
 
-#[cfg_attr(
-    debug_assertions,
-    ignore = "stack-sensitive regression is validated in release"
-)]
-#[tokio::test]
-async fn release_call_loop_keeps_direct_threading() {
+/// Stack size for the thread this test runs on (#154).
+///
+/// In release builds the direct-threaded dispatch keeps a flat host stack
+/// over the 200,000 call cycles below, so any normal thread would do. In
+/// dev builds a small host cost per call cycle remains (measured: the loop
+/// below needs between 8 MiB and 32 MiB there), so the test runs on an
+/// explicit 64 MiB thread in both profiles instead of being ignored in
+/// debug builds.
+const CALL_LOOP_STACK_BYTES: usize = 64 * 1024 * 1024;
+
+#[test]
+fn release_call_loop_keeps_direct_threading() {
+    std::thread::Builder::new()
+        .name("call-loop-test".to_string())
+        .stack_size(CALL_LOOP_STACK_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building a runtime for the call loop test");
+            runtime.block_on(call_loop_body());
+        })
+        .expect("spawning the call loop test thread")
+        .join()
+        .expect("the call loop test thread must not panic");
+}
+
+async fn call_loop_body() {
     let store = Store::new();
     let registry = Registry::new();
     let instance = instantiate_wat(

@@ -344,6 +344,170 @@ the byte deltas above are modest comparative observations that make optional
 layers visible. #138's value is the no-Tokio dependency topology and supported
 embeddability boundary; the no-threads configurations prove that path.
 
+## Size regression gate (#164)
+
+#139 measured the minimal-embedder ladder but shipped no gate, because a
+threshold such as "measured + 15%" would have been invented rather than
+derived: nobody had observed the run-to-run variance of the measurement on
+CI. #164 supplies that observation first and derives the threshold from it.
+
+### Observed run-to-run variance
+
+On 2026-11-23, the `Embedder footprint` workflow was run three times
+against the code of PR #252: workflow_dispatch runs 45054630647 and
+45054643208 against the PR branch at commit
+`eebf876bce0385f3ac556d0051a577b6d8958c77` (the merge of the PR head
+`f816ff188c499161530081913ee69d10ad20f1c3` with `main` at
+`07f9a49120bf4d465c1704692a496f4e2f108bb0`), and pull-request run
+45054539493, which built the same merge tree (`ubuntu-24.04`, Rust
+1.96.0). Every run produced byte-identical sizes: for all fourteen
+profile/configuration rows, the raw file size, the `.text` size, the
+stripped file size, and the stripped `.text` size each have a run-to-run
+spread of **0 B** across the three samples. The observed values are the
+baselines in the table below (stripped file / stripped `.text`, in bytes).
+
+| Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
+| --- | --- | ---: | ---: |
+| `release` | `baseline` | 345656 | 261679 |
+| `release` | `core` | 1,465,400 | 1,116,407 |
+| `release` | `component` | 2,434,600 | 1,943,479 |
+| `release` | `wasi` | 2,772,688 | 2,198,951 |
+| `release` | `core-nosimd` | 1,276,392 | 977,527 |
+| `release` | `core-jit` | 1,990,608 | 1,541,751 |
+| `release` | `wasi-threads` | 2,952,360 | 2,334,071 |
+| `release-size` | `baseline` | 296384 | 228114 |
+| `release-size` | `core` | 1,071,936 | 754,135 |
+| `release-size` | `component` | 1,592,568 | 1,170,263 |
+| `release-size` | `wasi` | 1,790,640 | 1,304,839 |
+| `release-size` | `core-nosimd` | 964,584 | 680,567 |
+| `release-size` | `core-jit` | 1,485,760 | 1,058,903 |
+| `release-size` | `wasi-threads` | 1,910,336 | 1,386,359 |
+
+#### Re-baseline history
+
+The original baseline was measured on 2026-11-23 against commit
+`6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca` (nine dispatches, spread 0 B).
+Before PR #248 could merge, `main` absorbed PR #247 (#117,
+semver-compatible export lookup, adding `runtime/name_match.rs`) and
+PR #246 (#167, executor-drive rework), both of which add code to
+`telomere-component`. The first CI run of PR #248 therefore tripped its
+own gate: a pull-request run builds the merge commit with current `main`,
+not the branch point, so the gate correctly measured the merged code. The
+growth is confined to the configurations that include the component
+runtime (`component`, `wasi`, `wasi-threads`; release/component stripped
+file +6,952 B, release/wasi-threads +20,088 B). Over the same interval the
+core configurations shrank slightly (release/core stripped file -208 B,
+the net effect of PR #244 (#175) and PR #245 (#151)) and the `baseline`
+configuration did not change. The baseline was re-measured on current
+`main` and updated as recorded above, following the procedure below.
+
+PR #250 (#154, debug-profile stack overflows) was branched before this
+gate existed, so `main` was merged into the branch first; its first CI run
+then tripped the gate on the PR's own change. The release-relevant part of
+that change splits the continuation computation of
+`special_function_return` into an `#[inline(never)]` helper
+(`prepare_function_return` in `crates/telomere/src/runtime/vm/control.rs`)
+so the tail dispatch stays a sibling call in non-LTO builds. Because the
+telomere library is linked into every embedder configuration, the
+resulting code-layout shift moved gated sizes slightly in both directions
+(release stripped `.text` -16 B in five configurations and release
+core-jit +80 B stripped file; release-size core and core-nosimd -80 B,
+component, wasi, wasi-threads and core-jit +16..+32 B; 12 of 28 gated
+series unchanged, largest absolute delta 80 B). The attribution was
+cross-checked by measuring the PR head alone against the original
+`6c43ca6` baseline (workflow_dispatch runs 45049436565 and 45049445764 on
+commit `e450be821b6d628fc91f7ae9f81977e1ce8caae7`), which showed the same
+delta pattern. The baseline was re-measured on the merged code and
+updated as recorded above, following the procedure below. The PR's other
+build change, `[profile.dev.package.telomere]` in `Cargo.toml`, applies to
+dev profiles only and cannot affect these numbers.
+
+PR #251 (#177, `interrupt()` wakes a guest parked in an indefinite
+`memory.atomic.wait`) merged current `main` into its branch first; its
+first CI run on the merged tree then tripped the gate on the PR's own
+change. The change adds the interrupt wake path to the telomere
+library: a fourth waiter state (`INTERRUPTED`) claimed by CAS and
+`wait_result_interruptible` racing notify / timeout / interrupt in
+`crates/telomere/src/common/memory.rs`, the `Interrupted` completion
+plumbing in `runtime/memory_effect.rs` and `runtime/scheduler.rs`, and
+— compiled only under the threads feature — the broadcast `Notify` in
+`common/metering.rs` (`interrupt()` broadcasts after storing the flag;
+waiters register interest and re-check the flag so no wakeup is lost).
+Because the library is linked into every embedder configuration except
+`baseline`, the growth is nearly uniform (release stripped `.text`
++608 B in core, component, wasi, core-nosimd and core-jit; stripped
+file +1,016 B, component +1,000 B; release-size stripped `.text`
++272 B, core-jit +256 B; stripped file +392..+424 B) and largest in
+`wasi-threads`, where the threads-only metering broadcast path lands
+(release +3,520 B stripped file / +2,384 B stripped `.text`;
+release-size +1,760 B / +992 B). The `baseline` configuration, which
+links no library code, is unchanged. The baseline was re-measured on
+the merged code and updated as recorded above, following the procedure
+below.
+
+PR #252 (#170, parse time grows cubically with block nesting) merged
+current `main` into its branch first; its first CI run on the merged
+tree then tripped the gate on the PR's own change. The change rewrites
+two optimizer analysis passes in
+`crates/telomere/src/parser/core/optimizer/pipeline/analysis.rs`:
+`compute_loop_depth` becomes a dominator-tree prefix sum accumulated in
+one reverse-postorder pass, and `compute_loop_parents` is inverted from
+an all-pairs scan to a single pass over each loop's members; the PR's
+only other change is a criterion bench, which is not linked into the
+embedder. The parser/optimizer is part of the telomere library linked
+into every embedder configuration except `baseline`, so the deltas are
+nearly uniform across library configurations and the `baseline`
+configuration is unchanged: in the `release` profile the library
+configurations shrink slightly (stripped `.text` -224 B in all six;
+stripped file -72 B, `wasi-threads` -88 B, `component` -56 B), while in
+the `release-size` profile (`opt-level = "z"`, fat LTO, one codegen
+unit) they grow (stripped file +1,120 B and stripped `.text` +960 B,
+with `core-nosimd` and `core-jit` at +1,104 B / +944 B). The baseline
+was re-measured on the merged code and updated as recorded above,
+following the procedure below.
+
+### Threshold derivation
+
+With an observed spread of 0 B, the derived headroom over the baseline is
+0 B: each threshold in `tools/embedder-size-baseline.json` equals its
+observed baseline exactly. This is the "measured + N%" form with N = 0,
+where N follows from the observed spread rather than being picked in
+advance. A consequence is that any size growth — including growth caused
+by a toolchain or runner-image change rather than by code — trips the gate
+and forces a human to look; that is the intent, and the re-baseline
+procedure below is the way through it.
+
+### How the gate runs
+
+`tools/check-embedder-size.py` compares the stripped file size and stripped
+`.text` size of every configuration in the two JSON files the footprint
+workflow already produces against the thresholds, and fails with the
+measured size, the threshold, and the baseline source for each violation.
+The footprint workflow runs it as the "Check embedder size regression gate"
+step, so the workflow now fails when a gated size grows. The workflow also
+triggers on `crates/**` changes, not only on measurement-tooling changes,
+so a library change cannot grow the binary without the gate running. Peak
+RSS and cold start are not gated: #139 records them as indicative on shared
+runners, so they cannot carry a threshold. The checker's unit tests are
+`tools/test_check_embedder_size.py`, wired into the CI feature-wiring job.
+
+### Updating the baseline when growth is intentional
+
+1. Make the change that grows (or shrinks) the binary, and say in the pull
+   request description that the growth is intentional and why.
+2. Take a fresh measurement of the exact code in the pull request: run the
+   `Embedder footprint` workflow on the pull request (or dispatch it
+   against the branch) and download the `embedder-footprint` artifact.
+3. Update `tools/embedder-size-baseline.json` in the same pull request: set
+   each changed row's `baseline` and `threshold` to the newly measured
+   stripped sizes, and rewrite the `source` block to name the new commit,
+   run IDs, date, and sample size the values came from. If the new values
+   rest on repeated runs, record the observed spread in `source.derivation`
+   and set the threshold to baseline + that spread; do not add headroom
+   that no measurement supports.
+4. Update the table in this section to match, so the recorded numbers and
+   the enforced numbers cannot drift apart silently.
+
 ## Size-oriented release profile
 
 The `release-size` profile inherits `release` and uses `opt-level = "z"`, fat

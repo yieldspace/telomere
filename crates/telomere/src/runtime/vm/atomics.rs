@@ -2230,6 +2230,9 @@ unsafe fn push_wait_effect(
             wait,
             timeout_ns,
             fp,
+            // #177: carry the store's metering handle so the driver can
+            // race this wait against `MeteringHandle::interrupt()`.
+            interrupt: ctx.store.metering(),
         }));
 }
 

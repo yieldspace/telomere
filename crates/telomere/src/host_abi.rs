@@ -169,8 +169,10 @@ pub use crate::common::memory::SharedMemoryObject;
 ///
 /// When the optional `threads` runtime is enabled, custom execution drivers
 /// consume this representation from [`crate::MemoryWaitPending`] and call
-/// [`SharedWaitRegistration::wait_result`]. Issue #216 tracks replacing this
-/// compatibility ABI.
+/// [`SharedWaitRegistration::wait_result`] — or
+/// [`SharedWaitRegistration::wait_result_interruptible`] with the pending
+/// operation's metering handle so `interrupt()` can wake the wait (#177).
+/// Issue #216 tracks replacing this compatibility ABI.
 #[cfg(feature = "threads")]
 pub use crate::common::memory::SharedWaitRegistration;
 /// A raw reference to the active interpreter call frame's local area.

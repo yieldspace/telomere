@@ -89,3 +89,29 @@ panic = "abort"
 strip = "symbols"
 debug = false
 overflow-checks = false
+
+# Dev-profile contract for the interpreter crate (#154).
+#
+# The direct-threaded dispatch (call_code / call_next in runtime/vm.rs) and
+# the recursive-descent parser are written against LLVM sibling-call
+# optimisation: every handler tail-calls the next one, so a build only keeps a
+# flat host stack when the optimiser actually performs those tail calls. At
+# opt-level 0 no sibling-call optimisation happens at all, and with debug
+# assertions enabled the unsafe-precondition checks it gates also block it,
+# so in a plain dev build each dispatched instruction leaves one host frame
+# live until the enclosing guest call returns, and each nested control
+# construct costs a ~130 KiB parse_inst frame. Long-running or deeply nested
+# guests then overflow any feasible host stack (the debug wast suite aborted
+# on call.wast, memory_copy.wast, and the tail-call fixtures).
+#
+# Compiling just this crate at release optimisation level without debug
+# assertions in dev builds restores the same code generation the release
+# contract already relies on (see rust-toolchain.toml and #114), while the
+# rest of the workspace keeps the normal dev profile. This does not remove the underlying reliance on an optimisation
+# stable Rust does not guarantee; that remains #114. It makes plain
+# cargo test in the debug profile behave like the documented release
+# contract so the regression is testable, and the debug-profile wast CI job
+# guards it.
+[profile.dev.package.telomere]
+opt-level = 3
+debug-assertions = false
