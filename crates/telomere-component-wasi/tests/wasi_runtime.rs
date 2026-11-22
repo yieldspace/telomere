@@ -1,7 +1,7 @@
 use telomere_component::{ComponentEngine, ComponentLinker, ComponentValue};
 use telomere_component_wasi::{add_to_linker_async, add_to_linker_sync, WasiState};
 
-fn compile_component() -> Vec<u8> {
+fn compile_component_with_version(version: &str) -> Vec<u8> {
     wat::parse_str(
         r#"
 (component
@@ -39,7 +39,8 @@ fn compile_component() -> Vec<u8> {
   (export "get-random-u64" (func $get-random-u64))
   (export "get-insecure-random-u64" (func $get-insecure-random-u64))
 )
-"#,
+"#
+        .replace("@0.2.6", &format!("@{version}")),
     )
     .expect("component wat must parse")
 }
@@ -156,7 +157,14 @@ fn assert_snapshot(
 async fn run_runtime(
     add: fn(&mut ComponentLinker, WasiState) -> Result<(), telomere_component::ComponentError>,
 ) {
-    let bytes = compile_component();
+    run_runtime_with_version(add, "0.2.6").await;
+}
+
+async fn run_runtime_with_version(
+    add: fn(&mut ComponentLinker, WasiState) -> Result<(), telomere_component::ComponentError>,
+    version: &str,
+) {
+    let bytes = compile_component_with_version(version);
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
 
@@ -216,6 +224,15 @@ async fn wasi_linker_async_supports_environment_and_random() {
 }
 
 #[tokio::test]
+async fn wasi_linker_sync_resolves_older_semver_imports() {
+    // The provider registers its interfaces at 0.2.6; a guest built
+    // against 0.2.0 (the version stock Rust wasm32-wasip2 components
+    // name) imports the same interfaces at 0.2.0 and must still link
+    // (#258).
+    run_runtime_with_version(add_to_linker_sync, "0.2.0").await;
+}
+
+#[tokio::test]
 async fn wasi_linker_sync_lowers_get_stdout_owned_resource() {
     let bytes = compile_stdout_component();
     let engine = ComponentEngine::new();
@@ -238,6 +255,10 @@ async fn wasi_linker_sync_lowers_get_stdout_owned_resource() {
 }
 
 fn compile_stdout_drop_component() -> Vec<u8> {
+    compile_stdout_drop_component_with_version("0.2.6")
+}
+
+fn compile_stdout_drop_component_with_version(version: &str) -> Vec<u8> {
     wat::parse_str(
         r#"
 (component
@@ -342,14 +363,25 @@ fn compile_stdout_drop_component() -> Vec<u8> {
     (canon lift (core func $caller "write-after-drop"))
   )
 )
-"#,
+"#.replace("@0.2.6", &format!("@{version}")),
     )
     .expect("stdout drop component wat must parse")
 }
 
 #[tokio::test]
 async fn wasi_stdout_handle_can_be_dropped_and_is_released() {
-    let bytes = compile_stdout_drop_component();
+    run_stdout_drop(compile_stdout_drop_component()).await;
+}
+
+#[tokio::test]
+async fn wasi_stdout_handle_drop_resolves_older_semver_imports() {
+    // The same guest importing at 0.2.0 instead of the provider's 0.2.6:
+    // both instance resolution and the resource-drop registration must
+    // follow the semver compatible track (#258).
+    run_stdout_drop(compile_stdout_drop_component_with_version("0.2.0")).await;
+}
+
+async fn run_stdout_drop(bytes: Vec<u8>) {
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
 

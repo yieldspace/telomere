@@ -214,7 +214,7 @@ mod env;
 #[cfg(feature = "fuzzing")]
 mod fuzz_api;
 mod host;
-mod name_match;
+pub(crate) mod name_match;
 
 pub use env::instantiate;
 #[cfg(feature = "fuzzing")]
