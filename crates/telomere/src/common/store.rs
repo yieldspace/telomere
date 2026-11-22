@@ -167,6 +167,10 @@ pub(crate) struct CallRecipe {
     pub(crate) local_size: u32,
     pub(crate) return_size: u32,
     pub(crate) return_arity: u32,
+    /// #186: validated maximum operand-stack depth (bytes) of the callee,
+    /// reserved at frame entry. Zero for host targets, which never execute
+    /// wasm pushes inside their frame.
+    pub(crate) max_operand_bytes: u32,
     pub(crate) target: CallDispatchTarget,
 }
 
@@ -825,17 +829,23 @@ impl StoreInner {
 
     pub(crate) fn build_call_recipe(&self, funcaddr: ObjectRef) -> CallRecipe {
         let funcinst = self.get_func(funcaddr);
-        let (target, code_base, local_size) = match &funcinst.body {
-            FunctionBody::Wasm { locals, code, .. } => (
+        let (target, code_base, local_size, max_operand_bytes) = match &funcinst.body {
+            FunctionBody::Wasm {
+                locals,
+                code,
+                lowered,
+                ..
+            } => (
                 CallDispatchTarget::Wasm {
                     local_size: locals.byte_size() as u32,
                 },
                 code.as_ptr(),
                 locals.byte_size() as u32,
+                lowered.max_operand_bytes,
             ),
-            FunctionBody::Host(fp) => (CallDispatchTarget::Host(*fp), std::ptr::null(), 0),
+            FunctionBody::Host(fp) => (CallDispatchTarget::Host(*fp), std::ptr::null(), 0, 0),
             FunctionBody::AsyncHost(fp) => {
-                (CallDispatchTarget::AsyncHost(*fp), std::ptr::null(), 0)
+                (CallDispatchTarget::AsyncHost(*fp), std::ptr::null(), 0, 0)
             }
         };
         let instance_data = self.instance(funcinst.instance);
@@ -861,6 +871,7 @@ impl StoreInner {
             local_size,
             return_size,
             return_arity,
+            max_operand_bytes,
             target,
         }
     }

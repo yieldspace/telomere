@@ -7,8 +7,8 @@ use super::{
     memory::trusted_copy_from_slice,
     object_ref::ObjectRef,
     store::{
-        FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId, MemoryHandle,
-        SharedMemoryId,
+        FunctionBody, FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId,
+        MemoryHandle, SharedMemoryId,
     },
     Instr, StablePc, StoreInner,
 };
@@ -330,19 +330,24 @@ impl Stack {
     }
 
     /// # Safety
-    /// Caller must ensure `src..src+N` is readable for the duration of the copy.
+    /// Caller must ensure `src..src+N` is readable for the duration of the copy,
+    /// and that the current frame reserved at least `N` more operand bytes at
+    /// entry (#186 frame-entry reservation; see `push_u32_fast`).
     #[inline(always)]
     pub unsafe fn push_copy_from_ptr<const N: usize>(&mut self, src: *const u8) -> VMResult<()> {
-        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(N), || {
-            VMResult::StackOverflow
-        }));
-        if new_top > self.memory.len() {
-            return VMResult::StackOverflow;
-        }
+        // #186: no per-push bounds check. This is sound because every path
+        // that reaches a `_fast` push executes inside a validated wasm
+        // function's frame, and frame entry reserved that function's
+        // validated maximum operand depth above the frame end (see
+        // `frame_end_from_local_top`), so the write cannot pass the end of
+        // the stack allocation. Pushes that can run outside such a frame
+        // (embedder argument/result staging, scheduler resume) keep the
+        // checked non-`_fast` variants.
+        debug_assert!(self.top + N <= self.memory.len());
         unsafe {
             std::ptr::copy_nonoverlapping(src, self.memory.as_mut_ptr().add(self.top), N);
         }
-        self.top = new_top;
+        self.top += N;
         VMResult::Success(())
     }
 
@@ -375,12 +380,15 @@ impl Stack {
 
     #[inline(always)]
     pub fn push_u32_fast(&mut self, v: u32) -> VMResult<()> {
-        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(4), || {
-            VMResult::StackOverflow
-        }));
-        if new_top > self.memory.len() {
-            return VMResult::StackOverflow;
-        }
+        // #186: no per-push bounds check. This is sound because every path
+        // that reaches a `_fast` push executes inside a validated wasm
+        // function's frame, and frame entry reserved that function's
+        // validated maximum operand depth above the frame end (see
+        // `frame_end_from_local_top`), so the write cannot pass the end of
+        // the stack allocation. Pushes that can run outside such a frame
+        // (embedder argument/result staging, scheduler resume) keep the
+        // checked non-`_fast` variants.
+        debug_assert!(self.top + 4 <= self.memory.len());
         unsafe {
             self.memory
                 .as_mut_ptr()
@@ -388,7 +396,7 @@ impl Stack {
                 .cast::<u32>()
                 .write_unaligned(v.to_le());
         }
-        self.top = new_top;
+        self.top += 4;
         VMResult::Success(())
     }
 
@@ -491,12 +499,15 @@ impl Stack {
 
     #[inline(always)]
     pub fn push_u64_fast(&mut self, v: u64) -> VMResult<()> {
-        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(8), || {
-            VMResult::StackOverflow
-        }));
-        if new_top > self.memory.len() {
-            return VMResult::StackOverflow;
-        }
+        // #186: no per-push bounds check. This is sound because every path
+        // that reaches a `_fast` push executes inside a validated wasm
+        // function's frame, and frame entry reserved that function's
+        // validated maximum operand depth above the frame end (see
+        // `frame_end_from_local_top`), so the write cannot pass the end of
+        // the stack allocation. Pushes that can run outside such a frame
+        // (embedder argument/result staging, scheduler resume) keep the
+        // checked non-`_fast` variants.
+        debug_assert!(self.top + 8 <= self.memory.len());
         unsafe {
             self.memory
                 .as_mut_ptr()
@@ -504,7 +515,7 @@ impl Stack {
                 .cast::<u64>()
                 .write_unaligned(v.to_le());
         }
-        self.top = new_top;
+        self.top += 8;
         VMResult::Success(())
     }
 
@@ -515,12 +526,15 @@ impl Stack {
 
     #[inline(always)]
     pub fn push_u128_fast(&mut self, v: u128) -> VMResult<()> {
-        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(16), || {
-            VMResult::StackOverflow
-        }));
-        if new_top > self.memory.len() {
-            return VMResult::StackOverflow;
-        }
+        // #186: no per-push bounds check. This is sound because every path
+        // that reaches a `_fast` push executes inside a validated wasm
+        // function's frame, and frame entry reserved that function's
+        // validated maximum operand depth above the frame end (see
+        // `frame_end_from_local_top`), so the write cannot pass the end of
+        // the stack allocation. Pushes that can run outside such a frame
+        // (embedder argument/result staging, scheduler resume) keep the
+        // checked non-`_fast` variants.
+        debug_assert!(self.top + 16 <= self.memory.len());
         unsafe {
             self.memory
                 .as_mut_ptr()
@@ -528,7 +542,7 @@ impl Stack {
                 .cast::<u128>()
                 .write_unaligned(v.to_le());
         }
-        self.top = new_top;
+        self.top += 16;
         VMResult::Success(())
     }
     pub fn pop_u128(&mut self) -> u128 {
@@ -634,26 +648,36 @@ impl Stack {
 
     /// # Safety
     /// Caller must ensure `local_base` points at the active locals area for the current frame and
-    /// that `local_addr..local_addr+4` is a valid local slot.
+    /// that `local_addr..local_addr+4` is a valid local slot. The push side relies on the
+    /// frame-entry operand reservation (#186; see `push_u32_fast`).
     #[inline(always)]
     pub unsafe fn local_get4_from_base(
         &mut self,
         local_base: *const u8,
         local_addr: usize,
     ) -> VMResult<()> {
-        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(4), || {
-            VMResult::StackOverflow
-        }));
-        if new_top > self.memory.len() {
-            return VMResult::StackOverflow;
-        }
+        // #186: no per-push bounds check. This is sound because every path
+        // that reaches a `_fast` push executes inside a validated wasm
+        // function's frame, and frame entry reserved that function's
+        // validated maximum operand depth above the frame end (see
+        // `frame_end_from_local_top`), so the write cannot pass the end of
+        // the stack allocation. Pushes that can run outside such a frame
+        // (embedder argument/result staging, scheduler resume) keep the
+        // checked non-`_fast` variants.
+        debug_assert!(self.top + 4 <= self.memory.len());
         let value = u32::from_le(unsafe {
             Self::local_ptr(local_base, local_addr)
                 .cast::<u32>()
                 .read_unaligned()
         });
-        trusted_write_u32(&mut self.memory[self.top..new_top], value);
-        self.top = new_top;
+        unsafe {
+            self.memory
+                .as_mut_ptr()
+                .add(self.top)
+                .cast::<u32>()
+                .write_unaligned(value.to_le());
+        }
+        self.top += 4;
         VMResult::Success(())
     }
 
@@ -677,26 +701,36 @@ impl Stack {
 
     /// # Safety
     /// Caller must ensure `local_base` points at the active locals area for the current frame and
-    /// that `local_addr..local_addr+8` is a valid local slot.
+    /// that `local_addr..local_addr+8` is a valid local slot. The push side relies on the
+    /// frame-entry operand reservation (#186; see `push_u32_fast`).
     #[inline(always)]
     pub unsafe fn local_get8_from_base(
         &mut self,
         local_base: *const u8,
         local_addr: usize,
     ) -> VMResult<()> {
-        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(8), || {
-            VMResult::StackOverflow
-        }));
-        if new_top > self.memory.len() {
-            return VMResult::StackOverflow;
-        }
+        // #186: no per-push bounds check. This is sound because every path
+        // that reaches a `_fast` push executes inside a validated wasm
+        // function's frame, and frame entry reserved that function's
+        // validated maximum operand depth above the frame end (see
+        // `frame_end_from_local_top`), so the write cannot pass the end of
+        // the stack allocation. Pushes that can run outside such a frame
+        // (embedder argument/result staging, scheduler resume) keep the
+        // checked non-`_fast` variants.
+        debug_assert!(self.top + 8 <= self.memory.len());
         let value = u64::from_le(unsafe {
             Self::local_ptr(local_base, local_addr)
                 .cast::<u64>()
                 .read_unaligned()
         });
-        trusted_write_u64(&mut self.memory[self.top..new_top], value);
-        self.top = new_top;
+        unsafe {
+            self.memory
+                .as_mut_ptr()
+                .add(self.top)
+                .cast::<u64>()
+                .write_unaligned(value.to_le());
+        }
+        self.top += 8;
         VMResult::Success(())
     }
     #[inline(always)]
@@ -707,26 +741,36 @@ impl Stack {
 
     /// # Safety
     /// Caller must ensure `local_base` points at the active locals area for the current frame and
-    /// that `local_addr..local_addr+16` is a valid local slot.
+    /// that `local_addr..local_addr+16` is a valid local slot. The push side relies on the
+    /// frame-entry operand reservation (#186; see `push_u32_fast`).
     #[inline(always)]
     pub unsafe fn local_get16_from_base(
         &mut self,
         local_base: *const u8,
         local_addr: usize,
     ) -> VMResult<()> {
-        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(16), || {
-            VMResult::StackOverflow
-        }));
-        if new_top > self.memory.len() {
-            return VMResult::StackOverflow;
-        }
+        // #186: no per-push bounds check. This is sound because every path
+        // that reaches a `_fast` push executes inside a validated wasm
+        // function's frame, and frame entry reserved that function's
+        // validated maximum operand depth above the frame end (see
+        // `frame_end_from_local_top`), so the write cannot pass the end of
+        // the stack allocation. Pushes that can run outside such a frame
+        // (embedder argument/result staging, scheduler resume) keep the
+        // checked non-`_fast` variants.
+        debug_assert!(self.top + 16 <= self.memory.len());
         let value = u128::from_le(unsafe {
             Self::local_ptr(local_base, local_addr)
                 .cast::<u128>()
                 .read_unaligned()
         });
-        trusted_write_u128(&mut self.memory[self.top..new_top], value);
-        self.top = new_top;
+        unsafe {
+            self.memory
+                .as_mut_ptr()
+                .add(self.top)
+                .cast::<u128>()
+                .write_unaligned(value.to_le());
+        }
+        self.top += 16;
         VMResult::Success(())
     }
     pub fn local_set(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
@@ -944,11 +988,25 @@ impl Stack {
                 .write_unaligned(info);
         }
     }
+    /// Computes the frame end (the operand region base) for a new frame and
+    /// validates that the whole frame plus the callee's reserved operand
+    /// region fits in the stack allocation.
+    ///
+    /// #186: `max_operand_bytes` is the callee's validated maximum
+    /// operand-stack depth, computed at parse time from the validator's
+    /// stack snapshots. Reserving it here, once per call, is what makes the
+    /// unchecked `_fast` pushes sound: while the frame executes, its operand
+    /// depth can never exceed the reserved bound, so no push can write past
+    /// the end of the allocation. The reservation is a check only — `top`
+    /// still starts at the frame end. A function whose frame plus operand
+    /// bound does not fit fails with `StackOverflow` at entry instead of at
+    /// the first push that would have crossed the end.
     fn frame_end_from_local_top(
         &self,
         local_top: usize,
         param_size: usize,
         local_size: usize,
+        max_operand_bytes: usize,
     ) -> VMResult<usize> {
         let info_top = vm_try!(VMResult::from_option(
             local_top
@@ -963,6 +1021,17 @@ impl Stack {
         if new_top > self.memory.len() {
             trace_stack_overflow(format_args!(
                 "frame overflow local_top={local_top} param_size={param_size} local_size={local_size} info_top={info_top} new_top={new_top} len={}",
+                self.memory.len()
+            ));
+            return VMResult::StackOverflow;
+        }
+        let reserved_end = vm_try!(VMResult::from_option(
+            new_top.checked_add(max_operand_bytes),
+            || VMResult::StackOverflow
+        ));
+        if reserved_end > self.memory.len() {
+            trace_stack_overflow(format_args!(
+                "operand reservation overflow local_top={local_top} param_size={param_size} local_size={local_size} frame_end={new_top} max_operand_bytes={max_operand_bytes} reserved_end={reserved_end} len={}",
                 self.memory.len()
             ));
             return VMResult::StackOverflow;
@@ -1039,11 +1108,22 @@ impl Stack {
         runtime: &StoreInner,
     ) -> VMResult<LocalReference> {
         let frame = frame.into_call_frame_cache(runtime);
+        // #186: the reservation bound lives on the callee's lowered body.
+        // Caches that do not resolve to a wasm function (host stubs, test
+        // dummies) reserve nothing, matching their previous behaviour.
+        let max_operand_bytes = match runtime.try_get_func(frame.code_addr) {
+            Some(func) => match &func.body {
+                FunctionBody::Wasm { lowered, .. } => lowered.max_operand_bytes as usize,
+                FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => 0,
+            },
+            None => 0,
+        };
         let return_pc =
             StablePc::from_raw_in_frame(runtime, self, prev_local_reference, return_addr);
         self.function_call_cached(
             param_size,
             local_size,
+            max_operand_bytes,
             frame,
             prev_local_reference,
             return_pc,
@@ -1054,6 +1134,7 @@ impl Stack {
         &mut self,
         param_size: usize,
         local_size: usize,
+        max_operand_bytes: usize,
         frame: CallFrameCache,
         prev_local_reference: LocalReference,
         return_pc: StablePc,
@@ -1068,7 +1149,12 @@ impl Stack {
                 VMResult::StackOverflow
             }
         ));
-        let new_top = vm_try!(self.frame_end_from_local_top(local_top, param_size, local_size));
+        let new_top = vm_try!(self.frame_end_from_local_top(
+            local_top,
+            param_size,
+            local_size,
+            max_operand_bytes
+        ));
         vm_try!(self.zero_new_locals(local_top + param_size, local_size));
         self.write_call_stack_info_at(
             local_top + param_size + local_size,
@@ -1186,9 +1272,16 @@ impl Stack {
         reference: &LocalReference,
         param_size: usize,
         local_size: usize,
+        max_operand_bytes: usize,
         frame: CallFrameCache,
     ) -> VMResult<LocalReference> {
-        self.function_return_call_cached(reference, param_size, local_size, frame)
+        self.function_return_call_cached(
+            reference,
+            param_size,
+            local_size,
+            max_operand_bytes,
+            frame,
+        )
     }
 
     pub(crate) fn function_return_call_cached(
@@ -1196,6 +1289,7 @@ impl Stack {
         reference: &LocalReference,
         param_size: usize,
         local_size: usize,
+        max_operand_bytes: usize,
         frame: CallFrameCache,
     ) -> VMResult<LocalReference> {
         tracing::trace!("function_return_call: {reference:?}");
@@ -1206,8 +1300,12 @@ impl Stack {
             ..
         } = self.call_stack_info(reference);
         vm_try!(self.copy_top_bytes_to(reference.local_top, param_size));
-        let new_top =
-            vm_try!(self.frame_end_from_local_top(reference.local_top, param_size, local_size));
+        let new_top = vm_try!(self.frame_end_from_local_top(
+            reference.local_top,
+            param_size,
+            local_size,
+            max_operand_bytes
+        ));
         vm_try!(self.zero_new_locals(reference.local_top + param_size, local_size));
 
         let info = CallStackInfo {
@@ -1471,7 +1569,7 @@ mod tests {
         stack.push_u32(0xa1a2_a3a4).unwrap();
         stack.push_u32(0xb1b2_b3b4).unwrap();
         let tail = stack
-            .function_return_call(&callee, 8, 8, frame(CachedMemoryKind::Local, 3))
+            .function_return_call(&callee, 8, 8, 8, frame(CachedMemoryKind::Local, 3))
             .unwrap();
 
         let tail_local_top = tail.local_top;
@@ -1613,5 +1711,49 @@ mod tests {
         assert_eq!(stack.top, 12);
         assert_eq!(&stack.memory[1..5], &[1, 2, 3, 4]);
         assert_eq!(&stack.memory[8..12], &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn frame_entry_reserves_validated_operand_depth() {
+        // Stack of 256 bytes: 4 param bytes are already pushed, then a frame
+        // with 8 local bytes is built. The frame end is
+        // 4 + 8 + CallStackInfo; the operand reservation must fit in what
+        // remains, and the LocalReference layout must not change.
+        let frame_end = 4 + 8 + CALL_STACK_INFO_SIZE;
+        let mut stack = Stack::new(256);
+        let prev = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        stack.push_u32(0x1122_3344).unwrap();
+        let reference = stack
+            .function_call_cached(
+                4,
+                8,
+                256 - frame_end,
+                frame(CachedMemoryKind::Local, 9),
+                prev,
+                StablePc::from_raw(0),
+            )
+            .unwrap();
+        let reference_local_top = reference.local_top;
+        let reference_local_size = reference.local_size;
+        assert_eq!(reference_local_top, 0);
+        assert_eq!(reference_local_size as usize, frame_end);
+        assert_eq!(stack.top, frame_end);
+
+        // One more reserved byte than the stack can hold fails at entry with
+        // the same StackOverflow a push would have produced before #186.
+        let mut stack = Stack::new(256);
+        stack.push_u32(0x1122_3344).unwrap();
+        let result = stack.function_call_cached(
+            4,
+            8,
+            256 - frame_end + 1,
+            frame(CachedMemoryKind::Local, 9),
+            prev,
+            StablePc::from_raw(0),
+        );
+        assert!(matches!(result, VMResult::StackOverflow));
     }
 }

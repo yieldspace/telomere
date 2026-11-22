@@ -24,6 +24,33 @@ mod tests {
         IoReadBinaryReader, Module, WasmParser,
     };
 
+    #[test]
+    fn max_operand_bytes_matches_validated_stack_depth() {
+        // Two live i32 values: the validated peak is 8 bytes, even if the
+        // pipeline later folds the adds away (the reservation bound is
+        // computed from the validator's snapshots, not the folded stream).
+        let func = function_at(
+            "(module (func (result i32) i32.const 1 i32.const 2 i32.add))",
+            0,
+        );
+        assert_eq!(func.lowered.max_operand_bytes, 8);
+
+        // Mixed widths: the i64 pair live together peaks at 16 bytes.
+        let func = function_at(
+            "(module (func (result i64) i64.const 1 i32.const 2 drop i64.const 3 i64.add))",
+            0,
+        );
+        assert_eq!(func.lowered.max_operand_bytes, 16);
+    }
+
+    #[cfg(feature = "simd")]
+    #[test]
+    fn max_operand_bytes_counts_v128_at_full_width() {
+        // A v128 operand counts its full 16 bytes.
+        let func = function_at("(module (func (result v128) v128.const i32x4 0 0 0 0))", 0);
+        assert_eq!(func.lowered.max_operand_bytes, 16);
+    }
+
     fn function_at(wat: &str, func_idx: usize) -> Func {
         let module = module_from_wat(wat);
         let FunctionBody::Wasm(func) = &module.codes.0[func_idx] else {
