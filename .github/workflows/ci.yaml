@@ -208,7 +208,9 @@ jobs:
         run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test jit
 
       - name: JIT-gated tests outside the jit and wast targets
-        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test trap_info --test metering
+        env:
+          TELOMERE_TRAP_FIXTURES_REQUIRE_JIT: "1"
+        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test trap_info --test metering --test trap_fixtures
 
       - name: JIT CLI smoke test
         shell: bash

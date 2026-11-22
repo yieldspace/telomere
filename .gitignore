@@ -20,6 +20,7 @@ target/
 !tools/baseline/*.wat
 !crates/telomere-component/tests/component_model_upstream/precompiled/**/*.wat
 !examples/*.wat
+!crates/telomere/tests/trap_fixtures/*.wat
 !fuzz/fixtures/canon_abi.wat
 
 # cargo-fuzz generated state. Checked-in seeds and regressions live under

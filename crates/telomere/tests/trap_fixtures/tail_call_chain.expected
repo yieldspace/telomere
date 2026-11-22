@@ -1,0 +1,6 @@
+# Trap-diagnostics expectation for `tail_call_chain`. Format: see README.md in this directory.
+kind: unreachable
+truncated: false
+total-frames: 2
+frame 0: func=2 name=b module=tail_call_chain kind=wasm pc=0
+frame 1: func=0 name=run module=tail_call_chain kind=wasm pc=2
