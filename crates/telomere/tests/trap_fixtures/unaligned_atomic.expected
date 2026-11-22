@@ -1,0 +1,5 @@
+# Trap-diagnostics expectation for `unaligned_atomic`. Format: see README.md in this directory.
+kind: unaligned atomic
+truncated: false
+total-frames: 1
+frame 0: func=0 name=run module=unaligned_atomic kind=wasm pc=2

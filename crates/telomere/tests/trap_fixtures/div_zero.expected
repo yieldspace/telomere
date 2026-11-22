@@ -1,0 +1,5 @@
+# Trap-diagnostics expectation for `div_zero`. Format: see README.md in this directory.
+kind: invalid operand
+truncated: false
+total-frames: 1
+frame 0: func=0 name=run module=div_zero kind=wasm pc=4

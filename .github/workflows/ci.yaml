@@ -30,6 +30,28 @@ jobs:
       - name: Test
         run: cargo test --verbose --release --workspace
 
+  debug-wast-test:
+    name: Debug-profile wast tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      # Guards the #154 dev-profile contract: without it the debug wast
+      # suite aborts with a host stack overflow (plain cargo test breaks).
+      - name: Test wast in the debug profile
+        run: cargo test --verbose -p telomere --test wast
+
   minimal-embedder:
     name: Standalone minimal embedder
     runs-on: ubuntu-latest
@@ -121,6 +143,9 @@ jobs:
       - name: Test JIT test coverage checker
         run: python3 tools/test_check_jit_test_coverage.py
 
+      - name: Test embedder size gate checker
+        run: python3 tools/test_check_embedder_size.py
+
       - name: Assert minimal embedder graph has no Tokio
         shell: bash
         run: |
@@ -208,7 +233,9 @@ jobs:
         run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test jit
 
       - name: JIT-gated tests outside the jit and wast targets
-        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test trap_info --test metering
+        env:
+          TELOMERE_TRAP_FIXTURES_REQUIRE_JIT: "1"
+        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test trap_info --test metering --test trap_fixtures
 
       - name: JIT CLI smoke test
         shell: bash

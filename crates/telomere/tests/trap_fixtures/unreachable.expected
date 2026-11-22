@@ -1,0 +1,5 @@
+# Trap-diagnostics expectation for `unreachable`. Format: see README.md in this directory.
+kind: unreachable
+truncated: false
+total-frames: 1
+frame 0: func=0 name=run module=unreachable kind=wasm pc=0

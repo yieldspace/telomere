@@ -1,0 +1,13 @@
+# Trap-diagnostics expectation for `deep_chain`. Format: see README.md in this directory.
+kind: unreachable
+truncated: false
+total-frames: 9
+frame 0: func=8 name=f8 module=deep_chain kind=wasm pc=0
+frame 1: func=7 name=f7 module=deep_chain kind=wasm pc=2
+frame 2: func=6 name=f6 module=deep_chain kind=wasm pc=2
+frame 3: func=5 name=f5 module=deep_chain kind=wasm pc=2
+frame 4: func=4 name=f4 module=deep_chain kind=wasm pc=2
+frame 5: func=3 name=f3 module=deep_chain kind=wasm pc=2
+frame 6: func=2 name=f2 module=deep_chain kind=wasm pc=2
+frame 7: func=1 name=f1 module=deep_chain kind=wasm pc=2
+frame 8: func=0 name=run module=deep_chain kind=wasm pc=2

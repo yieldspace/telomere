@@ -1,0 +1,5 @@
+# Trap-diagnostics expectation for `oob_load`. Format: see README.md in this directory.
+kind: memory index out of range
+truncated: false
+total-frames: 1
+frame 0: func=0 name=run module=oob_load kind=wasm pc=0

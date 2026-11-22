@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "source": {
+    "summary": "GitHub Actions 'Embedder footprint' runs for PR #250 (branch fix/154-debug-stack-overflow at commit b8eb7bf4ce5cec847431a4bef04bfeefceddbb6b, the merge of the PR head e450be821b6d628fc91f7ae9f81977e1ce8caae7 with main 2b650a24baab9d240cdb05868415eea4e3cf85b2; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45049989641 and 45050025929 against the branch and pull-request run 45047955830, which built the same merge tree, produced byte-identical sizes for every gated series",
+    "commit": "b8eb7bf4ce5cec847431a4bef04bfeefceddbb6b",
+    "date": "2026-11-23",
+    "runner": "ubuntu-24.04",
+    "toolchain": "1.96.0",
+    "sample_size": 3,
+    "run_ids": [
+      45049989641,
+      45050025929
+    ],
+    "cross_check_run_ids": [
+      45047955830
+    ],
+    "derivation": "Re-baseline for PR #250 (#154, debug-profile stack overflows). The PR's only release-relevant change splits the continuation computation of special_function_return in crates/telomere/src/runtime/vm/control.rs into an #[inline(never)] helper (prepare_function_return) so the tail dispatch stays a sibling call in non-LTO builds; the telomere library is linked into every embedder configuration, so the resulting code-layout shift moves gated sizes slightly in both directions (release stripped .text -16 B in core, component, wasi, core-nosimd and wasi-threads; release core-jit +80 B stripped file / +48 B stripped .text; release-size core and core-nosimd -80 B / -48 B, component, wasi and core-jit +16..+32 B, wasi-threads +16 B stripped file; 12 of 28 gated series unchanged, largest absolute delta 80 B). Attribution was cross-checked by measuring the PR head alone (e450be821b6d628fc91f7ae9f81977e1ce8caae7, before main was merged in) against the original 6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca baseline: workflow_dispatch runs 45049436565 and 45049445764 showed the same delta pattern. The PR's other build change, [profile.dev.package.telomere] in Cargo.toml, applies to dev profiles only and cannot affect these release measurements. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, 'Size regression gate (#164)'."
+  },
+  "thresholds": {
+    "release": {
+      "baseline": {
+        "stripped_file_bytes": {
+          "baseline": 345656,
+          "threshold": 345656
+        },
+        "stripped_text_bytes": {
+          "baseline": 261679,
+          "threshold": 261679
+        }
+      },
+      "core": {
+        "stripped_file_bytes": {
+          "baseline": 1464456,
+          "threshold": 1464456
+        },
+        "stripped_text_bytes": {
+          "baseline": 1116023,
+          "threshold": 1116023
+        }
+      },
+      "component": {
+        "stripped_file_bytes": {
+          "baseline": 2433656,
+          "threshold": 2433656
+        },
+        "stripped_text_bytes": {
+          "baseline": 1943095,
+          "threshold": 1943095
+        }
+      },
+      "wasi": {
+        "stripped_file_bytes": {
+          "baseline": 2771744,
+          "threshold": 2771744
+        },
+        "stripped_text_bytes": {
+          "baseline": 2198567,
+          "threshold": 2198567
+        }
+      },
+      "core-nosimd": {
+        "stripped_file_bytes": {
+          "baseline": 1275448,
+          "threshold": 1275448
+        },
+        "stripped_text_bytes": {
+          "baseline": 977143,
+          "threshold": 977143
+        }
+      },
+      "core-jit": {
+        "stripped_file_bytes": {
+          "baseline": 1989664,
+          "threshold": 1989664
+        },
+        "stripped_text_bytes": {
+          "baseline": 1541367,
+          "threshold": 1541367
+        }
+      },
+      "wasi-threads": {
+        "stripped_file_bytes": {
+          "baseline": 2948928,
+          "threshold": 2948928
+        },
+        "stripped_text_bytes": {
+          "baseline": 2331911,
+          "threshold": 2331911
+        }
+      }
+    },
+    "release-size": {
+      "baseline": {
+        "stripped_file_bytes": {
+          "baseline": 296384,
+          "threshold": 296384
+        },
+        "stripped_text_bytes": {
+          "baseline": 228114,
+          "threshold": 228114
+        }
+      },
+      "core": {
+        "stripped_file_bytes": {
+          "baseline": 1070408,
+          "threshold": 1070408
+        },
+        "stripped_text_bytes": {
+          "baseline": 752903,
+          "threshold": 752903
+        }
+      },
+      "component": {
+        "stripped_file_bytes": {
+          "baseline": 1591024,
+          "threshold": 1591024
+        },
+        "stripped_text_bytes": {
+          "baseline": 1169031,
+          "threshold": 1169031
+        }
+      },
+      "wasi": {
+        "stripped_file_bytes": {
+          "baseline": 1789096,
+          "threshold": 1789096
+        },
+        "stripped_text_bytes": {
+          "baseline": 1303607,
+          "threshold": 1303607
+        }
+      },
+      "core-nosimd": {
+        "stripped_file_bytes": {
+          "baseline": 963056,
+          "threshold": 963056
+        },
+        "stripped_text_bytes": {
+          "baseline": 679351,
+          "threshold": 679351
+        }
+      },
+      "core-jit": {
+        "stripped_file_bytes": {
+          "baseline": 1484264,
+          "threshold": 1484264
+        },
+        "stripped_text_bytes": {
+          "baseline": 1057703,
+          "threshold": 1057703
+        }
+      },
+      "wasi-threads": {
+        "stripped_file_bytes": {
+          "baseline": 1907456,
+          "threshold": 1907456
+        },
+        "stripped_text_bytes": {
+          "baseline": 1384407,
+          "threshold": 1384407
+        }
+      }
+    }
+  }
+}
