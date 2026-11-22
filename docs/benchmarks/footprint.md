@@ -353,35 +353,52 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-23, the `Embedder footprint` workflow was dispatched nine times
-against the identical commit `6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca` of
-`main` (GitHub Actions run IDs 45044278139, 45044284439, 45044292377,
-45044299824, 45044306442, 45044313442, 45044315747, 45044322491, 45044331637;
+On 2026-11-23, the `Embedder footprint` workflow was dispatched three
+times against the identical commit `4f16369ab6eddce110693de4f3ee7fdd9d49a936`
+of `main` (GitHub Actions run IDs 45046421655, 45046431017, 45046440246;
 `ubuntu-24.04`, Rust 1.96.0). Every run produced byte-identical sizes: for
 all fourteen profile/configuration rows, the raw file size, the `.text`
 size, the stripped file size, and the stripped `.text` size each have a
-run-to-run spread of **0 B** across the nine samples. The same values were
-also observed in the pull-request runs 45040469086 and 45042402374, whose
-library code is identical, giving eleven agreeing observations per series.
-The observed values are the baselines in the table below (stripped file /
-stripped `.text`, in bytes).
+run-to-run spread of **0 B** across the three samples. Pull-request run
+45045344668 (PR #248), which built the merge commit of that PR into this
+same `main` commit, measured the same values for every configuration its
+gate step flagged. The observed values are the baselines in the table
+below (stripped file / stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345656 | 261679 |
-| `release` | `core` | 1464664 | 1116215 |
-| `release` | `component` | 2426704 | 1936471 |
-| `release` | `wasi` | 2764848 | 2191943 |
-| `release` | `core-nosimd` | 1275656 | 977335 |
-| `release` | `core-jit` | 1989760 | 1541447 |
-| `release` | `wasi-threads` | 2928840 | 2316199 |
+| `release` | `core` | 1464456 | 1116039 |
+| `release` | `component` | 2433656 | 1943111 |
+| `release` | `wasi` | 2771744 | 2198583 |
+| `release` | `core-nosimd` | 1275448 | 977159 |
+| `release` | `core-jit` | 1989584 | 1541319 |
+| `release` | `wasi-threads` | 2948928 | 2331927 |
 | `release-size` | `baseline` | 296384 | 228114 |
-| `release-size` | `core` | 1070672 | 753079 |
-| `release-size` | `component` | 1587728 | 1166055 |
-| `release-size` | `wasi` | 1785888 | 1300647 |
-| `release-size` | `core-nosimd` | 963336 | 679527 |
-| `release-size` | `core-jit` | 1484528 | 1057927 |
-| `release-size` | `wasi-threads` | 1893728 | 1374583 |
+| `release-size` | `core` | 1070488 | 752951 |
+| `release-size` | `component` | 1591008 | 1169031 |
+| `release-size` | `wasi` | 1789080 | 1303607 |
+| `release-size` | `core-nosimd` | 963136 | 679399 |
+| `release-size` | `core-jit` | 1484232 | 1057687 |
+| `release-size` | `wasi-threads` | 1907440 | 1384407 |
+
+#### Re-baseline history
+
+The original baseline was measured on 2026-11-23 against commit
+`6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca` (nine dispatches, spread 0 B).
+Before PR #248 could merge, `main` absorbed PR #247 (#117,
+semver-compatible export lookup, adding `runtime/name_match.rs`) and
+PR #246 (#167, executor-drive rework), both of which add code to
+`telomere-component`. The first CI run of PR #248 therefore tripped its
+own gate: a pull-request run builds the merge commit with current `main`,
+not the branch point, so the gate correctly measured the merged code. The
+growth is confined to the configurations that include the component
+runtime (`component`, `wasi`, `wasi-threads`; release/component stripped
+file +6,952 B, release/wasi-threads +20,088 B). Over the same interval the
+core configurations shrank slightly (release/core stripped file -208 B,
+the net effect of PR #244 (#175) and PR #245 (#151)) and the `baseline`
+configuration did not change. The baseline was re-measured on current
+`main` and updated as recorded above, following the procedure below.
 
 ### Threshold derivation
 
