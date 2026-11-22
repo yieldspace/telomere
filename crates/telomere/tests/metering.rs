@@ -456,7 +456,7 @@ async fn arithmetic_traps_are_distinct_from_metering_interrupts() {
     .await;
 
     assert!(
-        matches!(result, VMResult::InvalidOperand),
+        matches!(result, VMResult::DivideByZero),
         "arithmetic trap must not be reported as an interruption: {result:?}"
     );
 }

@@ -1,4 +1,5 @@
 use super::InterruptReason;
+use std::fmt;
 
 // Adding a payload-carrying variant is subject to the hot-dispatch ABI size guards in
 // `runtime/vm.rs`; see yieldspace/telomere#178.
@@ -9,6 +10,12 @@ use super::InterruptReason;
 /// Unlike [`Result`], failures are WebAssembly traps and runtime conditions
 /// rather than host-language errors. Match the variants to decide whether a
 /// guest result can be used.
+///
+/// The failure variants implement [`fmt::Display`] with the WebAssembly
+/// spec's trap messages where the spec defines one, and `VMResult<V>`
+/// implements [`std::error::Error`] when `V: fmt::Debug`, so a failed call can
+/// flow through ordinary error handling. For the faulting function and a
+/// captured frame trace, see [`Store::take_last_trap`](crate::Store::take_last_trap).
 pub enum VMResult<V> {
     /// The operation completed and produced its value.
     Success(V),
@@ -30,8 +37,26 @@ pub enum VMResult<V> {
     Unlinkable,
     /// The runtime could not reserve or grow guest memory.
     MemoryAllocationFailed,
-    /// A guest instruction received an invalid dynamic operand.
+    /// A runtime-internal invariant was violated (for example, a decoded
+    /// instruction carried an operand kind the validator guarantees cannot
+    /// occur, or a store-internal link was missing).
+    ///
+    /// This is not a WebAssembly spec trap: validated guest execution cannot
+    /// produce it. Spec trap causes that used to be reported as
+    /// `InvalidOperand` are now reported precisely as
+    /// [`DivideByZero`](Self::DivideByZero),
+    /// [`IntegerOverflow`](Self::IntegerOverflow), or
+    /// [`InvalidConversion`](Self::InvalidConversion).
     InvalidOperand,
+    /// A guest integer division or remainder had a zero divisor
+    /// (spec trap: "integer divide by zero").
+    DivideByZero,
+    /// A guest signed integer division overflowed, dividing the most
+    /// negative value by -1 (spec trap: "integer overflow").
+    IntegerOverflow,
+    /// A guest float-to-integer truncation conversion received NaN or an
+    /// out-of-range value (spec trap: "invalid conversion to integer").
+    InvalidConversion,
     /// The runtime does not implement this execution path yet.
     Unimplemented,
     /// Finite Store fuel was exhausted at a metering checkpoint.
@@ -39,25 +64,44 @@ pub enum VMResult<V> {
     /// A watchdog requested Store execution cancellation at a metering checkpoint.
     Cancelled,
 }
+
+impl<V> fmt::Display for VMResult<V> {
+    /// Formats the failure with the WebAssembly spec's trap message where the
+    /// spec defines one (for example, `DivideByZero` displays as
+    /// "integer divide by zero"), so embedders and spec-test harnesses can
+    /// compare against the same strings. `Success` displays as "success";
+    /// the success value itself is not formatted.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            VMResult::Success(_) => "success",
+            VMResult::Unreachable => "unreachable",
+            VMResult::StackOverflow => "call stack exhausted",
+            VMResult::MemoryIndexOutOfRange => "out of bounds memory access",
+            VMResult::UnalignedAtomic => "unaligned atomic",
+            VMResult::TableIndexOutOfRange => "out of bounds table access",
+            VMResult::CallIndirectInvalidType => "indirect call type mismatch",
+            VMResult::TableUninitialized => "uninitialized element",
+            VMResult::Unlinkable => "unlinkable",
+            VMResult::MemoryAllocationFailed => "memory allocation failed",
+            VMResult::InvalidOperand => "invalid operand",
+            VMResult::DivideByZero => "integer divide by zero",
+            VMResult::IntegerOverflow => "integer overflow",
+            VMResult::InvalidConversion => "invalid conversion to integer",
+            VMResult::Unimplemented => "unimplemented",
+            VMResult::FuelExhausted => "fuel exhausted",
+            VMResult::Cancelled => "cancelled",
+        })
+    }
+}
+
+impl<V: fmt::Debug> std::error::Error for VMResult<V> {}
 #[macro_export]
 /// Propagates a non-success [`VMResult`](crate::VMResult) from the current function.
 macro_rules! vm_try {
     ($expr: expr) => {
         match $expr {
             VMResult::Success(v) => v,
-            VMResult::Unreachable => return VMResult::Unreachable,
-            VMResult::StackOverflow => return VMResult::StackOverflow,
-            VMResult::MemoryIndexOutOfRange => return VMResult::MemoryIndexOutOfRange,
-            VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
-            VMResult::TableIndexOutOfRange => return VMResult::TableIndexOutOfRange,
-            VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
-            VMResult::TableUninitialized => return VMResult::TableUninitialized,
-            VMResult::Unlinkable => return VMResult::Unlinkable,
-            VMResult::MemoryAllocationFailed => return VMResult::MemoryAllocationFailed,
-            VMResult::InvalidOperand => return VMResult::InvalidOperand,
-            VMResult::Unimplemented => return VMResult::Unimplemented,
-            VMResult::FuelExhausted => return VMResult::FuelExhausted,
-            VMResult::Cancelled => return VMResult::Cancelled,
+            other => return other.propagate_failure(),
         }
     };
 }
@@ -68,6 +112,45 @@ impl<V> VMResult<V> {
             VMResult::FuelExhausted => Some(InterruptReason::FuelExhausted),
             VMResult::Cancelled => Some(InterruptReason::Cancelled),
             _ => None,
+        }
+    }
+
+    /// Re-types a non-success result so it can be returned from a caller
+    /// whose success type differs, preserving the exact failure variant.
+    ///
+    /// This is the propagation step used by [`vm_try!`](crate::vm_try): the
+    /// variant-by-variant conversion lives here, once, instead of being
+    /// inlined at every dispatch call site, which keeps the interpreter's
+    /// hot handlers small. It is marked cold because it only runs on the
+    /// failure path.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called on a `Success` value; there is no success value of
+    /// the target type to convert into. `vm_try!` only calls this on the
+    /// non-success branch.
+    #[cold]
+    pub fn propagate_failure<U>(self) -> VMResult<U> {
+        match self {
+            VMResult::Success(_) => {
+                unreachable!("propagate_failure called on a Success VMResult")
+            }
+            VMResult::Unreachable => VMResult::Unreachable,
+            VMResult::StackOverflow => VMResult::StackOverflow,
+            VMResult::MemoryIndexOutOfRange => VMResult::MemoryIndexOutOfRange,
+            VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+            VMResult::TableIndexOutOfRange => VMResult::TableIndexOutOfRange,
+            VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
+            VMResult::TableUninitialized => VMResult::TableUninitialized,
+            VMResult::Unlinkable => VMResult::Unlinkable,
+            VMResult::MemoryAllocationFailed => VMResult::MemoryAllocationFailed,
+            VMResult::InvalidOperand => VMResult::InvalidOperand,
+            VMResult::DivideByZero => VMResult::DivideByZero,
+            VMResult::IntegerOverflow => VMResult::IntegerOverflow,
+            VMResult::InvalidConversion => VMResult::InvalidConversion,
+            VMResult::Unimplemented => VMResult::Unimplemented,
+            VMResult::FuelExhausted => VMResult::FuelExhausted,
+            VMResult::Cancelled => VMResult::Cancelled,
         }
     }
 
@@ -111,6 +194,15 @@ impl<V> VMResult<V> {
             }
             VMResult::InvalidOperand => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: InvalidOperand")
+            }
+            VMResult::DivideByZero => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: DivideByZero")
+            }
+            VMResult::IntegerOverflow => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: IntegerOverflow")
+            }
+            VMResult::InvalidConversion => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: InvalidConversion")
             }
             VMResult::Unimplemented => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: Unimplemented")

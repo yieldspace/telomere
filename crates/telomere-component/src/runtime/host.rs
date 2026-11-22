@@ -516,24 +516,30 @@ pub(super) fn vm_result_to_component_error(
 ) -> ComponentError {
     match result {
         CoreVMResult::Success(_) => unreachable!(),
-        CoreVMResult::Unreachable => {
-            ComponentError::Trap(format!("{context} trapped: unreachable"))
-        }
-        CoreVMResult::StackOverflow => {
-            ComponentError::Trap(format!("{context} trapped: stack overflow"))
-        }
-        CoreVMResult::MemoryIndexOutOfRange => {
-            ComponentError::Trap(format!("{context} trapped: memory index out of range"))
-        }
-        CoreVMResult::TableIndexOutOfRange => {
-            ComponentError::Trap(format!("{context} trapped: table index out of range"))
-        }
-        CoreVMResult::CallIndirectInvalidType => {
-            ComponentError::Trap(format!("{context} trapped: call indirect invalid type"))
-        }
-        CoreVMResult::TableUninitialized => {
-            ComponentError::Trap(format!("{context} trapped: table uninitialized"))
-        }
+        CoreVMResult::Unreachable => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::Unreachable,
+            message: format!("{context} trapped: unreachable"),
+        },
+        CoreVMResult::StackOverflow => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::StackOverflow,
+            message: format!("{context} trapped: stack overflow"),
+        },
+        CoreVMResult::MemoryIndexOutOfRange => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::MemoryIndexOutOfRange,
+            message: format!("{context} trapped: memory index out of range"),
+        },
+        CoreVMResult::TableIndexOutOfRange => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::TableIndexOutOfRange,
+            message: format!("{context} trapped: table index out of range"),
+        },
+        CoreVMResult::CallIndirectInvalidType => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::CallIndirectInvalidType,
+            message: format!("{context} trapped: call indirect invalid type"),
+        },
+        CoreVMResult::TableUninitialized => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::TableUninitialized,
+            message: format!("{context} trapped: table uninitialized"),
+        },
         CoreVMResult::Unlinkable => ComponentError::Link(format!("{context} failed: unlinkable")),
         CoreVMResult::MemoryAllocationFailed => {
             ComponentError::Runtime(format!("{context} failed: memory allocation failed"))
@@ -541,17 +547,85 @@ pub(super) fn vm_result_to_component_error(
         CoreVMResult::InvalidOperand => {
             ComponentError::Runtime(format!("{context} failed: invalid operand"))
         }
-        CoreVMResult::UnalignedAtomic => {
-            ComponentError::Trap(format!("{context} trapped: unaligned atomic"))
-        }
+        CoreVMResult::UnalignedAtomic => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::UnalignedAtomic,
+            message: format!("{context} trapped: unaligned atomic"),
+        },
+        CoreVMResult::DivideByZero => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::DivideByZero,
+            message: format!("{context} trapped: integer divide by zero"),
+        },
+        CoreVMResult::IntegerOverflow => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::IntegerOverflow,
+            message: format!("{context} trapped: integer overflow"),
+        },
+        CoreVMResult::InvalidConversion => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::InvalidConversion,
+            message: format!("{context} trapped: invalid conversion to integer"),
+        },
         CoreVMResult::Unimplemented => {
             ComponentError::Runtime(format!("{context} failed: unimplemented"))
         }
-        CoreVMResult::FuelExhausted => {
-            ComponentError::Trap(format!("{context} interrupted: fuel exhausted"))
+        CoreVMResult::FuelExhausted => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::FuelExhausted,
+            message: format!("{context} interrupted: fuel exhausted"),
+        },
+        CoreVMResult::Cancelled => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::Cancelled,
+            message: format!("{context} interrupted: cancelled"),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guest_trap_conversion_preserves_the_core_trap_kind() {
+        // The component layer must not flatten a guest trap to a bare
+        // string: callers match on the preserved TrapKind (#143).
+        let cases = [
+            (
+                CoreVMResult::<()>::DivideByZero,
+                telomere::TrapKind::DivideByZero,
+                "integer divide by zero",
+            ),
+            (
+                CoreVMResult::<()>::IntegerOverflow,
+                telomere::TrapKind::IntegerOverflow,
+                "integer overflow",
+            ),
+            (
+                CoreVMResult::<()>::InvalidConversion,
+                telomere::TrapKind::InvalidConversion,
+                "invalid conversion to integer",
+            ),
+            (
+                CoreVMResult::<()>::Unreachable,
+                telomere::TrapKind::Unreachable,
+                "unreachable",
+            ),
+        ];
+        for (result, expected_kind, expected_message) in cases {
+            let error = vm_result_to_component_error(result, "export run");
+            let ComponentError::GuestTrap { kind, message } = error else {
+                panic!("guest traps must convert to GuestTrap, got {error:?}");
+            };
+            assert_eq!(kind, expected_kind);
+            assert_eq!(message, format!("export run trapped: {expected_message}"));
         }
-        CoreVMResult::Cancelled => {
-            ComponentError::Trap(format!("{context} interrupted: cancelled"))
-        }
+    }
+
+    #[test]
+    fn non_trap_failures_keep_their_existing_component_categories() {
+        assert!(matches!(
+            vm_result_to_component_error(CoreVMResult::<()>::Unlinkable, "ctx"),
+            ComponentError::Link(_)
+        ));
+        assert!(matches!(
+            vm_result_to_component_error(CoreVMResult::<()>::InvalidOperand, "ctx"),
+            ComponentError::Runtime(_)
+        ));
     }
 }

@@ -3191,7 +3191,7 @@ async fn optimizer_memory_address_trap_sensitive_tree_preserves_traps() {
 
     let trapped =
         run_module_function(&instance, &store, "run_trap", &ResultValue::new(vec![])).await;
-    assert!(matches!(trapped, VMResult::InvalidOperand));
+    assert!(matches!(trapped, VMResult::DivideByZero));
 }
 
 #[tokio::test]

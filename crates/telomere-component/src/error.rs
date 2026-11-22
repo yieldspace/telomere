@@ -1,5 +1,5 @@
 use crate::decoder::ComponentParseError;
-use telomere::WasmParserError;
+use telomere::{TrapKind, WasmParserError};
 use thiserror::Error;
 
 /// An error raised while decoding, linking, or executing a component.
@@ -26,6 +26,16 @@ pub enum ComponentError {
     /// Guest execution trapped after successful decoding and linking.
     #[error("trap: {0}")]
     Trap(String),
+    /// Guest execution trapped in the core runtime, with the trap cause
+    /// preserved as a [`TrapKind`] so component-level callers can match on
+    /// it instead of parsing the message string.
+    #[error("trap: {message}")]
+    GuestTrap {
+        /// The core trap kind reported by the core runtime.
+        kind: TrapKind,
+        /// Human-readable context describing where the trap surfaced.
+        message: String,
+    },
     /// The component uses a recognized feature that this runtime does not implement.
     #[error("unsupported: {0}")]
     Unsupported(String),
