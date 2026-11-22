@@ -353,34 +353,35 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-23, the `Embedder footprint` workflow was dispatched three
-times against the identical commit `4f16369ab6eddce110693de4f3ee7fdd9d49a936`
-of `main` (GitHub Actions run IDs 45046421655, 45046431017, 45046440246;
-`ubuntu-24.04`, Rust 1.96.0). Every run produced byte-identical sizes: for
-all fourteen profile/configuration rows, the raw file size, the `.text`
-size, the stripped file size, and the stripped `.text` size each have a
-run-to-run spread of **0 B** across the three samples. Pull-request run
-45045344668 (PR #248), which built the merge commit of that PR into this
-same `main` commit, measured the same values for every configuration its
-gate step flagged. The observed values are the baselines in the table
-below (stripped file / stripped `.text`, in bytes).
+On 2026-11-23, the `Embedder footprint` workflow was run three times
+against the code of PR #250: workflow_dispatch runs 45049989641 and
+45050025929 against the PR branch at commit
+`b8eb7bf4ce5cec847431a4bef04bfeefceddbb6b` (the merge of the PR head
+`e450be821b6d628fc91f7ae9f81977e1ce8caae7` with `main` at
+`2b650a24baab9d240cdb05868415eea4e3cf85b2`), and pull-request run
+45047955830, which built the same merge tree (`ubuntu-24.04`, Rust
+1.96.0). Every run produced byte-identical sizes: for all fourteen
+profile/configuration rows, the raw file size, the `.text` size, the
+stripped file size, and the stripped `.text` size each have a run-to-run
+spread of **0 B** across the three samples. The observed values are the
+baselines in the table below (stripped file / stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345656 | 261679 |
-| `release` | `core` | 1464456 | 1116039 |
-| `release` | `component` | 2433656 | 1943111 |
-| `release` | `wasi` | 2771744 | 2198583 |
-| `release` | `core-nosimd` | 1275448 | 977159 |
-| `release` | `core-jit` | 1989584 | 1541319 |
-| `release` | `wasi-threads` | 2948928 | 2331927 |
+| `release` | `core` | 1464456 | 1116023 |
+| `release` | `component` | 2433656 | 1943095 |
+| `release` | `wasi` | 2771744 | 2198567 |
+| `release` | `core-nosimd` | 1275448 | 977143 |
+| `release` | `core-jit` | 1989664 | 1541367 |
+| `release` | `wasi-threads` | 2948928 | 2331911 |
 | `release-size` | `baseline` | 296384 | 228114 |
-| `release-size` | `core` | 1070488 | 752951 |
-| `release-size` | `component` | 1591008 | 1169031 |
-| `release-size` | `wasi` | 1789080 | 1303607 |
-| `release-size` | `core-nosimd` | 963136 | 679399 |
-| `release-size` | `core-jit` | 1484232 | 1057687 |
-| `release-size` | `wasi-threads` | 1907440 | 1384407 |
+| `release-size` | `core` | 1070408 | 752903 |
+| `release-size` | `component` | 1591024 | 1169031 |
+| `release-size` | `wasi` | 1789096 | 1303607 |
+| `release-size` | `core-nosimd` | 963056 | 679351 |
+| `release-size` | `core-jit` | 1484264 | 1057703 |
+| `release-size` | `wasi-threads` | 1907456 | 1384407 |
 
 #### Re-baseline history
 
@@ -399,6 +400,27 @@ core configurations shrank slightly (release/core stripped file -208 B,
 the net effect of PR #244 (#175) and PR #245 (#151)) and the `baseline`
 configuration did not change. The baseline was re-measured on current
 `main` and updated as recorded above, following the procedure below.
+
+PR #250 (#154, debug-profile stack overflows) was branched before this
+gate existed, so `main` was merged into the branch first; its first CI run
+then tripped the gate on the PR's own change. The release-relevant part of
+that change splits the continuation computation of
+`special_function_return` into an `#[inline(never)]` helper
+(`prepare_function_return` in `crates/telomere/src/runtime/vm/control.rs`)
+so the tail dispatch stays a sibling call in non-LTO builds. Because the
+telomere library is linked into every embedder configuration, the
+resulting code-layout shift moved gated sizes slightly in both directions
+(release stripped `.text` -16 B in five configurations and release
+core-jit +80 B stripped file; release-size core and core-nosimd -80 B,
+component, wasi, wasi-threads and core-jit +16..+32 B; 12 of 28 gated
+series unchanged, largest absolute delta 80 B). The attribution was
+cross-checked by measuring the PR head alone against the original
+`6c43ca6` baseline (workflow_dispatch runs 45049436565 and 45049445764 on
+commit `e450be821b6d628fc91f7ae9f81977e1ce8caae7`), which showed the same
+delta pattern. The baseline was re-measured on the merged code and
+updated as recorded above, following the procedure below. The PR's other
+build change, `[profile.dev.package.telomere]` in `Cargo.toml`, applies to
+dev profiles only and cannot affect these numbers.
 
 ### Threshold derivation
 
