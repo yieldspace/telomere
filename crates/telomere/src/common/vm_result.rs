@@ -52,10 +52,12 @@ pub enum VMResult<V> {
     /// (spec trap: "integer divide by zero").
     DivideByZero,
     /// A guest signed integer division overflowed, dividing the most
-    /// negative value by -1 (spec trap: "integer overflow").
+    /// negative value by -1, or a float-to-integer truncation conversion
+    /// had an out-of-range magnitude, including infinities
+    /// (spec trap: "integer overflow").
     IntegerOverflow,
-    /// A guest float-to-integer truncation conversion received NaN or an
-    /// out-of-range value (spec trap: "invalid conversion to integer").
+    /// A guest float-to-integer truncation conversion received NaN
+    /// (spec trap: "invalid conversion to integer").
     InvalidConversion,
     /// The runtime does not implement this execution path yet.
     Unimplemented,

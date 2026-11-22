@@ -154,10 +154,11 @@ pub enum TrapKind {
     InvalidOperand,
     /// A guest integer division or remainder had a zero divisor.
     DivideByZero,
-    /// A guest signed integer division overflowed (most negative value / -1).
+    /// A guest signed integer division overflowed (most negative value / -1),
+    /// or a float-to-integer truncation conversion had an out-of-range
+    /// magnitude, including infinities.
     IntegerOverflow,
-    /// A guest float-to-integer truncation conversion received NaN or an
-    /// out-of-range value.
+    /// A guest float-to-integer truncation conversion received NaN.
     InvalidConversion,
     /// The runtime does not implement this execution path yet.
     Unimplemented,
