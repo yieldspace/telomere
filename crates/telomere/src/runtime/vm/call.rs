@@ -848,6 +848,14 @@ pub unsafe fn op_call_i32_list_crc_summary(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    // The spin hint waits for nothing (it is not in a loop), but it is
+    // currently the only instruction keeping this body distinct from
+    // `op_call`'s: without it the two handlers are code-identical, fold
+    // to one address, and the optimizer's function-identity call-family
+    // registry misclassifies import calls as plain calls — an identity
+    // import relinking relies on (pinned by
+    // `optimizer_selects_call_family_registry_entries`; #185). Remove it
+    // only together with a replacement handler distinction.
     std::hint::spin_loop();
     if ctx.effect.get_pending_count() != 0 {
         trace!("waiting effect: {:?}", ctx.cont);
@@ -921,6 +929,9 @@ pub unsafe fn op_return_call_import(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    // See `op_call_import`: this hint is the only body difference from
+    // `op_return_call`; removing it folds the two handlers together and
+    // breaks the optimizer's call-family identity for import calls (#185).
     std::hint::spin_loop();
     if ctx.effect.get_pending_count() != 0 {
         trace!("waiting effect: {:?}", ctx.cont);
