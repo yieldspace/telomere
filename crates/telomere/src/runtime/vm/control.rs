@@ -277,6 +277,27 @@ pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
     call_next(ptr, 0, ctx)
 }
 
+/// Computes the continuation for a returning function and installs the
+/// caller local reference, without dispatching to it.
+///
+/// Kept out of line so that special_function_return itself only
+/// tail-dispatches: in builds without LTO the combined
+/// compute-and-dispatch shape compiled the continuation dispatch to a
+/// plain call, leaking one host frame per guest call/return cycle (#154).
+#[inline(never)]
+unsafe fn prepare_function_return(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Option<*const Instr> {
+    let (prev_local_ref, tail_code) = ctx.stack.function_return_optional_continuation(
+        &ctx.local_reference(),
+        (*tail_code).operand.drop_size as usize,
+        ctx.gc,
+    );
+    ctx.set_local_reference(prev_local_ref);
+    tail_code
+}
+
 /// Telomere internal `special_function_return` trampoline.
 ///
 /// Spec:
@@ -297,13 +318,7 @@ pub unsafe fn special_function_return(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     trace!("function return");
-    let (prev_local_ref, tail_code) = ctx.stack.function_return_optional_continuation(
-        &ctx.local_reference(),
-        (*tail_code).operand.drop_size as usize,
-        ctx.gc,
-    );
-    ctx.set_local_reference(prev_local_ref);
-    match tail_code {
+    match prepare_function_return(tail_code, ctx) {
         Some(tail_code) => {
             #[cfg(feature = "jit")]
             if crate::runtime::jit::interpreter_stop_active() {

@@ -104,7 +104,31 @@ struct Case {
     divergences: &'static [SpecDivergence],
 }
 
+/// Stack size for the thread the suite runs on (#154).
+///
+/// The suite runs on a dedicated runner thread in every profile. Release
+/// builds keep a flat host stack through the whole suite (the release
+/// stack discipline is guarded separately by the 512 KiB budget test in
+/// control_nesting_depth and by call_threading). Debug builds need the
+/// explicit size: the dev-profile contract in the workspace Cargo.toml
+/// restores sibling-call dispatch and release-scale parser frames for the
+/// telomere crate, but a small host cost per guest call cycle (measured
+/// at tens to a few hundred bytes) remains in non-LTO dev builds, and the
+/// 1,000,000-step tail-call fixtures need between 64 MiB and 256 MiB of
+/// host stack there. 512 MiB is twice that largest measured demand.
+const WAST_RUNNER_STACK_BYTES: usize = 512 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .name("wast-runner".to_string())
+        .stack_size(WAST_RUNNER_STACK_BYTES)
+        .spawn(run_suite)
+        .expect("spawning the wast runner thread")
+        .join()
+        .unwrap_or(ExitCode::FAILURE)
+}
+
+fn run_suite() -> ExitCode {
     let mut args = Arguments::from_args();
     args.test_threads.get_or_insert(1);
     reset_wast_jit_compiled_functions();
