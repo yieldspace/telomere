@@ -136,6 +136,14 @@ const SHARED_NOTIFY_WAT: &str = r#"
         (memory.atomic.notify (i32.const 0) (local.get 0))))
 "#;
 
+#[cfg(feature = "threads")]
+const SHARED_WAIT_FOREVER_WAT: &str = r#"
+    (module
+      (memory 1 1 shared)
+      (func (export "wait") (result i32)
+        (memory.atomic.wait32 (i32.const 0) (i32.const 0) (i64.const -1))))
+"#;
+
 struct PauseState {
     entered: mpsc::SyncSender<()>,
     resume: Mutex<mpsc::Receiver<()>>,
@@ -374,6 +382,61 @@ async fn cancellation_from_a_watchdog_thread_stops_guest_execution() {
     assert!(meter.is_interrupted());
     meter.reset_interrupt();
     assert!(!meter.is_interrupted());
+}
+
+#[cfg(feature = "threads")]
+#[tokio::test]
+async fn interrupt_wakes_a_guest_parked_in_an_indefinite_atomic_wait() {
+    let store = metered_store(None);
+    let meter = store.metering().expect("metering must be enabled");
+    let registry = Registry::new();
+    let instance = instantiate_wat(SHARED_WAIT_FOREVER_WAT, &store, &registry).await;
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+
+    let worker = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let result = futures::executor::block_on(run_module_function(
+                &instance,
+                &store,
+                "wait",
+                &ResultValue::new(vec![]),
+            ));
+            result_tx
+                .send(result)
+                .expect("test receiver must remain alive until guest completion");
+        })
+        .expect("guest worker must start");
+
+    // Give the guest time to park in the indefinite wait, and confirm the
+    // call has not returned on its own: nothing will ever notify or time
+    // this wait out.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        matches!(result_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "parked guest must not return before interrupt"
+    );
+
+    meter.interrupt();
+
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match result_rx.try_recv() {
+                Ok(result) => return result,
+                Err(mpsc::TryRecvError::Empty) => {
+                    tokio::time::sleep(Duration::from_millis(1)).await
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("guest worker exited without sending a result")
+                }
+            }
+        }
+    })
+    .await
+    .expect("interrupt must wake the parked guest in bounded time");
+
+    worker.join().expect("guest worker must not panic");
+    assert_interrupted(result, InterruptReason::Cancelled);
 }
 
 #[tokio::test]

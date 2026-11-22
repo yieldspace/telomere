@@ -316,9 +316,11 @@ fn emit_corpus_case(output_dir: &Path, hash: &str, bytes: &[u8]) -> bool {
 #[cfg(not(debug_assertions))]
 const REPLAY_STACK_BYTES: usize = 512 * 1024;
 
-// Keep the debug replay stack large. #154 remains open: an unoptimized
-// `parse_inst` frame is about 130 KiB (roughly 190 times its release size), so
-// the release-only stack contract cannot make debug corpus replay safe.
+// Keep the debug replay stack large as a margin. The dev-profile contract
+// (#154, root Cargo.toml) compiles the telomere crate optimized in dev
+// builds, so debug parse frames are at release scale; an embedder-supplied
+// unoptimized build would still pay about 130 KiB per parser frame
+// (roughly 190 times its release size), which this stack also covers.
 #[cfg(debug_assertions)]
 const REPLAY_STACK_BYTES: usize = 64 * 1024 * 1024;
 

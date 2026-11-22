@@ -14,6 +14,16 @@ pub(crate) type AsyncHostFn = Arc<
         + 'static,
 >;
 
+/// Releases one host-provided resource handle.
+///
+/// Registered for an imported instance's resource export with
+/// [ComponentLinker::register_import_resource_drop]; the runtime invokes it
+/// when a guest executes `canon resource.drop` on a live handle of that
+/// resource type, so the host can release the state behind the handle.
+pub(crate) type ResourceDropFn = Arc<
+    dyn for<'a> Fn(&'a Store, u32) -> ComponentFuture<'a, Result<(), ComponentError>> + 'static,
+>;
+
 #[derive(Clone)]
 pub(crate) struct CoreExportBinding {
     pub instance: InstanceHandle,
@@ -131,6 +141,7 @@ pub struct ComponentLinker {
     imports: HashMap<String, LinkerBinding>,
     exports: HashMap<String, LinkerBinding>,
     import_instances: HashMap<String, ComponentLinkerInstance>,
+    import_resource_drops: HashMap<(String, String), ResourceDropFn>,
 }
 
 impl ComponentLinker {
@@ -301,5 +312,53 @@ impl ComponentLinker {
 
     pub(crate) fn resolve_import_instance(&self, name: &str) -> Option<ComponentLinkerInstance> {
         self.import_instances.get(name).cloned()
+    }
+
+    /// Registers an asynchronous destructor for a resource type exported by
+    /// an imported instance.
+    ///
+    /// When a guest drops a handle of the resource named `resource` from the
+    /// instance imported as `instance` (`canon resource.drop`), the runtime
+    /// invokes `func` with the handle so the host can release the state
+    /// behind it. Dropping a handle that is not live traps in the guest, as
+    /// the canonical ABI requires, and never reaches `func`. Without a
+    /// registration, dropping a host-provided resource of that type traps.
+    pub fn register_import_resource_drop_async(
+        &mut self,
+        instance: impl Into<String>,
+        resource: impl Into<String>,
+        func: impl for<'a> Fn(&'a Store, u32) -> ComponentFuture<'a, Result<(), ComponentError>>
+            + 'static,
+    ) {
+        self.import_resource_drops.insert(
+            (instance.into(), resource.into()),
+            Arc::new(func) as ResourceDropFn,
+        );
+    }
+
+    /// Registers an immediate-result destructor for a resource type exported
+    /// by an imported instance.
+    ///
+    /// This is the synchronous counterpart to
+    /// [Self::register_import_resource_drop_async].
+    pub fn register_import_resource_drop(
+        &mut self,
+        instance: impl Into<String>,
+        resource: impl Into<String>,
+        func: impl Fn(&Store, u32) -> Result<(), ComponentError> + 'static,
+    ) {
+        self.register_import_resource_drop_async(instance, resource, move |store, handle| {
+            Box::pin(ready(func(store, handle)))
+        });
+    }
+
+    pub(crate) fn resolve_import_resource_drop(
+        &self,
+        instance: &str,
+        resource: &str,
+    ) -> Option<ResourceDropFn> {
+        self.import_resource_drops
+            .get(&(instance.to_owned(), resource.to_owned()))
+            .cloned()
     }
 }

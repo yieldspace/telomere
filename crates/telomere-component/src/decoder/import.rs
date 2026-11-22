@@ -75,7 +75,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 .register(Relation::Import(name.original.clone()));
             let focus = ctx.state.scope_mut();
 
-            focus.add_import(&name, ComponentImport::Instance);
+            focus.add_import(&name, ComponentImport::Instance(type_id));
             focus.instances.register(global);
 
             let focus = ctx.validator.scope_mut();

@@ -14,6 +14,8 @@ use parking_lot::Mutex;
 #[cfg(feature = "threads")]
 use tokio::sync::Notify;
 
+#[cfg(feature = "threads")]
+use super::MeteringHandle;
 #[cfg(test)]
 use super::PAGE_SIZE_MAX;
 use super::{Stack, VMResult, PAGE_SIZE};
@@ -155,31 +157,90 @@ impl SharedWaitRegistration {
     /// so this future can be driven by any executor — with or without a
     /// Tokio runtime — and never panics for lack of a reactor (#151).
     pub async fn wait_result(self, shared: Arc<SharedMemoryObject>, timeout_ns: i64) -> i32 {
-        if timeout_ns < 0 {
-            self.waiter.wait().await;
-            return 0;
+        match self
+            .wait_result_interruptible(shared, timeout_ns, None)
+            .await
+        {
+            VMResult::Success(code) => code,
+            // With no interrupt source attached the wait can only resolve
+            // as notified or timed out.
+            _ => unreachable!("wait without an interrupt source cannot be interrupted"),
+        }
+    }
+
+    /// Waits for a notify on this registration like [`Self::wait_result`],
+    /// but also races the wait against a metering interrupt (#177).
+    ///
+    /// When `interrupt` is `Some` and [`MeteringHandle::interrupt`] fires
+    /// before a notify or the timeout resolves the wait, the wait is
+    /// removed from the shared wait queue and this returns
+    /// [`VMResult::Cancelled`] — the same distinguishable outcome as a
+    /// guest stopped at a metering checkpoint — instead of a wait result
+    /// code. The three wake sources race and the first one to claim the
+    /// waiter's state wins; a notify or timeout that claims it first keeps
+    /// its usual result code even if the interrupt fires concurrently.
+    ///
+    /// The wait is therefore no longer resolved from a single wake source:
+    /// it additionally awaits the metering state's broadcast `Notify`.
+    /// That is the deliberate trade for making a parked guest evictable;
+    /// the claim itself remains a single compare-exchange on the waiter
+    /// state, exactly like the pre-existing notify/timeout race.
+    pub async fn wait_result_interruptible(
+        self,
+        shared: Arc<SharedMemoryObject>,
+        timeout_ns: i64,
+        interrupt: Option<MeteringHandle>,
+    ) -> VMResult<i32> {
+        if timeout_ns >= 0 {
+            // #151: tokio::time::sleep panics ("no reactor running") when
+            // the embedder drives execution outside a Tokio runtime, and
+            // nothing in the driver contract requires one. Mark the waiter
+            // as timed out from a detached timer thread and wake it through
+            // the same Notify a real notify uses; if a notify wins the
+            // race, the mark attempt fails and the thread leaves the wait
+            // untouched.
+            let timer_waiter = Arc::clone(&self.waiter);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_nanos(timeout_ns as u64));
+                if timer_waiter.try_mark_timed_out() {
+                    timer_waiter.notify.notify_one();
+                }
+            });
         }
 
-        // #151: tokio::time::sleep panics ("no reactor running") when the
-        // embedder drives execution outside a Tokio runtime, and nothing in
-        // the driver contract requires one. Mark the waiter as timed out
-        // from a detached timer thread and wake it through the same Notify
-        // a real notify uses; if a notify wins the race, the mark attempt
-        // fails and the thread leaves the wait untouched.
-        let timer_waiter = Arc::clone(&self.waiter);
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_nanos(timeout_ns as u64));
-            if timer_waiter.try_mark_timed_out() {
-                timer_waiter.notify.notify_one();
+        let interrupt_won = match &interrupt {
+            Some(handle) => {
+                let wait_fut = self.waiter.wait();
+                futures::pin_mut!(wait_fut);
+                let interrupt_fut = handle.wait_for_interrupt();
+                futures::pin_mut!(interrupt_fut);
+                match futures::future::select(wait_fut, interrupt_fut).await {
+                    futures::future::Either::Left(_) => false,
+                    futures::future::Either::Right(_) => true,
+                }
             }
-        });
+            None => {
+                self.waiter.wait().await;
+                false
+            }
+        };
 
-        self.waiter.wait().await;
+        if interrupt_won {
+            if self.waiter.try_mark_interrupted() {
+                shared.remove_waiter(self.address, self.waiter.id());
+                return VMResult::Cancelled;
+            }
+            // A notify or the timeout claimed the waiter first; its wake
+            // is already delivered or in flight, so this resolves at once
+            // and the earlier claim keeps its result code.
+            self.waiter.wait().await;
+        }
+
         if self.waiter.is_timed_out() {
             shared.remove_waiter(self.address, self.waiter.id());
-            2
+            VMResult::Success(2)
         } else {
-            0
+            VMResult::Success(0)
         }
     }
 }
@@ -204,6 +265,7 @@ impl SharedWaiter {
     const WAITING: u8 = 0;
     const NOTIFIED: u8 = 1;
     const TIMED_OUT: u8 = 2;
+    const INTERRUPTED: u8 = 3;
 
     fn new(id: u64) -> Self {
         Self {
@@ -240,6 +302,17 @@ impl SharedWaiter {
             .compare_exchange(
                 Self::WAITING,
                 Self::TIMED_OUT,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn try_mark_interrupted(&self) -> bool {
+        self.state
+            .compare_exchange(
+                Self::WAITING,
+                Self::INTERRUPTED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
@@ -2009,5 +2082,102 @@ mod tests {
             futures::executor::block_on(indefinite.wait_result(shared.clone(), -1)),
             0
         );
+    }
+
+    #[cfg(feature = "threads")]
+    #[test]
+    fn interruptible_wait_is_woken_by_a_metering_interrupt() {
+        // #177: an indefinite wait used to observe only its own Notify, so
+        // MeteringHandle::interrupt() could never evict the parked guest.
+        let shared = SharedMemoryObject::new(1, 1).unwrap();
+        assert!(matches!(
+            shared.atomic_store_u32(0, 7),
+            VMResult::Success(())
+        ));
+        let register =
+            |shared: &Arc<SharedMemoryObject>| match shared.register_wait32(0, 7).unwrap() {
+                AtomicWaitResult::Pending(wait) => wait,
+                AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+            };
+
+        // The interrupt lands while the guest is parked: the wait resolves
+        // as Cancelled (not as a wait result code) and the waiter is
+        // removed from the queue, so a later notify finds nobody.
+        let meter = MeteringHandle::new(None);
+        let parked = register(&shared);
+        let interrupter = meter.clone();
+        let interrupt_thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            interrupter.interrupt();
+        });
+        let outcome = futures::executor::block_on(parked.wait_result_interruptible(
+            shared.clone(),
+            -1,
+            Some(meter),
+        ));
+        interrupt_thread.join().unwrap();
+        assert!(matches!(outcome, VMResult::Cancelled));
+        {
+            let state = shared.state.lock();
+            assert!(!state.wait_queues.contains_key(&0));
+        }
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 0);
+
+        // An interrupt requested before the wait even starts is observed
+        // immediately rather than hanging on the broadcast.
+        let meter = MeteringHandle::new(None);
+        meter.interrupt();
+        let parked = register(&shared);
+        let outcome = futures::executor::block_on(parked.wait_result_interruptible(
+            shared.clone(),
+            -1,
+            Some(meter),
+        ));
+        assert!(matches!(outcome, VMResult::Cancelled));
+    }
+
+    #[cfg(feature = "threads")]
+    #[test]
+    fn interruptible_wait_keeps_notify_and_timeout_result_codes() {
+        // #177 acceptance: attaching an interrupt source must not change
+        // the existing result codes — notify 0, timeout 2, and a notify
+        // that claims the waiter before the interrupt keeps its 0.
+        let shared = SharedMemoryObject::new(1, 1).unwrap();
+        assert!(matches!(
+            shared.atomic_store_u32(0, 7),
+            VMResult::Success(())
+        ));
+        let register =
+            |shared: &Arc<SharedMemoryObject>| match shared.register_wait32(0, 7).unwrap() {
+                AtomicWaitResult::Pending(wait) => wait,
+                AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+            };
+
+        // The timeout still fires when the interrupt never does.
+        let meter = MeteringHandle::new(None);
+        let timed_out = register(&shared);
+        assert!(matches!(
+            futures::executor::block_on(timed_out.wait_result_interruptible(
+                shared.clone(),
+                1_000_000,
+                Some(meter),
+            )),
+            VMResult::Success(2)
+        ));
+
+        // A notify that lands first claims the waiter; an interrupt
+        // requested afterwards cannot rewrite the notified result.
+        let meter = MeteringHandle::new(None);
+        let notified = register(&shared);
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
+        meter.interrupt();
+        assert!(matches!(
+            futures::executor::block_on(notified.wait_result_interruptible(
+                shared.clone(),
+                -1,
+                Some(meter),
+            )),
+            VMResult::Success(0)
+        ));
     }
 }

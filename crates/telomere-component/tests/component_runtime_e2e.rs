@@ -753,3 +753,128 @@ async fn component_export_lookup_rejects_incompatible_version_with_found_and_exp
         "error should name the found version: {message}"
     );
 }
+
+#[tokio::test]
+async fn component_runtime_drops_host_provided_resource() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use telomere_component::ComponentLinkerInstance;
+
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "thing" (type (sub resource)))
+      (export "make" (func (result (own 0))))
+    )
+  )
+  (import "test:host/resources" (instance $i (type $iface)))
+  (alias export $i "thing" (type $thing))
+  (alias export $i "make" (func $make))
+
+  (core func $make-lower (canon lower (func $make)))
+  (core func $drop (canon resource.drop $thing))
+  (core module $caller
+    (import "" "make" (func $make (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "drop-it") (result i32)
+      (call $drop (call $make))
+      (i32.const 0)
+    )
+    (func (export "drop-twice") (result i32)
+      (local $h i32)
+      (local.set $h (call $make))
+      (call $drop (local.get $h))
+      (call $drop (local.get $h))
+      (i32.const 0)
+    )
+    (func (export "drop-bogus") (result i32)
+      (call $drop (i32.const 9999))
+      (i32.const 0)
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "make" (func $make-lower))
+        (export "drop" (func $drop))
+      ))
+    )
+  )
+  (func (export "drop-it") (result s32)
+    (canon lift (core func $caller "drop-it"))
+  )
+  (func (export "drop-twice") (result s32)
+    (canon lift (core func $caller "drop-twice"))
+  )
+  (func (export "drop-bogus") (result s32)
+    (canon lift (core func $caller "drop-bogus"))
+  )
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let next_handle = Rc::new(Cell::new(100_u32));
+    let dropped = Rc::new(RefCell::new(Vec::new()));
+
+    let mut host_instance = ComponentLinkerInstance::new();
+    let counter = Rc::clone(&next_handle);
+    host_instance.register_func("make", move |_store, _args| {
+        let handle = counter.get();
+        counter.set(handle + 1);
+        Ok(vec![ComponentValue::Own(handle)])
+    });
+
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("test:host/resources", host_instance);
+    let dropped_by_host = Rc::clone(&dropped);
+    linker.register_import_resource_drop("test:host/resources", "thing", move |_store, handle| {
+        dropped_by_host.borrow_mut().push(handle);
+        Ok(())
+    });
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let result = instance
+        .call(&store, "drop-it", &[])
+        .await
+        .expect("dropping a host-provided resource should succeed");
+    assert_eq!(result, vec![ComponentValue::S32(0)]);
+    assert_eq!(
+        *dropped.borrow(),
+        vec![100],
+        "the host destructor should run exactly once, with the issued handle"
+    );
+
+    let error = instance
+        .call(&store, "drop-twice", &[])
+        .await
+        .expect_err("dropping the same handle twice should trap");
+    assert!(
+        matches!(error, ComponentError::Trap(_)),
+        "double drop should trap, got {error:?}"
+    );
+    assert_eq!(
+        *dropped.borrow(),
+        vec![100, 101],
+        "the first drop releases the handle; the second must not reach the host again"
+    );
+
+    let error = instance
+        .call(&store, "drop-bogus", &[])
+        .await
+        .expect_err("dropping a handle that was never issued should trap");
+    assert!(
+        matches!(error, ComponentError::Trap(_)),
+        "dropping an unknown handle should trap, got {error:?}"
+    );
+    assert_eq!(*dropped.borrow(), vec![100, 101]);
+}

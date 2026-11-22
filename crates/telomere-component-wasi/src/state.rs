@@ -159,6 +159,34 @@ impl WasiState {
     pub fn stderr(&self) -> Vec<u8> {
         self.inner.borrow().stderr.clone()
     }
+
+    /// Releases the resource behind `handle`, removing it from whichever
+    /// table holds it.
+    ///
+    /// All WASI resource handles are allocated from one counter, so a live
+    /// handle appears in exactly one table. Returns whether the handle was
+    /// present. This backs the resource destructors the provider registers
+    /// with the component linker, which the runtime invokes when a guest
+    /// executes `canon resource.drop`.
+    pub(crate) fn drop_handle(&self, handle: u32) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        if inner.descriptors.remove(&handle).is_some() {
+            return true;
+        }
+        if inner.input_streams.remove(&handle).is_some() {
+            return true;
+        }
+        if inner.output_streams.remove(&handle).is_some() {
+            return true;
+        }
+        if inner.pollables.remove(&handle).is_some() {
+            return true;
+        }
+        if inner.errors.remove(&handle).is_some() {
+            return true;
+        }
+        inner.directory_entry_streams.remove(&handle).is_some()
+    }
 }
 
 impl WasiStateBuilder {

@@ -92,7 +92,7 @@ pub(crate) fn analyze(func: &CanonFunc) -> AnalysisResults {
                 .any(|pred| dominates(*pred, block.id, &idom))
         })
         .collect::<Vec<_>>();
-    let loop_depth = compute_loop_depth(func, &idom, &loop_headers);
+    let loop_depth = compute_loop_depth(func, &idom, &loop_headers, &reverse_postorder);
     let loop_members = compute_loop_members(func, &idom, &loop_headers);
     let loop_parents = compute_loop_parents(&loop_headers, &loop_members);
     let loop_preheaders = compute_loop_preheaders(func, &loop_members);
@@ -328,20 +328,32 @@ fn compute_loop_depth(
     func: &CanonFunc,
     idom: &[Option<usize>],
     loop_headers: &[bool],
+    reverse_postorder: &[usize],
 ) -> Vec<usize> {
-    (0..func.blocks.len())
-        .map(|block| {
-            let mut depth = 0usize;
-            let mut current = Some(block);
-            while let Some(node) = current {
-                if loop_headers[node] && dominates(node, block, idom) {
-                    depth += 1;
-                }
-                current = idom[node];
+    // A block's loop depth is the number of loop headers on its dominator
+    // chain, the block itself included. Every node on that chain dominates
+    // the block by definition, so the count is a prefix sum over the
+    // dominator tree: a block's depth is its own header flag plus its
+    // immediate dominator's depth. An immediate dominator always precedes
+    // its block in reverse postorder, so one pass in that order resolves
+    // every parent before its children.
+    //
+    // The previous implementation walked the whole chain for every block
+    // and re-checked `dominates` for each ancestor — a check that always
+    // holds for a block's own ancestors — costing O(depth) per ancestor.
+    // On deeply nested control flow the dominator tree is a chain, which
+    // made the pass O(blocks * depth^2): cubic in nesting depth (#170).
+    let mut depth = (0..func.blocks.len())
+        .map(|block| usize::from(loop_headers[block]))
+        .collect::<Vec<_>>();
+    for &block in reverse_postorder {
+        if let Some(parent) = idom[block] {
+            if parent != block {
+                depth[block] += depth[parent];
             }
-            depth
-        })
-        .collect()
+        }
+    }
+    depth
 }
 
 fn compute_loop_members(
@@ -379,28 +391,30 @@ fn compute_loop_members(
 }
 
 fn compute_loop_parents(loop_headers: &[bool], loop_members: &[Vec<usize>]) -> Vec<Option<usize>> {
+    // A header's parent is the smallest other loop whose member set
+    // contains it. Scanning every candidate header for every header costs
+    // O(headers^2) membership tests; inverting the scan — visiting each
+    // loop's members once — costs O(total membership) with the same
+    // result: candidates are still considered in ascending index order
+    // and a parent is only replaced by a strictly smaller loop, so ties
+    // resolve to the same candidate as the all-pairs scan (#170).
     let mut parents = vec![None; loop_headers.len()];
-    for header in 0..loop_headers.len() {
-        if !loop_headers[header] {
+    for candidate in 0..loop_headers.len() {
+        if !loop_headers[candidate] {
             continue;
         }
-        let mut best_parent: Option<usize> = None;
-        for candidate in 0..loop_headers.len() {
-            if candidate == header || !loop_headers[candidate] {
+        let candidate_size = loop_members[candidate].len();
+        for &member in &loop_members[candidate] {
+            if member == candidate || !loop_headers[member] {
                 continue;
             }
-            if !loop_members[candidate].contains(&header) {
-                continue;
-            }
-            let candidate_size = loop_members[candidate].len();
-            let better = best_parent
+            let better = parents[member]
                 .map(|current: usize| candidate_size < loop_members[current].len())
                 .unwrap_or(true);
             if better {
-                best_parent = Some(candidate);
+                parents[member] = Some(candidate);
             }
         }
-        parents[header] = best_parent;
     }
     parents
 }
@@ -1306,5 +1320,130 @@ mod tests {
         assert_eq!(candidate.block_id, 1);
         assert_eq!(candidate.cursor, 0);
         assert_eq!(analysis.loop_preheaders[1], Some(0));
+    }
+
+    fn bare_block(
+        id: usize,
+        predecessors: Vec<usize>,
+        successors: Vec<usize>,
+    ) -> super::CanonBlock {
+        super::CanonBlock {
+            id,
+            params: vec![],
+            predecessors,
+            successors,
+            insts: vec![],
+        }
+    }
+
+    /// The original chain-walking definition of loop depth, kept as the
+    /// reference the optimised pass is checked against (#170).
+    fn naive_loop_depth(
+        func: &CanonFunc,
+        idom: &[Option<usize>],
+        loop_headers: &[bool],
+    ) -> Vec<usize> {
+        (0..func.blocks.len())
+            .map(|block| {
+                let mut depth = 0usize;
+                let mut current = Some(block);
+                while let Some(node) = current {
+                    if loop_headers[node] && dominates(node, block, idom) {
+                        depth += 1;
+                    }
+                    current = idom[node];
+                }
+                depth
+            })
+            .collect()
+    }
+
+    fn headers_for(func: &CanonFunc, idom: &[Option<usize>]) -> Vec<bool> {
+        func.blocks
+            .iter()
+            .map(|block| {
+                block
+                    .predecessors
+                    .iter()
+                    .any(|pred| dominates(*pred, block.id, idom))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn loop_depth_matches_the_chain_walk_definition() {
+        // A graph with a real back edge (3 -> 2) and a merge at 5, so the
+        // dominator chains branch instead of forming a single line.
+        let func = CanonFunc {
+            funcidx: FuncIdx(0),
+            functype: FuncType::new(vec![], vec![]),
+            locals_size: 0,
+            entry_block: 0,
+            blocks: vec![
+                bare_block(0, vec![], vec![1]),
+                bare_block(1, vec![0], vec![2, 5]),
+                bare_block(2, vec![1, 3], vec![3]),
+                bare_block(3, vec![2], vec![2, 4]),
+                bare_block(4, vec![3], vec![5]),
+                bare_block(5, vec![1, 4], vec![]),
+            ],
+        };
+        let rpo = compute_reverse_postorder(&func);
+        let idom = compute_idom(&func, &rpo);
+        let headers = headers_for(&func, &idom);
+        let expected = naive_loop_depth(&func, &idom, &headers);
+        assert_eq!(expected, vec![0, 1, 2, 3, 4, 2]);
+        assert_eq!(compute_loop_depth(&func, &idom, &headers, &rpo), expected);
+        let analysis = analyze(&func);
+        assert_eq!(analysis.loop_depth, expected);
+        // Only block 3 sits inside another loop (the 2/3 loop), so it is
+        // the single block with a loop parent.
+        assert_eq!(
+            analysis.loop_parents,
+            vec![None, None, None, Some(2), None, None]
+        );
+    }
+
+    #[test]
+    fn analyze_stays_fast_on_a_deeply_nested_chain() {
+        // #170: loop depth used to re-check `dominates` for every dominator
+        // ancestor of every block — O(depth) work per ancestor, cubic on a
+        // chain-shaped dominator tree. 4096 blocks is 8x the parser's
+        // nesting limit; the chain-walking definition needs on the order of
+        // 10^10 steps here, the prefix-sum pass is linear.
+        const BLOCKS: usize = 4096;
+        let blocks = (0..BLOCKS)
+            .map(|id| {
+                bare_block(
+                    id,
+                    if id == 0 { vec![] } else { vec![id - 1] },
+                    if id + 1 == BLOCKS {
+                        vec![]
+                    } else {
+                        vec![id + 1]
+                    },
+                )
+            })
+            .collect();
+        let func = CanonFunc {
+            funcidx: FuncIdx(0),
+            functype: FuncType::new(vec![], vec![]),
+            locals_size: 0,
+            entry_block: 0,
+            blocks,
+        };
+        let start = std::time::Instant::now();
+        let analysis = analyze(&func);
+        let elapsed = start.elapsed();
+        // Every block except the entry has a dominating predecessor, so
+        // every block counts as a header and depth grows by one per level.
+        assert_eq!(analysis.loop_depth[0], 0);
+        assert_eq!(analysis.loop_depth[1], 1);
+        assert_eq!(analysis.loop_depth[BLOCKS - 1], BLOCKS - 1);
+        assert!(
+            elapsed.as_secs() < 10,
+            "analyze on a {BLOCKS}-block chain took {elapsed:?}; \
+             the nesting-dependent pass regressed (#170)"
+        );
     }
 }

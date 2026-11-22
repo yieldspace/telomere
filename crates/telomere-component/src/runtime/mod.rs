@@ -5,7 +5,7 @@ use crate::ir::{
     CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
     InstanceImport, Relation, ResourceId, TypeId,
 };
-use crate::linker::{ComponentLinkerInstance, LinkerBinding};
+use crate::linker::{ComponentLinkerInstance, LinkerBinding, ResourceDropFn};
 use crate::support::common::InstanceHandle;
 use crate::support::common::{
     FuncType as CoreFuncType, VMResult, ValType as CoreValType, WasmValue,
@@ -129,6 +129,15 @@ struct SharedState {
     next_resource_handle: Cell<u32>,
     resources: RefCell<HashMap<ResourceId, HashMap<u32, ResourceRecord>>>,
     generic_resources: RefCell<HashMap<TypeId, ResourceId>>,
+    /// Destructors the host registered for imported resource types, keyed by
+    /// the resource type's identity in the guest program. Populated once at
+    /// instantiation from the root component's imports.
+    host_resource_drops: RefCell<HashMap<ResourceId, ResourceDropFn>>,
+    /// Live handles of host-provided resources that have entered guest code,
+    /// per resource type. A `canon resource.drop` removes the handle here
+    /// before invoking the registered destructor; a handle that is absent
+    /// (never seen or already dropped) traps, per the canonical ABI.
+    host_resources: RefCell<HashMap<ResourceId, std::collections::HashSet<u32>>>,
 }
 
 #[derive(Clone)]
@@ -180,6 +189,7 @@ enum HostBinding {
         options: RuntimeCanonicalOptions,
         program: Rc<ComponentProgram>,
         signature: CoreFuncType,
+        shared: Rc<SharedState>,
     },
     ResourceNew {
         resource: ResourceId,

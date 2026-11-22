@@ -241,16 +241,27 @@ cancellation policy. Once it returns to guest execution, the next metering
 checkpoint observes the flag.
 
 `MeteringHandle::interrupt()` stops guest code that is executing at a metered
-checkpoint. It does not wake guest code parked in a `memory.atomic.wait` with
-no timeout, so such a guest cannot currently be evicted. **This is a known gap
-in this change, not a definitional boundary: `memory.atomic.wait` is a guest
-instruction, and bounding it is within the intent of store-scoped metering. It
-was deferred as an engineering judgement — the fix changes the public
-`ExecutionDriver`/`PendingOp` completion path, which should be designed together
-with the async facade — and is tracked as #177.** A guest can park only when its
-embedder has provided shared memory, and the embedder owns guest-thread
-creation. Until #177 lands, an embedder executing untrusted code must either
-withhold shared memory and threads or allow only waits with finite timeouts.
+checkpoint, and — since #177 — it also wakes guest code parked in a
+`memory.atomic.wait`, with or without a timeout. `interrupt()` stores the
+cancellation flag and then broadcasts on the metering state's `Notify`; a
+parked wait races that broadcast against its own notify and its timeout, and
+the first source to claim the waiter's state wins. An interrupted wait is
+removed from the shared wait queue and completes the guest call with the same
+`InterruptReason::Cancelled` outcome as a checkpoint stop, not with a wait
+result code. A notify or timeout that claims the waiter first keeps its usual
+result code (0 or 2), and the resumed guest then observes the interrupt at its
+next checkpoint, as before.
+
+This widened the wait's wake contract: a parked wait is no longer resolved
+from a single wake source, and its future additionally awaits the metering
+broadcast, so the wait path is not strictly wait-free in the way the
+single-`Notify` path was. What replaces that property is a single
+compare-exchange claim on the waiter state — the same arbitration the notify
+and timeout already used — plus a flag re-check after the broadcast wait is
+registered, so no interrupt can be lost between arming the wait and parking.
+The trade was accepted because the alternative left a parked guest
+unevictable for an unbounded time. A guest can park only when its embedder
+has provided shared memory, and the embedder owns guest-thread creation.
 
 `reset_interrupt()` clears the flag for a later invocation. It does not restore
 fuel or resume an invocation that has already returned an interruption result.
