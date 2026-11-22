@@ -642,6 +642,7 @@ mod tests {
         let local_reference = match stack.function_call_cached(
             0,
             0,
+            0,
             CallFrameCache::dummy(),
             LocalReference {
                 local_top: 0,

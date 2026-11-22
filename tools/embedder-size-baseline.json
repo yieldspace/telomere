@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions ‘Embedder footprint’ runs for PR #256 (branch fix/143-vmresult-error-context at commit ef671abd0df4cb702be537bf12ac8ba4d5745017, the merge of main 14cd8b2d392d342ee3110448ff72d3d01cfec701 into the PR head 9cca190edc249e5c4e715c39c0f8ae710cf0d659 plus the harness-table follow-up commit; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45065589500 and 45065600974 against the branch and pull-request run 45065494772, which built the same merge tree, produced byte-identical sizes for every gated series",
-    "commit": "ef671abd0df4cb702be537bf12ac8ba4d5745017",
+    "summary": "GitHub Actions ‘Embedder footprint’ runs for PR #257 (branch fix/186-operand-stack-reserve at commit e13eaf7a43a3bcf1f39e1eaded3d767ce294cd44, the merge of main 9b4d3f3c4e5d65407796399251c639937090b918 into the PR head 862bbe2db450ceaa82115de0f2356a83f2aa8170; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45072019203 and 45072026952 against the branch and pull-request run 45071971685, which built the same merge tree, produced byte-identical sizes for every gated series",
+    "commit": "e13eaf7a43a3bcf1f39e1eaded3d767ce294cd44",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45065589500,
-      45065600974
+      45072019203,
+      45072026952
     ],
     "cross_check_run_ids": [
-      45065494772
+      45071971685
     ],
-    "derivation": "Re-baseline for PR #256 (#143, VMResult std-error surface with distinct trap causes). The PR splits the three spec trap causes that InvalidOperand used to merge into payload-free DivideByZero / IntegerOverflow / InvalidConversion variants across the interpreter, the JIT stubs and all three JIT backends (the trap-code ABI appends codes 14-16 without renumbering), implements Display and std::error::Error for VMResult / TrapKind / TrapInfo with the spec trap messages, adds ComponentError::GuestTrap so a guest trap kind survives the component layer, and centralises the vm_try! propagation match (previously inlined at 1,143 call sites) into one cold VMResult::propagate_failure function. A follow-up on the merged tree classifies float-to-integer truncation failures by is_nan in the interpreter handlers and the JIT stubs (NaN is an invalid conversion; an out-of-range magnitude, including infinities, is an integer overflow), which the #131 trap-message table merged from main asserts separately. Attribution was isolated by measuring current main (14cd8b2) alone (workflow_dispatch run 45066161931): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR’s own. The baseline configuration, which links no library code, is byte-identical in both profiles (4 of 28 gated series unchanged). In the release profile the propagation centralisation dominates and the library configurations move slightly in both directions (stripped file -6,080..+4,136 B; stripped .text -1,728..+2,736 B). In the release-size profile (opt-level z, fat LTO, one codegen unit) the new Display/Error surface is inlined across the library and every library configuration grows (stripped file +10,760..+31,432 B; stripped .text +4,592..+15,776 B; the largest single delta is +1.8% of its series, release-size core stripped file). Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, ‘Size regression gate (#164)’."
+    "derivation": "Re-baseline for PR #257 (#186, reserve validated max operand depth at frame entry). The PR computes the validated maximum operand depth at parse time in pipeline::optimize_function from the type checker’s stack snapshots (the original stream’s fold; on the pipeline path the maximum of that fold and the reachable CanonFunc blocks’ fold), stores it as LoweredFunction.max_operand_bytes carried into CallRecipe, checks frame_end + bound <= stack length once at frame entry on every frame-construction path (overflow still traps StackOverflow, only detected earlier), and removes the per-push bounds checks from the seven _fast push functions (push_u32_fast / push_u64_fast / push_u128_fast, push_copy_from_ptr, local_get{4,8,16}_from_base) in crates/telomere/src/common/stack.rs, each of which now carries a debug_assert and the reservation invariant it relies on; checked pushes remain on non-frame paths (embedder staging, scheduler resume, host in-place results). Attribution was isolated by measuring current main (9b4d3f3) alone (workflow_dispatch run 45072035005): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR’s own. The baseline configuration, which links no library code, is byte-identical in both profiles (4 of 28 gated series unchanged). Every library configuration shrinks in both profiles, because the _fast pushes are inlined into handlers across the library and their removed checks outweigh the single entry check and the added field: release stripped file -1,720..-4,568 B and stripped .text -2,096..-3,824 B; release-size (opt-level z, fat LTO, one codegen unit) stripped file -7,248..-8,160 B and stripped .text -4,320..-5,216 B. No series grows, so the gate passed on the merged tree before this re-baseline; the baseline is updated anyway so the recorded numbers keep tracking the code on main. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, ‘Size regression gate (#164)’."
   },
   "thresholds": {
     "release": {
@@ -30,62 +30,62 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1463736,
-          "threshold": 1463736
+          "baseline": 1459424,
+          "threshold": 1459424
         },
         "stripped_text_bytes": {
-          "baseline": 1117511,
-          "threshold": 1117511
+          "baseline": 1113687,
+          "threshold": 1113687
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2450496,
-          "threshold": 2450496
+          "baseline": 2445928,
+          "threshold": 2445928
         },
         "stripped_text_bytes": {
-          "baseline": 1959447,
-          "threshold": 1959447
+          "baseline": 1955927,
+          "threshold": 1955927
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2797056,
-          "threshold": 2797056
+          "baseline": 2792488,
+          "threshold": 2792488
         },
         "stripped_text_bytes": {
-          "baseline": 2221655,
-          "threshold": 2221655
+          "baseline": 2218135,
+          "threshold": 2218135
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1273112,
-          "threshold": 1273112
+          "baseline": 1269032,
+          "threshold": 1269032
         },
         "stripped_text_bytes": {
-          "baseline": 976423,
-          "threshold": 976423
+          "baseline": 972711,
+          "threshold": 972711
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1985408,
-          "threshold": 1985408
+          "baseline": 1983688,
+          "threshold": 1983688
         },
         "stripped_text_bytes": {
-          "baseline": 1543143,
-          "threshold": 1543143
+          "baseline": 1541047,
+          "threshold": 1541047
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2982360,
-          "threshold": 2982360
+          "baseline": 2978384,
+          "threshold": 2978384
         },
         "stripped_text_bytes": {
-          "baseline": 2359159,
-          "threshold": 2359159
+          "baseline": 2355975,
+          "threshold": 2355975
         }
       }
     },
@@ -102,62 +102,62 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1092888,
-          "threshold": 1092888
+          "baseline": 1085560,
+          "threshold": 1085560
         },
         "stripped_text_bytes": {
-          "baseline": 767911,
-          "threshold": 767911
+          "baseline": 763527,
+          "threshold": 763527
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1621776,
-          "threshold": 1621776
+          "baseline": 1613632,
+          "threshold": 1613632
         },
         "stripped_text_bytes": {
-          "baseline": 1190871,
-          "threshold": 1190871
+          "baseline": 1185655,
+          "threshold": 1185655
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1817568,
-          "threshold": 1817568
+          "baseline": 1809408,
+          "threshold": 1809408
         },
         "stripped_text_bytes": {
-          "baseline": 1322503,
-          "threshold": 1322503
+          "baseline": 1317287,
+          "threshold": 1317287
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 979520,
-          "threshold": 979520
+          "baseline": 972272,
+          "threshold": 972272
         },
         "stripped_text_bytes": {
-          "baseline": 689607,
-          "threshold": 689607
+          "baseline": 685287,
+          "threshold": 685287
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1513352,
-          "threshold": 1513352
+          "baseline": 1505640,
+          "threshold": 1505640
         },
         "stripped_text_bytes": {
-          "baseline": 1074839,
-          "threshold": 1074839
+          "baseline": 1069671,
+          "threshold": 1069671
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1957792,
-          "threshold": 1957792
+          "baseline": 1949648,
+          "threshold": 1949648
         },
         "stripped_text_bytes": {
-          "baseline": 1415063,
-          "threshold": 1415063
+          "baseline": 1409847,
+          "threshold": 1409847
         }
       }
     }

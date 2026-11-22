@@ -72,6 +72,7 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
                     &ctx.local_reference,
                     param_size,
                     return_slot_slack,
+                    recipe.max_operand_bytes as usize,
                     recipe.frame,
                 ));
                 ctx.set_local_reference_with_frame(local_reference, recipe.frame);
@@ -79,6 +80,7 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
                     return_slot_slack,
+                    recipe.max_operand_bytes as usize,
                     recipe.frame,
                     ctx.local_reference,
                     return_pc,
@@ -93,6 +95,7 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
                     &ctx.local_reference,
                     param_size,
                     return_slot_slack,
+                    recipe.max_operand_bytes as usize,
                     recipe.frame,
                 ));
                 ctx.set_local_reference_with_frame(local_reference, recipe.frame);
@@ -100,6 +103,7 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
                     return_slot_slack,
+                    recipe.max_operand_bytes as usize,
                     recipe.frame,
                     ctx.local_reference,
                     return_pc,
@@ -115,6 +119,7 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
                     &ctx.local_reference,
                     param_size,
                     local_size,
+                    recipe.max_operand_bytes as usize,
                     recipe.frame,
                 ));
                 ctx.set_local_reference_with_frame(local_reference, recipe.frame);
@@ -122,6 +127,7 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
                     local_size,
+                    recipe.max_operand_bytes as usize,
                     recipe.frame,
                     ctx.local_reference,
                     return_pc,
@@ -303,6 +309,7 @@ unsafe fn prepare_jit_wasm_call<const IS_RETURN_CALL: bool>(
             &ctx.local_reference,
             param_size,
             local_size,
+            recipe.max_operand_bytes as usize,
             recipe.frame,
         ));
         ctx.set_local_reference_with_frame(local_reference, recipe.frame);
@@ -311,6 +318,7 @@ unsafe fn prepare_jit_wasm_call<const IS_RETURN_CALL: bool>(
         let local_reference = vm_try!(ctx.stack.function_call_cached(
             param_size,
             local_size,
+            recipe.max_operand_bytes as usize,
             recipe.frame,
             ctx.local_reference,
             return_pc,
