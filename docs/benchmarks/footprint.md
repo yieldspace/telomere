@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #253: workflow_dispatch runs 45058016773 and
-45058029076 against the PR branch at commit
-`7871f9bc17bb45e55ec2431a68730e9428d6b784` (the merge of the PR head
-`f64653a8f62a906a659ce938abb8c7835826b50a` with `main` at
-`501b27c95b5d1cab7264cbb519f791e661ce5abd`), and pull-request run
-45057705991, which built the same merge tree (`ubuntu-24.04`, Rust
+against the code of PR #254: workflow_dispatch runs 45060131072 and
+45060142935 against the PR branch at commit
+`fb01564eb0d7f252d3b24da100b325d5e7d56796` (the merge of the PR head
+`3420455b6ee3a6614cc397fc8b4023c28c20bdbc` with `main` at
+`4d3b77441d337a6ec8c2586c1e856b1f749be87c`), and pull-request run
+45060031215, which built the same merge tree (`ubuntu-24.04`, Rust
 1.96.0). Every run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
@@ -369,19 +369,19 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345656 | 261679 |
-| `release` | `core` | 1,465,400 | 1,116,407 |
-| `release` | `component` | 2,451,856 | 1,958,679 |
-| `release` | `wasi` | 2,797,832 | 2,220,663 |
-| `release` | `core-nosimd` | 1,276,392 | 977,527 |
-| `release` | `core-jit` | 1,990,608 | 1,541,751 |
-| `release` | `wasi-threads` | 2,977,536 | 2,355,783 |
+| `release` | `core` | 1,466,280 | 1,117,239 |
+| `release` | `component` | 2,452,544 | 1,959,303 |
+| `release` | `wasi` | 2,798,520 | 2,221,287 |
+| `release` | `core-nosimd` | 1,277,032 | 978,151 |
+| `release` | `core-jit` | 1,991,488 | 1,542,583 |
+| `release` | `wasi-threads` | 2,978,224 | 2,356,423 |
 | `release-size` | `baseline` | 296384 | 228114 |
-| `release-size` | `core` | 1,071,936 | 754,135 |
-| `release-size` | `component` | 1,602,504 | 1,178,583 |
-| `release-size` | `wasi` | 1,804,808 | 1,315,863 |
-| `release-size` | `core-nosimd` | 964,584 | 680,567 |
-| `release-size` | `core-jit` | 1,485,760 | 1,058,903 |
-| `release-size` | `wasi-threads` | 1,924,520 | 1,397,383 |
+| `release-size` | `core` | 1,073,824 | 756,071 |
+| `release-size` | `component` | 1,604,488 | 1,180,631 |
+| `release-size` | `wasi` | 1,806,808 | 1,317,911 |
+| `release-size` | `core-nosimd` | 965,112 | 681,143 |
+| `release-size` | `core-jit` | 1,487,664 | 1,060,855 |
+| `release-size` | `wasi-threads` | 1,926,360 | 1,399,287 |
 
 #### Re-baseline history
 
@@ -491,6 +491,30 @@ registrations; `wasi-threads` tracks `wasi` almost exactly (+32 B
 stripped file in release, +16 B in release-size) because the PR adds
 no threads-specific code. The baseline was re-measured on the merged
 code and updated as recorded above, following the procedure below.
+
+PR #254 (#131, wast harness spec fidelity) merged current `main` into
+its branch first; its first CI run on the merged tree then tripped the
+gate on the PR's own change. The PR strengthens the wast test harness
+(trap/invalid reason matching, result arity, bit-exact NaN patterns)
+and fixes the real defects that strengthening surfaced, all of them in
+the telomere core library: the parser's memarg alignment check is
+unified on `natural_align_log2` (`values.rs`, `instruction.rs`,
+`simd_instruction.rs`), the type checker now produces `UnknownLabel`,
+unknown export indices return their per-kind error variants
+(`parser.rs`), and the interpreter's rounding paths quiet signaling
+NaNs (`runtime/vm/numeric.rs`, `simd.rs`, `superinstructions.rs`).
+The harness changes themselves are test-only and are not linked into
+the embedder. Because the core library is linked into every embedder
+configuration except `baseline`, the `baseline` configuration is
+byte-identical in both profiles (4 of 28 gated series unchanged) and
+the growth is near-uniform across the library configurations (release
+stripped file +640..+880 B, stripped `.text` +624..+832 B;
+release-size stripped file +528..+2,000 B, stripped `.text`
++576..+2,048 B). `core-nosimd` grows the least in release-size
+(+528 B / +576 B) because the SIMD parser and runtime paths it
+excludes carry part of the change. The baseline was re-measured on
+the merged code and updated as recorded above, following the
+procedure below.
 
 ### Threshold derivation
 

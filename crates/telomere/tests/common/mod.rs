@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
     get_global, instantiate, InstanceHandle, IoReadBinaryReader, Registry, ResultValue, Store,
-    VMResult, WasmParser, WasmValue,
+    VMResult, WasmParser, WasmParserError, WasmValue,
 };
 use tracing::error;
 use wast::{
@@ -20,6 +20,172 @@ static WAST_JIT_COMPILED_FUNCTIONS: AtomicUsize = AtomicUsize::new(0);
 pub struct SpecDivergence {
     pub module_sha256: &'static str,
     pub why: &'static str,
+}
+
+// ---------------------------------------------------------------------------
+// Spec-fidelity checks for the wast harness (#131).
+//
+// The spec suite states *why* a module is invalid or *why* execution traps,
+// not just that it fails. The tables below map those spec messages onto
+// telomere's distinguishable error values (VMResult variants for traps,
+// WasmParserError variants for validation). A spec message with no table
+// entry fails the suite loudly instead of being silently discarded, so the
+// tables stay complete for the suite this harness actually runs.
+// ---------------------------------------------------------------------------
+
+/// The spec's canonical NaN: all-ones exponent, the quiet (most significant)
+/// payload bit set, and every remaining payload bit clear.
+fn is_canonical_nan_f32(value: f32) -> bool {
+    matches!(value.to_bits(), 0x7fc0_0000 | 0xffc0_0000)
+}
+
+fn is_canonical_nan_f64(value: f64) -> bool {
+    matches!(
+        value.to_bits(),
+        0x7ff8_0000_0000_0000 | 0xfff8_0000_0000_0000
+    )
+}
+
+/// The spec's arithmetic NaN: any NaN whose quiet payload bit is set.
+/// Canonical NaNs are a subset of arithmetic NaNs.
+fn is_arithmetic_nan_f32(value: f32) -> bool {
+    value.is_nan() && value.to_bits() & 0x0040_0000 != 0
+}
+
+fn is_arithmetic_nan_f64(value: f64) -> bool {
+    value.is_nan() && value.to_bits() & 0x0008_0000_0000_0000 != 0
+}
+
+fn vm_result_name<V>(result: &VMResult<V>) -> &'static str {
+    match result {
+        VMResult::Success(_) => "success",
+        VMResult::Unreachable => "Unreachable",
+        VMResult::StackOverflow => "StackOverflow",
+        VMResult::MemoryIndexOutOfRange => "MemoryIndexOutOfRange",
+        VMResult::UnalignedAtomic => "UnalignedAtomic",
+        VMResult::TableIndexOutOfRange => "TableIndexOutOfRange",
+        VMResult::CallIndirectInvalidType => "CallIndirectInvalidType",
+        VMResult::TableUninitialized => "TableUninitialized",
+        VMResult::Unlinkable => "Unlinkable",
+        VMResult::MemoryAllocationFailed => "MemoryAllocationFailed",
+        VMResult::InvalidOperand => "InvalidOperand",
+        VMResult::Unimplemented => "Unimplemented",
+        VMResult::FuelExhausted => "FuelExhausted",
+        VMResult::Cancelled => "Cancelled",
+    }
+}
+
+/// Drops a trailing " <index>" from a spec message ("unknown memory 0",
+/// "uninitialized element 2") so the table can key on the message family.
+fn spec_message_base(message: &str) -> &str {
+    let base = match message.split_once(':') {
+        // Detailed forms such as "type mismatch: instruction requires ..."
+        // share the base message's mapping.
+        Some((head, _)) if head == "type mismatch" => head,
+        _ => message,
+    };
+    match base.rfind(' ') {
+        Some(idx)
+            if !base[idx + 1..].is_empty()
+                && base[idx + 1..].bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            &base[..idx]
+        }
+        _ => base,
+    }
+}
+
+/// Asserts that an execution result is the trap the spec message mandates.
+fn assert_trap_message<V>(
+    message: &str,
+    result: &VMResult<V>,
+    span: wast::token::Span,
+    text: &str,
+) {
+    let accepted = match spec_message_base(message) {
+        "unreachable" => matches!(result, VMResult::Unreachable),
+        "out of bounds memory access" => matches!(result, VMResult::MemoryIndexOutOfRange),
+        "out of bounds table access" | "undefined element" => {
+            matches!(result, VMResult::TableIndexOutOfRange)
+        }
+        "uninitialized element" => matches!(result, VMResult::TableUninitialized),
+        "indirect call type mismatch" => matches!(result, VMResult::CallIndirectInvalidType),
+        "integer divide by zero" | "integer overflow" | "invalid conversion to integer" => {
+            matches!(result, VMResult::InvalidOperand)
+        }
+        "unaligned atomic" => matches!(result, VMResult::UnalignedAtomic),
+        "call stack exhausted" => matches!(result, VMResult::StackOverflow),
+        _ => panic!(
+            "no trap-message mapping for {message:?} (#131); actual result: {} @ {:?}",
+            vm_result_name(result),
+            span.linecol_in(text)
+        ),
+    };
+    assert!(
+        accepted,
+        "trap reason mismatch: expected {message:?}, got {} @ {:?}",
+        vm_result_name(result),
+        span.linecol_in(text)
+    );
+}
+
+/// Asserts that a parser rejection is the validation error the spec message
+/// mandates. Variant matching is the primary check; a parser error whose
+/// Display text equals the spec message verbatim is also accepted, because
+/// several WasmParserError displays are spec-worded (including the index in
+/// e.g. "unknown memory 0").
+fn assert_invalid_message(
+    message: &str,
+    err: &WasmParserError,
+    span: wast::token::Span,
+    text: &str,
+) {
+    use WasmParserError as E;
+    let variant_accepted = match spec_message_base(message) {
+        "type mismatch" => matches!(
+            err,
+            E::InvalidStackValType(..)
+                | E::InvalidStackValTypeAny
+                | E::InvalidElementSectionType(..)
+                // call_indirect / return_call_indirect against a non-funcref
+                // table is a typing failure reported with the table index.
+                | E::InvalidTableType(_)
+        ),
+        "alignment must not be larger than natural" => matches!(err, E::InvalidAlignment(_)),
+        "unknown memory" => matches!(err, E::InvalidMemIdx(_)),
+        "unknown table" => matches!(err, E::InvalidTableIndex(_)),
+        "unknown function" => matches!(err, E::InvalidFuncIdx(_)),
+        "unknown type" => matches!(err, E::InvalidTypeIdx(_)),
+        "unknown local" => matches!(err, E::InvalidLocalIndex(_)),
+        "unknown global" => matches!(err, E::InvalidGlobalIndex(_) | E::UnknownGlobal),
+        "unknown label" => matches!(err, E::UnknownLabel),
+        "unknown data segment" => matches!(err, E::InvalidDataIdx(_)),
+        "unknown elem segment" => matches!(err, E::UnknownElement(_)),
+        "duplicate export name" => matches!(err, E::DuplicatedExport(_)),
+        "multiple memories" => matches!(err, E::MultipleMemory),
+        "constant expression required" => matches!(err, E::InvalidConstInstruction(_)),
+        "global is immutable" | "immutable global" => matches!(err, E::InvalidGlobalAccess),
+        "invalid result arity" => matches!(err, E::InvalidResultArity),
+        "size minimum must not be greater than maximum" => matches!(err, E::InvalidLimit),
+        // parse_memtype deliberately rejects a shared memory without a
+        // maximum with the generic limits error.
+        "shared memory must have maximum" => matches!(err, E::InvalidLimit),
+        "memory size must be at most 65536 pages (4GiB)" => matches!(err, E::InvalidMemorySize(_)),
+        "start function" => matches!(err, E::StartFunction),
+        "undeclared function reference" => matches!(err, E::UndeclaredFunctionReference),
+        "invalid lane index" => {
+            matches!(err, E::InvalidInstruction(bytes) if bytes[0] == 0xFD)
+        }
+        _ => panic!(
+            "no invalid-message mapping for {message:?} (#131); actual error: {err:?} ({err}) @ {:?}",
+            span.linecol_in(text)
+        ),
+    };
+    assert!(
+        variant_accepted || err.to_string() == message,
+        "invalid reason mismatch: expected {message:?}, got {err:?} ({err}) @ {:?}",
+        span.linecol_in(text)
+    );
 }
 
 fn wast_parse_buffer(text: &str) -> ParseBuffer<'_> {
@@ -313,6 +479,14 @@ async fn run_wast_with_spec_divergences_in_context(
                         .await
                         .unwrap()
                     };
+                    assert_eq!(
+                        expected.len(),
+                        actual.len(),
+                        "result arity mismatch: expected {} value(s), got {} @ {:?}",
+                        expected.len(),
+                        actual.len(),
+                        span.linecol_in(text)
+                    );
                     for (expected, actual) in expected.iter().zip(actual.iter()) {
                         if let WastRet::Core(expected) = expected {
                             match (expected, actual) {
@@ -337,15 +511,21 @@ async fn run_wast_with_spec_divergences_in_context(
                                     WastRetCore::F32(NanPattern::CanonicalNan),
                                     WasmValue::F32(actual),
                                 ) => {
-                                    // TODO: is canonical nan?
-                                    assert!(actual.is_nan(), "{:?}", span.linecol_in(text));
+                                    assert!(
+                                        is_canonical_nan_f32(*actual),
+                                        "expected canonical NaN, got {actual:?} @ {:?}",
+                                        span.linecol_in(text)
+                                    );
                                 }
                                 (
                                     WastRetCore::F32(NanPattern::ArithmeticNan),
                                     WasmValue::F32(actual),
                                 ) => {
-                                    // TODO: is arithmetic nan?
-                                    assert!(actual.is_nan(), "{:?}", span.linecol_in(text));
+                                    assert!(
+                                        is_arithmetic_nan_f32(*actual),
+                                        "expected arithmetic NaN, got {actual:?} @ {:?}",
+                                        span.linecol_in(text)
+                                    );
                                 }
                                 (
                                     WastRetCore::F64(NanPattern::Value(expected)),
@@ -362,15 +542,21 @@ async fn run_wast_with_spec_divergences_in_context(
                                     WastRetCore::F64(NanPattern::CanonicalNan),
                                     WasmValue::F64(actual),
                                 ) => {
-                                    // TODO: is canonical nan?
-                                    assert!(actual.is_nan());
+                                    assert!(
+                                        is_canonical_nan_f64(*actual),
+                                        "expected canonical NaN, got {actual:?} @ {:?}",
+                                        span.linecol_in(text)
+                                    );
                                 }
                                 (
                                     WastRetCore::F64(NanPattern::ArithmeticNan),
                                     WasmValue::F64(actual),
                                 ) => {
-                                    // TODO: is arithmetic nan?
-                                    assert!(actual.is_nan());
+                                    assert!(
+                                        is_arithmetic_nan_f64(*actual),
+                                        "expected arithmetic NaN, got {actual:?} @ {:?}",
+                                        span.linecol_in(text)
+                                    );
                                 }
                                 (WastRetCore::V128(V128Pattern::I64x2(x)), WasmValue::V128(b)) => {
                                     let x = x.as_ptr() as *const u8;
@@ -431,10 +617,14 @@ async fn run_wast_with_spec_divergences_in_context(
                                                     span.linecol_in(text)
                                                 )
                                             }
-                                            NanPattern::ArithmeticNan
-                                            | NanPattern::CanonicalNan => assert!(
-                                                b.is_nan(),
-                                                "expected: NaN, actual: {b} @ {:?}",
+                                            NanPattern::CanonicalNan => assert!(
+                                                is_canonical_nan_f32(b),
+                                                "expected: canonical NaN, actual: {b} @ {:?}",
+                                                span.linecol_in(text)
+                                            ),
+                                            NanPattern::ArithmeticNan => assert!(
+                                                is_arithmetic_nan_f32(b),
+                                                "expected: arithmetic NaN, actual: {b} @ {:?}",
                                                 span.linecol_in(text)
                                             ),
                                         }
@@ -459,8 +649,16 @@ async fn run_wast_with_spec_divergences_in_context(
                                                     span.linecol_in(text)
                                                 )
                                             }
-                                            NanPattern::ArithmeticNan
-                                            | NanPattern::CanonicalNan => assert!(b.is_nan()),
+                                            NanPattern::CanonicalNan => assert!(
+                                                is_canonical_nan_f64(b),
+                                                "expected: canonical NaN, actual: {b} @ {:?}",
+                                                span.linecol_in(text)
+                                            ),
+                                            NanPattern::ArithmeticNan => assert!(
+                                                is_arithmetic_nan_f64(b),
+                                                "expected: arithmetic NaN, actual: {b} @ {:?}",
+                                                span.linecol_in(text)
+                                            ),
                                         }
                                     }
                                 }
@@ -521,34 +719,37 @@ async fn run_wast_with_spec_divergences_in_context(
                 message,
             } => {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
-                // Message fidelity is outside #130's scope and tracked by #120.
-                if message != "alignment must not be larger than natural" {
-                    let multiple_tables = message == "multiple tables";
-                    let multiple_memories = message == "multiple memories";
-                    // Multi-table/multi-memory support supersedes these pre-3.0 assertions.
-                    if let Ok(source) = module.encode() {
-                        let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                        let mut parser = telomere::WasmParser::new(&mut reader);
-                        // TODO: test error message
-                        let res = parser.parse_module();
-
-                        match res {
-                            Err(_err) => {
-                                // FIXME:
-                                //assert!(err.to_string().starts_with(message),"{} == {},message validation failed@{:?}",err.to_string(),message,span.linecol_in(text));
-                            }
-                            Ok(_) if multiple_tables || multiple_memories => {}
-                            Ok(_) => panic!("AssertInvalid failed@{:?}", span.linecol_in(text)),
-                        }
+                // Multi-table/multi-memory support supersedes these pre-3.0
+                // assertions: a module the parser accepts is fine, but a
+                // rejection must still be for the stated reason (#131).
+                let superseded = matches!(message, "multiple tables" | "multiple memories");
+                let source = module.encode().unwrap_or_else(|err| {
+                    panic!(
+                        "AssertInvalid module failed to encode: {err} @ {:?}",
+                        span.linecol_in(text)
+                    )
+                });
+                let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+                let mut parser = telomere::WasmParser::new(&mut reader);
+                match parser.parse_module() {
+                    Err(err) if message == "multiple tables" => {
+                        // The parser implements multiple tables, so it has no
+                        // error variant for this superseded assertion; any
+                        // rejection here is a defect in its own right.
+                        panic!(
+                            "AssertInvalid (multiple tables) rejected unexpectedly: {err} @ {:?}",
+                            span.linecol_in(text)
+                        )
                     }
-                } else {
-                    tracing::warn!("now we ignoring alignment error")
+                    Err(err) => assert_invalid_message(message, &err, span, text),
+                    Ok(_) if superseded => {}
+                    Ok(_) => panic!("AssertInvalid failed@{:?}", span.linecol_in(text)),
                 }
             }
             WastDirective::AssertExhaustion {
-                span: _,
+                span,
                 call,
-                message: _,
+                message,
             } => {
                 let result = telomere::run_module_function(
                     instance.as_ref().unwrap(),
@@ -557,12 +758,12 @@ async fn run_wast_with_spec_divergences_in_context(
                     &ResultValue::new(convert_args(&call.args)),
                 )
                 .await;
-                assert!(result.is_err());
+                assert_trap_message(message, &result, span, text);
             }
             WastDirective::AssertTrap {
                 span,
                 exec,
-                message: _,
+                message,
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
                     tracing::trace!(
@@ -572,37 +773,33 @@ async fn run_wast_with_spec_divergences_in_context(
                         span.linecol_in(text)
                     );
 
-                    if let Some(id) = v.module {
+                    let result = if let Some(id) = v.module {
                         let instance = registry.get(id.name()).unwrap();
-                        let result = telomere::run_module_function(
+                        telomere::run_module_function(
                             &instance,
                             store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
                         )
-                        .await;
-                        assert!(result.is_err(), "{:?}", span.linecol_in(text))
+                        .await
                     } else {
-                        let result = telomere::run_module_function(
+                        telomere::run_module_function(
                             instance.as_ref().unwrap(),
                             store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
                         )
-                        .await;
-                        assert!(result.is_err(), "{:?}", span.linecol_in(text))
-                    }
+                        .await
+                    };
+                    assert_trap_message(message, &result, span, text);
                 }
                 wast::WastExecute::Wat(mut v) => {
                     let source = v.encode().unwrap();
                     let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                     let mut parser = telomere::WasmParser::new(&mut reader);
                     let m = parser.parse_module().unwrap();
-                    assert!(
-                        instantiate(m, store, registry).await.is_err(),
-                        "{:?}",
-                        span.linecol_in(text)
-                    )
+                    let result = instantiate(m, store, registry).await;
+                    assert_trap_message(message, &result, span, text);
                 }
                 v => {
                     todo!("{v:?}")
