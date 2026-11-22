@@ -17,10 +17,10 @@ num-derive = "0.4.2"
 num-traits = "0.2.19"
 semver = "1.0.26"
 typed-arena = "2.0.2"
-futures = "0.3.31"
 smallvec.workspace = true
 
 [dev-dependencies]
+futures = "0.3.31"
 tracing-subscriber = { version = "0.3.19" }
 wast = { version = "243.0.0", features = ["component-model"] }
 wat = "1.243.0"

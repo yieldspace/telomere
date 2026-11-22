@@ -17,9 +17,20 @@ use crate::{
 ///
 /// # Examples
 ///
-/// The executor below uses only `std` and mirrors the complete standalone
-/// example in `examples/minimal-embedder/`; do not use a nested
-/// `futures::executor::block_on` for component calls.
+/// # Executor requirements
+///
+/// The futures returned by this API may be driven by any executor: a
+/// tokio runtime, `futures::executor::block_on`, or a minimal
+/// hand-written executor. The executor below uses only `std` and mirrors
+/// the complete standalone example in `examples/minimal-embedder/`.
+/// Instantiation drives core modules on the current thread without
+/// entering the caller's executor, so nested executors never panic with
+/// an executor re-entry error.
+///
+/// One requirement remains: a host function reached through synchronous
+/// execution must complete on its first poll. If one returns
+/// `Poll::Pending`, the call fails with a returned [`ComponentError`]
+/// instead of panicking.
 ///
 /// ```
 /// use telomere_component::{ComponentEngine, ComponentLinker, ComponentValue, Store};
@@ -150,6 +161,12 @@ impl ComponentEngine {
     /// Import resolution happens while the returned future is polled. The
     /// resulting [`ComponentInstance`] keeps the program alive and can call its
     /// root exports or traverse nested export instances.
+    ///
+    /// The returned future may be driven by any executor, including
+    /// `futures::executor::block_on` (see the executor requirements on
+    /// [`ComponentEngine`]); instantiation never enters the caller's
+    /// executor, so driving it from inside another executor cannot panic
+    /// with an executor re-entry error.
     pub async fn instantiate(
         &self,
         program: &ComponentProgram,

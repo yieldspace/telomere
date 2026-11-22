@@ -15,16 +15,50 @@ use crate::support::host_abi::{
 };
 use crate::support::{aliasing, Module, Registry, ResultValue, Store, VMResult as CoreVMResult};
 use crate::{ComponentError, ComponentInstance, ComponentLinker, ComponentProgram, ComponentValue};
-use futures::executor::block_on;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::pin;
 use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+use std::thread::{self, Thread};
 
 thread_local! {
     static HOST_BINDINGS: RefCell<HashMap<(u32, u32), Rc<HostBinding>>> = RefCell::new(HashMap::new());
+}
+
+/// Drives `future` to completion on the current thread.
+///
+/// This deliberately does not use `futures::executor::block_on`: the
+/// `futures` executor takes a thread-local enter guard, so an internal
+/// `block_on` panicked with `EnterError` whenever an embedder drove the
+/// public API with `futures::executor::block_on` itself (#167). The poll
+/// loop below enters no executor at all -- it only parks the current
+/// thread while the future is pending -- so it composes with any outer
+/// executor (futures, tokio, or a hand-written one) and with itself.
+pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
+    struct ThreadWaker(Thread);
+
+    impl Wake for ThreadWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => thread::park(),
+        }
+    }
 }
 
 const MAX_FLAT_PARAMS: usize = 16;
