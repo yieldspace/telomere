@@ -189,6 +189,42 @@ async fn time_fused_relink_roundtrips(store: Store, iters: u64) -> Duration {
     duration
 }
 
+/// Builds a module with `func_count` trivial functions, a 4-entry funcref
+/// table, and a passive element segment holding two of the functions.
+/// The exported `run` performs `n` zero-length `table.init` executions
+/// (issue #175: each one used to allocate a Vec of every function address
+/// in the module).
+fn table_init_zero_len_wat(func_count: usize) -> String {
+    let mut wat =
+        String::from("(module (type $t (func (result i32))) (table 4 funcref) (elem func $f7 $f9)");
+    for i in 0..func_count {
+        wat.push_str(&format!(" (func $f{i} (type $t) i32.const {i})"));
+    }
+    wat.push_str(
+        r#" (func (export "run") (param $n i32) (result i32)
+             (local $i i32)
+             block $exit
+               loop $loop
+                 local.get $i
+                 local.get $n
+                 i32.ge_u
+                 br_if $exit
+                 i32.const 0
+                 i32.const 0
+                 i32.const 0
+                 table.init 0 0
+                 local.get $i
+                 i32.const 1
+                 i32.add
+                 local.set $i
+                 br $loop
+               end
+             end
+             i32.const 0))"#,
+    );
+    wat
+}
+
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("benches/telomere-benchmark.wasm");
@@ -498,6 +534,33 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                     )
                     .unwrap(),
                     ResultValue::new(vec![WasmValue::I32(523776)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("table_init_zero_len_2048_funcs", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = benchmark_store(metering_mode);
+            let registry = Registry::new();
+            let handle = instantiate_wat(&table_init_zero_len_wat(2048), &store, &registry).await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1000)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(0)])
                 );
                 duration += start.elapsed();
             }

@@ -125,20 +125,19 @@ unsafe fn table_init_impl(
             let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
                 VMResult::TableIndexOutOfRange
             }));
-            let func_addrs = instance
-                .funcs
-                .as_slice()
-                .iter()
-                .map(|it| it.get())
-                .collect::<Vec<_>>();
             let dst_table = runtime.get_table(dst_table_addr);
             let dst = vm_try!(VMResult::from_option(
                 dst_table.1.get_mut(dst_pos..dst_pos + len),
                 || { VMResult::TableIndexOutOfRange }
             ));
+            // Resolve each copied entry directly from the instance's function
+            // slice: collecting all function addresses first would allocate
+            // O(module function count) even for a zero-length init (#175).
+            // This loop is O(len).
+            let funcs = instance.funcs.as_slice();
             for (i, funcidx) in slice.iter().enumerate() {
                 vm_checkpoint!(metering, budget, reserved, budget_epoch);
-                dst[i] = func_addrs[*funcidx as usize];
+                dst[i] = funcs[*funcidx as usize].get();
             }
         }
         ElemInit::ConstExpr(exprs) => {

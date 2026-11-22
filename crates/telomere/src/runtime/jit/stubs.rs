@@ -1549,18 +1549,17 @@ fn runtime_table_init(ctx: &mut ExecuteContext<'_>, pc: *const Instr) -> VMResul
             let Some(slice) = idxs.get(src..src + len) else {
                 return VMResult::TableIndexOutOfRange;
             };
-            let func_addrs = instance
-                .funcs
-                .as_slice()
-                .iter()
-                .map(|it| it.get())
-                .collect::<Vec<_>>();
             let table = ctx.gc.get_table(dst_table_addr);
             let Some(dst) = table.1.get_mut(dst_pos..dst_pos + len) else {
                 return VMResult::TableIndexOutOfRange;
             };
+            // Resolve each copied entry directly from the instance's function
+            // slice: collecting all function addresses first would allocate
+            // O(module function count) even for a zero-length init (#175).
+            // This loop is O(len).
+            let funcs = instance.funcs.as_slice();
             for (i, funcidx) in slice.iter().enumerate() {
-                dst[i] = func_addrs[*funcidx as usize];
+                dst[i] = funcs[*funcidx as usize].get();
             }
         }
         ElemInit::ConstExpr(exprs) => {
