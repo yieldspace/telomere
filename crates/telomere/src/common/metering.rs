@@ -3,6 +3,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+#[cfg(feature = "threads")]
+use tokio::sync::Notify;
 
 /// Number of checkpoints reserved by one cold-path metering grant.
 pub const CHECKPOINT_CHUNK: u64 = 4096;
@@ -33,6 +35,15 @@ struct Ledger {
 pub(crate) struct MeteringState {
     ledger: Mutex<Ledger>,
     interrupted: AtomicBool,
+    /// Broadcast wake for guests parked in `memory.atomic.wait` (#177).
+    ///
+    /// `interrupt()` sets `interrupted` first and then calls
+    /// `notify_waiters()` here, so a wait racing the interrupt either is
+    /// woken by the broadcast or observes the flag when it arms its own
+    /// wait. Only present with the `threads` feature, matching the wait
+    /// machinery itself.
+    #[cfg(feature = "threads")]
+    interrupt_notify: Notify,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +68,8 @@ impl MeteringHandle {
                 epoch: 0,
             }),
             interrupted: AtomicBool::new(false),
+            #[cfg(feature = "threads")]
+            interrupt_notify: Notify::new(),
         }))
     }
 
@@ -89,8 +102,40 @@ impl MeteringHandle {
     }
 
     /// Requests cancellation at the next metering checkpoint.
+    ///
+    /// This also wakes guests parked in `memory.atomic.wait` (#177): the
+    /// flag is stored first and then broadcast, so a parked wait either
+    /// observes the flag or receives the wake, and completes with the same
+    /// [`InterruptReason::Cancelled`] outcome as a guest stopped at a
+    /// checkpoint.
     pub fn interrupt(&self) {
         self.0.interrupted.store(true, Ordering::Relaxed);
+        #[cfg(feature = "threads")]
+        self.0.interrupt_notify.notify_waiters();
+    }
+
+    /// Resolves once cancellation has been requested through
+    /// [`Self::interrupt`].
+    ///
+    /// The flag is re-checked after the wake future is registered, so an
+    /// interrupt that lands between the first check and registration is
+    /// not lost even though `notify_waiters` stores no permit.
+    #[cfg(feature = "threads")]
+    pub(crate) async fn wait_for_interrupt(&self) {
+        loop {
+            if self.is_interrupted() {
+                return;
+            }
+            let notified = self.0.interrupt_notify.notified();
+            tokio::pin!(notified);
+            if notified.as_mut().enable() {
+                return;
+            }
+            if self.is_interrupted() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Returns whether cancellation has been requested.

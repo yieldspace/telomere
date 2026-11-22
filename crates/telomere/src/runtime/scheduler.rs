@@ -147,11 +147,19 @@ impl TokioDriver {
     #[cfg(feature = "threads")]
     fn submit_memory_wait(&mut self, op: MemoryWaitPending) {
         self.inflight.push(Box::pin(async move {
-            let value = op.wait.wait_result(op.shared, op.timeout_ns).await;
-            Completion {
-                task_id: op.task_id,
-                payload: CompletionPayload::ResumeWithI32 { fp: op.fp, value },
-            }
+            let (task_id, fp) = (op.task_id, op.fp);
+            let payload = match op
+                .wait
+                .wait_result_interruptible(op.shared, op.timeout_ns, op.interrupt)
+                .await
+            {
+                VMResult::Success(value) => CompletionPayload::ResumeWithI32 { fp, value },
+                VMResult::Cancelled => CompletionPayload::Interrupted,
+                // wait_result_interruptible only ever resolves with a wait
+                // result code or cancellation.
+                _ => unreachable!("memory wait resolves only with a code or cancellation"),
+            };
+            Completion { task_id, payload }
         }));
     }
 }
@@ -361,6 +369,40 @@ impl<'a> Scheduler<'a> {
                     }
                 }
             },
+            CompletionPayload::Interrupted => {
+                let result = VMResult::Cancelled;
+                let trap = {
+                    let runtime = self.store.lock_runtime_or_panic();
+                    let task = self.tasks.get(task_index).unwrap();
+                    capture_trap_context(
+                        &runtime,
+                        &task.stack,
+                        task.local_reference,
+                        None,
+                        &result,
+                        task.task_id,
+                    )
+                };
+                let mut complete_result = None;
+                {
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    task.pending_effects -= 1;
+                    if task.pending_effects == 0 {
+                        complete_result = Some((result, trap));
+                    } else {
+                        task.terminal_result = Some(result);
+                        task.terminal_trap = Some(trap);
+                    }
+                }
+                if let Some((result, trap)) = complete_result {
+                    let task = self.tasks.remove(task_index).unwrap();
+                    self.completed_tasks.push(CompletedTask {
+                        stack: task.stack,
+                        result,
+                        trap: Some(trap),
+                    });
+                }
+            }
             CompletionPayload::WasmAsync => {
                 panic!("Wasm async completion is not implemented yet")
             }
