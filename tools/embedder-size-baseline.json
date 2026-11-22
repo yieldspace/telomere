@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions 'Embedder footprint' runs for PR #252 (branch fix/170-parse-nesting-complexity at commit eebf876bce0385f3ac556d0051a577b6d8958c77, the merge of the PR head f816ff188c499161530081913ee69d10ad20f1c3 with main 07f9a49120bf4d465c1704692a496f4e2f108bb0; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45054630647 and 45054643208 against the branch and pull-request run 45054539493, which built the same merge tree, produced byte-identical sizes for every gated series",
-    "commit": "eebf876bce0385f3ac556d0051a577b6d8958c77",
+    "summary": "GitHub Actions 'Embedder footprint' runs for PR #253 (branch fix/118-resource-drop at commit 7871f9bc17bb45e55ec2431a68730e9428d6b784, the merge of the PR head f64653a8f62a906a659ce938abb8c7835826b50a with main 501b27c95b5d1cab7264cbb519f791e661ce5abd; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45058016773 and 45058029076 against the branch and pull-request run 45057705991, which built the same merge tree, produced byte-identical sizes for every gated series",
+    "commit": "7871f9bc17bb45e55ec2431a68730e9428d6b784",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45054630647,
-      45054643208
+      45058016773,
+      45058029076
     ],
     "cross_check_run_ids": [
-      45054539493
+      45057705991
     ],
-    "derivation": "Re-baseline for PR #252 (#170, parse time grows cubically with block nesting). The PR rewrites two optimizer analysis passes in crates/telomere/src/parser/core/optimizer/pipeline/analysis.rs: compute_loop_depth becomes a dominator-tree prefix sum accumulated in one reverse-postorder pass, and compute_loop_parents is inverted from an all-pairs scan to a single pass over each loop's members; the PR's only other change is a criterion bench, which is not linked into the embedder. The parser/optimizer is part of the telomere library linked into every embedder configuration except baseline, so the deltas are nearly uniform across library configurations and the baseline configuration is unchanged: in the release profile the library configurations shrink slightly (stripped .text -224 B in all six; stripped file -72 B, wasi-threads -88 B, component -56 B), while in the release-size profile (opt-level \"z\", fat LTO, one codegen unit) they grow (stripped file +1,120 B and stripped .text +960 B, with core-nosimd and core-jit at +1,104 B / +944 B). 24 of 28 gated series changed; the 4 unchanged series are the baseline configuration's. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, 'Size regression gate (#164)'."
+    "derivation": "Re-baseline for PR #253 (#118, canon resource.drop for host-provided resources). The PR is confined to the component layer: telomere-component gains the linker destructor-registration API (ComponentLinker::register_import_resource_drop / register_import_resource_drop_async), the decoder keeps each imported instance declaration's TypeId so instantiation can build the ResourceId-to-destructor table (runtime/env.rs), and the runtime tracks host-issued own handles (runtime/canonical.rs, runtime/host.rs) so canon resource.drop resolves them and calls the registered destructor exactly once; telomere-component-wasi gains WasiState::drop_handle and registers destructors for its handle-issuing imports in the provider. The core telomere library is untouched, so the baseline, core, core-nosimd and core-jit configurations are byte-identical in both profiles (16 of 28 gated series unchanged). Growth is confined to the configurations that link the component runtime: in the release profile, stripped file +17,256 B (component), +25,144 B (wasi) and +25,176 B (wasi-threads), stripped .text +15,200 B, +21,712 B and +21,712 B; in the release-size profile, stripped file +9,936 B, +14,168 B and +14,184 B, stripped .text +8,320 B, +11,024 B and +11,024 B. wasi and wasi-threads grow more than component because they also link telomere-component-wasi (drop_handle plus the provider's destructor registrations); wasi-threads tracks wasi almost exactly (+32 B stripped file in release, +16 B in release-size) because the PR adds no threads-specific code. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, 'Size regression gate (#164)'."
   },
   "thresholds": {
     "release": {
@@ -40,22 +40,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2434600,
-          "threshold": 2434600
+          "baseline": 2451856,
+          "threshold": 2451856
         },
         "stripped_text_bytes": {
-          "baseline": 1943479,
-          "threshold": 1943479
+          "baseline": 1958679,
+          "threshold": 1958679
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2772688,
-          "threshold": 2772688
+          "baseline": 2797832,
+          "threshold": 2797832
         },
         "stripped_text_bytes": {
-          "baseline": 2198951,
-          "threshold": 2198951
+          "baseline": 2220663,
+          "threshold": 2220663
         }
       },
       "core-nosimd": {
@@ -80,12 +80,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2952360,
-          "threshold": 2952360
+          "baseline": 2977536,
+          "threshold": 2977536
         },
         "stripped_text_bytes": {
-          "baseline": 2334071,
-          "threshold": 2334071
+          "baseline": 2355783,
+          "threshold": 2355783
         }
       }
     },
@@ -112,22 +112,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1592568,
-          "threshold": 1592568
+          "baseline": 1602504,
+          "threshold": 1602504
         },
         "stripped_text_bytes": {
-          "baseline": 1170263,
-          "threshold": 1170263
+          "baseline": 1178583,
+          "threshold": 1178583
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1790640,
-          "threshold": 1790640
+          "baseline": 1804808,
+          "threshold": 1804808
         },
         "stripped_text_bytes": {
-          "baseline": 1304839,
-          "threshold": 1304839
+          "baseline": 1315863,
+          "threshold": 1315863
         }
       },
       "core-nosimd": {
@@ -152,12 +152,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1910336,
-          "threshold": 1910336
+          "baseline": 1924520,
+          "threshold": 1924520
         },
         "stripped_text_bytes": {
-          "baseline": 1386359,
-          "threshold": 1386359
+          "baseline": 1397383,
+          "threshold": 1397383
         }
       }
     }

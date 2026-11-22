@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #252: workflow_dispatch runs 45054630647 and
-45054643208 against the PR branch at commit
-`eebf876bce0385f3ac556d0051a577b6d8958c77` (the merge of the PR head
-`f816ff188c499161530081913ee69d10ad20f1c3` with `main` at
-`07f9a49120bf4d465c1704692a496f4e2f108bb0`), and pull-request run
-45054539493, which built the same merge tree (`ubuntu-24.04`, Rust
+against the code of PR #253: workflow_dispatch runs 45058016773 and
+45058029076 against the PR branch at commit
+`7871f9bc17bb45e55ec2431a68730e9428d6b784` (the merge of the PR head
+`f64653a8f62a906a659ce938abb8c7835826b50a` with `main` at
+`501b27c95b5d1cab7264cbb519f791e661ce5abd`), and pull-request run
+45057705991, which built the same merge tree (`ubuntu-24.04`, Rust
 1.96.0). Every run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
@@ -370,18 +370,18 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345656 | 261679 |
 | `release` | `core` | 1,465,400 | 1,116,407 |
-| `release` | `component` | 2,434,600 | 1,943,479 |
-| `release` | `wasi` | 2,772,688 | 2,198,951 |
+| `release` | `component` | 2,451,856 | 1,958,679 |
+| `release` | `wasi` | 2,797,832 | 2,220,663 |
 | `release` | `core-nosimd` | 1,276,392 | 977,527 |
 | `release` | `core-jit` | 1,990,608 | 1,541,751 |
-| `release` | `wasi-threads` | 2,952,360 | 2,334,071 |
+| `release` | `wasi-threads` | 2,977,536 | 2,355,783 |
 | `release-size` | `baseline` | 296384 | 228114 |
 | `release-size` | `core` | 1,071,936 | 754,135 |
-| `release-size` | `component` | 1,592,568 | 1,170,263 |
-| `release-size` | `wasi` | 1,790,640 | 1,304,839 |
+| `release-size` | `component` | 1,602,504 | 1,178,583 |
+| `release-size` | `wasi` | 1,804,808 | 1,315,863 |
 | `release-size` | `core-nosimd` | 964,584 | 680,567 |
 | `release-size` | `core-jit` | 1,485,760 | 1,058,903 |
-| `release-size` | `wasi-threads` | 1,910,336 | 1,386,359 |
+| `release-size` | `wasi-threads` | 1,924,520 | 1,397,383 |
 
 #### Re-baseline history
 
@@ -465,6 +465,32 @@ unit) they grow (stripped file +1,120 B and stripped `.text` +960 B,
 with `core-nosimd` and `core-jit` at +1,104 B / +944 B). The baseline
 was re-measured on the merged code and updated as recorded above,
 following the procedure below.
+
+PR #253 (#118, canon `resource.drop` for host-provided resources)
+merged current `main` into its branch first; its first CI run on the
+merged tree then tripped the gate on the PR's own change. The change
+is confined to the component layer: `telomere-component` gains the
+linker destructor-registration API (`register_import_resource_drop` /
+`_async`), the decoder keeps each imported instance declaration's
+`TypeId` so instantiation can build the `ResourceId`-to-destructor
+table, and the runtime tracks host-issued `own` handles so
+`resource.drop` resolves them (`runtime/canonical.rs`,
+`runtime/host.rs`, `runtime/env.rs`); `telomere-component-wasi`
+gains `WasiState::drop_handle` and registers destructors for its
+handle-issuing imports in the provider. The core library is
+untouched, so `baseline`, `core`, `core-nosimd` and `core-jit` are
+byte-identical in both profiles (16 of 28 gated series unchanged),
+and the growth sits exactly in the configurations that link the
+component runtime (release stripped file +17,256 B for `component`,
++25,144 B for `wasi`, +25,176 B for `wasi-threads`; stripped `.text`
++15,200 / +21,712 / +21,712 B; release-size stripped file +9,936 /
++14,168 / +14,184 B, stripped `.text` +8,320 / +11,024 / +11,024 B).
+`wasi` and `wasi-threads` grow more than `component` because they
+also link the WASI provider's `drop_handle` and destructor
+registrations; `wasi-threads` tracks `wasi` almost exactly (+32 B
+stripped file in release, +16 B in release-size) because the PR adds
+no threads-specific code. The baseline was re-measured on the merged
+code and updated as recorded above, following the procedure below.
 
 ### Threshold derivation
 

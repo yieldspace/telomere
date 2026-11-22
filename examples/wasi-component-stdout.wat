@@ -41,25 +41,31 @@
     (type (;4;) (func (param i32)))
     (import "cm32p2|wasi:cli/stdout@0.2" "get-stdout" (func $get-stdout (;0;) (type 0)))
     (import "cm32p2|wasi:io/streams@0.2" "[method]output-stream.blocking-write-and-flush" (func $write-and-flush (;1;) (type 1)))
+    (import "resource-drop" "output-stream" (func $drop (;2;) (type 4)))
     (memory (;0;) 1)
     (export "cm32p2_memory" (memory 0))
-    (export "cm32p2_realloc" (func 2))
-    (export "cm32p2_initialize" (func 3))
+    (export "cm32p2_realloc" (func 3))
+    (export "cm32p2_initialize" (func 4))
     (export "cm32p2|wasi:cli/run@0.2|run" (func $run))
-    (export "cm32p2|wasi:cli/run@0.2|run_post" (func 5))
-    (func (;2;) (type 2) (param i32 i32 i32 i32) (result i32)
+    (export "cm32p2|wasi:cli/run@0.2|run_post" (func 6))
+    (func (;3;) (type 2) (param i32 i32 i32 i32) (result i32)
       unreachable
     )
-    (func (;3;) (type 3))
-    (func $run (;4;) (type 0) (result i32)
+    (func (;4;) (type 3))
+    (func $run (;5;) (type 0) (result i32)
+      (local $stdout i32)
       call $get-stdout
+      local.set $stdout
+      local.get $stdout
       i32.const 0
       i32.const 41
       i32.const 1024
       call $write-and-flush
+      local.get $stdout
+      call $drop
       i32.const 0
     )
-    (func (;5;) (type 4) (param i32))
+    (func (;6;) (type 4) (param i32))
     (data (;0;) (i32.const 0) "hello from telomere (wasi 0.2 component)\0a")
     (@producers
       (processed-by "wit-component" "0.255.0")
@@ -98,44 +104,49 @@
     (export "get-stdout" (func $get-stdout))
   )
   (alias core export $wit-component-shim-instance "0" (core func $"indirect-cm32p2|wasi:io/streams@0.2-[method]output-stream.blocking-write-and-flush" (;1;)))
+  (core func $resource-drop-output-stream (;2;) (canon resource.drop $output-stream))
   (core instance $cm32p2|wasi:io/streams@0.2 (;2;)
     (export "[method]output-stream.blocking-write-and-flush" (func $"indirect-cm32p2|wasi:io/streams@0.2-[method]output-stream.blocking-write-and-flush"))
   )
-  (core instance $main (;3;) (instantiate $main
+  (core instance $resource-drop-instance (;3;)
+    (export "output-stream" (func $resource-drop-output-stream))
+  )
+  (core instance $main (;4;) (instantiate $main
       (with "cm32p2|wasi:cli/stdout@0.2" (instance $cm32p2|wasi:cli/stdout@0.2))
       (with "cm32p2|wasi:io/streams@0.2" (instance $cm32p2|wasi:io/streams@0.2))
+      (with "resource-drop" (instance $resource-drop-instance))
     )
   )
   (alias core export $main "cm32p2_memory" (core memory $memory (;0;)))
   (alias core export $wit-component-shim-instance "$imports" (core table $"shim table" (;0;)))
   (alias export $wasi:io/streams@0.2.6 "[method]output-stream.blocking-write-and-flush" (func $"[method]output-stream.blocking-write-and-flush" (;1;)))
-  (alias core export $main "cm32p2_realloc" (core func $realloc (;2;)))
-  (core func $"#core-func3 indirect-cm32p2|wasi:io/streams@0.2-[method]output-stream.blocking-write-and-flush" (@name "indirect-cm32p2|wasi:io/streams@0.2-[method]output-stream.blocking-write-and-flush") (;3;) (canon lower (func $"[method]output-stream.blocking-write-and-flush") (memory $memory)))
-  (core instance $fixup-args (;4;)
+  (alias core export $main "cm32p2_realloc" (core func $realloc (;3;)))
+  (core func $"#core-func3 indirect-cm32p2|wasi:io/streams@0.2-[method]output-stream.blocking-write-and-flush" (@name "indirect-cm32p2|wasi:io/streams@0.2-[method]output-stream.blocking-write-and-flush") (;4;) (canon lower (func $"[method]output-stream.blocking-write-and-flush") (memory $memory)))
+  (core instance $fixup-args (;5;)
     (export "$imports" (table $"shim table"))
     (export "0" (func $"#core-func3 indirect-cm32p2|wasi:io/streams@0.2-[method]output-stream.blocking-write-and-flush"))
   )
-  (core instance $fixup (;5;) (instantiate $wit-component-fixup
+  (core instance $fixup (;6;) (instantiate $wit-component-fixup
       (with "" (instance $fixup-args))
     )
   )
-  (alias core export $main "cm32p2_initialize" (core func $start (;4;)))
+  (alias core export $main "cm32p2_initialize" (core func $start (;5;)))
   (core module $start-shim-module (;3;)
     (type (;0;) (func))
     (import "" "" (func (;0;) (type 0)))
     (start 0)
   )
-  (core instance $start-shim-args (;6;)
+  (core instance $start-shim-args (;7;)
     (export "" (func $start))
   )
-  (core instance $start-shim-instance (;7;) (instantiate $start-shim-module
+  (core instance $start-shim-instance (;8;) (instantiate $start-shim-module
       (with "" (instance $start-shim-args))
     )
   )
   (type (;5;) (result))
   (type (;6;) (func (result 5)))
-  (alias core export $main "cm32p2|wasi:cli/run@0.2|run" (core func $cm32p2|wasi:cli/run@0.2|run (;5;)))
-  (alias core export $main "cm32p2|wasi:cli/run@0.2|run_post" (core func $cm32p2|wasi:cli/run@0.2|run_post (;6;)))
+  (alias core export $main "cm32p2|wasi:cli/run@0.2|run" (core func $cm32p2|wasi:cli/run@0.2|run (;6;)))
+  (alias core export $main "cm32p2|wasi:cli/run@0.2|run_post" (core func $cm32p2|wasi:cli/run@0.2|run_post (;7;)))
   (func $run (;2;) (type 6) (canon lift (core func $cm32p2|wasi:cli/run@0.2|run) (post-return $cm32p2|wasi:cli/run@0.2|run_post)))
   (component $wasi:cli/run@0.2.6-shim-component (;0;)
     (type (;0;) (result))

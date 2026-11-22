@@ -80,10 +80,10 @@ cargo run -- component examples/wasi-component-args.wasm ; echo $?
 
 ### WASI 0.2 stdout component command
 
-This companion fixture calls `wasi:cli/stdout@0.2.6.get-stdout` and then
-`wasi:io/streams@0.2.6.[method]output-stream.blocking-write-and-flush` through
-the canonical ABI. It deliberately does not call `canon resource.drop`, because
-dropping a host-provided resource is still unsupported (see below).
+This companion fixture calls `wasi:cli/stdout@0.2.6.get-stdout`, writes
+through `wasi:io/streams@0.2.6.[method]output-stream.blocking-write-and-flush`,
+and then releases the stream handle with `canon resource.drop`, exercising
+the full resource lifecycle through the canonical ABI.
 
 ```shell
 wasm-tools parse examples/wasi-component-stdout.wat -o examples/wasi-component-stdout.wasm
@@ -136,9 +136,9 @@ The implemented host functions are `args_sizes_get`, `args_get`,
 `proc_exit` (see `src/core_wasi_preview1.rs`). `wasi-preview1-hello.wat` stays
 inside that set.
 
-### The component sample cannot come from `wasm32-wasip2`
+### The component sample could not come from `wasm32-wasip2`
 
-One remaining issue, and one that is fixed:
+Two issues blocked it; both are fixed:
 
 1. **Export version (fixed).** A `wasm32-wasip2` build from current Rust
    imports the `@0.2.6` WASI interfaces but may export `wasi:cli/run` at an
@@ -156,14 +156,15 @@ One remaining issue, and one that is fixed:
        export not found: wasi:cli/run@0.2.6 (found incompatible version wasi:cli/run@0.3.0)
    ```
 
-2. **Host-provided resource destruction is still unavailable.** Components can
-   lower a WASI import whose result is an owned resource handle - for example
+2. **Host-provided resource destruction (fixed).** Components can lower a
+   WASI import whose result is an owned resource handle - for example
    `wasi:cli/stdout@0.2.6.get-stdout`, which returns
-   `own<wasi:io/streams.output-stream>` - and use that handle for stream
-   operations, as `wasi-component-stdout.wat` demonstrates. However, calling
-   `canon resource.drop` for a host-provided resource is not supported yet.
-   Keep fixtures that exercise this path free of an explicit resource drop until
-   lifecycle support lands.
+   `own<wasi:io/streams.output-stream>` - use that handle for stream
+   operations, and release it with `canon resource.drop`, as
+   `wasi-component-stdout.wat` demonstrates. The drop runs the host's
+   destructor for the resource type, so the provider state behind the
+   handle is released. Dropping the same handle twice, or a handle that
+   was never issued, traps, as the canonical ABI requires.
 
    Imports with non-resource results also continue to work, including ones that
    need linear memory and `realloc` such as
@@ -171,5 +172,7 @@ One remaining issue, and one that is fixed:
    `wasi-component-args.wat` uses. Unresolved imports are reported cleanly
    (`export not found: ...`).
 
-The remaining point is reproducible from a clean checkout with the commands
-above.
+With both fixed, a stock `wasm32-wasip2` hello-world (built with the
+current stable Rust toolchain) now runs end to end under the CLI, printing
+its output and exiting 0. The WAT fixtures above remain as the committed
+regression fixtures for these paths.

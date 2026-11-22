@@ -60,7 +60,8 @@ fn register_sync(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
     filesystem::add_to_linker_sync(linker, Rc::clone(&host));
     io::add_to_linker_sync(linker, Rc::clone(&host));
     random::add_to_linker_sync(linker, Rc::clone(&host));
-    sockets::add_to_linker_sync(linker, host);
+    sockets::add_to_linker_sync(linker, Rc::clone(&host));
+    register_resource_drops(linker, host);
 }
 
 fn register_async(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
@@ -69,5 +70,38 @@ fn register_async(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
     filesystem::add_to_linker_async(linker, Rc::clone(&host));
     io::add_to_linker_async(linker, Rc::clone(&host));
     random::add_to_linker_async(linker, Rc::clone(&host));
-    sockets::add_to_linker_async(linker, host);
+    sockets::add_to_linker_async(linker, Rc::clone(&host));
+    register_resource_drops(linker, host);
+}
+
+/// Registers destructors for the resource types this provider hands out, so
+/// a guest's `canon resource.drop` releases the provider state behind the
+/// handle instead of trapping.
+///
+/// Every handle is allocated from one counter in [WasiState] and lives in
+/// exactly one table, so one release operation serves every resource type.
+/// The terminal-input/terminal-output resources are omitted: the provider
+/// never issues handles for them. Sockets resources are omitted for the
+/// same reason — their functions are unimplemented and issue no handles.
+fn register_resource_drops(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
+    const RESOURCE_TYPES: &[(&str, &str)] = &[
+        ("wasi:io/error@0.2.6", "error"),
+        ("wasi:io/poll@0.2.6", "pollable"),
+        ("wasi:io/streams@0.2.6", "input-stream"),
+        ("wasi:io/streams@0.2.6", "output-stream"),
+        ("wasi:filesystem/types@0.2.6", "descriptor"),
+        ("wasi:filesystem/types@0.2.6", "directory-entry-stream"),
+    ];
+    for &(instance, resource) in RESOURCE_TYPES {
+        let host = Rc::clone(&host);
+        linker.register_import_resource_drop(instance, resource, move |_store, handle| {
+            if host.state.drop_handle(handle) {
+                Ok(())
+            } else {
+                Err(ComponentError::Trap(format!(
+                    "unknown wasi resource handle {handle}"
+                )))
+            }
+        });
+    }
 }
