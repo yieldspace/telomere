@@ -1,8 +1,6 @@
-#![cfg(not(debug_assertions))]
-
 use telomere::{IoReadBinaryReader, WasmParser, WasmParserError, MAX_CONTROL_NESTING_DEPTH};
 
-const RELEASE_STACK_BUDGET_BYTES: usize = 512 * 1024;
+const STACK_BUDGET_BYTES: usize = 512 * 1024;
 const NESTED_BLOCKS_513: &[u8] =
     include_bytes!("../../../fuzz/regressions/parse_core_module/nested-blocks-513.bin");
 
@@ -121,12 +119,13 @@ fn parser_enforces_the_limit_for_mixed_block_loop_and_if_nesting() {
 }
 
 #[test]
-fn parser_accepts_control_nesting_at_the_limit_on_the_release_stack_budget() {
+fn parser_accepts_control_nesting_at_the_limit_on_the_documented_stack_budget() {
     let module = nested_block_module(MAX_CONTROL_NESTING_DEPTH);
     std::thread::Builder::new()
-        .stack_size(RELEASE_STACK_BUDGET_BYTES)
-        // #154 leaves debug `parse_inst` frames around 130 KiB, so this release-only
-        // test verifies the documented optimized-build stack budget instead.
+        .stack_size(STACK_BUDGET_BYTES)
+        // The dev-profile contract in the workspace Cargo.toml compiles the
+        // telomere crate optimized in dev builds too (#154), so this stack
+        // budget is verified in both profiles.
         .spawn(move || parse_module(&module))
         .expect("spawning parser thread")
         .join()
