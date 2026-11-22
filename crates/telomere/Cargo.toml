@@ -15,7 +15,7 @@ thiserror = "2.0.11"
 tracing = { version = "0.1.41", features = ["release_max_level_off"] }
 telomere-macros.workspace = true
 futures = "0.3.31"
-tokio = { workspace = true, optional = true, default-features = false, features = ["sync", "time"] }
+tokio = { workspace = true, optional = true, default-features = false, features = ["sync"] }
 parking_lot = "0.12.5"
 libc.workspace = true
 smallvec.workspace = true
