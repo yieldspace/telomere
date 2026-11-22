@@ -52,7 +52,11 @@ fn validate_const_expr_type(
                 .get(idx as usize)
                 .ok_or(WasmParserError::UnknownGlobal)?;
             if gt.1 != Mut::Const {
-                Err(WasmParserError::InvalidGlobalAccess)?;
+                // A constant expression may only read immutable globals;
+                // the spec classifies a mutable read as a
+                // constant-expression violation (global.get is 0x23), not
+                // as the global.set immutability error.
+                Err(WasmParserError::InvalidConstInstruction(0x23))?;
             }
             assert_valtype(expected, Some(gt.0))?;
         }
@@ -196,25 +200,25 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let desc = match ty {
             0x00 => {
                 if functions.get(idx as usize).is_none() {
-                    return Err(WasmParserError::UnknownExport);
+                    return Err(WasmParserError::InvalidFuncIdx(FuncIdx(idx)));
                 }
                 ExportDesc::Func(FuncIdx(idx))
             }
             0x01 => {
                 if tables.get(idx as usize).is_none() {
-                    return Err(WasmParserError::UnknownExport);
+                    return Err(WasmParserError::InvalidTableIndex(idx));
                 }
                 ExportDesc::Table(TableIdx(idx))
             }
             0x02 => {
                 if mems.get(idx as usize).is_none() {
-                    return Err(WasmParserError::UnknownExport);
+                    return Err(WasmParserError::InvalidMemIdx(idx));
                 }
                 ExportDesc::Mem(MemIdx(idx))
             }
             0x03 => {
                 if globals.get(idx as usize).is_none() {
-                    return Err(WasmParserError::UnknownExport);
+                    return Err(WasmParserError::InvalidGlobalIndex(idx));
                 }
                 ExportDesc::Global(GlobalIdx(idx))
             }

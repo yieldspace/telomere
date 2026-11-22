@@ -35,10 +35,10 @@ impl TypeChecker {
             .blocks
             .len()
             .checked_sub(1 + idx)
-            .ok_or(WasmParserError::InvalidStackValTypeAny)?;
+            .ok_or(WasmParserError::UnknownLabel)?;
         self.blocks
             .get(stack_idx)
-            .ok_or(WasmParserError::InvalidStackValTypeAny)
+            .ok_or(WasmParserError::UnknownLabel)
             .map(|(a, b, c)| (a, b, c))
     }
     pub fn current_block(&self) -> Result<(&BlockKind, &BlockType, &usize)> {

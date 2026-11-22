@@ -1,8 +1,9 @@
 use crate::{
     common::stack::LaneType,
     runtime::vm::{
-        compute_memory_offset, store_internal_local, store_internal_local_indexed,
-        store_internal_shared, store_internal_shared_indexed, StoreBytes,
+        compute_memory_offset, quiet_nan_f32, quiet_nan_f64, store_internal_local,
+        store_internal_local_indexed, store_internal_shared, store_internal_shared_indexed,
+        StoreBytes,
     },
 };
 use telomere_macros::define_simd_operation;
@@ -2964,33 +2965,60 @@ define_unary_simd_operation!(pmax, [f64x2], |a, b| {
 });
 
 define_binary_simd_operation!(abs, [f64x2, f32x4, i32x4, i8x16, i16x8], |a| a.abs());
-define_binary_simd_operation!(ceil, [f64x2, f32x4], |a| a.ceil());
-define_binary_simd_operation!(floor, [f64x2, f32x4], |a| a.floor());
+define_binary_simd_operation!(ceil, [f32x4], |a| {
+    let arr = a.to_array();
+    f32x4::from([
+        quiet_nan_f32(arr[0].ceil()),
+        quiet_nan_f32(arr[1].ceil()),
+        quiet_nan_f32(arr[2].ceil()),
+        quiet_nan_f32(arr[3].ceil()),
+    ])
+});
+define_binary_simd_operation!(ceil, [f64x2], |a| {
+    let arr = a.to_array();
+    f64x2::from([quiet_nan_f64(arr[0].ceil()), quiet_nan_f64(arr[1].ceil())])
+});
+define_binary_simd_operation!(floor, [f32x4], |a| {
+    let arr = a.to_array();
+    f32x4::from([
+        quiet_nan_f32(arr[0].floor()),
+        quiet_nan_f32(arr[1].floor()),
+        quiet_nan_f32(arr[2].floor()),
+        quiet_nan_f32(arr[3].floor()),
+    ])
+});
+define_binary_simd_operation!(floor, [f64x2], |a| {
+    let arr = a.to_array();
+    f64x2::from([quiet_nan_f64(arr[0].floor()), quiet_nan_f64(arr[1].floor())])
+});
 define_binary_simd_operation!(trunc, [f32x4], |a| {
     let arr = a.to_array();
     f32x4::from([
-        arr[0].trunc(),
-        arr[1].trunc(),
-        arr[2].trunc(),
-        arr[3].trunc(),
+        quiet_nan_f32(arr[0].trunc()),
+        quiet_nan_f32(arr[1].trunc()),
+        quiet_nan_f32(arr[2].trunc()),
+        quiet_nan_f32(arr[3].trunc()),
     ])
 });
 define_binary_simd_operation!(trunc, [f64x2], |a| {
     let arr = a.to_array();
-    f64x2::from([arr[0].trunc(), arr[1].trunc()])
+    f64x2::from([quiet_nan_f64(arr[0].trunc()), quiet_nan_f64(arr[1].trunc())])
 });
 define_binary_simd_operation!(nearest, [f32x4], |a| {
     let arr = a.to_array();
     f32x4::from([
-        arr[0].round_ties_even(),
-        arr[1].round_ties_even(),
-        arr[2].round_ties_even(),
-        arr[3].round_ties_even(),
+        quiet_nan_f32(arr[0].round_ties_even()),
+        quiet_nan_f32(arr[1].round_ties_even()),
+        quiet_nan_f32(arr[2].round_ties_even()),
+        quiet_nan_f32(arr[3].round_ties_even()),
     ])
 });
 define_binary_simd_operation!(nearest, [f64x2], |a| {
     let arr = a.to_array();
-    f64x2::from([arr[0].round_ties_even(), arr[1].round_ties_even()])
+    f64x2::from([
+        quiet_nan_f64(arr[0].round_ties_even()),
+        quiet_nan_f64(arr[1].round_ties_even()),
+    ])
 });
 
 /// WebAssembly `i64x2.abs`.
@@ -3149,7 +3177,19 @@ pub unsafe fn i32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     vm_try!(ctx.stack.push(a.bitxor(-i32x4::ONE) + i32x4::ONE));
     call_next(tail_code, 0, ctx)
 }
-define_binary_simd_operation!(sqrt, [f64x2, f32x4], |a| a.sqrt());
+define_binary_simd_operation!(sqrt, [f32x4], |a| {
+    let arr = a.to_array();
+    f32x4::from([
+        quiet_nan_f32(arr[0].sqrt()),
+        quiet_nan_f32(arr[1].sqrt()),
+        quiet_nan_f32(arr[2].sqrt()),
+        quiet_nan_f32(arr[3].sqrt()),
+    ])
+});
+define_binary_simd_operation!(sqrt, [f64x2], |a| {
+    let arr = a.to_array();
+    f64x2::from([quiet_nan_f64(arr[0].sqrt()), quiet_nan_f64(arr[1].sqrt())])
+});
 use std::ops::Not;
 use wide::CmpEq;
 use wide::CmpGe;
