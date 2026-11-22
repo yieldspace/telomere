@@ -115,6 +115,12 @@ jobs:
       - name: Test feature wiring checker
         run: python3 tools/test_check_feature_wiring.py
 
+      - name: Check JIT test coverage
+        run: python3 tools/check-jit-test-coverage.py
+
+      - name: Test JIT test coverage checker
+        run: python3 tools/test_check_jit_test_coverage.py
+
       - name: Assert minimal embedder graph has no Tokio
         shell: bash
         run: |
@@ -176,10 +182,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-          - target: x86_64-apple-darwin
-            os: macos-15-intel
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -202,6 +206,9 @@ jobs:
 
       - name: JIT regression tests
         run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test jit
+
+      - name: JIT-gated tests outside the jit and wast targets
+        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test trap_info --test metering
 
       - name: JIT CLI smoke test
         shell: bash
