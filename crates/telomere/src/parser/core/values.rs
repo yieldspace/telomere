@@ -68,9 +68,14 @@ pub fn parse_name<R: BinaryReader>(reader: &mut R) -> Result<(usize, String)> {
         String::from_utf8(name).map_err(|_| WasmParserError::InvalidNameEncoding)?,
     ))
 }
+/// Parses a memarg. `natural_align_log2` is the base-2 logarithm of the
+/// instruction's natural alignment in bytes; the encoded `align` field is
+/// itself a base-2 logarithm, and the spec requires it not to exceed the
+/// natural alignment's logarithm ("alignment must not be larger than
+/// natural").
 pub fn parse_memarg<R: BinaryReader>(
     reader: &mut R,
-    natural_align: u32,
+    natural_align_log2: u32,
 ) -> Result<(usize, u32, MemArg)> {
     let (len, flags) = parse_u32(reader)?;
     let (len2, memidx, align) = if flags >= 0x40 {
@@ -79,7 +84,7 @@ pub fn parse_memarg<R: BinaryReader>(
     } else {
         (0, 0, flags)
     };
-    if align > natural_align {
+    if align > natural_align_log2 {
         Err(WasmParserError::InvalidAlignment(align))?;
     }
     let (len3, offset) = parse_u32(reader)?;

@@ -1,7 +1,7 @@
 use super::canonical::{
     component_value_to_direct_wasm, direct_wasm_to_component_value, lift_component_args,
     lift_component_results, lower_component_args, lower_component_results,
-    lowered_indirect_result_area,
+    lowered_indirect_result_area, track_host_owned_results,
 };
 use super::*;
 
@@ -88,11 +88,13 @@ impl HostBinding {
                 func_type,
                 options,
                 program,
+                shared,
                 ..
             } => {
                 let result_area = lowered_indirect_result_area(func_type, args, program)?;
                 let component_args = lift_component_args(func_type, args, options, program, store)?;
                 let results = callable.call_sync(store, &component_args)?;
+                track_host_owned_results(func_type, &results, program, shared);
                 lower_component_results(func_type, &results, options, program, store, result_area)
             }
             HostBinding::ResourceNew {
@@ -133,11 +135,28 @@ impl HostBinding {
                         ))
                     }
                 };
-                let (rep, destructor) = shared.drop_resource(*resource, handle)?;
-                if let Some(dtor) = destructor {
-                    dtor.call_sync(store, &[WasmValue::I32(rep)])?;
+                match shared.drop_resource(*resource, handle) {
+                    Ok((rep, destructor)) => {
+                        shared.forget_host_resource(handle);
+                        if let Some(dtor) = destructor {
+                            dtor.call_sync(store, &[WasmValue::I32(rep)])?;
+                        }
+                        Ok(Vec::new())
+                    }
+                    Err(error) => {
+                        // Not a locally created resource. If this is a
+                        // tracked host-provided handle with a registered
+                        // destructor, release it through the host; a double
+                        // drop or a handle that was never issued is not
+                        // tracked and traps with the same error as a local
+                        // one.
+                        if shared.drop_host_resource(store, *resource, handle)? {
+                            Ok(Vec::new())
+                        } else {
+                            Err(error)
+                        }
+                    }
                 }
-                Ok(Vec::new())
             }
             HostBinding::ResourceRep {
                 resource, shared, ..
@@ -191,6 +210,83 @@ impl SharedState {
             .and_then(|records| records.remove(&handle))
             .map(|record| (record.rep, record.destructor))
             .ok_or_else(|| ComponentError::Trap(format!("resource handle {handle} is invalid")))
+    }
+
+    /// Records a handle that has entered guest code through a lowered call,
+    /// under the resource type the producing function declared.
+    ///
+    /// The declared type is not necessarily the identity a later
+    /// `canon resource.drop` names: when one imported interface re-exports
+    /// another interface's resource (for example `wasi:cli/stdout`
+    /// re-exporting `wasi:io/streams`' `output-stream`), the decoder assigns
+    /// each import declaration its own `ResourceId` for the same underlying
+    /// resource. Drop therefore looks handles up across all tracked types
+    /// (see `drop_host_resource`).
+    pub(super) fn track_host_resource_handle(&self, resource: ResourceId, handle: u32) {
+        self.host_resources
+            .borrow_mut()
+            .entry(resource)
+            .or_default()
+            .insert(handle);
+    }
+
+    fn host_resource_drop(&self, resource: ResourceId) -> Option<ResourceDropFn> {
+        self.host_resource_drops.borrow().get(&resource).cloned()
+    }
+
+    /// Removes a live host-provided handle, returning whether it was live.
+    fn take_host_resource(&self, resource: ResourceId, handle: u32) -> bool {
+        self.host_resources
+            .borrow_mut()
+            .get_mut(&resource)
+            .is_some_and(|handles| handles.remove(&handle))
+    }
+
+    /// Forgets every tracked host entry for `handle` (used when the handle
+    /// turned out to name a locally created resource instead).
+    fn forget_host_resource(&self, handle: u32) {
+        for handles in self.host_resources.borrow_mut().values_mut() {
+            handles.remove(&handle);
+        }
+    }
+
+    /// Releases a host-provided handle through a registered destructor.
+    ///
+    /// Returns `Ok(false)` when the handle is not tracked, or when neither
+    /// the type named by the drop nor the type the handle was tracked under
+    /// has a registered destructor; the caller then reports the handle as
+    /// invalid, exactly as for a locally created resource. The tracked
+    /// entry is consumed only when a destructor actually runs, so a double
+    /// drop traps instead of releasing twice.
+    fn drop_host_resource(
+        &self,
+        store: &Store,
+        resource: ResourceId,
+        handle: u32,
+    ) -> Result<bool, ComponentError> {
+        let tracked = {
+            let live = self.host_resources.borrow();
+            if live.get(&resource).is_some_and(|h| h.contains(&handle)) {
+                Some(resource)
+            } else {
+                live.iter()
+                    .find(|(_, handles)| handles.contains(&handle))
+                    .map(|(tracked, _)| *tracked)
+            }
+        };
+        let Some(tracked) = tracked else {
+            return Ok(false);
+        };
+        let Some(drop_fn) = self
+            .host_resource_drop(resource)
+            .or_else(|| self.host_resource_drop(tracked))
+        else {
+            return Ok(false);
+        };
+        self.take_host_resource(tracked, handle);
+        let released = run_ready_future_sync(drop_fn(store, handle), "host resource drop")?;
+        released?;
+        Ok(true)
     }
 
     fn resource_rep(&self, resource: ResourceId, handle: u32) -> Result<i32, ComponentError> {

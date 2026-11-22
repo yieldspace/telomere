@@ -1520,6 +1520,15 @@ pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext
     }
     #[cfg(feature = "vm-diagnostics")]
     vm_try!(check_dispatch_budget(tail_code, ctx));
+    // This store is load-bearing and must stay per-dispatch (#185 audit):
+    // on any non-`Success` result the scheduler hands `ctx.cont` to
+    // `capture_trap_context` as the innermost trapping pc, so every
+    // handler's trap report assumes it names the last dispatched
+    // instruction; handlers that suspend overwrite it with their exact
+    // resume pc before returning. Dropping it measured ~+5% CoreMark
+    // iterations/sec (paired A/B on the baseline-harness binaries), but
+    // that gain is not landable while trap capture depends on it:
+    // `VMResult` carries no pc that could replace the channel.
     ctx.cont = tail_code;
     let op = (*tail_code).op;
     op(tail_code.offset(1), ctx)

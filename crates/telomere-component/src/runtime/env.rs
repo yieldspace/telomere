@@ -20,6 +20,7 @@ fn instantiate_sync(
 ) -> Result<RuntimeInstance, ComponentError> {
     let program = Rc::new(program);
     let shared = Rc::new(SharedState::default());
+    register_host_resource_drops(&program, linker, &shared);
     let env = Rc::new(RuntimeEnv::new(
         program.clone(),
         linker.clone(),
@@ -45,6 +46,46 @@ fn instantiate_sync(
     }
 
     Ok(RuntimeInstance { root })
+}
+
+/// Maps each resource type exported by a root-level imported instance to
+/// the destructor the host registered for it, keyed by `ResourceId`.
+///
+/// The decoder retains the declared type of every instance import, so the
+/// resource exports of the declared instance type identify exactly which
+/// `ResourceId`s a guest-side `canon resource.drop` can name. Types from
+/// instances the host did not register a destructor for stay unmapped and
+/// keep trapping on drop, as before.
+fn register_host_resource_drops(
+    program: &ComponentProgram,
+    linker: &ComponentLinker,
+    shared: &SharedState,
+) {
+    use crate::ir::types::InstanceExportType;
+    use crate::ir::ComponentImport;
+
+    for (name, import) in &program.root.imports {
+        let ComponentImport::Instance(type_id) = import else {
+            continue;
+        };
+        let Some(Type::Instance(instance_type)) = program.get_type(*type_id) else {
+            continue;
+        };
+        for (export_name, export) in &instance_type.exports {
+            let InstanceExportType::Type(export_type_id) = export else {
+                continue;
+            };
+            let Ok(resource) = runtime_resource_id(program, shared, *export_type_id) else {
+                continue;
+            };
+            if let Some(drop_fn) = linker.resolve_import_resource_drop(name, export_name) {
+                shared
+                    .host_resource_drops
+                    .borrow_mut()
+                    .insert(resource, drop_fn);
+            }
+        }
+    }
 }
 
 fn materialize_defined_core_instances(
@@ -408,6 +449,7 @@ impl RuntimeEnv {
                     options,
                     program: self.program.clone(),
                     signature: signature.clone(),
+                    shared: self.shared.clone(),
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceNew { type_id })) => {

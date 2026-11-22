@@ -431,8 +431,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         Ok(())
     }
 
-    fn parse_memarg(&mut self, natural_align: u32) -> Result<(usize, u32, MemArg)> {
-        values::parse_memarg(self.reader, natural_align)
+    fn parse_memarg(&mut self, natural_align_log2: u32) -> Result<(usize, u32, MemArg)> {
+        values::parse_memarg(self.reader, natural_align_log2)
     }
 
     // #202: Atomic parsing is intentionally dormant without the optional threads parser.
@@ -1457,7 +1457,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x28 => {
                 trace!("parse_op_i32_load");
-                let (len, memidx, memarg) = self.parse_memarg(4)?;
+                let (len, memidx, memarg) = self.parse_memarg(2)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1473,7 +1473,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x29 => {
                 trace!("parse_op_i64_load");
-                let (len, memidx, memarg) = self.parse_memarg(8)?;
+                let (len, memidx, memarg) = self.parse_memarg(3)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1489,7 +1489,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x2A => {
                 trace!("parse_op_f32_load");
-                let (len, memidx, memarg) = self.parse_memarg(4)?;
+                let (len, memidx, memarg) = self.parse_memarg(2)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1505,7 +1505,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x2B => {
                 trace!("parse_op_f64_load");
-                let (len, memidx, memarg) = self.parse_memarg(8)?;
+                let (len, memidx, memarg) = self.parse_memarg(3)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1522,7 +1522,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x2C => {
                 trace!("parse_op_i32_load8_s");
-                let (len, memidx, memarg) = self.parse_memarg(1)?;
+                let (len, memidx, memarg) = self.parse_memarg(0)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1539,7 +1539,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x2D => {
                 trace!("parse_op_i32_load8_u");
-                let (len, memidx, memarg) = self.parse_memarg(1)?;
+                let (len, memidx, memarg) = self.parse_memarg(0)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1556,7 +1556,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x2E => {
                 trace!("parse_op_i32_load16_s");
-                let (len, memidx, memarg) = self.parse_memarg(2)?;
+                let (len, memidx, memarg) = self.parse_memarg(1)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1572,7 +1572,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x2F => {
                 trace!("parse_op_i32_load16_u");
-                let (len, memidx, memarg) = self.parse_memarg(2)?;
+                let (len, memidx, memarg) = self.parse_memarg(1)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1588,7 +1588,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x30 => {
                 trace!("parse_op_i64_load8_s");
-                let (len, memidx, memarg) = self.parse_memarg(1)?;
+                let (len, memidx, memarg) = self.parse_memarg(0)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1604,7 +1604,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x31 => {
                 trace!("parse_op_i64_load8_u");
-                let (len, memidx, memarg) = self.parse_memarg(1)?;
+                let (len, memidx, memarg) = self.parse_memarg(0)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1620,7 +1620,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x32 => {
                 trace!("parse_op_i64_load16_s");
-                let (len, memidx, memarg) = self.parse_memarg(2)?;
+                let (len, memidx, memarg) = self.parse_memarg(1)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1636,7 +1636,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x33 => {
                 trace!("parse_op_i64_load16_u");
-                let (len, memidx, memarg) = self.parse_memarg(2)?;
+                let (len, memidx, memarg) = self.parse_memarg(1)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1652,7 +1652,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x34 => {
                 trace!("parse_op_i64_load32_s");
-                let (len, memidx, memarg) = self.parse_memarg(4)?;
+                let (len, memidx, memarg) = self.parse_memarg(2)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1669,7 +1669,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x35 => {
                 trace!("parse_op_i64_load32_u");
-                let (len, memidx, memarg) = self.parse_memarg(4)?;
+                let (len, memidx, memarg) = self.parse_memarg(2)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1686,7 +1686,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x36 => {
                 trace!("parse_op_i32_store");
-                let (len, memidx, memarg) = self.parse_memarg(4)?;
+                let (len, memidx, memarg) = self.parse_memarg(2)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1702,7 +1702,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x37 => {
                 trace!("parse_op_i64_store");
-                let (len, memidx, memarg) = self.parse_memarg(8)?;
+                let (len, memidx, memarg) = self.parse_memarg(3)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1719,7 +1719,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x38 => {
                 trace!("parse_op_f32_store");
-                let (len, memidx, memarg) = self.parse_memarg(4)?;
+                let (len, memidx, memarg) = self.parse_memarg(2)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1735,7 +1735,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x39 => {
                 trace!("parse_op_f64_store");
-                let (len, memidx, memarg) = self.parse_memarg(8)?;
+                let (len, memidx, memarg) = self.parse_memarg(3)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1752,7 +1752,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x3A => {
                 trace!("parse_op_i32_store8");
-                let (len, memidx, memarg) = self.parse_memarg(1)?;
+                let (len, memidx, memarg) = self.parse_memarg(0)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1769,7 +1769,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x3B => {
                 trace!("parse_op_i32_store16");
-                let (len, memidx, memarg) = self.parse_memarg(2)?;
+                let (len, memidx, memarg) = self.parse_memarg(1)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1785,7 +1785,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x3C => {
                 trace!("parse_op_i64_store8");
-                let (len, memidx, memarg) = self.parse_memarg(1)?;
+                let (len, memidx, memarg) = self.parse_memarg(0)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1801,7 +1801,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x3D => {
                 trace!("parse_op_i64_store16");
-                let (len, memidx, memarg) = self.parse_memarg(2)?;
+                let (len, memidx, memarg) = self.parse_memarg(1)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -1818,7 +1818,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x3E => {
                 trace!("parse_op_i64_store32");
-                let (len, memidx, memarg) = self.parse_memarg(4)?;
+                let (len, memidx, memarg) = self.parse_memarg(2)?;
                 self.push_memarg_instruction(
                     instrs,
                     memidx,
@@ -3078,6 +3078,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     12 => {
                         let (len2, elemidx) = self.parse_u32()?;
                         let (len3, tableidx) = self.parse_u32()?;
+                        // Validation reports an unknown table before an
+                        // unknown element segment when both are invalid.
+                        if self.tables.get(tableidx as usize).is_none() {
+                            Err(WasmParserError::InvalidTableIndex(tableidx))?;
+                        }
                         let elem = self
                             .elems
                             .get(elemidx as usize)

@@ -197,6 +197,133 @@ pub(super) fn lower_component_results(
     }
 }
 
+/// Records the handles of resources in a lowered function's result, so a
+/// later `canon resource.drop` can release the host-provided ones.
+///
+/// Handles are recorded under the resource type the producing function
+/// declared; see `SharedState::track_host_resource_handle` for why drop
+/// cannot rely on that identity matching. Borrows are not owned by the
+/// guest and are never recorded.
+pub(super) fn track_host_owned_results(
+    func_type: &FuncType,
+    results: &[ComponentValue],
+    program: &ComponentProgram,
+    shared: &SharedState,
+) {
+    let (Some(result_ty), Some(value)) = (&func_type.result, results.first()) else {
+        return;
+    };
+    track_host_owned_value(result_ty, value, program, shared);
+}
+
+fn track_host_owned_value(
+    ty: &ValType,
+    value: &ComponentValue,
+    program: &ComponentProgram,
+    shared: &SharedState,
+) {
+    let ValType::Type(type_id) = ty else {
+        return;
+    };
+    track_host_owned_defined(*type_id, value, program, shared);
+}
+
+fn track_host_owned_defined(
+    type_id: TypeId,
+    value: &ComponentValue,
+    program: &ComponentProgram,
+    shared: &SharedState,
+) {
+    let Some(ty) = program.get_type(type_id) else {
+        return;
+    };
+    match ty {
+        Type::Resource(_) => {
+            if let ComponentValue::Own(handle) = value {
+                if let Ok(resource) = runtime_resource_id(program, shared, type_id) {
+                    shared.track_host_resource_handle(resource, *handle);
+                }
+            }
+        }
+        Type::DefVal(def) => match def {
+            DefValType::Own(_) => {
+                if let ComponentValue::Own(handle) = value {
+                    if let Ok(resource) = runtime_resource_id(program, shared, type_id) {
+                        shared.track_host_resource_handle(resource, *handle);
+                    }
+                }
+            }
+            DefValType::Record(fields) => {
+                let values: Vec<&ComponentValue> = match value {
+                    ComponentValue::Tuple(values) if is_tuple_fields(fields) => {
+                        values.iter().collect()
+                    }
+                    ComponentValue::Record(entries) => {
+                        let mut values = Vec::with_capacity(fields.len());
+                        for field in fields {
+                            match entries.iter().find(|(name, _)| name == &field.label.0) {
+                                Some((_, field_value)) => values.push(field_value),
+                                None => return,
+                            }
+                        }
+                        values
+                    }
+                    _ => return,
+                };
+                for (field, field_value) in fields.iter().zip(values) {
+                    track_host_owned_value(&field.ty, field_value, program, shared);
+                }
+            }
+            DefValType::List(elem, _) => {
+                if let ComponentValue::List(items) = value {
+                    for item in items {
+                        track_host_owned_value(elem, item, program, shared);
+                    }
+                }
+            }
+            DefValType::Variant(cases) => {
+                let (case, payload) = match value {
+                    ComponentValue::Variant { case, value } => (case.as_str(), value.as_deref()),
+                    ComponentValue::Enum(case) => (case.as_str(), None),
+                    ComponentValue::Option(value) if is_option_cases(cases) => match value {
+                        Some(inner) => ("some", Some(inner.as_ref())),
+                        None => ("none", None),
+                    },
+                    ComponentValue::Result { ok, err } if is_result_cases(cases) => {
+                        match (ok, err) {
+                            (Some(inner), None) => ("ok", Some(inner.as_ref())),
+                            (None, Some(inner)) => ("err", Some(inner.as_ref())),
+                            _ => return,
+                        }
+                    }
+                    _ => return,
+                };
+                if let Some(payload) = payload {
+                    if let Some(case) = cases.iter().find(|c| c.label.0.as_str() == case) {
+                        if let Some(case_ty) = &case.ty {
+                            track_host_owned_value(case_ty, payload, program, shared);
+                        }
+                    }
+                }
+            }
+            DefValType::Primitive(_) | DefValType::Flags(_) | DefValType::Borrow(_) => {}
+        },
+        Type::Generic(generic) => match generic.bound {
+            crate::ir::types::GenericBound::Eq(inner) => {
+                track_host_owned_defined(inner, value, program, shared);
+            }
+            crate::ir::types::GenericBound::Sub => {
+                if let ComponentValue::Own(handle) = value {
+                    if let Ok(resource) = runtime_resource_id(program, shared, type_id) {
+                        shared.track_host_resource_handle(resource, *handle);
+                    }
+                }
+            }
+        },
+        Type::Func(_) | Type::Component(_) | Type::Instance(_) => {}
+    }
+}
+
 pub(super) fn lowered_indirect_result_area(
     func_type: &FuncType,
     args: &[WasmValue],

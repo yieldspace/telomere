@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions 'Embedder footprint' runs for PR #251 (branch fix/177-interrupt-wakes-atomic-wait at commit 871ecfabacc14d43045d295960fbd062c24f53b8, the merge of the PR head 848e64b853e66e1cf769c2321ef17adbfe4b2e29 with main e46cd8d66dfcf415f5a0a9521a52e70f5a9cf376; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45051812925 and 45051827578 against the branch and pull-request run 45051722003, which built the same merge tree, produced byte-identical sizes for every gated series",
-    "commit": "871ecfabacc14d43045d295960fbd062c24f53b8",
+    "summary": "GitHub Actions 'Embedder footprint' runs for PR #254 (branch fix/131-wast-harness-assertions at commit fb01564eb0d7f252d3b24da100b325d5e7d56796, the merge of the PR head 3420455b6ee3a6614cc397fc8b4023c28c20bdbc with main 4d3b77441d337a6ec8c2586c1e856b1f749be87c; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45060131072 and 45060142935 against the branch and pull-request run 45060031215, which built the same merge tree, produced byte-identical sizes for every gated series",
+    "commit": "fb01564eb0d7f252d3b24da100b325d5e7d56796",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45051812925,
-      45051827578
+      45060131072,
+      45060142935
     ],
     "cross_check_run_ids": [
-      45051722003
+      45060031215
     ],
-    "derivation": "Re-baseline for PR #251 (#177, interrupt() does not wake a guest parked in an indefinite memory.atomic.wait). The PR adds the interrupt wake path to the telomere library: a fourth waiter state (INTERRUPTED) with a CAS claim and wait_result_interruptible racing notify / timeout / interrupt in crates/telomere/src/common/memory.rs, the Interrupted completion plumbing in runtime/memory_effect.rs and runtime/scheduler.rs, and - compiled only under the threads feature - the broadcast Notify in common/metering.rs (MeteringState gains interrupt_notify, MeteringHandle::interrupt() broadcasts after the flag store, and wait_for_interrupt registers interest and re-checks the flag so no wakeup is lost). The library is linked into every embedder configuration except baseline, so the gated growth is nearly uniform (release stripped .text +608 B in core, component, wasi, core-nosimd and core-jit, stripped file +1,016 B with component +1,000 B; release-size stripped .text +272 B with core-jit +256 B, stripped file +392..+424 B), the baseline configuration is unchanged, and wasi-threads grows most because the threads-only metering broadcast path lands there (release +3,520 B stripped file / +2,384 B stripped .text; release-size +1,760 B / +992 B). 24 of 28 gated series changed; the 4 unchanged series are the baseline configuration's. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, 'Size regression gate (#164)'."
+    "derivation": "Re-baseline for PR #254 (#131, wast harness spec fidelity). The PR strengthens the wast test harness (trap/invalid reason matching, result arity, bit-exact NaN patterns) and fixes the real defects that strengthening surfaced, all of them in the telomere core library: the parser's memarg alignment check is unified on natural_align_log2 (values.rs, instruction.rs, simd_instruction.rs), the type checker now produces UnknownLabel, unknown export indices return their per-kind error variants (parser.rs), and the interpreter's rounding paths quiet signaling NaNs (runtime/vm/numeric.rs, simd.rs, superinstructions.rs). The harness changes themselves are test-only and are not linked into the embedder. Because the core library is linked into every embedder configuration except baseline, the baseline configuration is byte-identical in both profiles (4 of 28 gated series unchanged) and the growth is near-uniform across the library configurations: in the release profile, stripped file +640..+880 B and stripped .text +624..+832 B; in the release-size profile, stripped file +528..+2,000 B and stripped .text +576..+2,048 B. core-nosimd grows the least in release-size (+528 B / +576 B) because the SIMD parser and runtime paths it excludes carry part of the change. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, 'Size regression gate (#164)'."
   },
   "thresholds": {
     "release": {
@@ -30,62 +30,62 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1465472,
-          "threshold": 1465472
+          "baseline": 1466280,
+          "threshold": 1466280
         },
         "stripped_text_bytes": {
-          "baseline": 1116631,
-          "threshold": 1116631
+          "baseline": 1117239,
+          "threshold": 1117239
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2434656,
-          "threshold": 2434656
+          "baseline": 2452544,
+          "threshold": 2452544
         },
         "stripped_text_bytes": {
-          "baseline": 1943703,
-          "threshold": 1943703
+          "baseline": 1959303,
+          "threshold": 1959303
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2772760,
-          "threshold": 2772760
+          "baseline": 2798520,
+          "threshold": 2798520
         },
         "stripped_text_bytes": {
-          "baseline": 2199175,
-          "threshold": 2199175
+          "baseline": 2221287,
+          "threshold": 2221287
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1276464,
-          "threshold": 1276464
+          "baseline": 1277032,
+          "threshold": 1277032
         },
         "stripped_text_bytes": {
-          "baseline": 977751,
-          "threshold": 977751
+          "baseline": 978151,
+          "threshold": 978151
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1990680,
-          "threshold": 1990680
+          "baseline": 1991488,
+          "threshold": 1991488
         },
         "stripped_text_bytes": {
-          "baseline": 1541975,
-          "threshold": 1541975
+          "baseline": 1542583,
+          "threshold": 1542583
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2952448,
-          "threshold": 2952448
+          "baseline": 2978224,
+          "threshold": 2978224
         },
         "stripped_text_bytes": {
-          "baseline": 2334295,
-          "threshold": 2334295
+          "baseline": 2356423,
+          "threshold": 2356423
         }
       }
     },
@@ -102,62 +102,62 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1070816,
-          "threshold": 1070816
+          "baseline": 1073824,
+          "threshold": 1073824
         },
         "stripped_text_bytes": {
-          "baseline": 753175,
-          "threshold": 753175
+          "baseline": 756071,
+          "threshold": 756071
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1591448,
-          "threshold": 1591448
+          "baseline": 1604488,
+          "threshold": 1604488
         },
         "stripped_text_bytes": {
-          "baseline": 1169303,
-          "threshold": 1169303
+          "baseline": 1180631,
+          "threshold": 1180631
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1789520,
-          "threshold": 1789520
+          "baseline": 1806808,
+          "threshold": 1806808
         },
         "stripped_text_bytes": {
-          "baseline": 1303879,
-          "threshold": 1303879
+          "baseline": 1317911,
+          "threshold": 1317911
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 963480,
-          "threshold": 963480
+          "baseline": 965112,
+          "threshold": 965112
         },
         "stripped_text_bytes": {
-          "baseline": 679623,
-          "threshold": 679623
+          "baseline": 681143,
+          "threshold": 681143
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1484656,
-          "threshold": 1484656
+          "baseline": 1487664,
+          "threshold": 1487664
         },
         "stripped_text_bytes": {
-          "baseline": 1057959,
-          "threshold": 1057959
+          "baseline": 1060855,
+          "threshold": 1060855
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1909216,
-          "threshold": 1909216
+          "baseline": 1926360,
+          "threshold": 1926360
         },
         "stripped_text_bytes": {
-          "baseline": 1385399,
-          "threshold": 1385399
+          "baseline": 1399287,
+          "threshold": 1399287
         }
       }
     }

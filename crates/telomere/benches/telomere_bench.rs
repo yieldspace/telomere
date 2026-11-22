@@ -225,6 +225,42 @@ fn table_init_zero_len_wat(func_count: usize) -> String {
     wat
 }
 
+/// One function holding `depth` nested blocks around an empty core:
+/// the deepest shape the parser accepts at the current depth limit.
+fn nested_block_module(depth: u32) -> Vec<u8> {
+    fn push_u32_leb128(mut value: u32, bytes: &mut Vec<u8>) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+            if value == 0 {
+                return;
+            }
+        }
+    }
+    let mut body = vec![0x00]; // no local declarations
+    for _ in 0..depth {
+        body.extend([0x02, 0x40]); // block with an empty block type
+    }
+    body.extend([0x41, 0x00, 0x1a]); // i32.const 0; drop
+    body.extend(std::iter::repeat_n(0x0b, depth as usize + 1));
+    let mut code_section = vec![0x01]; // one function body
+    push_u32_leb128(body.len() as u32, &mut code_section);
+    code_section.extend(body);
+    let mut module = vec![
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, //
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type: () -> ()
+        0x03, 0x02, 0x01, 0x00, // one function of type 0
+        0x0a, // code section
+    ];
+    push_u32_leb128(code_section.len() as u32, &mut module);
+    module.extend(code_section);
+    module
+}
+
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("benches/telomere-benchmark.wasm");
@@ -580,6 +616,22 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             .iter_custom(|iters| time_fused_relink_roundtrips(unlimited_metered_store(), iters))
     });
     metering_group.finish();
+
+    // #170: parse time used to grow cubically with block nesting because
+    // the optimizer's loop-depth pass re-walked the dominator chain for
+    // every ancestor. Pin the deepest module the parser accepts so a
+    // regression shows up in bench output instead of in production.
+    let mut parse_group = c.benchmark_group("parse_nesting");
+    parse_group.sampling_mode(SamplingMode::Flat);
+    let nested = nested_block_module(telomere::MAX_CONTROL_NESTING_DEPTH);
+    parse_group.bench_function("nested_blocks_at_depth_limit", |b| {
+        b.iter(|| {
+            let mut reader = telomere::IoReadBinaryReader::from(nested.as_slice());
+            let mut parser = telomere::WasmParser::new(&mut reader);
+            black_box(parser.parse_module().unwrap());
+        });
+    });
+    parse_group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

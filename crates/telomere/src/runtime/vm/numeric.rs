@@ -346,6 +346,33 @@ pub unsafe fn op_f32_gt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     call_next(tail_code, 0, ctx)
 }
 
+/// Returns `value` with its NaN quiet bit set when `value` is a NaN, and
+/// `value` unchanged otherwise.
+///
+/// The spec requires a floating-point operation whose result is a NaN to
+/// produce an *arithmetic* NaN (quiet bit set). Host math routines do not
+/// guarantee this on every target: the software expansion LLVM emits for
+/// `floor`/`ceil`/`trunc`/`round_ties_even` without a hardware rounding
+/// instruction returns a signaling NaN operand unchanged. The rounding
+/// and square-root handlers therefore quiet their results explicitly
+/// (#131).
+pub fn quiet_nan_f32(value: f32) -> f32 {
+    if value.is_nan() {
+        f32::from_bits(value.to_bits() | 0x0040_0000)
+    } else {
+        value
+    }
+}
+
+/// The f64 counterpart of [`quiet_nan_f32`].
+pub fn quiet_nan_f64(value: f64) -> f64 {
+    if value.is_nan() {
+        f64::from_bits(value.to_bits() | 0x0008_0000_0000_0000)
+    } else {
+        value
+    }
+}
+
 /// WebAssembly `f32.sqrt`.
 ///
 /// Spec:
@@ -364,7 +391,7 @@ pub unsafe fn op_f32_gt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 pub unsafe fn op_f32_sqrt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_sqrt");
     let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_f32(a.sqrt()));
+    vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.sqrt())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1522,7 +1549,7 @@ pub unsafe fn op_f32_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_f32(a.ceil()));
+    vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.ceil())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1543,7 +1570,7 @@ pub unsafe fn op_f32_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_f32(a.floor()));
+    vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.floor())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1564,7 +1591,7 @@ pub unsafe fn op_f32_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_f32(a.trunc()));
+    vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.trunc())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1585,7 +1612,7 @@ pub unsafe fn op_f32_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_nearest(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_f32(a.round_ties_even()));
+    vm_try!(ctx.stack.push_f32(quiet_nan_f32(a.round_ties_even())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1606,7 +1633,7 @@ pub unsafe fn op_f32_nearest(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_f64(a.ceil()));
+    vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.ceil())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1627,7 +1654,7 @@ pub unsafe fn op_f64_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_f64(a.floor()));
+    vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.floor())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1648,7 +1675,7 @@ pub unsafe fn op_f64_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_f64(a.trunc()));
+    vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.trunc())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1669,7 +1696,7 @@ pub unsafe fn op_f64_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_nearest(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_f64(a.round_ties_even()));
+    vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.round_ties_even())));
     call_next(tail_code, 0, ctx)
 }
 
@@ -1732,7 +1759,7 @@ pub unsafe fn op_f64_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_sqrt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_f64(a.sqrt()));
+    vm_try!(ctx.stack.push_f64(quiet_nan_f64(a.sqrt())));
     call_next(tail_code, 0, ctx)
 }
 

@@ -252,11 +252,13 @@ fn eval_local_unary32(op: LocalUnary32Op, src_bits: u32) -> u32 {
         LocalUnary32Op::I32Popcnt => (src_bits as i32).count_ones(),
         LocalUnary32Op::F32Abs => f32::from_bits(src_bits).abs().to_bits(),
         LocalUnary32Op::F32Neg => (-f32::from_bits(src_bits)).to_bits(),
-        LocalUnary32Op::F32Sqrt => f32::from_bits(src_bits).sqrt().to_bits(),
-        LocalUnary32Op::F32Ceil => f32::from_bits(src_bits).ceil().to_bits(),
-        LocalUnary32Op::F32Floor => f32::from_bits(src_bits).floor().to_bits(),
-        LocalUnary32Op::F32Trunc => f32::from_bits(src_bits).trunc().to_bits(),
-        LocalUnary32Op::F32Nearest => f32::from_bits(src_bits).round_ties_even().to_bits(),
+        LocalUnary32Op::F32Sqrt => quiet_nan_f32(f32::from_bits(src_bits).sqrt()).to_bits(),
+        LocalUnary32Op::F32Ceil => quiet_nan_f32(f32::from_bits(src_bits).ceil()).to_bits(),
+        LocalUnary32Op::F32Floor => quiet_nan_f32(f32::from_bits(src_bits).floor()).to_bits(),
+        LocalUnary32Op::F32Trunc => quiet_nan_f32(f32::from_bits(src_bits).trunc()).to_bits(),
+        LocalUnary32Op::F32Nearest => {
+            quiet_nan_f32(f32::from_bits(src_bits).round_ties_even()).to_bits()
+        }
     }
 }
 
@@ -268,11 +270,13 @@ fn eval_local_unary64(op: LocalUnary64Op, src_bits: u64) -> u64 {
         LocalUnary64Op::I64Popcnt => (src_bits as i64).count_ones() as u64,
         LocalUnary64Op::F64Abs => f64::from_bits(src_bits).abs().to_bits(),
         LocalUnary64Op::F64Neg => (-f64::from_bits(src_bits)).to_bits(),
-        LocalUnary64Op::F64Sqrt => f64::from_bits(src_bits).sqrt().to_bits(),
-        LocalUnary64Op::F64Ceil => f64::from_bits(src_bits).ceil().to_bits(),
-        LocalUnary64Op::F64Floor => f64::from_bits(src_bits).floor().to_bits(),
-        LocalUnary64Op::F64Trunc => f64::from_bits(src_bits).trunc().to_bits(),
-        LocalUnary64Op::F64Nearest => f64::from_bits(src_bits).round_ties_even().to_bits(),
+        LocalUnary64Op::F64Sqrt => quiet_nan_f64(f64::from_bits(src_bits).sqrt()).to_bits(),
+        LocalUnary64Op::F64Ceil => quiet_nan_f64(f64::from_bits(src_bits).ceil()).to_bits(),
+        LocalUnary64Op::F64Floor => quiet_nan_f64(f64::from_bits(src_bits).floor()).to_bits(),
+        LocalUnary64Op::F64Trunc => quiet_nan_f64(f64::from_bits(src_bits).trunc()).to_bits(),
+        LocalUnary64Op::F64Nearest => {
+            quiet_nan_f64(f64::from_bits(src_bits).round_ties_even()).to_bits()
+        }
     }
 }
 

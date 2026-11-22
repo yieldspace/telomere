@@ -312,7 +312,7 @@ pub(crate) mod v128_load8x8_s {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 3)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -333,7 +333,7 @@ pub(crate) mod v128_load8x8_u {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 3)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -354,7 +354,7 @@ pub(crate) mod v128_load16x4_s {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 3)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -375,7 +375,7 @@ pub(crate) mod v128_load16x4_u {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 3)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -396,7 +396,7 @@ pub(crate) mod v128_load32x2_s {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 3)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -417,7 +417,7 @@ pub(crate) mod v128_load32x2_u {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 3)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -438,7 +438,7 @@ pub(crate) mod v128_load8_splat {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 0)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -459,7 +459,7 @@ pub(crate) mod v128_load16_splat {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 1)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -479,7 +479,7 @@ pub(crate) mod v128_load32_splat {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 2)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -499,7 +499,7 @@ pub(crate) mod v128_load64_splat {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 3)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,

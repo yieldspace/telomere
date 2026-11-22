@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #251: workflow_dispatch runs 45051812925 and
-45051827578 against the PR branch at commit
-`871ecfabacc14d43045d295960fbd062c24f53b8` (the merge of the PR head
-`848e64b853e66e1cf769c2321ef17adbfe4b2e29` with `main` at
-`e46cd8d66dfcf415f5a0a9521a52e70f5a9cf376`), and pull-request run
-45051722003, which built the same merge tree (`ubuntu-24.04`, Rust
+against the code of PR #254: workflow_dispatch runs 45060131072 and
+45060142935 against the PR branch at commit
+`fb01564eb0d7f252d3b24da100b325d5e7d56796` (the merge of the PR head
+`3420455b6ee3a6614cc397fc8b4023c28c20bdbc` with `main` at
+`4d3b77441d337a6ec8c2586c1e856b1f749be87c`), and pull-request run
+45060031215, which built the same merge tree (`ubuntu-24.04`, Rust
 1.96.0). Every run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
@@ -369,19 +369,19 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345656 | 261679 |
-| `release` | `core` | 1465472 | 1116631 |
-| `release` | `component` | 2434656 | 1943703 |
-| `release` | `wasi` | 2772760 | 2199175 |
-| `release` | `core-nosimd` | 1276464 | 977751 |
-| `release` | `core-jit` | 1990680 | 1541975 |
-| `release` | `wasi-threads` | 2952448 | 2334295 |
+| `release` | `core` | 1,466,280 | 1,117,239 |
+| `release` | `component` | 2,452,544 | 1,959,303 |
+| `release` | `wasi` | 2,798,520 | 2,221,287 |
+| `release` | `core-nosimd` | 1,277,032 | 978,151 |
+| `release` | `core-jit` | 1,991,488 | 1,542,583 |
+| `release` | `wasi-threads` | 2,978,224 | 2,356,423 |
 | `release-size` | `baseline` | 296384 | 228114 |
-| `release-size` | `core` | 1070816 | 753175 |
-| `release-size` | `component` | 1591448 | 1169303 |
-| `release-size` | `wasi` | 1789520 | 1303879 |
-| `release-size` | `core-nosimd` | 963480 | 679623 |
-| `release-size` | `core-jit` | 1484656 | 1057959 |
-| `release-size` | `wasi-threads` | 1909216 | 1385399 |
+| `release-size` | `core` | 1,073,824 | 756,071 |
+| `release-size` | `component` | 1,604,488 | 1,180,631 |
+| `release-size` | `wasi` | 1,806,808 | 1,317,911 |
+| `release-size` | `core-nosimd` | 965,112 | 681,143 |
+| `release-size` | `core-jit` | 1,487,664 | 1,060,855 |
+| `release-size` | `wasi-threads` | 1,926,360 | 1,399,287 |
 
 #### Re-baseline history
 
@@ -444,6 +444,77 @@ release-size +1,760 B / +992 B). The `baseline` configuration, which
 links no library code, is unchanged. The baseline was re-measured on
 the merged code and updated as recorded above, following the procedure
 below.
+
+PR #252 (#170, parse time grows cubically with block nesting) merged
+current `main` into its branch first; its first CI run on the merged
+tree then tripped the gate on the PR's own change. The change rewrites
+two optimizer analysis passes in
+`crates/telomere/src/parser/core/optimizer/pipeline/analysis.rs`:
+`compute_loop_depth` becomes a dominator-tree prefix sum accumulated in
+one reverse-postorder pass, and `compute_loop_parents` is inverted from
+an all-pairs scan to a single pass over each loop's members; the PR's
+only other change is a criterion bench, which is not linked into the
+embedder. The parser/optimizer is part of the telomere library linked
+into every embedder configuration except `baseline`, so the deltas are
+nearly uniform across library configurations and the `baseline`
+configuration is unchanged: in the `release` profile the library
+configurations shrink slightly (stripped `.text` -224 B in all six;
+stripped file -72 B, `wasi-threads` -88 B, `component` -56 B), while in
+the `release-size` profile (`opt-level = "z"`, fat LTO, one codegen
+unit) they grow (stripped file +1,120 B and stripped `.text` +960 B,
+with `core-nosimd` and `core-jit` at +1,104 B / +944 B). The baseline
+was re-measured on the merged code and updated as recorded above,
+following the procedure below.
+
+PR #253 (#118, canon `resource.drop` for host-provided resources)
+merged current `main` into its branch first; its first CI run on the
+merged tree then tripped the gate on the PR's own change. The change
+is confined to the component layer: `telomere-component` gains the
+linker destructor-registration API (`register_import_resource_drop` /
+`_async`), the decoder keeps each imported instance declaration's
+`TypeId` so instantiation can build the `ResourceId`-to-destructor
+table, and the runtime tracks host-issued `own` handles so
+`resource.drop` resolves them (`runtime/canonical.rs`,
+`runtime/host.rs`, `runtime/env.rs`); `telomere-component-wasi`
+gains `WasiState::drop_handle` and registers destructors for its
+handle-issuing imports in the provider. The core library is
+untouched, so `baseline`, `core`, `core-nosimd` and `core-jit` are
+byte-identical in both profiles (16 of 28 gated series unchanged),
+and the growth sits exactly in the configurations that link the
+component runtime (release stripped file +17,256 B for `component`,
++25,144 B for `wasi`, +25,176 B for `wasi-threads`; stripped `.text`
++15,200 / +21,712 / +21,712 B; release-size stripped file +9,936 /
++14,168 / +14,184 B, stripped `.text` +8,320 / +11,024 / +11,024 B).
+`wasi` and `wasi-threads` grow more than `component` because they
+also link the WASI provider's `drop_handle` and destructor
+registrations; `wasi-threads` tracks `wasi` almost exactly (+32 B
+stripped file in release, +16 B in release-size) because the PR adds
+no threads-specific code. The baseline was re-measured on the merged
+code and updated as recorded above, following the procedure below.
+
+PR #254 (#131, wast harness spec fidelity) merged current `main` into
+its branch first; its first CI run on the merged tree then tripped the
+gate on the PR's own change. The PR strengthens the wast test harness
+(trap/invalid reason matching, result arity, bit-exact NaN patterns)
+and fixes the real defects that strengthening surfaced, all of them in
+the telomere core library: the parser's memarg alignment check is
+unified on `natural_align_log2` (`values.rs`, `instruction.rs`,
+`simd_instruction.rs`), the type checker now produces `UnknownLabel`,
+unknown export indices return their per-kind error variants
+(`parser.rs`), and the interpreter's rounding paths quiet signaling
+NaNs (`runtime/vm/numeric.rs`, `simd.rs`, `superinstructions.rs`).
+The harness changes themselves are test-only and are not linked into
+the embedder. Because the core library is linked into every embedder
+configuration except `baseline`, the `baseline` configuration is
+byte-identical in both profiles (4 of 28 gated series unchanged) and
+the growth is near-uniform across the library configurations (release
+stripped file +640..+880 B, stripped `.text` +624..+832 B;
+release-size stripped file +528..+2,000 B, stripped `.text`
++576..+2,048 B). `core-nosimd` grows the least in release-size
+(+528 B / +576 B) because the SIMD parser and runtime paths it
+excludes carry part of the change. The baseline was re-measured on
+the merged code and updated as recorded above, following the
+procedure below.
 
 ### Threshold derivation
 
