@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #275 (branch fix/271-export-resolved-name at head da35d049ee8bbabc43102fe3eed958f656af07a2 \u2014 branch commit 34cf8f5 (retain the resolved (version-matched) export key for the host-export binding lookup) plus merge commit da35d04 bringing in current main 296f712, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45165908240 and 45165914168 against the branch and pull-request run 45165419636, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "da35d049ee8bbabc43102fe3eed958f656af07a2",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #276 (branch fix/270-wait-timer-release at head 276a0e41ff732ad12d66df383ea48dc88b35c692 \u2014 branch commit 278de94 (release atomic.wait timer threads when the wait resolves) plus merge commit 276a0e4 bringing in current main 92b66b3, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45169595430 and 45169601657 against the branch and pull-request run 45169582070, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "276a0e41ff732ad12d66df383ea48dc88b35c692",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45165908240,
-      45165914168
+      45169595430,
+      45169601657
     ],
     "cross_check_run_ids": [
-      45165419636
+      45169582070
     ],
-    "derivation": "Re-baseline for PR #275 (#271, host-export binding lookup retains the resolved (version-matched) export name: RuntimeComponentInstance::resolve_export keeps the key returned by resolve_component_export_key in scope and passes it to ComponentLinker::resolve_export, instead of discarding it and looking the binding up under the requested name). The branch merged current main (296f712, the PR #273 merge, which already contained PRs #269 and #274) before measurement; the merge conflicted in crates/telomere-component/src/runtime/env.rs, where main (PR #268) had added a Value arm to the same match, and the resolution keeps the branch\u2019s block structure and keyed lookup with the Value arm added inside it. The first CI run on the merged tree passed the gate, because every delta is negative. Attribution was isolated by measuring current main (296f712) alone (workflow_dispatch run 45165921937, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR\u2019s own. The shrinkage is confined to the three configurations that link the component runtime (component, wasi, wasi-threads): \u221248 B stripped file and stripped .text in release; in release-size \u221216 B in component and wasi and \u221232 B in wasi-threads \u2014 the code-layout effect of restructuring the Component arm of resolve_export from a match expression into a block with an early return. The other 20 gated series are byte-identical; 12 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.41% (1,169,031 B to 1,232,247 B), unchanged at two decimal places from after PR #273, because that series moves by only \u221216 B here. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #276 (#270, atomic.wait timer threads are released when the wait resolves: SharedWaiter gains a release (Mutex, Condvar) pair signalled by the successful CAS claim in try_mark_notified / try_mark_interrupted; the per-wait timer thread sleeps in the condvar's wait_timeout and exits as soon as the wait is resolved instead of sleeping to the original deadline, and registrations already resolved before wait_result is polled spawn no thread at all). The branch merged current main (92b66b3, containing PRs #269, #273, #278 and #275) before measurement; the merge was conflict-free (main's only change to common/memory.rs was the push_to_stack visibility narrowing from PR #269, disjoint from the wait-timer code). The first CI run on the merged tree tripped the gate on this PR's own change. Attribution was isolated by measuring current main (92b66b3) alone (workflow_dispatch run 45169608064, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. The growth is confined to wasi-threads, the configuration with the threads feature that compiles the shared-wait timer code in crates/telomere/src/common/memory.rs: release stripped file +1,608 B / stripped .text +1,280 B; release-size +1,088 B / +800 B. The other 30 gated series are byte-identical; 2 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.41% (1,169,031 B to 1,232,247 B), unchanged, because that series does not move here. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -90,12 +90,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3068152,
-          "threshold": 3068152
+          "baseline": 3069760,
+          "threshold": 3069760
         },
         "stripped_text_bytes": {
-          "baseline": 2436071,
-          "threshold": 2436071
+          "baseline": 2437351,
+          "threshold": 2437351
         }
       }
     },
@@ -172,12 +172,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2003088,
-          "threshold": 2003088
+          "baseline": 2004176,
+          "threshold": 2004176
         },
         "stripped_text_bytes": {
-          "baseline": 1457591,
-          "threshold": 1457591
+          "baseline": 1458391,
+          "threshold": 1458391
         }
       }
     }
