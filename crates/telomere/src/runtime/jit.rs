@@ -265,7 +265,7 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
 /// layer can resolve the same site id against a different function's
 /// table. A site that does not resolve degrades to no pc, never a
 /// wrong one.
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 fn resolve_trap_site(
     exit: JitNativeExit,
     compiled: &CompiledFunction,
