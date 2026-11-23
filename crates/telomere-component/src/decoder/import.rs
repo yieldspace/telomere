@@ -131,9 +131,22 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 },
             );
         }
-        ExternDesc::Value(_) => Err(ComponentParseError::Unsupported(
-            "value imports are not supported".to_owned(),
-        ))?,
+        ExternDesc::Value(ty) => {
+            crate::decoder::value::validate_value_type(ctx.validator, &ty, true)?;
+            let global_idx = ctx
+                .state
+                .value_store
+                .register(Relation::Import(name.original.clone()));
+            let focus = ctx.state.scope_mut();
+            focus.add_import(&name, ComponentImport::Value(ty.clone()));
+            focus.values.register(global_idx);
+
+            let focus = ctx.validator.scope_mut();
+            focus.value_indexes.add(ty.clone());
+            focus
+                .imports
+                .insert(name.original, ComponentImportType::Value(ty));
+        }
     }
     Ok(())
 }

@@ -7,10 +7,9 @@ use telomere::{
         common::{memory_export, read_memory},
         runtime::run_core_export_sync_reentrant,
     },
-    get_global,
-    host_abi::{ExecuteContext, Instr},
-    link_host_function_with_function_idx, run_module_function, InstanceHandle, IoReadBinaryReader,
-    Registry, ResultValue, Store, StoreState, VMResult, WasmParser, WasmParserError, WasmValue,
+    get_global, link_host_function_with_function_idx, run_module_function, HostContext,
+    InstanceHandle, IoReadBinaryReader, Registry, ResultValue, Store, StoreState, VMResult,
+    WasmParser, WasmParserError, WasmValue,
 };
 
 fn parse_module_err(wat: &str) -> WasmParserError {
@@ -27,16 +26,12 @@ struct ReentrantGetGlobalState {
     instance: Mutex<Option<InstanceHandle>>,
 }
 
-fn return_from_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let (previous_local_reference, return_address) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(previous_local_reference);
-    VMResult::Success(return_address)
+fn return_from_host(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    VMResult::Success(vec![])
 }
 
-fn get_global_from_host_callback(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let state = unsafe { ctx.store.state.get::<ReentrantGetGlobalState>() }
+fn get_global_from_host_callback(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let state = unsafe { cx.store().state.get::<ReentrantGetGlobalState>() }
         .expect("reentrant get_global test requires ReentrantGetGlobalState in StoreState");
     let instance = state
         .instance
@@ -46,10 +41,10 @@ fn get_global_from_host_callback(ctx: &mut ExecuteContext) -> VMResult<*const In
         .expect("reentrant get_global instance must be installed before guest execution");
 
     assert!(matches!(
-        get_global(&instance, ctx.store, "g"),
+        get_global(&instance, cx.store(), "g"),
         VMResult::Unlinkable
     ));
-    return_from_host(ctx)
+    return_from_host(cx)
 }
 
 #[tokio::test]

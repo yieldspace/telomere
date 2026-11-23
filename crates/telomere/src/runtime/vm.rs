@@ -93,7 +93,8 @@ mod tables;
 use crate::common::Op;
 use crate::{
     common::store::{
-        CallDispatchCache, CallDispatchTarget, FunctionInstanceData, StoreExecutionError,
+        CallDispatchCache, CallDispatchTarget, FunctionBody as RuntimeFunctionBody,
+        FunctionInstanceData, StoreExecutionError,
     },
     common::{
         execute_elem_init_const_expr, CallFrameCache, ElemInit, ExecuteContext, ExportDesc,
@@ -101,8 +102,10 @@ use crate::{
         StablePc, Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::{
-        memory_effect::{HostCallPending, PendingOp},
-        scheduler::{ExecutionDriver, ReadyFlag, Scheduler, SyncRunError, Task, TokioDriver},
+        memory_effect::{HostCallFuture, HostCallPending, PendingOp},
+        scheduler::{
+            fresh_task_id, ExecutionDriver, ReadyFlag, Scheduler, SyncRunError, Task, TokioDriver,
+        },
     },
     Store,
 };
@@ -1734,19 +1737,34 @@ fn start_async_host_call_with(
     async_host: crate::common::AsyncHostFunction,
 ) -> VMResult<CallOutcome> {
     let task_id = ctx.task_id;
+    let frame_reference = ctx.local_reference;
     let future = async_host(ctx);
     ctx.effect
-        .push_pending(PendingOp::HostCall(HostCallPending { task_id, future }));
+        .push_pending(PendingOp::HostCall(HostCallPending {
+            task_id,
+            future: HostCallFuture::from_raw(future),
+            frame_reference,
+        }));
     ctx.cont = return_addr;
     VMResult::Success(CallOutcome::Pending)
 }
 
-fn start_async_host_call(
+fn start_public_async_host_call_with(
     return_addr: *const Instr,
     ctx: &mut ExecuteContext,
+    fp: crate::host::AsyncHostFn,
 ) -> VMResult<CallOutcome> {
-    let async_host = ctx.func().async_host_code_pointer();
-    start_async_host_call_with(return_addr, ctx, async_host)
+    let task_id = ctx.task_id;
+    let frame_reference = ctx.local_reference;
+    let future = vm_try!(crate::host::start_public_async_host_call(ctx, fp));
+    ctx.effect
+        .push_pending(PendingOp::HostCall(HostCallPending {
+            task_id,
+            future: HostCallFuture::from_public(future),
+            frame_reference,
+        }));
+    ctx.cont = return_addr;
+    VMResult::Success(CallOutcome::Pending)
 }
 
 fn invoke_sync_host_function_with(
@@ -1758,15 +1776,31 @@ fn invoke_sync_host_function_with(
     VMResult::Success(CallOutcome::Immediate(return_addr))
 }
 
+fn invoke_public_host_function_with(
+    _return_addr: *const Instr,
+    ctx: &mut ExecuteContext,
+    fp: crate::host::HostFn,
+) -> VMResult<CallOutcome> {
+    let return_addr = vm_try!(crate::host::invoke_public_host_function(ctx, fp));
+    VMResult::Success(CallOutcome::Immediate(return_addr))
+}
+
 fn invoke_host_function(
     return_addr: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<CallOutcome> {
-    if ctx.func().is_async_host_func() {
-        start_async_host_call(return_addr, ctx)
-    } else {
-        let fp = ctx.func().host_code_pointer();
-        invoke_sync_host_function_with(return_addr, ctx, fp)
+    match ctx.func().body {
+        RuntimeFunctionBody::AsyncHost(fp) => start_async_host_call_with(return_addr, ctx, fp),
+        RuntimeFunctionBody::PublicAsyncHost(fp) => {
+            start_public_async_host_call_with(return_addr, ctx, fp)
+        }
+        RuntimeFunctionBody::PublicHost(fp) => {
+            invoke_public_host_function_with(return_addr, ctx, fp)
+        }
+        RuntimeFunctionBody::Host(fp) => invoke_sync_host_function_with(return_addr, ctx, fp),
+        RuntimeFunctionBody::Wasm { .. } => {
+            unreachable!("host invocation requested for a WebAssembly function")
+        }
     }
 }
 
@@ -2162,7 +2196,7 @@ async fn run_module_function_with_driver_named<D: ExecutionDriver>(
 
             scheduler.push(Task {
                 fp: entry_pc,
-                task_id: 0,
+                task_id: fresh_task_id(),
                 stack,
                 local_reference,
                 ready_flag: ReadyFlag::Ready,
@@ -2265,7 +2299,7 @@ pub(crate) fn run_module_function_sync_with_runtime(
 
             scheduler.push(Task {
                 fp: entry_pc,
-                task_id: 0,
+                task_id: fresh_task_id(),
                 stack,
                 local_reference,
                 ready_flag: ReadyFlag::Ready,

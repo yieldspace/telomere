@@ -208,6 +208,7 @@ impl<'a> Validator<'a> {
                 ExportInfo::Instance(id) => ComponentExportType::Instance(*id),
                 ExportInfo::Func(id) => ComponentExportType::Func(*id),
                 ExportInfo::TypeSub(id) => ComponentExportType::Type(*id),
+                ExportInfo::Value(ty) => ComponentExportType::Value(ty.clone()),
             };
             exports.insert(name.clone(), export_ty);
         }
@@ -234,6 +235,7 @@ impl<'a> Validator<'a> {
                 ExportInfo::Func(type_id) => InstanceExportType::Func(*type_id),
                 ExportInfo::TypeEq(type_id) => InstanceExportType::Type(*type_id),
                 ExportInfo::TypeSub(id) => InstanceExportType::Type(*id),
+                ExportInfo::Value(ty) => InstanceExportType::Value(ty.clone()),
             };
             exports.insert(name.clone(), export_ty);
         }
@@ -389,6 +391,9 @@ mod tests {
                     ComponentImportType::Type { type_id, .. } => {
                         naive_refs_foreign_resource(validator, *type_id, owner, visiting).unwrap()
                     }
+                    ComponentImportType::Value(ty) => {
+                        naive_val_refs_foreign_resource(validator, ty, owner, visiting).unwrap()
+                    }
                 }) || component_ty.exports.values().any(|export| match export {
                     ComponentExportType::CoreModule(_) => false,
                     ComponentExportType::Component(type_id)
@@ -396,6 +401,9 @@ mod tests {
                     | ComponentExportType::Type(type_id)
                     | ComponentExportType::Func(type_id) => {
                         naive_refs_foreign_resource(validator, *type_id, owner, visiting).unwrap()
+                    }
+                    ComponentExportType::Value(ty) => {
+                        naive_val_refs_foreign_resource(validator, ty, owner, visiting).unwrap()
                     }
                 })
             }
@@ -407,6 +415,9 @@ mod tests {
                     | InstanceExportType::Type(type_id)
                     | InstanceExportType::Func(type_id) => {
                         naive_refs_foreign_resource(validator, *type_id, owner, visiting).unwrap()
+                    }
+                    InstanceExportType::Value(ty) => {
+                        naive_val_refs_foreign_resource(validator, ty, owner, visiting).unwrap()
                     }
                 })
             }
@@ -469,6 +480,9 @@ mod tests {
                             ComponentImportType::Type { type_id, .. } => {
                                 naive_effective_type_size(validator, *type_id, visiting)?
                             }
+                            ComponentImportType::Value(ty) => {
+                                naive_val_size(validator, ty, visiting)?
+                            }
                         },
                     );
                 }
@@ -482,6 +496,9 @@ mod tests {
                             | ComponentExportType::Type(type_id)
                             | ComponentExportType::Func(type_id) => {
                                 naive_effective_type_size(validator, *type_id, visiting)?
+                            }
+                            ComponentExportType::Value(ty) => {
+                                naive_val_size(validator, ty, visiting)?
                             }
                         },
                     );
@@ -500,6 +517,9 @@ mod tests {
                             | InstanceExportType::Type(type_id)
                             | InstanceExportType::Func(type_id) => {
                                 naive_effective_type_size(validator, *type_id, visiting)?
+                            }
+                            InstanceExportType::Value(ty) => {
+                                naive_val_size(validator, ty, visiting)?
                             }
                         },
                     );

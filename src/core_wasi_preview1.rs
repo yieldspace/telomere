@@ -15,12 +15,11 @@ use telomere::{
         module_exports, module_function_types, module_imports, ExportDesc, FuncType, ImportDesc,
         MemArg, ValType,
     },
-    host_abi::{
-        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, Memory,
-        NativeModule,
-    },
     unstable_internals::pending_effect_count,
-    JitConfig, Module, Registry, ResultValue, RuntimeConfig, Store, StoreState, VMResult,
+    unstable_internals::{
+        instantiate_raw_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
+    },
+    JitConfig, Memory, Module, Registry, ResultValue, RuntimeConfig, Store, StoreState, VMResult,
 };
 
 pub(crate) const PREVIEW1_MODULE: &str = "wasi_snapshot_preview1";
@@ -264,7 +263,7 @@ pub(crate) async fn run(
     let store = Store::new_with_state_and_runtime_config(state_ptr, runtime_config);
     let mut registry = Registry::new();
     let host = vm_result_to_anyhow(
-        instantiate_native_module(build_preview1_native_module(), &store, &registry).await,
+        instantiate_raw_native_module(build_preview1_native_module(), &store, &registry).await,
         "failed to instantiate `wasi_snapshot_preview1` host module",
     )?;
     registry.register(PREVIEW1_MODULE, host);
@@ -806,7 +805,7 @@ mod tests {
             StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State)
         });
         let mut registry = Registry::new();
-        let host = instantiate_native_module(build_preview1_native_module(), &store, &registry)
+        let host = instantiate_raw_native_module(build_preview1_native_module(), &store, &registry)
             .await
             .unwrap();
         registry.register(PREVIEW1_MODULE, host);

@@ -153,6 +153,7 @@ impl ComponentEngine {
             core_memory_store: state.core_memory_store.snapshot(),
             core_global_store: state.core_global_store.snapshot(),
             core_table_store: state.core_table_store.snapshot(),
+            value_store: state.value_store.snapshot(),
         })
     }
 

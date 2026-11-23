@@ -7,6 +7,7 @@ use super::{
     HostFunction, Instr, LocalsData, MemType, MeteringConfig, MeteringHandle, ModuleNames, Stack,
     TableType, TrapInfo, TypeIdx, VMResult, PAGE_SIZE_MAX,
 };
+use crate::host::{AsyncHostFn, HostFn};
 #[cfg(feature = "aot-load")]
 use crate::runtime::jit::{CompiledFunction, StoreJitCache};
 use crate::runtime::trap_context::TrapContext;
@@ -151,6 +152,12 @@ pub(crate) enum FunctionBody {
     },
     Host(HostFunction),
     AsyncHost(AsyncHostFunction),
+    /// A host function registered through the public boundary (#216); the
+    /// adapter in `crate::host` bridges it to the internal convention.
+    PublicHost(HostFn),
+    /// An asynchronous host function registered through the public
+    /// boundary (#216).
+    PublicAsyncHost(AsyncHostFn),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -158,6 +165,8 @@ pub(crate) enum CallDispatchTarget {
     Wasm { local_size: u32 },
     Host(HostFunction),
     AsyncHost(AsyncHostFunction),
+    PublicHost(HostFn),
+    PublicAsyncHost(AsyncHostFn),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -186,6 +195,8 @@ impl fmt::Debug for FunctionBody {
                 .finish(),
             Self::Host(_) => f.write_str("Host(..)"),
             Self::AsyncHost(_) => f.write_str("AsyncHost(..)"),
+            Self::PublicHost(_) => f.write_str("PublicHost(..)"),
+            Self::PublicAsyncHost(_) => f.write_str("PublicAsyncHost(..)"),
         }
     }
 }
@@ -201,25 +212,37 @@ impl FunctionInstanceData {
     pub(crate) fn is_host_func(&self) -> bool {
         matches!(
             self.body,
-            FunctionBody::Host(_) | FunctionBody::AsyncHost(_)
+            FunctionBody::Host(_)
+                | FunctionBody::AsyncHost(_)
+                | FunctionBody::PublicHost(_)
+                | FunctionBody::PublicAsyncHost(_)
         )
     }
 
     pub(crate) fn is_async_host_func(&self) -> bool {
-        matches!(self.body, FunctionBody::AsyncHost(_))
+        matches!(
+            self.body,
+            FunctionBody::AsyncHost(_) | FunctionBody::PublicAsyncHost(_)
+        )
     }
 
     pub(crate) fn locals(&self) -> LocalsData {
         match &self.body {
             FunctionBody::Wasm { locals, .. } => locals.clone(),
-            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => LocalsData::default(),
+            FunctionBody::Host(_)
+            | FunctionBody::AsyncHost(_)
+            | FunctionBody::PublicHost(_)
+            | FunctionBody::PublicAsyncHost(_) => LocalsData::default(),
         }
     }
 
     pub(crate) fn code(&self) -> Option<&[Instr]> {
         match &self.body {
             FunctionBody::Wasm { code, .. } => Some(code.as_ref()),
-            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
+            FunctionBody::Host(_)
+            | FunctionBody::AsyncHost(_)
+            | FunctionBody::PublicHost(_)
+            | FunctionBody::PublicAsyncHost(_) => None,
         }
     }
 
@@ -231,19 +254,26 @@ impl FunctionInstanceData {
         (self.locals(), 0)
     }
 
-    pub(crate) fn host_code_pointer(&self) -> HostFunction {
+    /// Returns the raw host callback of a `FunctionBody::Host`, and `None`
+    /// for every other body. Public-boundary callbacks have no raw code
+    /// pointer: their signatures cannot be represented by `HostFunction`.
+    pub(crate) fn host_code_pointer(&self) -> Option<HostFunction> {
         match self.body {
-            FunctionBody::Host(fp) => fp,
-            FunctionBody::Wasm { .. } | FunctionBody::AsyncHost(_) => {
-                unreachable!("host code pointer requested for non-host function")
-            }
+            FunctionBody::Host(fp) => Some(fp),
+            FunctionBody::Wasm { .. }
+            | FunctionBody::AsyncHost(_)
+            | FunctionBody::PublicHost(_)
+            | FunctionBody::PublicAsyncHost(_) => None,
         }
     }
 
     pub(crate) fn async_host_code_pointer(&self) -> AsyncHostFunction {
         match self.body {
             FunctionBody::AsyncHost(fp) => fp,
-            FunctionBody::Wasm { .. } | FunctionBody::Host(_) => {
+            FunctionBody::Wasm { .. }
+            | FunctionBody::Host(_)
+            | FunctionBody::PublicHost(_)
+            | FunctionBody::PublicAsyncHost(_) => {
                 unreachable!("async host code pointer requested for non-async function")
             }
         }
@@ -255,6 +285,14 @@ impl FunctionInstanceData {
 
     pub(crate) fn replace_async_host_code_pointer(&mut self, fp: AsyncHostFunction) {
         self.body = FunctionBody::AsyncHost(fp);
+    }
+
+    pub(crate) fn replace_public_host_code_pointer(&mut self, fp: HostFn) {
+        self.body = FunctionBody::PublicHost(fp);
+    }
+
+    pub(crate) fn replace_public_async_host_code_pointer(&mut self, fp: AsyncHostFn) {
+        self.body = FunctionBody::PublicAsyncHost(fp);
     }
 }
 
@@ -849,6 +887,15 @@ impl StoreInner {
             FunctionBody::AsyncHost(fp) => {
                 (CallDispatchTarget::AsyncHost(*fp), std::ptr::null(), 0, 0)
             }
+            FunctionBody::PublicHost(fp) => {
+                (CallDispatchTarget::PublicHost(*fp), std::ptr::null(), 0, 0)
+            }
+            FunctionBody::PublicAsyncHost(fp) => (
+                CallDispatchTarget::PublicAsyncHost(*fp),
+                std::ptr::null(),
+                0,
+                0,
+            ),
         };
         let instance_data = self.instance(funcinst.instance);
         let memory0 = instance_data

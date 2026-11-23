@@ -25,6 +25,7 @@ mod name;
 mod sort;
 mod types;
 mod validator;
+mod value;
 
 #[cfg(test)]
 mod nesting_depth_tests;
@@ -80,7 +81,6 @@ pub fn parse_section_type<R: BinaryReader>(
             0x09 => Ok(Some(ComponentSection::Start)),
             0x0a => Ok(Some(ComponentSection::Import)),
             0x0b => Ok(Some(ComponentSection::Export)),
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
             0x0c => Ok(Some(ComponentSection::Value)),
             _ => Err(ComponentParseError::InvalidSectionType(kind)),
         }

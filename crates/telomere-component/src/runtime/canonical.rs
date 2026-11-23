@@ -2463,6 +2463,7 @@ mod tests {
             core_memory_store: HashMap::new(),
             core_global_store: HashMap::new(),
             core_table_store: HashMap::new(),
+            value_store: HashMap::new(),
         }
     }
 

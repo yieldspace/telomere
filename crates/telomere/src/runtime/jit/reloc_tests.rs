@@ -11,14 +11,12 @@ use super::backend;
 use super::emit_env::{Emission, ModuleFacts, RelocKind};
 use super::stubs::{stub_table_fingerprint, StubId};
 use crate::common::store::FunctionBody;
-use crate::common::{
-    ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, VMResult, ValType,
-};
+use crate::common::{FuncType, VMResult, ValType};
+use crate::host::{HostContext, HostFnDefinition, HostModule};
 use crate::runtime::instantiate::instantiate_native_module;
 use crate::{instantiate, InstanceHandle, IoReadBinaryReader, Registry, Store, WasmParser};
 
-fn host_inc(ctx: &mut ExecuteContext<'_>) -> VMResult<*const Instr> {
-    let _ = ctx;
+fn host_inc(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<crate::WasmValue>> {
     VMResult::Unimplemented
 }
 
@@ -239,8 +237,8 @@ async fn setup_corpus() -> (Store, Vec<CorpusInstance>) {
     let store = Store::new();
     let mut registry = Registry::new();
     let host = match instantiate_native_module(
-        NativeModule {
-            functions: vec![HostFunctionDefinition {
+        HostModule {
+            functions: vec![HostFnDefinition {
                 name: Some("inc".to_owned()),
                 signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
                 fp: host_inc,

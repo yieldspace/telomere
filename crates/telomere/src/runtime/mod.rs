@@ -31,6 +31,10 @@ pub fn jit_supported() -> bool {
 pub use memory_effect::Completion;
 /// Data carried when a pending operation completes.
 pub use memory_effect::CompletionPayload;
+/// An opaque pending asynchronous host call a driver polls to completion.
+pub use memory_effect::HostCallFuture;
+/// The opaque result of a completed asynchronous host call.
+pub use memory_effect::HostCallOutcome;
 /// A pending future returned by an asynchronous host callback.
 pub use memory_effect::HostCallPending;
 #[cfg(feature = "threads")]
