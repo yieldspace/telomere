@@ -7,10 +7,8 @@ use telomere::{
     Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
 };
 use telomere::{
-    component_support::common::FuncType,
-    host_abi::{
-        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
-    },
+    component_support::common::FuncType, instantiate_native_module, HostContext, HostFnDefinition,
+    HostModule,
 };
 
 fn assert_send_sync<T: Send + Sync>() {}
@@ -28,10 +26,8 @@ async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> Insta
         .unwrap()
 }
 
-fn noop_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
+fn noop_host(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    VMResult::Success(vec![])
 }
 
 #[test]
@@ -121,8 +117,8 @@ fn store_supports_parallel_calls_via_arc() {
     ));
 
     let host = block_on(instantiate_native_module(
-        NativeModule {
-            functions: vec![HostFunctionDefinition {
+        HostModule {
+            functions: vec![HostFnDefinition {
                 fp: noop_host,
                 name: Some("noop".to_owned()),
                 signature: FuncType::new(vec![], vec![]),

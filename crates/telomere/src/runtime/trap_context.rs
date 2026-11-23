@@ -37,7 +37,7 @@ pub(crate) struct CapturedFrame {
 #[derive(Debug)]
 pub(crate) struct TrapContext {
     pub(crate) result: VMResult<()>,
-    pub(crate) task_id: u32,
+    pub(crate) task_id: u64,
     /// Innermost first. When truncated, this contains the innermost 48 then
     /// the outermost 16 frames. Frames elided by tail calls are not present.
     pub(crate) frames: Vec<CapturedFrame>,
@@ -63,7 +63,7 @@ pub(crate) fn capture_trap_context(
     local_reference: LocalReference,
     innermost_pc: Option<*const Instr>,
     result: &VMResult<()>,
-    task_id: u32,
+    task_id: u64,
 ) -> Box<TrapContext> {
     let mut head = Vec::with_capacity(HEAD_FRAMES);
     let mut tail = [None; TAIL_FRAMES];
@@ -97,8 +97,10 @@ pub(crate) fn capture_trap_context(
             Some(function) => {
                 let kind = match &function.body {
                     FunctionBody::Wasm { .. } => CapturedFrameKind::Wasm,
-                    FunctionBody::Host(_) => CapturedFrameKind::Host,
-                    FunctionBody::AsyncHost(_) => CapturedFrameKind::AsyncHost,
+                    FunctionBody::Host(_) | FunctionBody::PublicHost(_) => CapturedFrameKind::Host,
+                    FunctionBody::AsyncHost(_) | FunctionBody::PublicAsyncHost(_) => {
+                        CapturedFrameKind::AsyncHost
+                    }
                 };
                 (Some(function.funcidx), kind)
             }
@@ -225,7 +227,10 @@ mod tests {
 
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::Unreachable));
-        assert_eq!(context.task_id, 0);
+        assert_ne!(
+            context.task_id, 0,
+            "trap context must carry the execution's fresh task identity"
+        );
         assert!(!context.truncated);
         assert_eq!(context.total_frames, 4);
         assert_eq!(context.frames.len(), 4);
@@ -269,7 +274,10 @@ mod tests {
 
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::MemoryIndexOutOfRange));
-        assert_eq!(context.task_id, 0);
+        assert_ne!(
+            context.task_id, 0,
+            "trap context must carry the execution's fresh task identity"
+        );
         assert_eq!(
             context
                 .frames
@@ -304,7 +312,10 @@ mod tests {
 
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::CallIndirectInvalidType));
-        assert_eq!(context.task_id, 0);
+        assert_ne!(
+            context.task_id, 0,
+            "trap context must carry the execution's fresh task identity"
+        );
         assert_eq!(
             context
                 .frames
@@ -358,7 +369,9 @@ mod tests {
         VMResult::Success(entry_pc)
     }
 
-    fn async_host_unreachable(_ctx: &mut ExecuteContext<'_>) -> crate::common::AsyncHostFuture {
+    fn async_host_unreachable(
+        _cx: &mut crate::host::HostContext<'_, '_>,
+    ) -> crate::host::HostFuture {
         Box::pin(async { VMResult::Unreachable })
     }
 
@@ -373,7 +386,7 @@ mod tests {
             "#,
         )
         .await;
-        crate::runtime::instantiate::link_host_function_with_function_idx(
+        crate::runtime::instantiate::link_raw_host_function_with_function_idx(
             &instance,
             0,
             reenter_guest_then_trap,
@@ -386,7 +399,10 @@ mod tests {
 
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::Unreachable));
-        assert_eq!(context.task_id, 0);
+        assert_ne!(
+            context.task_id, 0,
+            "trap context must carry the execution's fresh task identity"
+        );
         assert_eq!(context.frames[0].funcidx, Some(2));
         assert_eq!(context.frames[0].kind, CapturedFrameKind::Wasm);
         assert_eq!(context.frames[1].funcidx, Some(0));
@@ -417,7 +433,10 @@ mod tests {
         assert!(matches!(result, VMResult::Unreachable));
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::Unreachable));
-        assert_eq!(context.task_id, 0);
+        assert_ne!(
+            context.task_id, 0,
+            "trap context must carry the execution's fresh task identity"
+        );
         assert_eq!(context.frames[0].kind, CapturedFrameKind::AsyncHost);
         assert_eq!(context.frames[0].pc_index, None);
     }
@@ -439,7 +458,10 @@ mod tests {
 
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::StackOverflow));
-        assert_eq!(context.task_id, 0);
+        assert_ne!(
+            context.task_id, 0,
+            "trap context must carry the execution's fresh task identity"
+        );
         assert!(context.truncated);
         assert!(context.total_frames > 64);
         assert_eq!(context.frames.len(), 64);
@@ -497,7 +519,10 @@ mod tests {
         assert!(matches!(result, VMResult::Unreachable));
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::Unreachable));
-        assert_eq!(context.task_id, 0);
+        assert_ne!(
+            context.task_id, 0,
+            "trap context must carry the execution's fresh task identity"
+        );
     }
 
     #[cfg(feature = "jit")]

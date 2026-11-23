@@ -5,11 +5,12 @@ use std::{env, fs};
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use telomere::{
     component_support::common::{FuncType, ValType},
-    host_abi::{
-        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
+    instantiate,
+    unstable_internals::{
+        instantiate_raw_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
     },
-    instantiate, InstanceHandle, IoReadBinaryReader, Registry, ResultValue, RuntimeConfig, Store,
-    VMResult, WasmParser, WasmValue,
+    InstanceHandle, IoReadBinaryReader, Registry, ResultValue, RuntimeConfig, Store, VMResult,
+    WasmParser, WasmValue,
 };
 use tokio::runtime::Runtime;
 
@@ -411,7 +412,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         b.to_async(&rt).iter_custom(|iters| async move {
             let store = benchmark_store(metering_mode);
             let mut registry = Registry::new();
-            let host = match instantiate_native_module(
+            let host = match instantiate_raw_native_module(
                 NativeModule {
                     functions: vec![HostFunctionDefinition {
                         name: Some("add-one".to_owned()),

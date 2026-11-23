@@ -29,9 +29,28 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ComponentError::GuestTrap` preserves the core `TrapKind` for guest traps
   crossing the component boundary, so component-level callers can match on
   the trap cause instead of parsing a message string.
+- `HostContext::with_memory` and `HostContext::with_caller_memory` closure
+  accessors on the public host boundary (#216). Unlike `memory` /
+  `caller_memory`, which return `None` when the default memory is shared,
+  the closure form dispatches to a shared memory under its lock, restoring
+  the reach the raw pre-#216 callback surface had.
 
 ### Changed
 
+- **Breaking:** replaced the raw host-linking ABI with a designed public
+  boundary (#216). Host callbacks are now `HostFn`/`AsyncHostFn` functions
+  receiving a `HostContext` (decoded `WasmValue` arguments, the owning
+  `Store`, guest-memory access) and returning `VMResult<Vec<WasmValue>>`;
+  native modules are `HostModule`/`AsyncHostModule` built from
+  `HostFnDefinition`/`AsyncHostFnDefinition`. The `telomere::host_abi`
+  module is removed, `Module::codes` is crate-private, and the driver
+  surface exposes opaque `HostCallFuture`/`HostCallOutcome` wrappers
+  instead of interpreter continuations. The raw ABI (raw `ExecuteContext`
+  callbacks, `NativeModule`, `link_raw_*` / `instantiate_raw_*` entry
+  points) remains available behind the opt-in `unstable-internals`
+  feature. The component-model host trampoline and the telomere test
+  suite's ordinary host functions migrated to the new boundary; the CLI's
+  Preview1 support stays on the raw opt-in surface pending #137.
 - **Breaking:** split the spec trap causes out of `VMResult::InvalidOperand`.
   Integer division/remainder by zero now returns `VMResult::DivideByZero`,
   signed division overflow returns `VMResult::IntegerOverflow`, and a failed
@@ -72,6 +91,36 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Fixed baseline JIT trap emission to continue scanning and emit labels for enclosing live
   paths with a normalized cached-register stack depth.
+- A submitted asynchronous host call's future no longer writes its result
+  values into the suspended task's return slot when it is polled (#216
+  review). The future is owned by the embedder's driver and could still be
+  polled after the submitting execution was dropped — freeing the scheduler
+  and the task stack — which wrote through a dangling slot pointer. The
+  future now resolves to the callback's values, and the scheduler performs
+  the validated return-slot write when it applies the completion.
+- Completions from an embedder driver are now bound to the execution that
+  submitted them (#216 re-review). Root tasks take a fresh, process-unique
+  task identity instead of the constant every run used to share, so if a
+  cancelled execution's driver is reused without being drained, its
+  retained completion names no task of the later execution and the
+  scheduler discards the stale outcome before any return-slot write or
+  resume — including when the two runs' host calls have different
+  signatures.
+- Task identities are now 64-bit throughout the driver surface
+  (`PendingOp::task_id`, the pending structs, and `Completion::task_id`),
+  widened from `u32` (#216 re-review). A 32-bit process-wide counter
+  would wrap after 2^32 executions in a long-lived process and reissue
+  an identity, letting a completion retained by a driver name a task of
+  a later execution again; 2^64 identities cannot be exhausted in
+  practice, so identities are never reused.
+- The raw code-pointer accessor behind `unstable-internals` no longer
+  panics on callbacks registered through the public host boundary (#216
+  re-review). `function_host_code_pointer` gated on "host and not async",
+  which admits public synchronous callbacks, and then reached an
+  `unreachable!` because a public callback's signature cannot be
+  represented by the raw `HostFunction` type. The accessor now matches
+  `FunctionBody::Host` explicitly and returns `None` for public
+  callbacks.
 
 ### Removed
 

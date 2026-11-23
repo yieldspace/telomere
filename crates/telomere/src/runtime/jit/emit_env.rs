@@ -113,6 +113,18 @@ pub(crate) trait EmitEnv {
 
     /// Drains the relocations recorded so far. JIT mode records none.
     fn take_relocs(&mut self) -> Vec<Reloc>;
+
+    /// Whether the emitters must instrument checkpoints for execution
+    /// metering (#171). Only the JIT environment can say yes: metering is
+    /// a property of the live store the code is compiled for, and that
+    /// store's JIT cache is private to it, so baking the flag into the
+    /// emitted bytes is sound. The AoT environment has no store and
+    /// always returns `false`; an AoT loader must therefore never install
+    /// its output into a metered store (it would run unmetered), a
+    /// constraint also recorded in `docs/core/metering.md`.
+    fn metering_enabled(&self) -> bool {
+        false
+    }
 }
 
 fn stack_layout(functype: &FuncType) -> (u32, u32) {
@@ -127,7 +139,10 @@ fn recipe_from_store(recipe: CallRecipe) -> EmitRecipe {
         return_size: recipe.return_size,
         fast_callee: match recipe.target {
             CallDispatchTarget::Wasm { .. } => Some(FastCallee::Store(recipe.frame.code_addr)),
-            CallDispatchTarget::Host(_) | CallDispatchTarget::AsyncHost(_) => None,
+            CallDispatchTarget::Host(_)
+            | CallDispatchTarget::AsyncHost(_)
+            | CallDispatchTarget::PublicHost(_)
+            | CallDispatchTarget::PublicAsyncHost(_) => None,
         },
     }
 }
@@ -136,11 +151,15 @@ fn recipe_from_store(recipe: CallRecipe) -> EmitRecipe {
 /// live store, exactly as the emitters behaved before #197.
 pub(crate) struct JitEmitEnv<'a> {
     runtime: &'a StoreInner,
+    /// #171: whether the owning store has execution metering enabled.
+    /// Fixed for the store's lifetime, and the store's JIT cache is
+    /// private to it, so the emitters may bake the flag into the code.
+    metered: bool,
 }
 
 impl<'a> JitEmitEnv<'a> {
-    pub(crate) fn new(runtime: &'a StoreInner) -> Self {
-        Self { runtime }
+    pub(crate) fn new(runtime: &'a StoreInner, metered: bool) -> Self {
+        Self { runtime, metered }
     }
 }
 
@@ -199,6 +218,10 @@ impl EmitEnv for JitEmitEnv<'_> {
 
     fn take_relocs(&mut self) -> Vec<Reloc> {
         Vec::new()
+    }
+
+    fn metering_enabled(&self) -> bool {
+        self.metered
     }
 }
 

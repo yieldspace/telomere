@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #268 (branch fix/241-sort-value at head 5536558521eca906c8ba5b2613fed4f3c4ded378 \u2014 branch commits 5b404d4 (the #241 value index space) and 5536558 (the Codex P1 follow-up adding the ValueBudget decode budget) on current main 3e1d335, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45138823545 and 45138835861 against the branch and pull-request run 45136051551, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "5536558521eca906c8ba5b2613fed4f3c4ded378",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #276 (branch fix/270-wait-timer-release at head 276a0e41ff732ad12d66df383ea48dc88b35c692 \u2014 branch commit 278de94 (release atomic.wait timer threads when the wait resolves) plus merge commit 276a0e4 bringing in current main 92b66b3, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45169595430 and 45169601657 against the branch and pull-request run 45169582070, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "276a0e41ff732ad12d66df383ea48dc88b35c692",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45138823545,
-      45138835861
+      45169595430,
+      45169601657
     ],
     "cross_check_run_ids": [
-      45136051551
+      45169582070
     ],
-    "derivation": "Re-baseline for PR #268 (#241, the component model value index space: Sort::Value, sort 0x02, value imports/exports). The PR implements the value index space end to end in telomere-component \u2014 decode, validation, instantiation and link-time resolution of value imports/exports, static literal decoding of the value section, and the linker\u2019s register_import_value \u2014 and a follow-up commit answers a Codex P1 review finding: a list whose element type has an empty encoding decoded its element count without consuming any input bytes, so a 26-byte component could materialise billions of values and abort the embedding process on allocation; the value decoder now charges every node materialised without consuming input bytes against a zero-width ValueBudget and checks list element counts against the remaining encoding bytes plus that budget before any element is materialised. The branch is based on current main (3e1d335) with no merge, so the first CI run tripped the gate on the PR\u2019s own change. Attribution was isolated by measuring current main (3e1d335) alone (workflow_dispatch run 45138848073, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR\u2019s own. The growth is confined to the three configurations that link the component runtime: component (release stripped file +50,568 B / stripped .text +44,720 B; release-size stripped file +28,664 B / stripped .text +25,024 B), wasi (release stripped file +48,056 B / stripped .text +42,640 B; release-size stripped file +28,856 B / stripped .text +25,216 B) and wasi-threads (release stripped file +48,040 B / stripped .text +42,640 B; release-size stripped file +28,824 B / stripped .text +25,200 B). The other 20 of the 32 gated series are byte-identical. Against the original #164 baseline, the largest cumulative growth is now the release-size component stripped .text series at +5.05% (1,169,031 B to 1,228,023 B), up from +3.54% (release-size core-jit stripped .text, unchanged by this PR). Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #276 (#270, atomic.wait timer threads are released when the wait resolves: SharedWaiter gains a release (Mutex, Condvar) pair signalled by the successful CAS claim in try_mark_notified / try_mark_interrupted; the per-wait timer thread sleeps in the condvar's wait_timeout and exits as soon as the wait is resolved instead of sleeping to the original deadline, and registrations already resolved before wait_result is polled spawn no thread at all). The branch merged current main (92b66b3, containing PRs #269, #273, #278 and #275) before measurement; the merge was conflict-free (main's only change to common/memory.rs was the push_to_stack visibility narrowing from PR #269, disjoint from the wait-timer code). The first CI run on the merged tree tripped the gate on this PR's own change. Attribution was isolated by measuring current main (92b66b3) alone (workflow_dispatch run 45169608064, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. The growth is confined to wasi-threads, the configuration with the threads feature that compiles the shared-wait timer code in crates/telomere/src/common/memory.rs: release stripped file +1,608 B / stripped .text +1,280 B; release-size +1,088 B / +800 B. The other 30 gated series are byte-identical; 2 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.41% (1,169,031 B to 1,232,247 B), unchanged, because that series does not move here. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -30,72 +30,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1478832,
-          "threshold": 1478832
+          "baseline": 1493584,
+          "threshold": 1493584
         },
         "stripped_text_bytes": {
-          "baseline": 1131399,
-          "threshold": 1131399
+          "baseline": 1143303,
+          "threshold": 1143303
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2525936,
-          "threshold": 2525936
+          "baseline": 2537392,
+          "threshold": 2537392
         },
         "stripped_text_bytes": {
-          "baseline": 2027911,
-          "threshold": 2027911
+          "baseline": 2036775,
+          "threshold": 2036775
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2869968,
-          "threshold": 2869968
+          "baseline": 2881392,
+          "threshold": 2881392
         },
         "stripped_text_bytes": {
-          "baseline": 2288039,
-          "threshold": 2288039
+          "baseline": 2296903,
+          "threshold": 2296903
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1286200,
-          "threshold": 1286200
+          "baseline": 1300968,
+          "threshold": 1300968
         },
         "stripped_text_bytes": {
-          "baseline": 988295,
-          "threshold": 988295
+          "baseline": 1000199,
+          "threshold": 1000199
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2016976,
-          "threshold": 2016976
+          "baseline": 2038040,
+          "threshold": 2038040
         },
         "stripped_text_bytes": {
-          "baseline": 1569751,
-          "threshold": 1569751
+          "baseline": 1586951,
+          "threshold": 1586951
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1506352,
-          "threshold": 1506352
+          "baseline": 1520816,
+          "threshold": 1520816
         },
         "stripped_text_bytes": {
-          "baseline": 1150583,
-          "threshold": 1150583
+          "baseline": 1162215,
+          "threshold": 1162215
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3056280,
-          "threshold": 3056280
+          "baseline": 3069760,
+          "threshold": 3069760
         },
         "stripped_text_bytes": {
-          "baseline": 2426807,
-          "threshold": 2426807
+          "baseline": 2437351,
+          "threshold": 2437351
         }
       }
     },
@@ -112,72 +112,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1097848,
-          "threshold": 1097848
+          "baseline": 1105936,
+          "threshold": 1105936
         },
         "stripped_text_bytes": {
-          "baseline": 776999,
-          "threshold": 776999
+          "baseline": 782311,
+          "threshold": 782311
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1659016,
-          "threshold": 1659016
+          "baseline": 1665840,
+          "threshold": 1665840
         },
         "stripped_text_bytes": {
-          "baseline": 1228023,
-          "threshold": 1228023
+          "baseline": 1232247,
+          "threshold": 1232247
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1854872,
-          "threshold": 1854872
+          "baseline": 1861696,
+          "threshold": 1861696
         },
         "stripped_text_bytes": {
-          "baseline": 1359751,
-          "threshold": 1359751
+          "baseline": 1363959,
+          "threshold": 1363959
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 983008,
-          "threshold": 983008
+          "baseline": 991160,
+          "threshold": 991160
         },
         "stripped_text_bytes": {
-          "baseline": 697415,
-          "threshold": 697415
+          "baseline": 702791,
+          "threshold": 702791
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1532440,
-          "threshold": 1532440
+          "baseline": 1545272,
+          "threshold": 1545272
         },
         "stripped_text_bytes": {
-          "baseline": 1095175,
-          "threshold": 1095175
+          "baseline": 1104343,
+          "threshold": 1104343
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1117216,
-          "threshold": 1117216
+          "baseline": 1125368,
+          "threshold": 1125368
         },
         "stripped_text_bytes": {
-          "baseline": 788503,
-          "threshold": 788503
+          "baseline": 793879,
+          "threshold": 793879
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1996184,
-          "threshold": 1996184
+          "baseline": 2004176,
+          "threshold": 2004176
         },
         "stripped_text_bytes": {
-          "baseline": 1453223,
-          "threshold": 1453223
+          "baseline": 1458391,
+          "threshold": 1458391
         }
       }
     }

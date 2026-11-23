@@ -96,13 +96,8 @@ pub(crate) mod parser;
 #[doc(hidden)]
 pub(crate) mod runtime;
 
-/// Raw host-linking ABI kept public for the default embedding capability.
-///
-/// This compatibility carve-out exposes interpreter representation required by
-/// synchronous and asynchronous host-function linking. It remains public so the
-/// documented support matrix and embedding examples work in default builds; its
-/// eventual closure is tracked by issue #216.
-pub mod host_abi;
+#[doc(hidden)]
+pub(crate) mod host;
 
 /// Unstable interpreter internals for opt-in downstream integrations.
 #[cfg(feature = "unstable-internals")]
@@ -135,6 +130,8 @@ pub use common::InstanceHandle;
 pub use common::InterruptReason;
 /// Configures the optional lazy baseline JIT for a [`Store`].
 pub use common::JitConfig;
+/// Guest memory accessible to host functions and embedders.
+pub use common::Memory;
 /// Sets resource limits for memories created by a [`Store`].
 pub use common::MemoryConfig;
 /// Configures Store-scoped guest execution metering.
@@ -163,6 +160,22 @@ pub use common::VMResult;
 pub use common::WasmValue;
 /// Owns runtime state, resources, and optional embedder state for instantiated modules.
 pub use common::{Store, StoreState};
+/// An asynchronous host function written against the public boundary.
+pub use host::AsyncHostFn;
+/// An asynchronous host function and its WebAssembly signature.
+pub use host::AsyncHostFnDefinition;
+/// A collection of asynchronous host functions instantiable as a module.
+pub use host::AsyncHostModule;
+/// The context supplied to a host function while a guest call is in flight.
+pub use host::HostContext;
+/// A synchronous host function written against the public boundary.
+pub use host::HostFn;
+/// A synchronous host function and its WebAssembly signature.
+pub use host::HostFnDefinition;
+/// The future returned by an asynchronous host function.
+pub use host::HostFuture;
+/// A collection of synchronous host functions instantiable as a module.
+pub use host::HostModule;
 /// Identifies a WebAssembly proposal when parsing rejects an unsupported feature.
 pub use parser::core::ProposalFeature;
 /// Parses a core WebAssembly binary into a [`Module`].
@@ -185,30 +198,16 @@ pub use runtime::jit::JitCacheStats;
 pub use runtime::jit_supported;
 
 /// Instantiates a native module whose host functions return futures.
-///
-/// This exposes raw interpreter continuations to preserve default asynchronous
-/// host linking advertised by Telomere's support matrix and embedding examples.
-/// The compatibility carve-out is tracked by issue #216.
 pub use runtime::instantiate::instantiate_native_async_module;
+/// Instantiates a native module made of synchronous host functions.
+pub use runtime::instantiate::instantiate_native_module;
 /// Replaces an exported guest function with an asynchronous host callback.
-///
-/// This raw callback ABI remains public for default asynchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::instantiate::link_async_host_function_with_export_name;
 /// Replaces a guest function by index with an asynchronous host callback.
-///
-/// This raw callback ABI remains public for default asynchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::instantiate::link_async_host_function_with_function_idx;
 /// Replaces an exported guest function with a synchronous host callback.
-///
-/// This raw callback ABI remains public for default synchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::instantiate::link_host_function_with_export_name;
 /// Replaces a guest function by index with a synchronous host callback.
-///
-/// This raw callback ABI remains public for default synchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::instantiate::link_host_function_with_function_idx;
 #[cfg(feature = "unstable-internals")]
 /// Marks the current host call as returning through the runtime's special path.
@@ -219,46 +218,32 @@ pub use runtime::instantiate::link_host_function_with_function_idx;
 /// Issue #216 tracks its replacement.
 pub use runtime::vm::special_function_return;
 
+#[cfg(feature = "threads")]
+/// Shared guest memory carried by a [`MemoryWaitPending`] to a driver.
+pub use common::memory::SharedMemoryObject;
+#[cfg(feature = "threads")]
+/// A registration for a pending shared-memory wait, consumed by drivers.
+pub use common::memory::SharedWaitRegistration;
 /// Calls a named exported function using an embedder-provided async driver.
-///
-/// This exposes raw continuations so default asynchronous host linking can use
-/// an embedder executor. Issue #216 tracks the compatibility carve-out.
 pub use runtime::run_module_function_with_driver;
 /// A completion delivered by an [`ExecutionDriver`].
-///
-/// This raw driver value remains public for default asynchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::Completion;
 /// The result payload carried by a [`Completion`].
-///
-/// This raw driver value remains public for default asynchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::CompletionPayload;
 /// Integrates pending WebAssembly operations with an embedder's async executor.
-///
-/// This raw driver trait remains public for default asynchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::ExecutionDriver;
+/// An opaque pending asynchronous host call a driver polls to completion.
+pub use runtime::HostCallFuture;
+/// The opaque result of a completed asynchronous host call.
+pub use runtime::HostCallOutcome;
 /// A pending asynchronous host-function invocation.
-///
-/// This raw driver value remains public for default asynchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::HostCallPending;
 #[cfg(feature = "threads")]
 /// A pending wait on shared WebAssembly memory.
-///
-/// This raw driver value remains public for default asynchronous host linking
-/// with threads; issue #216 tracks its replacement.
 pub use runtime::MemoryWaitPending;
 /// Work submitted by the runtime to an [`ExecutionDriver`].
-///
-/// This raw driver value remains public for default asynchronous host linking;
-/// issue #216 tracks its replacement.
 pub use runtime::PendingOp;
 /// The default driver for async host calls and shared-memory waits.
-///
-/// This raw driver remains public for default asynchronous host linking; issue
-/// #216 tracks its replacement.
 pub use runtime::TokioDriver;
 #[cfg(feature = "unstable-internals")]
 /// A reserved pending operation for future guest async support.

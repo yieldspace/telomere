@@ -1,6 +1,8 @@
 #[cfg(feature = "threads")]
 use super::memory_effect::MemoryWaitPending;
-use super::memory_effect::{Completion, CompletionPayload, HostCallPending, PendingOp};
+use super::memory_effect::{
+    Completion, CompletionPayload, HostCallPending, HostCallResult, PendingOp,
+};
 use super::trap_context::{capture_trap_context, TrapContext};
 use crate::{
     common::{
@@ -42,7 +44,7 @@ pub(crate) enum ReadyFlag {
 
 #[derive(Debug)]
 pub(crate) struct Task {
-    pub task_id: u32,
+    pub task_id: u64,
     pub stack: Stack,
     pub local_reference: LocalReference,
     pub pending_effects: u32,
@@ -65,8 +67,43 @@ pub(crate) enum SyncRunError {
     Stalled,
 }
 
+/// Source of identities for top-level execution tasks.
+///
+/// A driver matches completions to tasks purely by `task_id`, and an
+/// embedder's driver may retain a completion past the execution that
+/// submitted it: when the execution future is cancelled, the scheduler
+/// and its tasks are dropped while the driver keeps the submitted
+/// future, and a later execution reusing the same (undrained) driver
+/// can be handed the stale completion. Root tasks therefore take a
+/// fresh identity from this process-wide counter instead of a
+/// constant, so a retained completion can never name a task of a
+/// later execution and [`Scheduler::apply_completion`] discards it
+/// before any stack write or resume.
+///
+/// The counter is 64 bits wide, so identities are never reissued: a
+/// 32-bit counter would wrap after 2^32 allocations in a long-lived
+/// process and hand a retained stale completion the identity of a new
+/// task, while exhausting 2^64 identities is unreachable in practice
+/// (at a sustained 10^9 allocations per second it would take roughly
+/// 585 years). There is therefore no wrap or exhaustion path to fail
+/// closed on.
+static NEXT_TASK_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Allocates a task identity unique across executions in this process.
+pub(crate) fn fresh_task_id() -> u64 {
+    NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Test hook: advances the identity counter to at least `floor`, so
+/// boundary behaviour can be exercised without allocating billions of
+/// identities. Never moves the counter backwards.
+#[cfg(test)]
+pub(crate) fn seed_task_id_floor(floor: u64) {
+    NEXT_TASK_ID.fetch_max(floor, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) struct EffectSupplier<'a> {
-    task_id: u32,
+    task_id: u64,
     pending_effects: &'a mut u32,
     queue: &'a mut VecDeque<PendingOp>,
 }
@@ -78,7 +115,7 @@ impl EffectSupplier<'_> {
 
     #[cfg(test)]
     pub(crate) fn from_parts<'a>(
-        task_id: u32,
+        task_id: u64,
         pending_effects: &'a mut u32,
         queue: &'a mut VecDeque<PendingOp>,
     ) -> EffectSupplier<'a> {
@@ -201,6 +238,10 @@ pub(crate) struct Scheduler<'a> {
     pub(crate) completed_tasks: Vec<CompletedTask>,
     pub(crate) store: &'a Store,
     ready_count: u32,
+    /// Host frames of in-flight host calls, by task, retained so an
+    /// asynchronously completing trap is attributed to the host frame
+    /// (#211) rather than to the already-resumed caller frame.
+    host_call_frames: std::collections::HashMap<u64, LocalReference>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -211,6 +252,7 @@ impl<'a> Scheduler<'a> {
             completed_tasks: vec![],
             store,
             ready_count: 0,
+            host_call_frames: std::collections::HashMap::new(),
         }
     }
 
@@ -224,6 +266,10 @@ impl<'a> Scheduler<'a> {
 
     fn submit_pending_ops<D: ExecutionDriver>(&mut self, driver: &mut D) {
         while let Some(op) = self.pending_queue.pop_front() {
+            if let PendingOp::HostCall(pending) = &op {
+                self.host_call_frames
+                    .insert(pending.task_id, pending.frame_reference);
+            }
             driver.submit(op);
         }
     }
@@ -234,7 +280,16 @@ impl<'a> Scheduler<'a> {
             .iter()
             .position(|task| task.task_id == completion.task_id)
         else {
+            // No live task carries this identity: the completion belongs
+            // to an earlier execution that shared this driver (task ids
+            // are unique per execution; see `fresh_task_id`). Discard
+            // the stale outcome without writing or resuming anything.
             return;
+        };
+        let host_frame = if matches!(completion.payload, CompletionPayload::HostCall { .. }) {
+            self.host_call_frames.remove(&completion.task_id)
+        } else {
+            None
         };
         match completion.payload {
             CompletionPayload::Resume { fp } => {
@@ -314,71 +369,109 @@ impl<'a> Scheduler<'a> {
                     });
                 }
             }
-            CompletionPayload::HostCall { result } => match result {
-                VMResult::Success(fp) => {
-                    let runtime = self.store.lock_runtime_or_panic();
-                    let fp = {
-                        let task = self.tasks.get_mut(task_index).unwrap();
-                        StablePc::from_raw_in_frame(&runtime, &task.stack, task.local_reference, fp)
-                    };
-                    let mut complete_result = None;
-                    {
-                        let task = self.tasks.get_mut(task_index).unwrap();
-                        task.pending_effects -= 1;
-                        task.fp = fp;
-                        if task.pending_effects == 0 {
-                            if let Some(result) = task.terminal_result.take() {
-                                complete_result = Some((result, task.terminal_trap.take()));
-                            } else {
-                                task.ready_flag = ReadyFlag::Ready;
-                                self.ready_count += 1;
+            CompletionPayload::HostCall { result } => {
+                // A public-boundary host call resolves to its callback's
+                // values rather than a resume address. Write the values
+                // into the suspended frame's return slot here, where the
+                // scheduler owns the task's stack, and reduce the outcome
+                // to the raw resume form handled below. The submitted
+                // future itself never touches the stack, so a driver may
+                // safely keep polling it even after the submitting
+                // execution has been dropped.
+                let result = match result.into_result() {
+                    HostCallResult::Resume(result) => result,
+                    HostCallResult::Values {
+                        result: VMResult::Success(values),
+                        return_addr,
+                        result_types,
+                    } => match host_frame {
+                        Some(frame) => {
+                            let task = self.tasks.get_mut(task_index).unwrap();
+                            // SAFETY: `frame` is the host frame recorded when
+                            // this call was submitted; its return slot is the
+                            // start of its local area, and the pointer is used
+                            // only for this write while the task is held here.
+                            let slot = unsafe { task.stack.local_area_mut_ptr(&frame) };
+                            match crate::host::write_result_values(slot, &result_types, &values) {
+                                VMResult::Success(_) => VMResult::Success(return_addr),
+                                other => other.propagate_failure(),
                             }
                         }
-                    }
-                    if let Some((result, trap)) = complete_result {
-                        let task = self.tasks.remove(task_index).unwrap();
-                        self.completed_tasks.push(CompletedTask {
-                            stack: task.stack,
-                            result,
-                            trap,
-                        });
-                    }
-                }
-                other => {
-                    let result = vm_result_to_unit(other);
-                    let trap = {
+                        None => VMResult::InvalidOperand,
+                    },
+                    HostCallResult::Values { result: other, .. } => other.propagate_failure(),
+                };
+                match result {
+                    VMResult::Success(fp) => {
                         let runtime = self.store.lock_runtime_or_panic();
-                        let task = self.tasks.get(task_index).unwrap();
-                        capture_trap_context(
-                            &runtime,
-                            &task.stack,
-                            task.local_reference,
-                            None,
-                            &result,
-                            task.task_id,
-                        )
-                    };
-                    let mut complete_result = None;
-                    {
-                        let task = self.tasks.get_mut(task_index).unwrap();
-                        task.pending_effects -= 1;
-                        if task.pending_effects == 0 {
-                            complete_result = Some((result, trap));
-                        } else {
-                            task.terminal_result = Some(result);
-                            task.terminal_trap = Some(trap);
+                        let fp = {
+                            let task = self.tasks.get_mut(task_index).unwrap();
+                            StablePc::from_raw_in_frame(
+                                &runtime,
+                                &task.stack,
+                                task.local_reference,
+                                fp,
+                            )
+                        };
+                        let mut complete_result = None;
+                        {
+                            let task = self.tasks.get_mut(task_index).unwrap();
+                            task.pending_effects -= 1;
+                            task.fp = fp;
+                            if task.pending_effects == 0 {
+                                if let Some(result) = task.terminal_result.take() {
+                                    complete_result = Some((result, task.terminal_trap.take()));
+                                } else {
+                                    task.ready_flag = ReadyFlag::Ready;
+                                    self.ready_count += 1;
+                                }
+                            }
+                        }
+                        if let Some((result, trap)) = complete_result {
+                            let task = self.tasks.remove(task_index).unwrap();
+                            self.completed_tasks.push(CompletedTask {
+                                stack: task.stack,
+                                result,
+                                trap,
+                            });
                         }
                     }
-                    if let Some((result, trap)) = complete_result {
-                        let task = self.tasks.remove(task_index).unwrap();
-                        self.completed_tasks.push(CompletedTask {
-                            stack: task.stack,
-                            result,
-                            trap: Some(trap),
-                        });
+                    other => {
+                        let result = vm_result_to_unit(other);
+                        let trap = {
+                            let runtime = self.store.lock_runtime_or_panic();
+                            let task = self.tasks.get(task_index).unwrap();
+                            capture_trap_context(
+                                &runtime,
+                                &task.stack,
+                                host_frame.unwrap_or(task.local_reference),
+                                None,
+                                &result,
+                                task.task_id,
+                            )
+                        };
+                        let mut complete_result = None;
+                        {
+                            let task = self.tasks.get_mut(task_index).unwrap();
+                            task.pending_effects -= 1;
+                            if task.pending_effects == 0 {
+                                complete_result = Some((result, trap));
+                            } else {
+                                task.terminal_result = Some(result);
+                                task.terminal_trap = Some(trap);
+                            }
+                        }
+                        if let Some((result, trap)) = complete_result {
+                            let task = self.tasks.remove(task_index).unwrap();
+                            self.completed_tasks.push(CompletedTask {
+                                stack: task.stack,
+                                result,
+                                trap: Some(trap),
+                            });
+                        }
                     }
                 }
-            },
+            }
             CompletionPayload::Interrupted => {
                 let result = VMResult::Cancelled;
                 let trap = {
@@ -665,9 +758,10 @@ impl<'a> Scheduler<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Completion, CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, ReadyFlag,
-        Scheduler, Task, TokioDriver,
+        fresh_task_id, seed_task_id_floor, Completion, CompletionPayload, ExecutionDriver,
+        HostCallPending, PendingOp, ReadyFlag, Scheduler, Task, TokioDriver,
     };
+    use crate::runtime::memory_effect::{HostCallFuture, HostCallResult};
     use crate::{
         common::{CallFrameCache, LocalReference, StablePc, Stack},
         Store, VMResult,
@@ -678,12 +772,21 @@ mod tests {
         let mut driver = TokioDriver::new();
         driver.submit(PendingOp::HostCall(HostCallPending {
             task_id: 3,
-            future: Box::pin(async { VMResult::Success(std::ptr::null()) }),
+            future: HostCallFuture::from_raw(Box::pin(async {
+                VMResult::Success(std::ptr::null())
+            })),
+            frame_reference: LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
         }));
         let completion = driver.next_completion().await.unwrap();
         match completion.payload {
             CompletionPayload::HostCall { result } => {
-                assert!(matches!(result, VMResult::Success(ptr) if ptr.is_null()));
+                assert!(matches!(
+                    result.into_result(),
+                    HostCallResult::Resume(VMResult::Success(ptr)) if ptr.is_null()
+                ));
             }
             other => panic!("unexpected completion: {other:?}"),
         }
@@ -797,5 +900,21 @@ mod tests {
             .pop()
             .expect("wasm async completion must finish the task");
         assert!(matches!(completed.result, VMResult::Unimplemented));
+    }
+
+    #[test]
+    fn task_ids_do_not_wrap_at_the_u32_boundary() {
+        // Seed the process-wide counter just below the former 32-bit
+        // boundary: allocations must cross it without wrapping or
+        // reissuing an identity a retained completion could still name.
+        // Successive allocations in one thread are strictly increasing
+        // even if other tests allocate concurrently, and the seed only
+        // ever moves the shared counter forward.
+        seed_task_id_floor(u64::from(u32::MAX) - 1);
+        let first = fresh_task_id();
+        let second = fresh_task_id();
+        let third = fresh_task_id();
+        assert!(first < second && second < third);
+        assert!(third > u64::from(u32::MAX));
     }
 }

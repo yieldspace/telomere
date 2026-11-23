@@ -41,8 +41,9 @@ Please note that the following are already known and documented, and are better
 filed as ordinary issues than as security reports:
 
 - the experimental JIT is not hardened and is not recommended for untrusted
-  guests. Metering and JIT are mutually exclusive: enabling metering on a Store
-  disables its JIT rather than offering an unmetered JIT execution path;
+  guests. Metering does cover JIT-compiled code (see
+  [docs/core/metering.md](docs/core/metering.md)), but that coverage is a
+  resource bound, not JIT hardening;
 - crashes reachable from a malformed or hostile component, including the
   resource-handle abort described in [examples/README.md](examples/README.md);
 - the public API boundary deliberately does not wrap calls in
@@ -54,7 +55,7 @@ filed as ordinary issues than as security reports:
   separately;
 - resource exhaustion by a guest whose embedder intentionally disables
   metering or chooses unlimited fuel. The library metering API bounds only its
-  documented checkpointed interpreter paths and precharges native bulk work by
+  documented checkpointed execution paths and precharges native bulk work by
   its extent before it begins. It is not a memory ceiling, does not impose a
   wall-clock deadline, does not interrupt a blocked host call, and does not
   interrupt an already started native bulk operation. It is not yet exposed by

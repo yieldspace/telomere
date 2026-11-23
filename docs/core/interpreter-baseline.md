@@ -38,6 +38,13 @@ L1 preserves the only score with an external comparison point. L2 includes
 startup, parsing, optimization, instantiation, execution, and teardown. L3 is
 never a release gate or a cross-runtime claim.
 
+A CI regression gate (#212) consumes this methodology's L2 corpus and its
+default/`jit` build cells as a ceiling check on every pull request; it is
+documented in [Performance regression gate](../benchmarks/performance.md).
+The gate's medians are ceiling-check statistics, not published baselines:
+publication still happens only through this document's quiet-window protocol
+and raw records. L3 remains local-only and is not the gate's instrument.
+
 ## Build and run matrix
 
 The matrix consists of four builds and six run cells. Interpreter cells do not

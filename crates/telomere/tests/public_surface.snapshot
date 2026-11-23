@@ -1,25 +1,37 @@
+telomere::AsyncHostFn | always
+telomere::AsyncHostFnDefinition | always
+telomere::AsyncHostModule | always
 telomere::Completion | always
 telomere::CompletionPayload | always
 telomere::DiagnosticsConfig | always
 telomere::ExecutionDriver | always
+telomere::HostCallFuture | always
+telomere::HostCallOutcome | always
 telomere::HostCallPending | always
+telomere::HostContext | always
+telomere::HostFn | always
+telomere::HostFnDefinition | always
+telomere::HostFuture | always
+telomere::HostModule | always
 telomere::InstanceHandle | always
 telomere::InterruptReason | always
 telomere::IoReadBinaryReader | always
 telomere::JitCacheStats | cfg(feature = "aot-load")
 telomere::JitConfig | always
 telomere::MAX_CONTROL_NESTING_DEPTH | always
+telomere::Memory | always
 telomere::MemoryConfig | always
 telomere::MemoryWaitPending | cfg(feature = "threads")
 telomere::MeteringConfig | always
 telomere::MeteringHandle | always
 telomere::Module | always
-telomere::Module::codes | always
 telomere::PendingOp | always
 telomere::ProposalFeature | always
 telomere::Registry | always
 telomere::ResultValue | always
 telomere::RuntimeConfig | always
+telomere::SharedMemoryObject | cfg(feature = "threads")
+telomere::SharedWaitRegistration | cfg(feature = "threads")
 telomere::Store | always
 telomere::Store::take_last_trap | always
 telomere::StoreState | always
@@ -95,30 +107,9 @@ telomere::component_support::runtime::instantiate | always
 telomere::component_support::runtime::run_core_export_sync_reentrant | always
 telomere::component_support::runtime::run_module_function | always
 telomere::get_global | always
-telomere::host_abi | always
-telomere::host_abi::AsyncHostFunction | always
-telomere::host_abi::AsyncHostFunctionDefinition | always
-telomere::host_abi::AsyncHostFuture | always
-telomere::host_abi::AsyncNativeModule | always
-telomere::host_abi::CodeSection | always
-telomere::host_abi::ExecuteContext | always
-telomere::host_abi::Func | always
-telomere::host_abi::FunctionBody | always
-telomere::host_abi::HostFunction | always
-telomere::host_abi::HostFunctionDefinition | always
-telomere::host_abi::Instr | always
-telomere::host_abi::LocalReference | always
-telomere::host_abi::Memory | always
-telomere::host_abi::NativeModule | always
-telomere::host_abi::ObjectRef | always
-telomere::host_abi::ReturnSlot | always
-telomere::host_abi::SharedMemoryObject | cfg(feature = "threads")
-telomere::host_abi::SharedWaitRegistration | cfg(feature = "threads")
-telomere::host_abi::Stack | always
-telomere::host_abi::StoreInner | always
-telomere::host_abi::instantiate_native_module | always
 telomere::instantiate | always
 telomere::instantiate_native_async_module | always
+telomere::instantiate_native_module | always
 telomere::jit_supported | always
 telomere::link_async_host_function_with_export_name | always
 telomere::link_async_host_function_with_function_idx | always
@@ -129,10 +120,29 @@ telomere::run_module_function | always
 telomere::run_module_function_with_driver | always
 telomere::special_function_return | cfg(feature = "unstable-internals")
 telomere::unstable_internals | cfg(feature = "unstable-internals")
+telomere::unstable_internals::AsyncHostFunction | cfg(feature = "unstable-internals")
+telomere::unstable_internals::AsyncHostFunctionDefinition | cfg(feature = "unstable-internals")
+telomere::unstable_internals::AsyncHostFuture | cfg(feature = "unstable-internals")
+telomere::unstable_internals::AsyncNativeModule | cfg(feature = "unstable-internals")
 telomere::unstable_internals::AtomicRmwOperation | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::CodeSection | cfg(feature = "unstable-internals")
+telomere::unstable_internals::ExecuteContext | cfg(feature = "unstable-internals")
+telomere::unstable_internals::Func | cfg(feature = "unstable-internals")
+telomere::unstable_internals::FunctionBody | cfg(feature = "unstable-internals")
+telomere::unstable_internals::HostFunction | cfg(feature = "unstable-internals")
+telomere::unstable_internals::HostFunctionDefinition | cfg(feature = "unstable-internals")
+telomere::unstable_internals::Instr | cfg(feature = "unstable-internals")
+telomere::unstable_internals::LocalReference | cfg(feature = "unstable-internals")
+telomere::unstable_internals::NativeModule | cfg(feature = "unstable-internals")
+telomere::unstable_internals::ObjectRef | cfg(feature = "unstable-internals")
 telomere::unstable_internals::Op | cfg(feature = "unstable-internals")
 telomere::unstable_internals::Operand | cfg(feature = "unstable-internals")
+telomere::unstable_internals::ReturnSlot | cfg(feature = "unstable-internals")
+telomere::unstable_internals::SharedMemoryObject | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::SharedWaitRegistration | cfg(feature = "threads") && cfg(feature = "unstable-internals")
 telomere::unstable_internals::SharedWaitState | cfg(feature = "threads") && cfg(feature = "unstable-internals")
+telomere::unstable_internals::Stack | cfg(feature = "unstable-internals")
+telomere::unstable_internals::StoreInner | cfg(feature = "unstable-internals")
 telomere::unstable_internals::ValueSize | cfg(feature = "unstable-internals")
 telomere::unstable_internals::current_function_index | cfg(feature = "unstable-internals")
 telomere::unstable_internals::function_address | cfg(feature = "unstable-internals")
@@ -141,6 +151,12 @@ telomere::unstable_internals::function_code_pointer | cfg(feature = "unstable-in
 telomere::unstable_internals::function_host_code_pointer | cfg(feature = "unstable-internals")
 telomere::unstable_internals::function_is_host | cfg(feature = "unstable-internals")
 telomere::unstable_internals::function_locals_size | cfg(feature = "unstable-internals")
+telomere::unstable_internals::instantiate_raw_native_async_module | cfg(feature = "unstable-internals")
+telomere::unstable_internals::instantiate_raw_native_module | cfg(feature = "unstable-internals")
+telomere::unstable_internals::link_raw_async_host_function_with_export_name | cfg(feature = "unstable-internals")
+telomere::unstable_internals::link_raw_async_host_function_with_function_idx | cfg(feature = "unstable-internals")
+telomere::unstable_internals::link_raw_host_function_with_export_name | cfg(feature = "unstable-internals")
+telomere::unstable_internals::link_raw_host_function_with_function_idx | cfg(feature = "unstable-internals")
 telomere::unstable_internals::module_name | cfg(feature = "unstable-internals")
 telomere::unstable_internals::new_shared_memory | cfg(feature = "threads") && cfg(feature = "unstable-internals")
 telomere::unstable_internals::pending_effect_count | cfg(feature = "unstable-internals")

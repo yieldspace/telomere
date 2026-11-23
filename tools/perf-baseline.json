@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "source": {
+    "summary": "GitHub Actions 'Performance gate' runs 45146333434, 45148203571, 45148210616, 45148216951 and 45148222925 for PR branch fix/212-perf-gate (tree 252ff04c50ba40a120c1be7bba92a9905ad136ab, identical across the five runs; ubuntu-24.04, Rust 1.96.0)",
+    "commit": "43feb4c (tree-identical head 114b1f2dface58cc9f073ac9efcb4de16fbfc316)",
+    "tree": "252ff04c50ba40a120c1be7bba92a9905ad136ab",
+    "date": "2026-11-23",
+    "runner": "ubuntu-24.04",
+    "toolchain": "1.96.0",
+    "sample_size": 5,
+    "run_ids": [
+      45146333434,
+      45148203571,
+      45148210616,
+      45148216951,
+      45148222925
+    ],
+    "derivation": "Initial establishment for #212. Five 'Performance gate' runs of tree 252ff04c50ba40a120c1be7bba92a9905ad136ab (branch commits fd074ac, the gate itself, and 43feb4c, an establishment-only push trigger, on main f3d4830; runs 2-5 were pushed as empty commits, so all five runs measured byte-identical code and tooling) on ubuntu-24.04 / Rust 1.96.0. The five runs landed on five different CPU models (AMD EPYC 9V45, AMD EPYC 7763, AMD EPYC 9V74, Intel Xeon 6973P-C, Intel Xeon 6975P-C), and absolute per-cell medians for identical code spread 59.6-202.8% (loop-linear) and 72.1-106.7% (repeat-fib32) across runs purely from host allocation, so absolute wall times are recorded with advisory ceilings only (baseline x 1.25, warning, never a failure). The gated series are the two within-run ratios: jit_feature_tax_ratio spread 12.7% / 7.9% across the same runs (baselines are the runs' medians 1.098992 / 1.09026; ceilings are baseline x 1.20 = 1.3188 / 1.3084, above the worst observed runs at baseline x 1.08 / x 1.02 and far below the historical 2.0x tax), and jit_speed_ratio (baselines 0.684745 / 2.019301; ceilings are the worst observed run x 1.25 = 1.4220 / 2.9894, because loop-linear's worst run already sits at baseline x 1.66 and a median-derived margin would false-fire on observed fleet behaviour). Per #184 the ceilings are provisional conservative policy margins, not optima derived from an A/A floor. Full per-run numbers: docs/benchmarks/performance.md, 'Observed run-to-run variance on CI'."
+  },
+  "thresholds": {
+    "loop-linear": {
+      "cells": {
+        "default-interp": {
+          "baseline_median_ns": 4196513549,
+          "advisory_ceiling_ns": 5245641936
+        },
+        "jit-interp": {
+          "baseline_median_ns": 4933947856,
+          "advisory_ceiling_ns": 6167434820
+        },
+        "jit-jit": {
+          "baseline_median_ns": 2623767992,
+          "advisory_ceiling_ns": 3279709990
+        }
+      },
+      "jit_feature_tax_ratio": {
+        "baseline": 1.098992,
+        "ceiling": 1.3188
+      },
+      "jit_speed_ratio": {
+        "baseline": 0.684745,
+        "ceiling": 1.422
+      }
+    },
+    "repeat-fib32": {
+      "cells": {
+        "default-interp": {
+          "baseline_median_ns": 5166259011,
+          "advisory_ceiling_ns": 6457823763
+        },
+        "jit-interp": {
+          "baseline_median_ns": 5499237484,
+          "advisory_ceiling_ns": 6874046855
+        },
+        "jit-jit": {
+          "baseline_median_ns": 10601385897,
+          "advisory_ceiling_ns": 13251732371
+        }
+      },
+      "jit_feature_tax_ratio": {
+        "baseline": 1.09026,
+        "ceiling": 1.3084
+      },
+      "jit_speed_ratio": {
+        "baseline": 2.019301,
+        "ceiling": 2.9894
+      }
+    }
+  }
+}
