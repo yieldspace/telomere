@@ -880,6 +880,22 @@ pub union Operand {
 /// Replacing pointer identity with explicit op ids in `Instr` would remove
 /// this contract, but that is a dispatch-representation change owned by
 /// #179/#189 and is deliberately not part of #240.
+///
+/// The barrier's *form* matters as much as its presence. `black_box`
+/// materialises its argument in an address-taken stack slot, and at every
+/// barrier site on a dispatch path that slot made LLVM drop the sibling
+/// call for the handler's `call_next` dispatch, so each execution left a
+/// live host frame behind and a long loop over the handler overflowed
+/// the host stack (#277, found first in `op_f64_const`). The #285 audit
+/// found all 264 barrier-bearing handlers dispatching non-tail. Barrier
+/// sites on dispatch paths therefore use a volatile load of the same
+/// function-local static instead: a volatile load of a static that is
+/// never written cannot be elided or folded to a constant, it keeps the
+/// body distinct, and it leaves no frame state, so the dispatch stays a
+/// tail jump. The one deliberate exception is `op_return`, whose
+/// dispatch target is the terminal return continuation, so no frame can
+/// accumulate across iterations. New or changed barrier sites on hot
+/// dispatch paths need their generated dispatch checked for a tail jump.
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
 #[derive(Clone, Copy)]
 pub union Instr {
