@@ -1510,13 +1510,20 @@ pub unsafe fn f32x4_replace_lane(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `i32x4_replace_lane`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The barrier is a volatile load rather than `black_box` of
+    // the static's address: see the `Op` contract in `common.rs`
+    // (#285).
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static
+        // that is never written, so a volatile read of it is
+        // in-bounds and cannot race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     let lane = (*tail_code).operand.u32 as usize;
     let value = ctx.stack.pop_f32().to_le_bytes();
@@ -1581,13 +1588,20 @@ pub unsafe fn f64x2_replace_lane(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `i64x2_replace_lane`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The barrier is a volatile load rather than `black_box` of
+    // the static's address: see the `Op` contract in `common.rs`
+    // (#285).
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static
+        // that is never written, so a volatile read of it is
+        // in-bounds and cannot race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     let lane = (*tail_code).operand.u32 as usize;
     let value = ctx.stack.pop_f64().to_le_bytes();

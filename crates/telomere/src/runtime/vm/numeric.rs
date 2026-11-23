@@ -75,13 +75,20 @@ pub unsafe fn op_i32_crc16_update16_masked(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `op_i32_crc16_update16` (the `& 0xffff` mask is provably redundant), whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The barrier is a volatile load rather than `black_box` of
+    // the static's address: see the `Op` contract in `common.rs`
+    // (#285).
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static
+        // that is never written, so a volatile read of it is
+        // in-bounds and cannot race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     profile_numeric_family("op_i32_crc16_update16_masked");
     let data_local = (*tail_code).operand.local_addr as usize;

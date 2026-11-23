@@ -3414,13 +3414,20 @@ macro_rules! define_indexed_push_load {
         #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
@@ -3449,13 +3456,20 @@ macro_rules! define_indexed_push_load {
         #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
@@ -3488,13 +3502,20 @@ macro_rules! define_indexed_scalar_load {
         #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
@@ -3522,13 +3543,20 @@ macro_rules! define_indexed_scalar_load {
         #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
@@ -3560,13 +3588,20 @@ macro_rules! define_indexed_store_alias {
         #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             store_internal_local_indexed(tail_code, ctx, stringify!($local), $make_operation)
         }
@@ -3589,13 +3624,20 @@ macro_rules! define_indexed_store_alias {
         #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             store_internal_shared_indexed(tail_code, ctx, stringify!($shared), $make_operation)
         }
@@ -3609,13 +3651,20 @@ macro_rules! define_local_base_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
@@ -3632,13 +3681,20 @@ macro_rules! define_indexed_local_base_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
@@ -3659,13 +3715,20 @@ macro_rules! define_local_base_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
@@ -3683,13 +3746,20 @@ macro_rules! define_indexed_local_base_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
@@ -3706,13 +3776,20 @@ macro_rules! define_local_base_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             store_internal_local_base(tail_code, ctx, stringify!($name), $make_operation)
@@ -3726,13 +3803,20 @@ macro_rules! define_indexed_local_base_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             store_internal_indexed_local_base(tail_code, ctx, stringify!($name), $make_operation)
@@ -4420,13 +4504,20 @@ macro_rules! define_shared_local_base_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_base(tail_code, ctx));
@@ -4447,13 +4538,20 @@ macro_rules! define_indexed_shared_local_base_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_shared_local_base(tail_code, ctx));
@@ -4474,13 +4572,20 @@ macro_rules! define_shared_local_base_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_base(tail_code, ctx));
@@ -4500,13 +4605,20 @@ macro_rules! define_indexed_shared_local_base_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_shared_local_base(tail_code, ctx));
@@ -4523,13 +4635,20 @@ macro_rules! define_shared_local_base_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             store_internal_shared_local_base(tail_code, ctx, stringify!($name), $make_operation)
@@ -4543,13 +4662,20 @@ macro_rules! define_indexed_shared_local_base_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             store_internal_indexed_shared_local_base(
@@ -4569,13 +4695,20 @@ macro_rules! define_local_scaled_index_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
@@ -4592,13 +4725,20 @@ macro_rules! define_indexed_local_scaled_index_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
@@ -4619,13 +4759,20 @@ macro_rules! define_shared_local_scaled_index_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
@@ -4646,13 +4793,20 @@ macro_rules! define_indexed_shared_local_scaled_index_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let (start, memidx) =
@@ -4674,13 +4828,20 @@ macro_rules! define_local_scaled_index_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
@@ -4698,13 +4859,20 @@ macro_rules! define_indexed_local_scaled_index_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
@@ -4722,13 +4890,20 @@ macro_rules! define_shared_local_scaled_index_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
@@ -4748,13 +4923,20 @@ macro_rules! define_indexed_shared_local_scaled_index_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let (start, memidx) =
@@ -4772,13 +4954,20 @@ macro_rules! define_local_scaled_index_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             store_internal_local_scaled_index(tail_code, ctx, stringify!($name), $make_operation)
@@ -4792,13 +4981,20 @@ macro_rules! define_indexed_local_scaled_index_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             store_internal_indexed_local_scaled_index(
@@ -4817,13 +5013,20 @@ macro_rules! define_shared_local_scaled_index_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             store_internal_shared_local_scaled_index(
@@ -4842,13 +5045,20 @@ macro_rules! define_indexed_shared_local_scaled_index_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             store_internal_indexed_shared_local_scaled_index(
@@ -4983,13 +5193,20 @@ pub unsafe fn op_f64_load_const_base(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `op_i64_load_const_base`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The barrier is a volatile load rather than `black_box` of
+    // the static's address: see the `Op` contract in `common.rs`
+    // (#285).
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static
+        // that is never written, so a volatile read of it is
+        // in-bounds and cannot race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     profile_memory_family("op_f64_load_const_base");
     let memarg = (*tail_code).operand.memarg;
@@ -5398,13 +5615,20 @@ pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 #[inline(never)]
 pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `op_i32_load`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The barrier is a volatile load rather than `black_box` of
+    // the static's address: see the `Op` contract in `common.rs`
+    // (#285).
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static
+        // that is never written, so a volatile read of it is
+        // in-bounds and cannot race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     profile_memory_family("op_f32_load");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5430,13 +5654,20 @@ pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 #[inline(never)]
 pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `op_i64_load`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The barrier is a volatile load rather than `black_box` of
+    // the static's address: see the `Op` contract in `common.rs`
+    // (#285).
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static
+        // that is never written, so a volatile read of it is
+        // in-bounds and cannot race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     profile_memory_family("op_f64_load");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5746,13 +5977,20 @@ pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 #[inline(never)]
 pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `op_i32_store`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The barrier is a volatile load rather than `black_box` of
+    // the static's address: see the `Op` contract in `common.rs`
+    // (#285).
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static
+        // that is never written, so a volatile read of it is
+        // in-bounds and cannot race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     store_internal_local(tail_code, ctx, "op_f32_store", |ctx| {
         StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
@@ -5777,13 +6015,20 @@ pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 #[inline(never)]
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `op_i64_store`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The barrier is a volatile load rather than `black_box` of
+    // the static's address: see the `Op` contract in `common.rs`
+    // (#285).
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static
+        // that is never written, so a volatile read of it is
+        // in-bounds and cannot race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     store_internal_local(tail_code, ctx, "op_f64_store", |ctx| {
         StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
@@ -5972,13 +6217,20 @@ macro_rules! define_shared_push_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start(tail_code, ctx));
@@ -6012,13 +6264,20 @@ macro_rules! define_shared_scalar_load {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start(tail_code, ctx));
@@ -6051,13 +6310,20 @@ macro_rules! define_shared_store_alias {
         #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             // #240: fn-pointer identity is load-bearing for handlers (see
-            // the `Op` contract in `common.rs`). The address of a
+            // the `Op` contract in `common.rs`). Referencing a
             // function-local static keeps every expansion of this template
             // distinct, so identical-code folding cannot merge two products
             // whose bodies are otherwise byte-identical into one address.
+            //
+            // The barrier is a volatile load rather than `black_box` of
+            // the static's address: see the `Op` contract in `common.rs`
+            // (#285).
             {
                 static FN_IDENTITY: u8 = 0;
-                std::hint::black_box(&raw const FN_IDENTITY);
+                // SAFETY: `FN_IDENTITY` is a live function-local static
+                // that is never written, so a volatile read of it is
+                // in-bounds and cannot race; the value itself is unused.
+                let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
             }
             store_internal_shared(tail_code, ctx, stringify!($name), $make_operation)
         }
