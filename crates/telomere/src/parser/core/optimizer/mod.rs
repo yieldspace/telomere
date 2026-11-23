@@ -1224,6 +1224,102 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_refuses_const_base_fold_when_effective_address_overflows_u32() {
+        // #263: a folded memarg offset becomes the entire effective address
+        // of a const-base op, so base + offset must not wrap past u32. When
+        // the sum overflows, the fold is refused and the generic op — whose
+        // runtime address computation is a checked add — stays.
+        let load = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "load") (result i32)
+                i32.const 1
+                i32.load offset=4294967295))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(&load, vm::op_i32_load_const_base as crate::common::Op),
+            0
+        );
+        assert_eq!(count_op(&load, vm::op_i32_load as crate::common::Op), 1);
+
+        let i64_load = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "load") (result i64)
+                i32.const 2
+                i64.load offset=4294967295))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(&i64_load, vm::op_i64_load_const_base as crate::common::Op),
+            0
+        );
+        assert_eq!(count_op(&i64_load, vm::op_i64_load as crate::common::Op), 1);
+
+        // A negative const base is the unsigned address 2^32 - 1; adding any
+        // positive offset overflows as well.
+        let f64_load = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "load") (result f64)
+                i32.const -1
+                f64.load offset=1))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(&f64_load, vm::op_f64_load_const_base as crate::common::Op),
+            0
+        );
+        assert_eq!(count_op(&f64_load, vm::op_f64_load as crate::common::Op), 1);
+
+        let store = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "store") (param i32)
+                i32.const 1
+                local.get 0
+                i32.store offset=4294967295))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &store,
+                vm::op_i32_store_const_base_local4 as crate::common::Op
+            ),
+            0
+        );
+        assert_eq!(count_op(&store, vm::op_i32_store as crate::common::Op), 1);
+
+        // Boundary just inside the range: base + offset == u32::MAX still
+        // folds. The const-base op then traps on the memory bounds check for
+        // any memory smaller than 2^32 bytes, exactly like the generic path,
+        // so refusing only the overflowing sums does not weaken the fold.
+        let boundary = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "load") (result i32)
+                i32.const 4
+                i32.load offset=4294967291))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(&boundary, vm::op_i32_load_const_base as crate::common::Op),
+            1
+        );
+    }
+
+    #[test]
     fn optimizer_selects_local_base_memory_families() {
         let load = function_at(
             r#"
@@ -3372,6 +3468,138 @@ mod tests {
             panic!("expected rewritten jump target");
         };
         assert_eq!(target, specialized.label);
+    }
+
+    #[test]
+    fn optimizer_versioning_refuses_const_base_edge_when_address_overflows_u32() {
+        use crate::common::{MemArg, Operand, ValType};
+        use pipeline::{
+            analysis,
+            ir::{
+                BlockParam, CanonBlock, CanonFunc, CanonInst, EffectId, InstId, StorageClass,
+                ValueId,
+            },
+            select, versioning,
+        };
+
+        let block0 = CanonBlock {
+            id: 0,
+            params: Vec::new(),
+            insts: vec![
+                CanonInst {
+                    id: InstId(0),
+                    op: vm::op_i32_const as crate::common::Op,
+                    operands: vec![crate::common::LoweredOperand::Raw(unsafe {
+                        Operand { i32: 1 }.encoded
+                    })],
+                    stack_before: Vec::new(),
+                    stack_after: vec![ValType::I32],
+                    preserved_prefix_len: 0,
+                    fresh_result_count: 1,
+                    effect: EffectId(0),
+                },
+                CanonInst {
+                    id: InstId(1),
+                    op: vm::op_br as crate::common::Op,
+                    operands: vec![crate::common::LoweredOperand::JumpTarget(1)],
+                    stack_before: vec![ValType::I32],
+                    stack_after: Vec::new(),
+                    preserved_prefix_len: 0,
+                    fresh_result_count: 0,
+                    effect: EffectId(1),
+                },
+            ],
+            predecessors: Vec::new(),
+            successors: vec![1],
+        };
+        let block1 = CanonBlock {
+            id: 1,
+            params: vec![BlockParam {
+                id: ValueId(0),
+                index: 0,
+                ty: ValType::I32,
+                storage: StorageClass::BlockParam,
+            }],
+            insts: vec![
+                CanonInst {
+                    id: InstId(2),
+                    op: vm::op_i32_load as crate::common::Op,
+                    operands: vec![crate::common::LoweredOperand::Raw(unsafe {
+                        Operand {
+                            memarg: MemArg {
+                                align: 2,
+                                offset: 4294967295,
+                            },
+                        }
+                        .encoded
+                    })],
+                    stack_before: vec![ValType::I32],
+                    stack_after: vec![ValType::I32],
+                    preserved_prefix_len: 0,
+                    fresh_result_count: 1,
+                    effect: EffectId(2),
+                },
+                CanonInst {
+                    id: InstId(3),
+                    op: vm::op_br as crate::common::Op,
+                    operands: vec![crate::common::LoweredOperand::JumpTarget(2)],
+                    stack_before: vec![ValType::I32],
+                    stack_after: Vec::new(),
+                    preserved_prefix_len: 0,
+                    fresh_result_count: 0,
+                    effect: EffectId(3),
+                },
+            ],
+            predecessors: vec![0],
+            successors: vec![2],
+        };
+        let block2 = CanonBlock {
+            id: 2,
+            params: Vec::new(),
+            insts: vec![CanonInst {
+                id: InstId(4),
+                op: vm::op_i32_const as crate::common::Op,
+                operands: vec![crate::common::LoweredOperand::Raw(unsafe {
+                    Operand { i32: 0 }.encoded
+                })],
+                stack_before: Vec::new(),
+                stack_after: vec![ValType::I32],
+                preserved_prefix_len: 0,
+                fresh_result_count: 1,
+                effect: EffectId(4),
+            }],
+            predecessors: vec![1],
+            successors: Vec::new(),
+        };
+        let func = CanonFunc {
+            funcidx: crate::common::FuncIdx(0),
+            functype: crate::common::FuncType(
+                crate::common::ResultType(vec![]),
+                crate::common::ResultType(vec![]),
+            ),
+            locals_size: 4,
+            entry_block: 0,
+            blocks: vec![block0, block1, block2],
+        };
+
+        let analysis = analysis::analyze(&func);
+        let kernel = select::select(&func, &analysis);
+        let versioned = versioning::apply(kernel, &func, &analysis);
+
+        // #263: base (1) + offset (u32::MAX) overflows u32, so the fold is
+        // refused: no versioned block may contain the const-base load, and
+        // the generic load must survive so the checked runtime path traps.
+        assert!(versioned.blocks.iter().all(|block| {
+            block.ops.iter().all(|op| {
+                !std::ptr::fn_addr_eq(op.op, vm::op_i32_load_const_base as crate::common::Op)
+            })
+        }));
+        assert!(versioned.blocks.iter().any(|block| {
+            block
+                .ops
+                .iter()
+                .any(|op| std::ptr::fn_addr_eq(op.op, vm::op_i32_load as crate::common::Op))
+        }));
     }
 
     #[test]
