@@ -355,14 +355,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #287: workflow_dispatch runs 45196676309 and
-45196700235 against the PR branch at head
-`c308c156e0a1f48683590433f1075c97f9bf8a3e` (branch commit `fb0ea07`,
-restore tail dispatch at every #240 identity-barrier handler except
-`op_return` (#285); and merge commit
-`c308c15` bringing in `main` at
-`3be9627`), and pull-request run 45194029095, which built the same
+On 2026-11-24, the `Embedder footprint` workflow was run three times
+against the code of PR #286: workflow_dispatch runs 45206926698 and
+45206945651 against the PR branch at head
+`91dd280f3c81d03cc7ee3fb3b88f8d806166d4af` (branch commit `d3005b1`,
+restore tail dispatch in `op_ref_is_null` (#282); and merge commit
+`91dd280` bringing in `main` at
+`94a0eca`), and pull-request run 45206866309, which built the same
 tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -373,21 +372,21 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,494,024 | 1,144,311 |
-| `release` | `component` | 2,537,424 | 2,037,815 |
-| `release` | `wasi` | 2,881,424 | 2,297,943 |
-| `release` | `core-nosimd` | 1,301,392 | 1,001,207 |
+| `release` | `core` | 1,494,040 | 1,144,311 |
+| `release` | `component` | 2,537,440 | 2,037,815 |
+| `release` | `wasi` | 2,881,440 | 2,297,943 |
+| `release` | `core-nosimd` | 1,301,408 | 1,001,207 |
 | `release` | `core-jit` | 2,034,656 | 1,584,023 |
-| `release` | `core-aot` | 1,521,464 | 1,163,415 |
-| `release` | `wasi-threads` | 3,070,792 | 2,438,887 |
+| `release` | `core-aot` | 1,521,480 | 1,163,415 |
+| `release` | `wasi-threads` | 3,070,808 | 2,438,887 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,110,840 | 783,143 |
-| `release-size` | `component` | 1,670,312 | 1,232,999 |
-| `release-size` | `wasi` | 1,866,184 | 1,364,711 |
-| `release-size` | `core-nosimd` | 996,016 | 703,559 |
-| `release-size` | `core-jit` | 1,551,456 | 1,105,671 |
-| `release-size` | `core-aot` | 1,130,288 | 794,727 |
-| `release-size` | `wasi-threads` | 2,008,584 | 1,459,127 |
+| `release-size` | `core` | 1,110,824 | 783,127 |
+| `release-size` | `component` | 1,670,296 | 1,232,983 |
+| `release-size` | `wasi` | 1,866,168 | 1,364,711 |
+| `release-size` | `core-nosimd` | 996,000 | 703,543 |
+| `release-size` | `core-jit` | 1,551,472 | 1,105,671 |
+| `release-size` | `core-aot` | 1,130,272 | 794,711 |
+| `release-size` | `wasi-threads` | 2,008,552 | 1,459,111 |
 
 #### Re-baseline history
 
@@ -1088,6 +1087,39 @@ baseline, the largest cumulative growth remains release-size
 1,232,999 B), up from +5.36%. The baseline was re-measured
 on the merged code and updated as recorded above, following
 the procedure below.
+
+PR #286 (#282, `op_ref_is_null` has the same non-tail dispatch
+as `op_f64_const`: the #240 identity barrier in `refs.rs` is
+replaced with the volatile-load form proven in #277,
+restoring tail dispatch) merged current `main` into its
+branch first; the only conflict was in
+`tests/call_threading.rs`, where both sides had appended a
+same-shaped loop test at the same location (`main`'s
+`f64.const` test from #277 and this branch's `ref.is_null`
+test), resolved by keeping both tests. After the merge the
+replacement is present exactly once, the only remaining
+`black_box` barrier is `op_return`'s intentional exception,
+and a full disassembly audit of the merged tree shows 261
+TAIL / 1 NONTAIL among the named barrier handlers (the only
+NONTAIL being `op_return`), with `op_ref_is_null` verified
+TAIL by direct disassembly. Attribution was isolated by
+measuring current `main` alone (workflow_dispatch run
+45206965424, gate success), which reproduces the previous
+baseline exactly on all 32 gated series. 18 of the 32 gated
+series change, all by ±16 B except one at −32 B: in
+`release`, stripped file grows by +16 B in `core`,
+`component`, `core-aot`, `core-nosimd`, `wasi` and
+`wasi-threads` and stripped `.text` is unchanged; in
+`release-size`, stripped file shrinks by −16 B to −32 B
+in the library configurations except `core-jit` (+16 B),
+and stripped `.text` shrinks by −16 B in `component`,
+`core`, `core-aot`, `core-nosimd` and `wasi-threads`. The
+`baseline` configuration is byte-identical in both profiles.
+Against the original #164 baseline, the largest cumulative
+growth remains release-size `component` stripped `.text` at
++5.47% (1,169,031 B to 1,232,983 B), unchanged from +5.47%.
+The baseline was re-measured on the merged code and updated
+as recorded above, following the procedure below.
 
 ### Threshold derivation
 

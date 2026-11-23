@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #287 (branch fix/285-barrier-tail-dispatch at head c308c156e0a1f48683590433f1075c97f9bf8a3e \u2014 branch commit fb0ea07 (restore tail dispatch at every #240 identity-barrier handler except op_return (#285)) plus merge commit c308c15 bringing in current main 3be9627, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45196676309 and 45196700235 against the branch and pull-request run 45194029095, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "c308c156e0a1f48683590433f1075c97f9bf8a3e",
-    "date": "2026-11-23",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #286 (branch fix/282-ref-is-null-tail at head 91dd280f3c81d03cc7ee3fb3b88f8d806166d4af \u2014 branch commit d3005b1 (restore tail dispatch in op_ref_is_null (#282)) plus merge commit 91dd280 bringing in current main 94a0eca, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45206926698 and 45206945651 against the branch and pull-request run 45206866309, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "91dd280f3c81d03cc7ee3fb3b88f8d806166d4af",
+    "date": "2026-11-24",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45196676309,
-      45196700235
+      45206926698,
+      45206945651
     ],
     "cross_check_run_ids": [
-      45194029095
+      45206866309
     ],
-    "derivation": "Re-baseline for PR #287 (#285, all 264 identity-barrier handlers dispatch non-tail: the #240 identity barrier at the 41 remaining source sites \u2014 38 in memory.rs (33 macro-generated plus 5 direct), 2 in simd.rs (the f32x4/f64x2 replace-lane handlers) and 1 in numeric.rs (op_i32_crc16_update16_masked) \u2014 is replaced with the volatile-load form proven in #277/#282, restoring tail dispatch for the whole handler set; op_return keeps its black_box as the one intentional exception because its dispatch target is terminal and no frame accumulates; op_f64_const and op_ref_is_null are untouched here, being the scope of PRs #283 and #286). The branch merged current main (3be9627, containing PR #283) before measurement; the merge was conflict-free, and op_f64_const's volatile load from PR #283 is present exactly once afterwards, verified in source and by a full disassembly audit of the merged tree (CLI: 261 TAIL / 1 NONTAIL, the only NONTAIL being op_return). Attribution was isolated by measuring current main (3be9627) alone (workflow_dispatch run 45196725415, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. 28 of the 32 gated series change; only the baseline configuration is byte-identical in both profiles. In release, stripped .text grows by +1,728 B in core, component, core-aot, core-nosimd and wasi and by +2,112 B in wasi-threads, while core-jit shrinks by \u22122,368 B; stripped file grows by +3,984 B (core, component, core-aot, wasi), +3,968 B (core-nosimd), +4,896 B (wasi-threads) and +128 B (core-jit). In release-size, stripped .text grows by +1,248 B (wasi), +1,264 B (core, component, core-aot, wasi-threads), +1,280 B (core-nosimd) and +2,000 B (core-jit), and stripped file grows by +8,064 B (core, component, core-aot, wasi), +8,080 B (core-nosimd, wasi-threads) and +9,856 B (core-jit). Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.47% (1,169,031 B to 1,232,999 B), up from +5.36%. Run-to-run spread was again 0 B for every gated series across the three samples."
+    "derivation": "Re-baseline for PR #286 (#282, op_ref_is_null has the same non-tail dispatch as op_f64_const: the #240 identity barrier in crates/telomere/src/runtime/vm/refs.rs is replaced with the volatile-load form proven in #277, restoring the handler's tail dispatch). The branch merged current main (94a0eca, containing PR #287) before measurement; the only conflict was in crates/telomere/tests/call_threading.rs, where both sides had appended a same-shaped loop test at the same location (main's f64.const test from #277 and this branch's ref.is_null test), resolved by keeping both tests. After the merge the op_ref_is_null replacement is present exactly once, the only remaining black_box barrier is op_return's intentional exception, and a full disassembly audit of the merged tree shows 261 TAIL / 1 NONTAIL among the named barrier handlers (the only NONTAIL being op_return), with op_ref_is_null verified TAIL by direct disassembly. Attribution was isolated by measuring current main (94a0eca) alone (workflow_dispatch run 45206965424, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. 18 of the 32 gated series change, all by \u00b116 B except one at \u221232 B: in release, stripped file grows by +16 B in core, component, core-aot, core-nosimd, wasi and wasi-threads, and stripped .text is unchanged everywhere; in release-size, stripped file shrinks by \u221216 B in component, core, core-aot, core-nosimd and wasi and by \u221232 B in wasi-threads, grows by +16 B in core-jit, and stripped .text shrinks by \u221216 B in component, core, core-aot, core-nosimd and wasi-threads. The baseline configuration is byte-identical in both profiles. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.47% (1,169,031 B to 1,232,983 B), unchanged from +5.47%. Run-to-run spread was again 0 B for every gated series across the three samples."
   },
   "thresholds": {
     "release": {
@@ -30,8 +30,8 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1494024,
-          "threshold": 1494024
+          "baseline": 1494040,
+          "threshold": 1494040
         },
         "stripped_text_bytes": {
           "baseline": 1144311,
@@ -40,8 +40,8 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2537424,
-          "threshold": 2537424
+          "baseline": 2537440,
+          "threshold": 2537440
         },
         "stripped_text_bytes": {
           "baseline": 2037815,
@@ -50,8 +50,8 @@
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2881424,
-          "threshold": 2881424
+          "baseline": 2881440,
+          "threshold": 2881440
         },
         "stripped_text_bytes": {
           "baseline": 2297943,
@@ -60,8 +60,8 @@
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1301392,
-          "threshold": 1301392
+          "baseline": 1301408,
+          "threshold": 1301408
         },
         "stripped_text_bytes": {
           "baseline": 1001207,
@@ -80,8 +80,8 @@
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1521464,
-          "threshold": 1521464
+          "baseline": 1521480,
+          "threshold": 1521480
         },
         "stripped_text_bytes": {
           "baseline": 1163415,
@@ -90,8 +90,8 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3070792,
-          "threshold": 3070792
+          "baseline": 3070808,
+          "threshold": 3070808
         },
         "stripped_text_bytes": {
           "baseline": 2438887,
@@ -112,28 +112,28 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1110840,
-          "threshold": 1110840
+          "baseline": 1110824,
+          "threshold": 1110824
         },
         "stripped_text_bytes": {
-          "baseline": 783143,
-          "threshold": 783143
+          "baseline": 783127,
+          "threshold": 783127
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1670312,
-          "threshold": 1670312
+          "baseline": 1670296,
+          "threshold": 1670296
         },
         "stripped_text_bytes": {
-          "baseline": 1232999,
-          "threshold": 1232999
+          "baseline": 1232983,
+          "threshold": 1232983
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1866184,
-          "threshold": 1866184
+          "baseline": 1866168,
+          "threshold": 1866168
         },
         "stripped_text_bytes": {
           "baseline": 1364711,
@@ -142,18 +142,18 @@
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 996016,
-          "threshold": 996016
+          "baseline": 996000,
+          "threshold": 996000
         },
         "stripped_text_bytes": {
-          "baseline": 703559,
-          "threshold": 703559
+          "baseline": 703543,
+          "threshold": 703543
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1551456,
-          "threshold": 1551456
+          "baseline": 1551472,
+          "threshold": 1551472
         },
         "stripped_text_bytes": {
           "baseline": 1105671,
@@ -162,22 +162,22 @@
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1130288,
-          "threshold": 1130288
+          "baseline": 1130272,
+          "threshold": 1130272
         },
         "stripped_text_bytes": {
-          "baseline": 794727,
-          "threshold": 794727
+          "baseline": 794711,
+          "threshold": 794711
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2008584,
-          "threshold": 2008584
+          "baseline": 2008552,
+          "threshold": 2008552
         },
         "stripped_text_bytes": {
-          "baseline": 1459127,
-          "threshold": 1459127
+          "baseline": 1459111,
+          "threshold": 1459111
         }
       }
     }
