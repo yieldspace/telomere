@@ -456,6 +456,7 @@ unsafe fn ensure_indirect_call_recipe(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     if ctx.effect.get_pending_count() != 0 {
         trace!("waiting effect: {:?}", ctx.cont);
@@ -479,6 +480,7 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
 /// - The recipe must describe a Wasm target prepared by instantiation-time callsite quickening.
 /// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+#[inline(never)]
 pub unsafe fn op_call_jit_lazy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     unsafe { op_call_jit_lazy_inner::<false>(tail_code, ctx) }
 }
@@ -638,6 +640,7 @@ unsafe fn internal_op_call_i32_numeric_token_state_transition(
 /// - The optimizer/instantiator must only select this handler for a direct call whose target was
 ///   observed to start with `op_i32_numeric_token_state_transition`.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_call_i32_numeric_token_state_transition(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -683,6 +686,7 @@ unsafe fn internal_op_call_i32_crc16_update16(
 /// - The instantiator must only select this handler for a direct call whose target was observed to
 ///   start with `op_i32_crc16_update16`.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_call_i32_crc16_update16(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -729,6 +733,7 @@ unsafe fn internal_op_call_i32_crc16_update16_masked(
 /// - The instantiator must only select this handler for a direct call whose target was observed to
 ///   materialize as `op_i32_crc16_update16_masked`.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_call_i32_crc16_update16_masked(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -756,8 +761,7 @@ unsafe fn internal_op_call_cached_u16_low7_guard(
     }
 
     let data_ptr = ctx.stack.peek_u32_fast_from_top(4);
-    let cached =
-        vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(data_ptr as usize));
+    let cached = vm_try!(unsafe { ctx.default_local_memory_view() }.read_u16_at(data_ptr as usize));
     if cached & 0x80 == 0 {
         return VMResult::Success(NumericTransitionCallOutcome::Fallback);
     }
@@ -780,6 +784,7 @@ unsafe fn internal_op_call_cached_u16_low7_guard(
 /// - The instantiator must only select this handler for a direct call whose target starts with the
 ///   validated cached-u16 guard shape.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_call_cached_u16_low7_guard(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -829,6 +834,7 @@ unsafe fn internal_op_call_i32_list_crc_summary(
 ///   to `op_i32_list_crc_summary`.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 #[allow(dead_code)]
+#[inline(never)]
 pub unsafe fn op_call_i32_list_crc_summary(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -855,6 +861,7 @@ pub unsafe fn op_call_i32_list_crc_summary(
 /// # Safety
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+#[inline(never)]
 pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     // The spin hint waits for nothing (it is not in a loop), but it is
     // currently the only instruction keeping this body distinct from
@@ -889,6 +896,7 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     if ctx.effect.get_pending_count() != 0 {
         trace!("waiting effect: {:?}", ctx.cont);
@@ -913,6 +921,7 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
 /// - The recipe must describe a Wasm target prepared by instantiation-time callsite quickening.
 /// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+#[inline(never)]
 pub unsafe fn op_return_call_jit_lazy(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -933,6 +942,7 @@ pub unsafe fn op_return_call_jit_lazy(
 /// # Safety
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+#[inline(never)]
 pub unsafe fn op_return_call_import(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1029,6 +1039,7 @@ unsafe fn internal_op_call_indirect<const IS_RETURN_CALL: bool>(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     if ctx.effect.get_pending_count() != 0 {
         trace!("waiting effect: {:?}", ctx.cont);
@@ -1053,6 +1064,7 @@ pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_return_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1082,6 +1094,7 @@ pub unsafe fn op_return_call_indirect(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn special_start_function_call(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1103,6 +1116,7 @@ pub unsafe fn special_start_function_call(
 /// - `ctx` must already contain the target Wasm frame as the current frame.
 /// - The active store must have runtime JIT enabled and run on a supported target.
 /// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+#[inline(never)]
 pub unsafe fn special_start_jit_function_call(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,

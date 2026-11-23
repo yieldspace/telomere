@@ -117,7 +117,10 @@ impl StoreJitCache {
                 return VMResult::Unimplemented;
             }
         };
-        let allocation_len = match CodeArena::allocation_len(bytes.len()) {
+        // The cap is charged in emitted code bytes (16-byte aligned), not
+        // in page-rounded mapping sizes: functions are packed into code
+        // slabs, so residency is bounded by code size, not page count.
+        let allocation_len = match CodeArena::accounted_len(bytes.len()) {
             Ok(len) => len,
             Err(_) => {
                 profile::count(Counter::CompileRejectAllocationLen);

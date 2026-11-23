@@ -447,17 +447,26 @@ impl<'a> Scheduler<'a> {
                     runtime.jit_instance_global_addrs_ptr(current_frame.instance)
                 };
                 let global_values_ptr = runtime.jit_global_values_ptr();
-                let default_local_memory_ptr = match current_frame.memory0_kind {
-                    CachedMemoryKind::Local => runtime
-                        .local_memory_mut(unsafe {
-                            crate::common::store::LocalMemoryId::from_raw_unchecked(
-                                current_frame.memory0_raw,
+                let (default_local_memory_ptr, default_local_memory_base, default_local_memory_len) =
+                    match current_frame.memory0_kind {
+                        CachedMemoryKind::Local => {
+                            let memory = runtime
+                                .local_memory_mut(unsafe {
+                                    crate::common::store::LocalMemoryId::from_raw_unchecked(
+                                        current_frame.memory0_raw,
+                                    )
+                                })
+                                .memory_mut();
+                            (
+                                memory as *mut crate::common::Memory,
+                                memory.data_mut_ptr(),
+                                memory.data_size(),
                             )
-                        })
-                        .memory_mut()
-                        as *mut crate::common::Memory,
-                    CachedMemoryKind::None | CachedMemoryKind::Shared => std::ptr::null_mut(),
-                };
+                        }
+                        CachedMemoryKind::None | CachedMemoryKind::Shared => {
+                            (std::ptr::null_mut(), std::ptr::null_mut(), 0)
+                        }
+                    };
                 let mut ec = ExecuteContext {
                     gc: runtime,
                     stack_memory_ptr,
@@ -466,6 +475,8 @@ impl<'a> Scheduler<'a> {
                     local_reference,
                     local_base_ptr,
                     default_local_memory_ptr,
+                    default_local_memory_base,
+                    default_local_memory_len,
                     current_instance_globals_ptr,
                     global_values_ptr,
                     current_frame,

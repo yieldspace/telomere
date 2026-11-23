@@ -1793,7 +1793,7 @@ pub(crate) unsafe fn store_internal_local(
     trace!("op_store: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    vm_try!(unsafe { ctx.default_local_memory_mut_unchecked() }.write_bytes(start, bytes));
+    vm_try!(unsafe { ctx.default_local_memory_view() }.write_bytes(start, bytes));
     call_next(tail_code, 1, ctx)
 }
 

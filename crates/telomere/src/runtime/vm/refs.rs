@@ -15,6 +15,7 @@ use super::*;
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_ref_null(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     vm_try!(ctx.stack.push_u32(0));
     call_next(tail_code, 0, ctx)
@@ -35,7 +36,17 @@ pub unsafe fn op_ref_null(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_ref_is_null(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_i32_eqz`, whose body is otherwise
+    // byte-identical (both push whether a slot is zero), so identical-code
+    // folding cannot merge the two fn items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     let value = ctx.stack.pop_u32();
     vm_try!(ctx.stack.push_u32(u32::from(value == 0)));
     call_next(tail_code, 0, ctx)
@@ -56,6 +67,7 @@ pub unsafe fn op_ref_is_null(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let funcidx = (*tail_code).operand.u32;
     vm_try!(ctx

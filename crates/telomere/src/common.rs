@@ -817,6 +817,63 @@ pub union Operand {
     pub start_host_function: HostFunction,
 }
 
+/// One interpreter instruction handler in the direct-threaded dispatch.
+///
+/// # Handler identity contract (#240)
+///
+/// Handlers are identified by **function-pointer identity**: the optimizer
+/// pipeline, the instantiator, and the JIT baseline decoder
+/// (`decode_baseline_op` over `OP_SPECS`) all recognise a handler by
+/// comparing an [`Instr`]'s stored `Op` against a handler item with
+/// `std::ptr::fn_addr_eq` (directly, or through an `op_eq` helper).
+///
+/// Rust does **not** guarantee that a function item has a single address in
+/// a linked binary. Under the workspace release profile (`codegen-units = 1`,
+/// ThinLTO), the linker/LTO can import an internal-linkage handler into
+/// several modules and internalise a copy in each, so two references to the
+/// "same" handler can hold different addresses and `fn_addr_eq` returns
+/// `false` for identical handlers. This is measured, not hypothetical:
+///
+/// - #209: `op_unreachable` (a one-line constant return) existed as two
+///   local symbols with one mangled hash in a release test binary, so the
+///   JIT baseline decoder did not recognise it and trap pc attribution was
+///   silently lost in release builds only.
+/// - #240: `special_function_vm_end` was likewise duplicated as two local
+///   symbols in 20 of 28 release test binaries on x86_64-linux / 1.96.0.
+///
+/// The defence is mechanical: **every handler that is compared by identity
+/// must be annotated `#[inline(never)]`**. The attribute forces a single
+/// global emission instead of per-module internalised copies (#209 verified
+/// the symbol change with `nm`: local x2 -> global x1). When you add a
+/// handler, or compare an existing one by identity for the first time, add
+/// the attribute to its definition — including the macro template or proc
+/// macro that generates it, where applicable. `tools/check-fn-identity.py`
+/// enforces this in CI by resolving every identity-compared handler to its
+/// definition and requiring the attribute.
+///
+/// Identity also fails in the opposite direction: **several handlers can
+/// share one address**. When two handlers' bodies become byte-identical
+/// after optimisation — the i64/f64 and i32/f32 twins on the untyped bit
+/// representation (`op_i64_const`/`op_f64_const`, the local-base load/store
+/// families, the SIMD replace-lane pair), or a provably redundant mask
+/// (`op_i32_crc16_update16_masked`, whose `& 0xffff` the CRC helper never
+/// observes) — identical-code folding merges the fn items, `fn_addr_eq`
+/// returns `true` for *different* handlers, and the JIT baseline decoder
+/// silently picks the first matching `OP_SPECS` entry for both. This was
+/// measured in-tree: 17 `OP_SPECS` pointer groups in an optimised test
+/// binary, 9 of them with different decoders. `#[inline(never)]` does not
+/// prevent folding. The defence for a handler whose body would otherwise
+/// fold into a twin is an identity barrier at the top of the body: the
+/// address of a function-local `static` passed to `std::hint::black_box`
+/// (for macro templates, one static per expansion). Two runtime tests in
+/// the JIT backend (`op_specs_decode_through_baseline_lookup`,
+/// `op_specs_alias_entries_share_their_decoder`) pin the decode side of
+/// this contract: if a future change folds another `OP_SPECS` pair, they
+/// fail.
+///
+/// Replacing pointer identity with explicit op ids in `Instr` would remove
+/// this contract, but that is a dispatch-representation change owned by
+/// #179/#189 and is deliberately not part of #240.
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
 #[derive(Clone, Copy)]
 pub union Instr {
@@ -1262,6 +1319,13 @@ pub struct ExecuteContext<'a> {
     pub local_reference: LocalReference,
     pub(crate) local_base_ptr: *mut u8,
     pub(crate) default_local_memory_ptr: *mut Memory,
+    // #187: flat (base, committed length) snapshot of the default local
+    // memory, refreshed together with `default_local_memory_ptr`. Scalar
+    // handlers validate accesses against this pair with a single compare
+    // instead of dereferencing the `Memory` struct on every access. Null
+    // base / zero length unless the frame's default memory is local.
+    pub(crate) default_local_memory_base: *mut u8,
+    pub(crate) default_local_memory_len: usize,
     pub(crate) current_instance_globals_ptr: *const ObjectRef,
     pub(crate) global_values_ptr: *mut store::GlobalValue,
     pub(crate) current_frame: CallFrameCache,
@@ -1276,6 +1340,127 @@ pub struct ExecuteContext<'a> {
     pub(crate) reserved: u64,
     /// Ledger epoch captured with the current grant.
     pub(crate) budget_epoch: u64,
+}
+
+/// Flat `(base, committed_len)` view of the active frame's default local
+/// memory (#187).
+///
+/// `ExecuteContext` snapshots the pair at every frame transition — the same
+/// refresh discipline as `default_local_memory_ptr` — and the interpreter's
+/// `memory.grow` handlers re-snapshot it after growing, so within a frame
+/// the pair always describes the memory that frame observes. Scalar
+/// handlers validate each access with a single `offset + N <= len`
+/// comparison against this view instead of dereferencing the `Memory`
+/// struct and re-checking `data_size()` on every access.
+///
+/// The view exists only for local memories. For a shared default memory the
+/// context caches a null base and the shared handlers keep going through
+/// `StoreInner` under its locking discipline: a cached length for a shared
+/// memory could go stale under a concurrent grow (memory only grows, so a
+/// stale length would stay safe, but it would spuriously trap valid
+/// accesses), so shared paths are deliberately not flattened.
+///
+/// The accessors mirror the `Memory::read_*_at` / `write_*` semantics,
+/// including the little-endian unaligned accesses and the
+/// `MemoryIndexOutOfRange` trap. Because the bounds arithmetic is done in
+/// u64, the check stays sound for any offset even though the offsets that
+/// reach this view today come from u32 wasm operands; a future memory64
+/// only has to feed wider offsets into the same check.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DefaultLocalMemoryView {
+    base: *mut u8,
+    len: usize,
+}
+
+impl DefaultLocalMemoryView {
+    /// The single bounds comparison every accessor performs before touching
+    /// memory. On success returns the raw pointer to `offset`, which lies
+    /// inside the committed prefix of the memory's mmap reservation.
+    #[inline(always)]
+    fn checked_ptr(&self, offset: usize, n: usize) -> VMResult<*mut u8> {
+        if offset as u64 + n as u64 > self.len as u64 {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        // SAFETY: the comparison above proves `offset + n <= len`, so the
+        // pointer stays inside the committed region of the reservation the
+        // view was snapshotted from.
+        VMResult::Success(unsafe { self.base.add(offset) })
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u8_at(&self, offset: usize) -> VMResult<u8> {
+        let ptr = vm_try!(self.checked_ptr(offset, 1));
+        // SAFETY: `checked_ptr` validated the 1-byte range.
+        VMResult::Success(unsafe { *ptr })
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i8_at(&self, offset: usize) -> VMResult<i8> {
+        VMResult::Success(vm_try!(self.read_u8_at(offset)) as i8)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u16_at(&self, offset: usize) -> VMResult<u16> {
+        let ptr = vm_try!(self.checked_ptr(offset, 2));
+        // SAFETY: `checked_ptr` validated the 2-byte range.
+        VMResult::Success(u16::from_le(unsafe { ptr.cast::<u16>().read_unaligned() }))
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i16_at(&self, offset: usize) -> VMResult<i16> {
+        VMResult::Success(vm_try!(self.read_u16_at(offset)) as i16)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u32_at(&self, offset: usize) -> VMResult<u32> {
+        let ptr = vm_try!(self.checked_ptr(offset, 4));
+        // SAFETY: `checked_ptr` validated the 4-byte range.
+        VMResult::Success(u32::from_le(unsafe { ptr.cast::<u32>().read_unaligned() }))
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i32_at(&self, offset: usize) -> VMResult<i32> {
+        VMResult::Success(vm_try!(self.read_u32_at(offset)) as i32)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u64_at(&self, offset: usize) -> VMResult<u64> {
+        let ptr = vm_try!(self.checked_ptr(offset, 8));
+        // SAFETY: `checked_ptr` validated the 8-byte range.
+        VMResult::Success(u64::from_le(unsafe { ptr.cast::<u64>().read_unaligned() }))
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_bytes(&self, offset: usize, bytes: &[u8]) -> VMResult<()> {
+        let ptr = vm_try!(self.checked_ptr(offset, bytes.len()));
+        // SAFETY: `checked_ptr` validated the `bytes.len()` range. `ptr::copy`
+        // (memmove semantics) keeps this correct even if a caller ever
+        // passes a source slice that aliases the guest memory.
+        unsafe { std::ptr::copy(bytes.as_ptr(), ptr, bytes.len()) };
+        VMResult::Success(())
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_u32_at(&self, offset: usize, value: u32) -> VMResult<()> {
+        let ptr = vm_try!(self.checked_ptr(offset, 4));
+        // SAFETY: `checked_ptr` validated the 4-byte range.
+        unsafe { ptr.cast::<u32>().write_unaligned(value.to_le()) };
+        VMResult::Success(())
+    }
+
+    /// Pushes `N` bytes read from `offset` onto the operand stack. The
+    /// stack-side write relies on the frame-entry operand reservation
+    /// (#186), exactly like `Memory::push_to_stack` calling
+    /// `Stack::push_copy_from_ptr`.
+    #[inline(always)]
+    pub(crate) fn push_to_stack<const N: usize>(
+        &self,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
+        let ptr = vm_try!(self.checked_ptr(offset, N));
+        unsafe { stack.push_copy_from_ptr::<N>(ptr) }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1309,15 +1494,46 @@ fn snapshot_memory_kind(kind: CachedMemoryKind) -> SnapshotMemoryKind {
 
 impl ExecuteContext<'_> {
     fn refresh_default_local_memory_ptr(&mut self) {
-        self.default_local_memory_ptr = match self.current_frame.memory0_kind {
-            CachedMemoryKind::Local => self
-                .gc
-                .local_memory_mut(unsafe {
-                    LocalMemoryId::from_raw_unchecked(self.current_frame.memory0_raw)
-                })
-                .memory_mut() as *mut Memory,
-            CachedMemoryKind::None | CachedMemoryKind::Shared => std::ptr::null_mut(),
+        let (memory_ptr, memory_base, memory_len) = match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => {
+                let memory = self
+                    .gc
+                    .local_memory_mut(unsafe {
+                        LocalMemoryId::from_raw_unchecked(self.current_frame.memory0_raw)
+                    })
+                    .memory_mut();
+                (
+                    memory as *mut Memory,
+                    memory.data_mut_ptr(),
+                    memory.data_size(),
+                )
+            }
+            CachedMemoryKind::None | CachedMemoryKind::Shared => {
+                (std::ptr::null_mut(), std::ptr::null_mut(), 0)
+            }
         };
+        self.default_local_memory_ptr = memory_ptr;
+        self.default_local_memory_base = memory_base;
+        self.default_local_memory_len = memory_len;
+    }
+
+    /// Re-snapshots the flat (base, committed length) pair of the default
+    /// local memory after an in-frame `memory.grow` may have changed the
+    /// committed length (#187).
+    ///
+    /// The base pointer never moves for an mmap-backed `Memory` (growth
+    /// only commits more of the reservation), but the length does, and the
+    /// spec requires later accesses in the same frame to observe the grown
+    /// length. The interpreter's grow handlers call this after growing;
+    /// frame transitions refresh the pair through
+    /// `refresh_default_local_memory_ptr`, so no other in-frame path can
+    /// leave it stale. A no-op when the frame has no default local memory.
+    pub(crate) fn refresh_default_local_memory_len(&mut self) {
+        if !self.default_local_memory_ptr.is_null() {
+            let memory = unsafe { &*self.default_local_memory_ptr };
+            self.default_local_memory_base = memory.data_ptr() as *mut u8;
+            self.default_local_memory_len = memory.data_size();
+        }
     }
 
     fn refresh_jit_global_ptrs(&mut self) {
@@ -1424,6 +1640,24 @@ impl ExecuteContext<'_> {
     pub unsafe fn default_local_memory_mut_unchecked(&mut self) -> &mut Memory {
         debug_assert!(!self.default_local_memory_ptr.is_null());
         unsafe { &mut *self.default_local_memory_ptr }
+    }
+
+    /// Returns the flat (base, committed length) view of the active frame's
+    /// default local memory (#187).
+    ///
+    /// # Safety
+    /// The active frame must have a default local memory and the cached
+    /// (base, length) pair must have been refreshed from the current frame
+    /// after the last frame transition, exactly like
+    /// `default_local_memory_unchecked`. The view must not be used after a
+    /// frame transition or after a `memory.grow` that bypassed
+    /// `refresh_default_local_memory_len`.
+    pub(crate) unsafe fn default_local_memory_view(&self) -> DefaultLocalMemoryView {
+        debug_assert!(!self.default_local_memory_base.is_null());
+        DefaultLocalMemoryView {
+            base: self.default_local_memory_base,
+            len: self.default_local_memory_len,
+        }
     }
     #[inline(always)]
     fn memory_slot_at(&self, memidx: u32) -> Option<InstanceMemorySlot> {
