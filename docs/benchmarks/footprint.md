@@ -356,11 +356,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #268: workflow_dispatch runs 45138823545 and
-45138835861 against the PR branch at head
-`5536558521eca906c8ba5b2613fed4f3c4ded378` (branch commits `5b404d4`,
-the #241 value index space, and `5536558`, the Codex P1 `ValueBudget`
-follow-up, on `main` at `3e1d335`), and pull-request run 45136051551,
+against the code of PR #269: workflow_dispatch runs 45155658610 and
+45155673480 against the PR branch at head
+`2f84a7cd392c7dcf044f93059734f827753e6d3c` (branch commits `ab7fdfe`,
+the #216 public host API; `6bc92e0`, `c5a67d1`, `47e50e3` and
+`ced821d`, the Codex review follow-ups; and merge commit `2f84a7c`
+bringing in `main` at `f3d4830`), and pull-request run 45155655301,
 which built the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -371,21 +372,21 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,478,832 | 1,131,399 |
-| `release` | `component` | 2,525,936 | 2,027,911 |
-| `release` | `wasi` | 2,869,968 | 2,288,039 |
-| `release` | `core-nosimd` | 1,286,200 | 988,295 |
-| `release` | `core-jit` | 2,016,976 | 1,569,751 |
-| `release` | `core-aot` | 1,506,352 | 1,150,583 |
-| `release` | `wasi-threads` | 3,056,280 | 2,426,807 |
+| `release` | `core` | 1,493,728 | 1,143,447 |
+| `release` | `component` | 2,537,584 | 2,036,967 |
+| `release` | `wasi` | 2,881,584 | 2,297,095 |
+| `release` | `core-nosimd` | 1,301,112 | 1,000,343 |
+| `release` | `core-jit` | 2,031,760 | 1,581,703 |
+| `release` | `core-aot` | 1,520,992 | 1,162,391 |
+| `release` | `wasi-threads` | 3,068,344 | 2,436,263 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,097,848 | 776,999 |
-| `release-size` | `component` | 1,659,016 | 1,228,023 |
-| `release-size` | `wasi` | 1,854,872 | 1,359,751 |
-| `release-size` | `core-nosimd` | 983,008 | 697,415 |
-| `release-size` | `core-jit` | 1,532,440 | 1,095,175 |
-| `release-size` | `core-aot` | 1,117,216 | 788,503 |
-| `release-size` | `wasi-threads` | 1,996,184 | 1,453,223 |
+| `release-size` | `core` | 1,105,936 | 782,311 |
+| `release-size` | `component` | 1,665,856 | 1,232,263 |
+| `release-size` | `wasi` | 1,861,712 | 1,363,975 |
+| `release-size` | `core-nosimd` | 991,160 | 702,791 |
+| `release-size` | `core-jit` | 1,540,528 | 1,100,503 |
+| `release-size` | `core-aot` | 1,125,368 | 793,879 |
+| `release-size` | `wasi-threads` | 2,003,120 | 1,457,623 |
 
 #### Re-baseline history
 
@@ -858,6 +859,40 @@ Against the original #164 baseline, the largest cumulative growth is now
 release-size `component` stripped `.text` at +5.05% (1,169,031 B to
 1,228,023 B), up from +3.54%. The baseline was re-measured on the branch
 code and updated as recorded above, following the procedure below.
+
+PR #269 (#216, replacing the raw host-linking ABI with a designed
+public host API: `telomere::host_abi` removed in favour of
+`HostContext` / `HostFn` / `HostModule` in
+`crates/telomere/src/host.rs`, the raw surface retained only behind
+`unstable-internals`) merged current `main` into its branch first; its
+first CI run on the merged tree then tripped the gate on the PR's own
+change. Four follow-up commits answer Codex review findings on the new
+boundary: the adapter future no longer touches the execution stack
+(completions resolve to values carried in an opaque outcome, and the
+scheduler validates and writes the return slot against the
+submission-time frame reference); completions are bound to the
+execution that submitted them by a process-wide monotonic task
+identity, widened to u64 so the counter cannot wrap and recycle an
+identity a retained completion could match; and the raw code-pointer
+accessor matches `FunctionBody::Host` explicitly and returns `None`
+for public callbacks instead of reaching `unreachable!`. Attribution
+was isolated by measuring current `main` alone (workflow_dispatch run
+45155688403, gate success), which reproduces the previous baseline
+exactly on all 32 gated series. Because the telomere library is linked
+into every embedder configuration except `baseline`, the growth covers
+the seven library configurations and `baseline` is unchanged: `core`
+(release stripped file +14,896 B / stripped `.text` +12,048 B;
+release-size stripped file +8,088 B / stripped `.text` +5,312 B),
+`core-nosimd` (+14,912 B / +12,048 B; +8,152 B / +5,376 B), `core-jit`
+(+14,784 B / +11,952 B; +8,088 B / +5,328 B), `core-aot` (+14,640 B /
++11,808 B; +8,152 B / +5,376 B), `component` (+11,648 B / +9,056 B;
++6,840 B / +4,240 B), `wasi` (+11,616 B / +9,056 B; +6,840 B / +4,224
+B) and `wasi-threads` (+12,064 B / +9,456 B; +6,936 B / +4,400 B).
+Against the original #164 baseline, the largest cumulative growth is
+now release-size `component` stripped `.text` at +5.41% (1,169,031 B
+to 1,232,263 B), up from +5.05%. The baseline was re-measured on the
+merged code and updated as recorded above, following the procedure
+below.
 
 ### Threshold derivation
 

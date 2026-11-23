@@ -1,4 +1,5 @@
 pub use telomere::component_support::{binary, common, parser, runtime};
-pub(crate) use telomere::host_abi;
-pub(crate) use telomere::unstable_internals as internals;
-pub use telomere::{aliasing, instantiate, Module, Registry, ResultValue, Store, VMResult};
+pub use telomere::{
+    aliasing, instantiate, instantiate_native_module, HostContext, HostFnDefinition, HostModule,
+    Module, Registry, ResultValue, Store, VMResult,
+};

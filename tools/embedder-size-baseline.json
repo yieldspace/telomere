@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #268 (branch fix/241-sort-value at head 5536558521eca906c8ba5b2613fed4f3c4ded378 \u2014 branch commits 5b404d4 (the #241 value index space) and 5536558 (the Codex P1 follow-up adding the ValueBudget decode budget) on current main 3e1d335, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45138823545 and 45138835861 against the branch and pull-request run 45136051551, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "5536558521eca906c8ba5b2613fed4f3c4ded378",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #269 (branch fix/216-host-linking-api at head 2f84a7cd392c7dcf044f93059734f827753e6d3c \u2014 branch commits ab7fdfe (the #216 public host API) and the four Codex review follow-ups 6bc92e0, c5a67d1, 47e50e3 and ced821d, plus merge commit 2f84a7c bringing in current main f3d4830, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45155658610 and 45155673480 against the branch and pull-request run 45155655301, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "2f84a7cd392c7dcf044f93059734f827753e6d3c",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45138823545,
-      45138835861
+      45155658610,
+      45155673480
     ],
     "cross_check_run_ids": [
-      45136051551
+      45155655301
     ],
-    "derivation": "Re-baseline for PR #268 (#241, the component model value index space: Sort::Value, sort 0x02, value imports/exports). The PR implements the value index space end to end in telomere-component \u2014 decode, validation, instantiation and link-time resolution of value imports/exports, static literal decoding of the value section, and the linker\u2019s register_import_value \u2014 and a follow-up commit answers a Codex P1 review finding: a list whose element type has an empty encoding decoded its element count without consuming any input bytes, so a 26-byte component could materialise billions of values and abort the embedding process on allocation; the value decoder now charges every node materialised without consuming input bytes against a zero-width ValueBudget and checks list element counts against the remaining encoding bytes plus that budget before any element is materialised. The branch is based on current main (3e1d335) with no merge, so the first CI run tripped the gate on the PR\u2019s own change. Attribution was isolated by measuring current main (3e1d335) alone (workflow_dispatch run 45138848073, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR\u2019s own. The growth is confined to the three configurations that link the component runtime: component (release stripped file +50,568 B / stripped .text +44,720 B; release-size stripped file +28,664 B / stripped .text +25,024 B), wasi (release stripped file +48,056 B / stripped .text +42,640 B; release-size stripped file +28,856 B / stripped .text +25,216 B) and wasi-threads (release stripped file +48,040 B / stripped .text +42,640 B; release-size stripped file +28,824 B / stripped .text +25,200 B). The other 20 of the 32 gated series are byte-identical. Against the original #164 baseline, the largest cumulative growth is now the release-size component stripped .text series at +5.05% (1,169,031 B to 1,228,023 B), up from +3.54% (release-size core-jit stripped .text, unchanged by this PR). Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #269 (#216, replacing the raw host-linking ABI with a designed public host API: telomere::host_abi is removed in favour of HostContext / HostFn / AsyncHostFn / HostModule / AsyncHostModule in crates/telomere/src/host.rs, and the raw ABI is retained only behind unstable-internals). Four follow-up commits answer Codex review findings on the new boundary: the adapter future no longer touches the execution stack and resolves to values carried in an opaque outcome (validation and the return-slot write happen in the scheduler against the submission-time frame reference); host completions are bound to the execution that submitted them by a process-wide monotonic task identity, widened to u64 so the counter cannot wrap and recycle an identity a retained completion could match; and the raw code-pointer accessor now matches FunctionBody::Host explicitly and returns None for public callbacks instead of reaching unreachable!. The branch merged current main (f3d4830) before measurement, so the first CI run on the merged tree tripped the gate on the PR\u2019s own change. Attribution was isolated by measuring current main (f3d4830) alone (workflow_dispatch run 45155688403, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR\u2019s own. Because the telomere library is linked into every embedder configuration except baseline, the growth covers the seven library configurations and the baseline configuration is unchanged: core (release stripped file +14,896 B / stripped .text +12,048 B; release-size stripped file +8,088 B / stripped .text +5,312 B), core-nosimd (release +14,912 B / +12,048 B; release-size +8,152 B / +5,376 B), core-jit (release +14,784 B / +11,952 B; release-size +8,088 B / +5,328 B), core-aot (release +14,640 B / +11,808 B; release-size +8,152 B / +5,376 B), component (release +11,648 B / +9,056 B; release-size +6,840 B / +4,240 B), wasi (release +11,616 B / +9,056 B; release-size +6,840 B / +4,224 B) and wasi-threads (release +12,064 B / +9,456 B; release-size +6,936 B / +4,400 B). The other 4 of the 32 gated series (the baseline configuration in both profiles) are byte-identical. Against the original #164 baseline, the largest cumulative growth is now the release-size component stripped .text series at +5.41% (1,169,031 B to 1,232,263 B), up from +5.05% (the same series after PR #268). Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -30,72 +30,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1478832,
-          "threshold": 1478832
+          "baseline": 1493728,
+          "threshold": 1493728
         },
         "stripped_text_bytes": {
-          "baseline": 1131399,
-          "threshold": 1131399
+          "baseline": 1143447,
+          "threshold": 1143447
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2525936,
-          "threshold": 2525936
+          "baseline": 2537584,
+          "threshold": 2537584
         },
         "stripped_text_bytes": {
-          "baseline": 2027911,
-          "threshold": 2027911
+          "baseline": 2036967,
+          "threshold": 2036967
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2869968,
-          "threshold": 2869968
+          "baseline": 2881584,
+          "threshold": 2881584
         },
         "stripped_text_bytes": {
-          "baseline": 2288039,
-          "threshold": 2288039
+          "baseline": 2297095,
+          "threshold": 2297095
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1286200,
-          "threshold": 1286200
+          "baseline": 1301112,
+          "threshold": 1301112
         },
         "stripped_text_bytes": {
-          "baseline": 988295,
-          "threshold": 988295
+          "baseline": 1000343,
+          "threshold": 1000343
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2016976,
-          "threshold": 2016976
+          "baseline": 2031760,
+          "threshold": 2031760
         },
         "stripped_text_bytes": {
-          "baseline": 1569751,
-          "threshold": 1569751
+          "baseline": 1581703,
+          "threshold": 1581703
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1506352,
-          "threshold": 1506352
+          "baseline": 1520992,
+          "threshold": 1520992
         },
         "stripped_text_bytes": {
-          "baseline": 1150583,
-          "threshold": 1150583
+          "baseline": 1162391,
+          "threshold": 1162391
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3056280,
-          "threshold": 3056280
+          "baseline": 3068344,
+          "threshold": 3068344
         },
         "stripped_text_bytes": {
-          "baseline": 2426807,
-          "threshold": 2426807
+          "baseline": 2436263,
+          "threshold": 2436263
         }
       }
     },
@@ -112,72 +112,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1097848,
-          "threshold": 1097848
+          "baseline": 1105936,
+          "threshold": 1105936
         },
         "stripped_text_bytes": {
-          "baseline": 776999,
-          "threshold": 776999
+          "baseline": 782311,
+          "threshold": 782311
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1659016,
-          "threshold": 1659016
+          "baseline": 1665856,
+          "threshold": 1665856
         },
         "stripped_text_bytes": {
-          "baseline": 1228023,
-          "threshold": 1228023
+          "baseline": 1232263,
+          "threshold": 1232263
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1854872,
-          "threshold": 1854872
+          "baseline": 1861712,
+          "threshold": 1861712
         },
         "stripped_text_bytes": {
-          "baseline": 1359751,
-          "threshold": 1359751
+          "baseline": 1363975,
+          "threshold": 1363975
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 983008,
-          "threshold": 983008
+          "baseline": 991160,
+          "threshold": 991160
         },
         "stripped_text_bytes": {
-          "baseline": 697415,
-          "threshold": 697415
+          "baseline": 702791,
+          "threshold": 702791
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1532440,
-          "threshold": 1532440
+          "baseline": 1540528,
+          "threshold": 1540528
         },
         "stripped_text_bytes": {
-          "baseline": 1095175,
-          "threshold": 1095175
+          "baseline": 1100503,
+          "threshold": 1100503
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1117216,
-          "threshold": 1117216
+          "baseline": 1125368,
+          "threshold": 1125368
         },
         "stripped_text_bytes": {
-          "baseline": 788503,
-          "threshold": 788503
+          "baseline": 793879,
+          "threshold": 793879
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1996184,
-          "threshold": 1996184
+          "baseline": 2003120,
+          "threshold": 2003120
         },
         "stripped_text_bytes": {
-          "baseline": 1453223,
-          "threshold": 1453223
+          "baseline": 1457623,
+          "threshold": 1457623
         }
       }
     }

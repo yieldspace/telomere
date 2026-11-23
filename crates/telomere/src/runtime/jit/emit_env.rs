@@ -127,7 +127,10 @@ fn recipe_from_store(recipe: CallRecipe) -> EmitRecipe {
         return_size: recipe.return_size,
         fast_callee: match recipe.target {
             CallDispatchTarget::Wasm { .. } => Some(FastCallee::Store(recipe.frame.code_addr)),
-            CallDispatchTarget::Host(_) | CallDispatchTarget::AsyncHost(_) => None,
+            CallDispatchTarget::Host(_)
+            | CallDispatchTarget::AsyncHost(_)
+            | CallDispatchTarget::PublicHost(_)
+            | CallDispatchTarget::PublicAsyncHost(_) => None,
         },
     }
 }
