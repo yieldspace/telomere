@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #265 (branch fix/197-jit-relocations at merge commit 83d2372420ff675f2f6de3ec80d275a51dd745a1 \u2014 branch head 3646905ff2cd6780160184f70e95936aece61c46 with current main e91089baa9a889e83d2e615a5bf0dbed62addf87 merged in without conflicts, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45112476845 and 45112481681 against the branch and pull-request run 45112159380, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "83d2372420ff675f2f6de3ec80d275a51dd745a1",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #266 (branch fix/209-jit-trap-sites at merge commit 41dc4b069048d143dba66ca7c89c6b8c92b2ef72 \u2014 branch head b8e280f22f80d61d5d6fb8c6d7d9d71148e5c173 with current main a4177b48c678bba83e7a3e816bd0db45e07744e0 merged in, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45115393274 and 45115397566 against the branch and pull-request run 45115342631, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "41dc4b069048d143dba66ca7c89c6b8c92b2ef72",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45112476845,
-      45112481681
+      45115393274,
+      45115397566
     ],
     "cross_check_run_ids": [
-      45112159380
+      45115342631
     ],
-    "derivation": "Re-baseline for PR #265 (#197, record relocations in the JIT emitters). The PR generalises the three baseline JIT emitters over a monomorphised EmitEnv: the JIT implementation reproduces the previous behaviour from the live store, while the AoT implementation supplies recipes from the parsed Module and records stub addresses / funcaddr immediates as placeholders plus a relocation table (RelocKind::{Stub(StubId), FuncAddr(funcidx)}); the 44 stubs gain a single source of truth (StubId table + fingerprint), and the patcher rewrites each site at the same length after verifying the placeholder. Attribution was isolated by measuring current main (e91089b) alone (workflow_dispatch run 45112486937, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR\u2019s own. Only the core-jit configuration links telomere-jit-codegen and the JIT emitters into the minimal embedder, so the delta is confined to its four gated series: release stripped file +2,552 B / stripped .text +848 B; release-size stripped file +720 B / stripped .text \u2212672 B (the release-size .text shrink is the code-layout effect of the emitter refactor under that profile\u2019s optimisation settings, as in earlier re-baselines). The other 24 gated series are byte-identical. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #266 (#209, per-function JIT trap-site tables). The PR records, for every native trap site a baseline emitter produces, the decoded-stream pc index of the emitting instruction in a per-function table (Vec<u32>), packs the 1-based site id into the trap exit value (code | site << 8; site 0 keeps the previous bare-code encoding for stub-raised traps), resolves the site against the trapping function's own table at the innermost JIT entry boundary, and charges the table bytes to the code-cache budget. Landing it required merging current main (PR #265, #197's EmitEnv generalisation) into the branch: the three backend files and backend.rs conflicted, and were resolved onto #197's structure \u2014 the per-arch emitters stay generic over EmitEnv and their Emission result gains the trap-site table, Emitter::finish() returns the code plus the table, and return_trap keeps recording sites and packing the exit value in both modes. Attribution was isolated by measuring current main (a4177b4) alone (workflow_dispatch run 45115401237, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR\u2019s own. The growth is confined to the core-jit configuration, the only one that links the JIT backends into the minimal embedder (release stripped file +2,384 B / stripped .text +2,128 B; release-size stripped file +880 B / stripped .text +816 B), plus a +16 B code-layout shift in the release-size component configuration (stripped file and stripped .text), attributable to the ExecuteContext field the PR appends in the shared runtime \u2014 the only part of the change linked into non-JIT configurations; the other 25 gated series are byte-identical. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -70,12 +70,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2014256,
-          "threshold": 2014256
+          "baseline": 2016640,
+          "threshold": 2016640
         },
         "stripped_text_bytes": {
-          "baseline": 1567319,
-          "threshold": 1567319
+          "baseline": 1569447,
+          "threshold": 1569447
         }
       },
       "wasi-threads": {
@@ -112,12 +112,12 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1630336,
-          "threshold": 1630336
+          "baseline": 1630352,
+          "threshold": 1630352
         },
         "stripped_text_bytes": {
-          "baseline": 1202983,
-          "threshold": 1202983
+          "baseline": 1202999,
+          "threshold": 1202999
         }
       },
       "wasi": {
@@ -142,12 +142,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1531528,
-          "threshold": 1531528
+          "baseline": 1532408,
+          "threshold": 1532408
         },
         "stripped_text_bytes": {
-          "baseline": 1094343,
-          "threshold": 1094343
+          "baseline": 1095159,
+          "threshold": 1095159
         }
       },
       "wasi-threads": {
