@@ -808,12 +808,12 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
     label!(special_function_vm_end, "special_function_vm_end");
     label!(op_call, "op_call");
     label!(op_call_import, "op_call_import");
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     label!(op_call_jit_lazy, "op_call_jit_lazy");
     label!(op_call_indirect, "op_call_indirect");
     label!(op_return_call, "op_return_call");
     label!(op_return_call_import, "op_return_call_import");
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     label!(op_return_call_jit_lazy, "op_return_call_jit_lazy");
     label!(op_return_call_indirect, "op_return_call_indirect");
     label!(op_i32_const, "op_i32_const");
@@ -1513,7 +1513,7 @@ const _: () = assert!(
 /// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
 #[inline(always)]
 pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     if crate::runtime::jit::should_stop_interpreter_at(tail_code) {
         ctx.cont = tail_code;
         return VMResult::Success(());
@@ -1743,7 +1743,7 @@ pub(crate) use bulk_memory::{
 };
 #[allow(unused_imports)]
 pub(crate) use bulk_memory::{op_mem_copy, op_mem_fill, op_mem_init};
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) use call::{jit_call_direct, jit_call_direct_wasm_fast, jit_call_indirect};
 pub(crate) use call::{
     op_call, op_call_cached_u16_low7_guard, op_call_i32_crc16_update16,
@@ -1751,7 +1751,7 @@ pub(crate) use call::{
     op_call_i32_numeric_token_state_transition, op_call_import, op_call_indirect, op_return_call,
     op_return_call_import, op_return_call_indirect, special_start_function_call,
 };
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) use call::{op_call_jit_lazy, op_return_call_jit_lazy, special_start_jit_function_call};
 /// Internal host-call trampoline exposed for low-level native-module integrations.
 ///
@@ -1901,13 +1901,13 @@ pub(crate) const START_HOST_FUNCTION_PROGRAM: [Instr; 1] = [Instr {
     op: special_start_function_call,
 }];
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) const START_JIT_FUNCTION_PROGRAM: [Instr; 1] = [Instr {
     op: special_start_jit_function_call,
 }];
 
 pub(crate) fn wasm_entry_pc(_store: &Store) -> StablePc {
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     {
         if crate::runtime::jit::supported() && _store.runtime_config().jit.enabled {
             return StablePc::from_stable_ptr(START_JIT_FUNCTION_PROGRAM.as_ptr());

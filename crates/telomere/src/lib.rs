@@ -7,7 +7,10 @@
 //! validator-facing optimizer that lowers a parsed module into the runtime's
 //! instruction representation, the interpreter and its scheduler, host function
 //! linking through [`Registry`], and the optional function-local lazy baseline
-//! JIT behind the `jit` feature. It is written from scratch and does not depend
+//! JIT behind the `jit` feature. Deployments that only load and execute
+//! precompiled native code can instead use the smaller `aot-load` feature,
+//! which carries the cache, stubs, and code memory but no compiler. It is
+//! written from scratch and does not depend
 //! on Cranelift or on the `wasmparser`/`wasmtime` crates. Embedders normally
 //! start from [`Store`], [`instantiate`], and [`run_module_function`].
 //!
@@ -172,8 +175,8 @@ pub use runtime::aliasing;
 pub use runtime::get_global;
 /// Instantiates a parsed core WebAssembly module in a store.
 pub use runtime::instantiate;
-#[cfg(feature = "jit")]
-/// Statistics for the optional store-local JIT cache.
+#[cfg(feature = "aot-load")]
+/// Statistics for the optional store-local native-code cache.
 ///
 /// This remains public because the minimal-embedder JIT configuration uses it
 /// to verify that an enabled workload compiled.

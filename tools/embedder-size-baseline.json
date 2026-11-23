@@ -14,7 +14,7 @@
     "cross_check_run_ids": [
       45098217560
     ],
-    "derivation": "Re-baseline for PR #264 (#263, const-base memarg fold must not wrap past 2^32). The PR changes the optimizer\u2019s three copies of fold_const_base_memarg (crates/telomere/src/parser/core/optimizer/pipeline/analysis.rs, select.rs, and versioning.rs) from wrapping_add to checked_add, refusing the const-base specialisation on overflow so the generic op\u2019s checked runtime address computation traps with MemoryIndexOutOfRange; it adds regression tests only besides. Attribution was isolated by measuring current main (8d69b4b) alone (workflow_dispatch run 45098248974, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR\u2019s own. The delta is a flat +16 B in stripped file and stripped .text in every release configuration that links the telomere library (core, component, wasi, core-nosimd, core-jit, wasi-threads) and in the release-size core, core-nosimd, and wasi-threads configurations \u2014 the few extra instructions of the checked fold landing in the linked library code; the release-size component, wasi, and core-jit configurations are byte-identical, as is the baseline configuration, which links no library code, in both profiles (10 of 28 gated series unchanged). Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #264 (#263, const-base memarg fold must not wrap past 2^32). The PR changes the optimizer\u2019s three copies of fold_const_base_memarg (crates/telomere/src/parser/core/optimizer/pipeline/analysis.rs, select.rs, and versioning.rs) from wrapping_add to checked_add, refusing the const-base specialisation on overflow so the generic op\u2019s checked runtime address computation traps with MemoryIndexOutOfRange; it adds regression tests only besides. Attribution was isolated by measuring current main (8d69b4b) alone (workflow_dispatch run 45098248974, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR\u2019s own. The delta is a flat +16 B in stripped file and stripped .text in every release configuration that links the telomere library (core, component, wasi, core-nosimd, core-jit, wasi-threads) and in the release-size core, core-nosimd, and wasi-threads configurations \u2014 the few extra instructions of the checked fold landing in the linked library code; the release-size component, wasi, and core-jit configurations are byte-identical, as is the baseline configuration, which links no library code, in both profiles (10 of 28 gated series unchanged). Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019. The four core-aot series were added by the #200 change (aot-load feature split): they were measured with the same tool on the change branch at fleur-du-lapin (Linux x86_64, Xeon Gold 6140, Rust 1.96.0, --sizes-only, one run per profile; the existing series measured in the same runs matched this baseline within 312 B, the code-layout shift of the cfg refactor), and they gate the new configuration from its first CI run; the merge-time re-baseline on CI runners supersedes these values like every other row."
   },
   "thresholds": {
     "release": {
@@ -76,6 +76,16 @@
         "stripped_text_bytes": {
           "baseline": 1566471,
           "threshold": 1566471
+        }
+      },
+      "core-aot": {
+        "stripped_file_bytes": {
+          "baseline": 1506264,
+          "threshold": 1506264
+        },
+        "stripped_text_bytes": {
+          "baseline": 1150503,
+          "threshold": 1150503
         }
       },
       "wasi-threads": {
@@ -148,6 +158,16 @@
         "stripped_text_bytes": {
           "baseline": 1095015,
           "threshold": 1095015
+        }
+      },
+      "core-aot": {
+        "stripped_file_bytes": {
+          "baseline": 1117160,
+          "threshold": 1117160
+        },
+        "stripped_text_bytes": {
+          "baseline": 788423,
+          "threshold": 788423
         }
       },
       "wasi-threads": {

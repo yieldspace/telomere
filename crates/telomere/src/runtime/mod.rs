@@ -20,7 +20,13 @@ pub use instantiate::aliasing;
 /// Instantiates a parsed core WebAssembly module in a store.
 pub use instantiate::instantiate;
 /// Returns whether the optional JIT is available in this build and on this target.
-pub use jit::supported as jit_supported;
+///
+/// Only the `jit` feature can compile WebAssembly at runtime, so this is
+/// `false` in an `aot-load`-only build even though such a build can execute
+/// precompiled code installed by an AoT loader.
+pub fn jit_supported() -> bool {
+    cfg!(feature = "jit") && jit::supported()
+}
 /// A completion delivered by an [`ExecutionDriver`].
 pub use memory_effect::Completion;
 /// Data carried when a pending operation completes.

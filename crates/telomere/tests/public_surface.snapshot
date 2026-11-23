@@ -6,7 +6,7 @@ telomere::HostCallPending | always
 telomere::InstanceHandle | always
 telomere::InterruptReason | always
 telomere::IoReadBinaryReader | always
-telomere::JitCacheStats | cfg(feature = "jit")
+telomere::JitCacheStats | cfg(feature = "aot-load")
 telomere::JitConfig | always
 telomere::MAX_CONTROL_NESTING_DEPTH | always
 telomere::MemoryConfig | always

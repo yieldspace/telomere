@@ -5,7 +5,8 @@ fn ensure_call_recipe(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDisp
     ctx.gc.ensure_call_recipe_for_func(funcaddr)
 }
 
-#[cfg(feature = "jit")]
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
 fn jit_exit_from_call_outcome<const IS_RETURN_CALL: bool>(
     result: VMResult<CallOutcome>,
     continuation: *const Instr,
@@ -139,7 +140,8 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
 /// Telomere runtime helper for JIT direct `call` / `return_call` sites.
 ///
 /// Stack effect: internal runtime call dispatch.
@@ -181,7 +183,8 @@ pub(crate) unsafe fn jit_call_direct<const IS_RETURN_CALL: bool>(
     )
 }
 
-#[cfg(feature = "jit")]
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
 /// Telomere runtime helper for fast JIT direct calls whose callee is known to be a Wasm function.
 ///
 /// Stack effect: prepares the WebAssembly `call` callee frame and returns a JIT continuation exit.
@@ -220,7 +223,8 @@ pub(crate) unsafe fn jit_call_direct_wasm_fast(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
 /// Telomere runtime helper for JIT `call_indirect` / `return_call_indirect` sites.
 ///
 /// Stack effect: pops the indirect table element index and dispatches to the resolved target.
@@ -295,7 +299,8 @@ pub(crate) unsafe fn jit_call_indirect<const IS_RETURN_CALL: bool>(
     )
 }
 
-#[cfg(feature = "jit")]
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
 unsafe fn prepare_jit_wasm_call<const IS_RETURN_CALL: bool>(
     return_addr: *const Instr,
     recipe: CallDispatchCache,
@@ -328,7 +333,8 @@ unsafe fn prepare_jit_wasm_call<const IS_RETURN_CALL: bool>(
     VMResult::Success(())
 }
 
-#[cfg(feature = "jit")]
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
 unsafe fn finish_jit_wasm_call<const IS_RETURN_CALL: bool>(
     continuation: *const Instr,
     recipe: CallDispatchCache,
@@ -374,7 +380,8 @@ unsafe fn finish_jit_wasm_call<const IS_RETURN_CALL: bool>(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
 unsafe fn finish_rejected_direct_wasm_call(
     continuation: *const Instr,
     recipe: CallDispatchCache,
@@ -393,7 +400,8 @@ unsafe fn finish_rejected_direct_wasm_call(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
 #[inline(always)]
 fn pack_call_stack_sizes(recipe: CallDispatchCache) -> u64 {
     (u64::from(recipe.param_size) << 32) | u64::from(recipe.return_size)
@@ -469,7 +477,7 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 /// WebAssembly `call` quickened to the lazy baseline JIT entry path.
 ///
 /// Stack effect: `[params] -> [results]`.
@@ -485,7 +493,7 @@ pub unsafe fn op_call_jit_lazy(tail_code: *const Instr, ctx: &mut ExecuteContext
     unsafe { op_call_jit_lazy_inner::<false>(tail_code, ctx) }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 unsafe fn op_call_jit_lazy_inner<const IS_RETURN_CALL: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -909,7 +917,7 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 /// WebAssembly `return_call` quickened to the lazy baseline JIT entry path.
 ///
 /// Stack effect: tail-calls the target with the active frame replaced by the callee frame.
@@ -1105,7 +1113,7 @@ pub unsafe fn special_start_function_call(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 /// Telomere internal trampoline for starting a Wasm function through lazy baseline JIT.
 ///
 /// Stack effect: internal runtime continuation.

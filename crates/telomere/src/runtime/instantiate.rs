@@ -472,7 +472,7 @@ pub async fn instantiate(
             .iter()
             .map(|&funcaddr| runtime.call_recipe_slot_for_func(funcaddr))
             .collect::<Vec<_>>();
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot-load")]
         let jit_local_wasm_recipe_slots = local_wasm_funcs
             .iter()
             .map(|&func_addr| runtime.call_recipe_slot_for_func(func_addr))
@@ -485,9 +485,9 @@ pub async fn instantiate(
                 }
                 RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
             };
-            #[cfg(feature = "jit")]
+            #[cfg(feature = "aot-load")]
             let mut materialized = materialized;
-            #[cfg(feature = "jit")]
+            #[cfg(feature = "aot-load")]
             if crate::runtime::jit::supported() && store.runtime_config().jit.enabled {
                 rewrite_direct_wasm_calls_for_jit(
                     &mut materialized.instrs,
@@ -975,7 +975,7 @@ fn rewrite_direct_calls_for_slots(
     debug_assert_eq!(cursor, instrs.len());
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 fn rewrite_direct_wasm_calls_for_jit(
     instrs: &mut [Instr],
     op_lens: &[u16],
@@ -1841,7 +1841,7 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     #[test]
     fn rewrite_direct_wasm_calls_for_jit_preserves_specialized_call_opcodes() {
         let mut instrs = vec![

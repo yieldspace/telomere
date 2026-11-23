@@ -69,7 +69,3 @@ fn emit_baseline_plan(
 ) -> Result<Vec<u8>, ()> {
     Err(())
 }
-
-pub(crate) fn supported() -> bool {
-    telomere_jit_codegen::target::supported()
-}

@@ -323,9 +323,9 @@ fn ungated_surface_excludes_non_abi_interpreter_representation_paths() {
 }
 
 #[test]
-fn advertised_jit_observability_remains_public_with_jit() {
+fn advertised_jit_observability_remains_public_with_aot_load() {
     let records = collect_public_surface();
-    let expected = expected_path("telomere::JitCacheStats", &["cfg(feature = \"jit\")"]);
+    let expected = expected_path("telomere::JitCacheStats", &["cfg(feature = \"aot-load\")"]);
     let actual = records
         .iter()
         .filter(|record| record.path == expected.path)
@@ -334,7 +334,7 @@ fn advertised_jit_observability_remains_public_with_jit() {
     assert_eq!(
         actual,
         BTreeSet::from([expected]),
-        "the minimal-embedder JIT cache observation type must remain public with `jit`"
+        "the minimal-embedder JIT cache observation type must remain public with `aot-load` (and therefore with `jit`, which implies it)"
     );
 }
 

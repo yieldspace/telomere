@@ -62,6 +62,12 @@ CONFIGS = {
         "fixture": "examples/add.wasm",
         "expected_stdout": "3\n",
     },
+    "core-aot": {
+        "bin": "embed-core",
+        "features": ["simd", "aot-load"],
+        "fixture": "examples/add.wasm",
+        "expected_stdout": "3\n",
+    },
     "wasi-threads": {
         "bin": "embed-wasi",
         "features": ["simd", "threads", "wasi"],

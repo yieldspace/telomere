@@ -111,11 +111,13 @@ a higher layer into a lower-layer result.
 | `wasi` | `component` + `telomere-component-wasi` with `simd,wasi` | `examples/wasi-component-args.wasm` → `0` |
 | `core-nosimd` | `telomere` without optional features | `examples/add.wasm` → `3` |
 | `core-jit` | `core` with `simd,jit` | `examples/add.wasm` → `3` |
+| `core-aot` | `core` with `simd,aot-load` (#200; load path without emitters) | `examples/add.wasm` → `3` |
 | `wasi-threads` | `wasi` with `simd,threads,wasi` | `examples/wasi-component-args.wasm` → `0` |
 
 The `baseline`, `core`, `component`, `wasi`, `core-nosimd`, `core-jit`, and
 `wasi-threads` names are the configuration contract for
 [#140](https://github.com/yieldspace/telomere/issues/140)'s RISC-V follow-up.
+`core-aot` was added later by #200 and is gated by the same #164 mechanism.
 The headline ladder retains SIMD because it is the supported default; a
 SIMD-off headline would not describe the supported path. Thus `minimal` does
 not mean "fewest bytes".
@@ -375,6 +377,7 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | `release` | `wasi` | 2,821,912 | 2,245,399 |
 | `release` | `core-nosimd` | 1,286,200 | 988,295 |
 | `release` | `core-jit` | 2,011,704 | 1,566,471 |
+| `release` | `core-aot` | 1,506,264 | 1,150,503 |
 | `release` | `wasi-threads` | 3,008,240 | 2,384,167 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,097,848 | 776,999 |
@@ -382,6 +385,7 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | `release-size` | `wasi` | 1,826,016 | 1,334,535 |
 | `release-size` | `core-nosimd` | 983,008 | 697,415 |
 | `release-size` | `core-jit` | 1,530,808 | 1,095,015 |
+| `release-size` | `core-aot` | 1,117,160 | 788,423 |
 | `release-size` | `wasi-threads` | 1,967,360 | 1,428,023 |
 
 #### Re-baseline history
@@ -1075,3 +1079,105 @@ TELOMERE_JIT_BIN=/tmp/telomere-cli-jit python3 tools/measure-cold-start.py
 The historical CLI tables in that section were filled in from a single run of
 that sequence. The #139 embedder and Linux data have the separate environments,
 commands, and JSON artifact records stated above.
+
+## AOT load path split (#200)
+
+#200 splits the native-code *load* path from the JIT *emitters* so an
+embedder can carry precompiled code without carrying a compiler.
+
+- The `telomere` crate gains a non-default `aot-load` feature: the runtime
+  stubs, the native-call ABI, the per-store code cache, and
+  `telomere-jit-codegen::code_memory` (allocation, protection, relocation
+  application). It pulls in no emitter and no assembler.
+- `jit` now implies `aot-load` and additionally enables the new non-default
+  `emit` feature of `telomere-jit-codegen`, which gates that crate's
+  architecture backends and macro-assembler layer (its `arch` and `masm`
+  modules). `code_memory` stays available without `emit`.
+- In an `aot-load`-only build, compile-on-miss in the call path becomes
+  cache-consult-only: a miss returns the typed `Unimplemented` VM error and
+  the call falls back to the interpreter, exactly like a function the JIT
+  rejects. Nothing in the build can compile at runtime; the two
+  function-layout structs the emitters consume (`MemoryJitLayout`,
+  `GlobalValueJitLayout`) stay behind `jit`.
+
+### Symbol-absence check
+
+`tools/check-aot-load-symbols.py` builds the `core-aot` embedder and fails
+if any emitter symbol (`emit_baseline_function`, `emit_baseline_plan`,
+`build_baseline_plan`) is present, with load-path symbols (`CodeArena`,
+`StoreJitCache`, `instantiate`) as positive controls. It is wired into the
+`aot-load` CI job and into the footprint workflow after the size gate. The
+check deliberately builds the `dev` profile: under the workspace release
+profiles, LTO inlines `emit_baseline_function` away even in a real `jit`
+binary (measured on a control build), so a release-profile absence check
+would pass vacuously; in a dev build the emitter entry points survive as
+symbols whenever the emitter layer is linked. The checker's unit tests
+(`tools/test_check_aot_load_symbols.py`) cover the symbol-matching rules.
+
+### Measured ladder
+
+Measured 2026-11-23 with `tools/measure-embedder-footprint.py --sizes-only`
+on the #200 change branch (stripped file / stripped `.text`, bytes; RSS and
+timing steps skipped locally because the measuring host lacks
+`/usr/bin/time` — CI runs the full tool). The interpreter-only cell is the
+existing `core` configuration; the `jit` + `aot-load` cell is `core-jit`
+(`jit` implies `aot-load`, so it is the same build).
+
+Linux x86_64 (fleur-du-lapin, Intel Xeon Gold 6140, Rust 1.96.0):
+
+| Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
+| --- | --- | ---: | ---: |
+| `release` | `core` (interp-only) | 1,478,824 | 1,131,399 |
+| `release` | `core-aot` | 1,506,264 | 1,150,503 |
+| `release` | `core-jit` | 2,012,016 | 1,566,759 |
+| `release-size` | `core` (interp-only) | 1,097,856 | 776,999 |
+| `release-size` | `core-aot` | 1,117,160 | 788,423 |
+| `release-size` | `core-jit` | 1,530,864 | 1,095,079 |
+
+macOS arm64 (Mac mini, Apple M2 Pro, Rust 1.96.0):
+
+| Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
+| --- | --- | ---: | ---: |
+| `release` | `core` (interp-only) | 1,388,264 | 1,013,268 |
+| `release` | `core-aot` | 1,438,632 | 1,030,808 |
+| `release` | `core-jit` | 1,873,176 | 1,430,536 |
+| `release-size` | `core` (interp-only) | 770,640 | 598,428 |
+| `release-size` | `core-aot` | 787,376 | 607,604 |
+| `release-size` | `core-jit` | 1,004,416 | 815,464 |
+
+Derived deltas (stripped file / stripped `.text`):
+
+| Delta | Linux `release` | Linux `release-size` | macOS `release` | macOS `release-size` |
+| --- | ---: | ---: | ---: | ---: |
+| Load path (`core-aot` − `core`) | +27,440 / +19,104 | +19,304 / +11,424 | +50,368 / +17,540 | +16,736 / +9,176 |
+| Emitters (`core-jit` − `core-aot`) | +505,752 / +416,256 | +413,704 / +306,656 | +434,544 / +399,728 | +217,040 / +207,860 |
+
+The load path costs roughly 11–19 KB of `.text`; the emitters cost
+208–416 KB of `.text` depending on profile and target — that emitter cost
+is what an `aot-load` embedder no longer pays. The interpreter-only cell
+did not regress: in the same Linux runs, `core` measured −8 B (release
+stripped file) and +8 B (release-size) against the #164 baseline above,
+which is code-layout noise from the cfg refactor, and the `core-aot` rows
+were added to `tools/embedder-size-baseline.json` so the #164 gate covers
+the new cell from its first CI run.
+
+### Artifact side
+
+No serialized AoT artifact format exists yet: the codec (#196), the
+artifact container and its load path (#198), and the `telomere compile`
+producer (#199) own it, so there are no artifact bytes to record against
+wasm bytes. As the closest measurable proxy for what the load path would
+carry, an in-crate measurement harness
+(`runtime::jit::artifact_measure`, an ignored test run on demand) emitted
+every function of the pinned wasm-testsuite corpus with the baseline
+backend and summed the emitted code bytes against the source wasm bytes:
+
+| Corpus | Modules | Functions emitted | Wasm bytes | Emitted code bytes | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 147 root `.wast` files + `examples/add.wasm` | 1,465 instantiated (134 failed: imports/unsupported) | 5,904 (0 rejected) | 272,481 | 8,031,517 | 29.48× |
+
+The ratio is dominated by fixed per-function emission overhead: the spec
+suite's modules are mostly tiny single-purpose functions, so 29.48× is a
+property of this corpus, not a bulk-code expansion factor, and it excludes
+any container or relocation-record overhead. The artifact-bytes column of
+this comparison belongs to #198/#201, once the format exists to measure.

@@ -8,14 +8,17 @@ use std::{
 
 use parking_lot::Mutex;
 
+use crate::common::ObjectRef;
+#[cfg(feature = "jit")]
 use crate::common::{
     store::{FunctionBody, StoreInner},
-    ObjectRef, VMResult,
+    VMResult,
 };
 
+#[cfg(feature = "jit")]
+use super::backend;
 use super::{
     abi::JitEntry,
-    backend,
     profile::{self, Counter},
 };
 use telomere_jit_codegen::code_memory::{CodeArena, ExecutableCode};
@@ -66,6 +69,24 @@ pub(crate) struct CompiledFunction {
 }
 
 impl StoreJitCache {
+    /// Returns the compiled function installed for `funcaddr`, if any,
+    /// refreshing its eviction recency.
+    ///
+    /// This consult is the whole native-code read path in an `aot-load`-only
+    /// build: code arrives in the cache through an AoT loader (or, with the
+    /// `jit` feature, through [`StoreJitCache::get_or_compile`]), and a miss
+    /// simply means the function has no native code in this store.
+    pub(crate) fn get_cached(&self, funcaddr: ObjectRef) -> Option<Arc<CompiledFunction>> {
+        let mut inner = self.inner.lock();
+        inner.clock = inner.clock.wrapping_add(1);
+        let clock = inner.clock;
+        let cached = inner.compiled.get_mut(&funcaddr)?;
+        profile::count(Counter::CompileHit);
+        cached.last_used = clock;
+        Some(cached.tiers.active().clone())
+    }
+
+    #[cfg(feature = "jit")]
     pub(crate) fn get_or_compile(
         &self,
         funcaddr: ObjectRef,
@@ -82,19 +103,15 @@ impl StoreJitCache {
         }
 
         {
-            let mut inner = self.inner.lock();
-            inner.clock = inner.clock.wrapping_add(1);
-            let clock = inner.clock;
+            let inner = self.inner.lock();
             if inner.disabled.contains(&funcaddr) {
                 profile::count(Counter::CompileRejectDisabled);
                 trace_compile_reject("disabled", 0, 0, max_bytes);
                 return VMResult::Unimplemented;
             }
-            if let Some(cached) = inner.compiled.get_mut(&funcaddr) {
-                profile::count(Counter::CompileHit);
-                cached.last_used = clock;
-                return VMResult::Success(cached.tiers.active().clone());
-            }
+        }
+        if let Some(compiled) = self.get_cached(funcaddr) {
+            return VMResult::Success(compiled);
         }
 
         let FunctionBody::Wasm { code, op_lens, .. } = body else {
@@ -309,6 +326,38 @@ mod tests {
 
         assert!(Arc::ptr_eq(tiers.active(), &compiled));
         assert_eq!(tiers.code_size(), 32);
+    }
+
+    #[test]
+    fn get_cached_consults_installed_code_without_compiling() {
+        let cache = StoreJitCache::default();
+        let func = ObjectRef(7);
+        assert!(cache.get_cached(func).is_none());
+
+        let compiled = test_compiled(32);
+        {
+            let mut inner = cache.inner.lock();
+            inner.used_bytes = compiled.code_size();
+            inner.compiled.insert(
+                func,
+                CachedFunction {
+                    tiers: CompiledTiers::baseline(compiled.clone()),
+                    last_used: 0,
+                },
+            );
+        }
+
+        let hit = cache
+            .get_cached(func)
+            .expect("installed function must be consultable");
+        assert!(Arc::ptr_eq(&hit, &compiled));
+
+        let inner = cache.inner.lock();
+        assert_eq!(
+            inner.compiled.get(&func).unwrap().last_used,
+            2,
+            "a consult refreshes eviction recency (one miss + one hit on the clock)"
+        );
     }
 
     #[test]

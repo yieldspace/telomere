@@ -7,11 +7,11 @@ use super::{
     HostFunction, Instr, LocalsData, MemType, MeteringConfig, MeteringHandle, ModuleNames, Stack,
     TableType, TrapInfo, TypeIdx, VMResult, PAGE_SIZE_MAX,
 };
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 use crate::runtime::jit::{CompiledFunction, StoreJitCache};
 use crate::runtime::trap_context::TrapContext;
 use parking_lot::{Mutex, MutexGuard};
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 use std::sync::atomic::AtomicBool;
 use std::{
     cell::RefCell,
@@ -453,9 +453,9 @@ pub struct StoreInner {
     funcs: Vec<FunctionInstanceData>,
     call_recipes: Vec<Option<CallRecipe>>,
     last_trap: Option<TrapSlot>,
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     jit_rejected_funcs: Vec<AtomicBool>,
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     jit_compiled_funcs: Vec<RefCell<Weak<CompiledFunction>>>,
     tables: Vec<super::TableInstance>,
     globals: Vec<GlobalValue>,
@@ -736,9 +736,9 @@ impl StoreInner {
         let id = FuncId::from_index(self.funcs.len());
         self.funcs.push(func);
         self.call_recipes.push(None);
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot-load")]
         self.jit_rejected_funcs.push(AtomicBool::new(false));
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot-load")]
         self.jit_compiled_funcs.push(RefCell::new(Weak::new()));
         id
     }
@@ -789,19 +789,19 @@ impl StoreInner {
             .expect("call recipe slot exceeds u32::MAX")
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     pub(crate) fn jit_rejected_func(&self, addr: ObjectRef) -> bool {
         self.jit_rejected_funcs[self.call_recipe_slot_for_func_addr(addr)].load(Ordering::Relaxed)
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     pub(crate) fn mark_jit_rejected_func(&self, addr: ObjectRef) {
         let slot = self.call_recipe_slot_for_func_addr(addr);
         self.jit_rejected_funcs[slot].store(true, Ordering::Relaxed);
         *self.jit_compiled_funcs[slot].borrow_mut() = Weak::new();
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     pub(crate) fn jit_cached_compiled_func(
         &self,
         addr: ObjectRef,
@@ -810,7 +810,7 @@ impl StoreInner {
         self.jit_compiled_funcs[slot].borrow().upgrade()
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     pub(crate) fn set_jit_cached_compiled_func(
         &self,
         addr: ObjectRef,
@@ -1965,7 +1965,7 @@ pub struct Store {
     next_instance_id: AtomicU32,
     runtime_config: RuntimeConfig,
     metering: Option<MeteringHandle>,
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     jit_cache: StoreJitCache,
     /// Optional immutable embedder state made available to host functions.
     pub state: StoreState,
@@ -2016,7 +2016,7 @@ impl Store {
             next_instance_id: AtomicU32::new(1),
             runtime_config,
             metering,
-            #[cfg(feature = "jit")]
+            #[cfg(feature = "aot-load")]
             jit_cache: StoreJitCache::default(),
             state,
         }
@@ -2059,12 +2059,12 @@ impl Store {
         self.metering.as_ref()
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     fn jit_cache_stats_impl(&self) -> crate::JitCacheStats {
         self.jit_cache.stats()
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     /// Returns a snapshot of the store-local JIT cache.
     ///
     /// This is useful for confirming that a workload compiled after enabling
@@ -2073,7 +2073,7 @@ impl Store {
         self.jit_cache_stats_impl()
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot-load")]
     pub(crate) fn jit_cache(&self) -> &StoreJitCache {
         &self.jit_cache
     }
