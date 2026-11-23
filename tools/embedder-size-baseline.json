@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #280 (branch fix/128-reachable-panics at head 677c152b36691c48e6db99e9b0bf7d284d616b1d \u2014 branch commit 0ec3b09 (fail closed on reachable internal-invariant violations (#128)) plus merge commit 677c152 bringing in current main da5eb1e, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45176267574 and 45176273957 against the branch and pull-request run 45176240985, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "677c152b36691c48e6db99e9b0bf7d284d616b1d",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #281 (branch fix/279-elem-tableidx at head b981705af163e9b9a04d5603aed1b6176f73603d \u2014 branch commit a20c782 (parser validates kind-6 element segments against the declared table (#279)) plus merge commit b981705 bringing in current main bfa7df4, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45184156762 and 45184172624 against the branch and pull-request run 45184047623, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "b981705af163e9b9a04d5603aed1b6176f73603d",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45176267574,
-      45176273957
+      45184156762,
+      45184172624
     ],
     "cross_check_run_ids": [
-      45176240985
+      45184047623
     ],
-    "derivation": "Re-baseline for PR #280 (#128, internal-invariant violations abort the host: panics and unwraps reachable from module, guest and link input in instantiation, linking, call_indirect and the async scheduler are converted to fail-closed error returns, and the 33 expect/unreachable sites in the fused-op evaluation path in runtime/vm/superinstructions.rs ride the existing Option chain into InvalidOperand). The branch merged current main (da5eb1e, containing PRs #269, #273, #278, #275 and #276) before measurement; the merge conflicted in runtime/scheduler.rs (a test-module union: the branch's WasmAsync tests and main's u64 task-id boundary test are both kept) and in tests/public_api_fail_closed.rs, and one auto-merged asymmetry was repaired by hand \u2014 the public host-linking implementations rewritten by PR #269 (#216) in runtime/instantiate.rs still indexed and unwrapped on embedder input, so the branch's fail-closed conversions were ported to the four public link implementations (the raw counterparts already carried them), and the two regression tests were ported to the public API. The first CI run on the merged tree passed the gate, because every delta is negative. Attribution was isolated by measuring current main (da5eb1e) alone (workflow_dispatch run 45176281284, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. Removing panic paths and their formatting machinery shrinks all seven library configurations in both profiles (release stripped file \u22123,352..\u22123,984 B / stripped .text \u2212528..\u2212720 B; release-size stripped file \u22123,144..\u22123,688 B / stripped .text \u2212416..\u2212688 B), while the baseline configuration, which links no library code, is unchanged; 28 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.36% (1,169,031 B to 1,231,735 B), down from +5.41%. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #281 (#279, the parser validates kind-6 element segments against table 0 instead of the declared table: parse_elem parsed the segment's tableidx and checked the table exists, but passed a literal 0 to validate_active_elem, so a segment declared for another table was type-checked against table 0's element type \u2014 externref segments declared for a funcref table were accepted and funcref segments for such a table were rejected; the fix passes the parsed tableidx, one line in parser/core/parser.rs, plus a new regression suite tests/elem_validation.rs). The branch merged current main (bfa7df4, containing PRs #269, #273, #278, #275, #276 and #280) before measurement; the merge was conflict-free. Attribution was isolated by measuring current main (bfa7df4) alone (workflow_dispatch run 45184187750, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. 14 of the 32 gated series change, each by exactly +16 B in both the stripped file and stripped .text sizes, confined to configurations that link the parser (release component / wasi / wasi-threads; release-size core / component / core-jit / wasi-threads); the remaining 18 series are byte-identical. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.37% (1,169,031 B to 1,231,751 B), up from +5.36%. Run-to-run spread was again 0 B for every gated series across the three samples."
   },
   "thresholds": {
     "release": {
@@ -40,22 +40,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2533408,
-          "threshold": 2533408
+          "baseline": 2533424,
+          "threshold": 2533424
         },
         "stripped_text_bytes": {
-          "baseline": 2036071,
-          "threshold": 2036071
+          "baseline": 2036087,
+          "threshold": 2036087
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2877408,
-          "threshold": 2877408
+          "baseline": 2877424,
+          "threshold": 2877424
         },
         "stripped_text_bytes": {
-          "baseline": 2296199,
-          "threshold": 2296199
+          "baseline": 2296215,
+          "threshold": 2296215
         }
       },
       "core-nosimd": {
@@ -90,12 +90,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3065864,
-          "threshold": 3065864
+          "baseline": 3065880,
+          "threshold": 3065880
         },
         "stripped_text_bytes": {
-          "baseline": 2436759,
-          "threshold": 2436759
+          "baseline": 2436775,
+          "threshold": 2436775
         }
       }
     },
@@ -112,22 +112,22 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1102760,
-          "threshold": 1102760
+          "baseline": 1102776,
+          "threshold": 1102776
         },
         "stripped_text_bytes": {
-          "baseline": 781863,
-          "threshold": 781863
+          "baseline": 781879,
+          "threshold": 781879
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1662248,
-          "threshold": 1662248
+          "baseline": 1662264,
+          "threshold": 1662264
         },
         "stripped_text_bytes": {
-          "baseline": 1231735,
-          "threshold": 1231735
+          "baseline": 1231751,
+          "threshold": 1231751
         }
       },
       "wasi": {
@@ -152,12 +152,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1541584,
-          "threshold": 1541584
+          "baseline": 1541600,
+          "threshold": 1541600
         },
         "stripped_text_bytes": {
-          "baseline": 1103655,
-          "threshold": 1103655
+          "baseline": 1103671,
+          "threshold": 1103671
         }
       },
       "core-aot": {
@@ -172,12 +172,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2000504,
-          "threshold": 2000504
+          "baseline": 2000520,
+          "threshold": 2000520
         },
         "stripped_text_bytes": {
-          "baseline": 1457863,
-          "threshold": 1457863
+          "baseline": 1457879,
+          "threshold": 1457879
         }
       }
     }

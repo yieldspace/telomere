@@ -356,12 +356,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #280: workflow_dispatch runs 45176267574 and
-45176273957 against the PR branch at head
-`677c152b36691c48e6db99e9b0bf7d284d616b1d` (branch commit `0ec3b09`,
-fail closed on reachable internal-invariant violations (#128); and
-merge commit `677c152` bringing in `main` at `da5eb1e`), and
-pull-request run 45176240985, which built the same
+against the code of PR #281: workflow_dispatch runs 45184156762 and
+45184172624 against the PR branch at head
+`b981705af163e9b9a04d5603aed1b6176f73603d` (branch commit `a20c782`,
+parser validates kind-6 element segments against the declared
+table (#279); and merge commit `b981705` bringing in `main` at
+`bfa7df4`), and pull-request run 45184047623, which built the same
 tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -373,20 +373,20 @@ table below (stripped file / stripped `.text`, in bytes).
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,490,024 | 1,142,583 |
-| `release` | `component` | 2,533,408 | 2,036,071 |
-| `release` | `wasi` | 2,877,408 | 2,296,199 |
+| `release` | `component` | 2,533,424 | 2,036,087 |
+| `release` | `wasi` | 2,877,424 | 2,296,215 |
 | `release` | `core-nosimd` | 1,297,424 | 999,479 |
 | `release` | `core-jit` | 2,034,528 | 1,586,391 |
 | `release` | `core-aot` | 1,517,464 | 1,161,687 |
-| `release` | `wasi-threads` | 3,065,864 | 2,436,759 |
+| `release` | `wasi-threads` | 3,065,880 | 2,436,775 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,102,760 | 781,863 |
-| `release-size` | `component` | 1,662,248 | 1,231,735 |
+| `release-size` | `core` | 1,102,776 | 781,879 |
+| `release-size` | `component` | 1,662,264 | 1,231,751 |
 | `release-size` | `wasi` | 1,858,120 | 1,363,463 |
 | `release-size` | `core-nosimd` | 987,936 | 702,279 |
-| `release-size` | `core-jit` | 1,541,584 | 1,103,655 |
+| `release-size` | `core-jit` | 1,541,600 | 1,103,671 |
 | `release-size` | `core-aot` | 1,122,224 | 793,463 |
-| `release-size` | `wasi-threads` | 2,000,504 | 1,457,863 |
+| `release-size` | `wasi-threads` | 2,000,520 | 1,457,879 |
 
 #### Re-baseline history
 
@@ -1006,6 +1006,29 @@ cumulative growth remains release-size `component` stripped `.text`
 at +5.36% (1,169,031 B to 1,231,735 B), down from +5.41%. The
 baseline was re-measured on the merged code and updated as recorded
 above, following the procedure below.
+
+PR #281 (#279, the parser validates kind-6 element segments
+against table 0 instead of the declared table: `parse_elem`
+parsed the segment's `tableidx` and checked the table exists,
+but passed a literal `0` to `validate_active_elem`, so a segment
+declared for another table was type-checked against table 0's
+element type — an externref segment declared for a funcref
+table was accepted, and a funcref segment for such a table was
+rejected) merged current `main` into its branch first; the
+merge was conflict-free. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45184187750, gate
+success), which reproduces the previous baseline exactly on
+all 32 gated series. The one-line fix (passing the parsed
+`tableidx`) moves 14 of the 32 gated series by exactly +16 B
+each, in both the stripped file and stripped `.text` sizes,
+confined to the configurations that link the parser (`release`
+`component` / `wasi` / `wasi-threads`; `release-size` `core` /
+`component` / `core-jit` / `wasi-threads`); the remaining 18
+series are byte-identical. Against the original #164 baseline,
+the largest cumulative growth remains release-size `component`
+stripped `.text` at +5.37% (1,169,031 B to 1,231,751 B), up
+from +5.36%. The baseline was re-measured on the merged code
+and updated as recorded above, following the procedure below.
 
 ### Threshold derivation
 
