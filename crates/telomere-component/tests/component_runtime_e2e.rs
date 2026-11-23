@@ -977,3 +977,283 @@ async fn component_runtime_drops_host_provided_resource() {
     );
     assert_eq!(*dropped.borrow(), vec![100, 101]);
 }
+
+/// Builds a host future that returns `Poll::Pending` on its first poll and
+/// would only complete on a second one, counting how often it was polled.
+fn yield_once_future(
+    polls: std::rc::Rc<std::cell::Cell<u32>>,
+) -> telomere_component::ComponentFuture<'static, Result<Vec<ComponentValue>, ComponentError>> {
+    Box::pin(std::future::poll_fn(move |_cx| {
+        polls.set(polls.get() + 1);
+        if polls.get() == 1 {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(Ok(vec![ComponentValue::I32(42)]))
+        }
+    }))
+}
+
+#[tokio::test]
+async fn component_runtime_async_import_that_yields_fails_with_first_poll_error() {
+    // Pins the first-poll contract (#147): registration and instantiation
+    // succeed, and the failure surfaces as a returned error at call time --
+    // never as a panic, and the future is not polled a second time.
+    let bytes = compile_component(
+        r#"
+(component
+  (type (func (param "lhs" s32) (param "rhs" s32) (result s32)))
+  (import "host-add" (func (type 0)))
+  (export "add" (func 0))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let polls = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+    let polls_in_fn = std::rc::Rc::clone(&polls);
+    let mut linker = ComponentLinker::new();
+    linker.register_import_async("host-add", move |_store, _args| {
+        yield_once_future(std::rc::Rc::clone(&polls_in_fn))
+    });
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let error = instance
+        .call(
+            &store,
+            "add",
+            &[ComponentValue::I32(20), ComponentValue::I32(22)],
+        )
+        .await
+        .expect_err("a host future that yields on its first poll must fail the call");
+    match &error {
+        ComponentError::Runtime(message) => {
+            assert!(
+                message.contains("yielded in sync execution"),
+                "error should name the sync-execution failure, got: {message}"
+            );
+            assert!(
+                message.contains("first poll"),
+                "error should state the first-poll contract, got: {message}"
+            );
+        }
+        other => panic!("expected a runtime error, got {other:?}"),
+    }
+    assert_eq!(
+        polls.get(),
+        1,
+        "the future must be polled exactly once and never driven further"
+    );
+}
+
+#[tokio::test]
+async fn component_runtime_async_import_awaiting_ready_future_succeeds() {
+    // The other half of the first-poll contract: awaiting futures that are
+    // already ready completes within the single poll and is supported.
+    let bytes = compile_component(
+        r#"
+(component
+  (type (func (param "lhs" s32) (param "rhs" s32) (result s32)))
+  (import "host-add" (func (type 0)))
+  (export "add" (func 0))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let mut linker = ComponentLinker::new();
+    linker.register_import_async("host-add", |_store, args| {
+        let lhs = args[0].as_i32().unwrap_or(0);
+        let rhs = args[1].as_i32().unwrap_or(0);
+        Box::pin(async move {
+            let lhs = std::future::ready(lhs).await;
+            let rhs = std::future::ready(rhs).await;
+            Ok(vec![ComponentValue::I32(lhs + rhs)])
+        })
+    });
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let result = instance
+        .call(
+            &store,
+            "add",
+            &[ComponentValue::I32(20), ComponentValue::I32(22)],
+        )
+        .await
+        .expect("awaiting ready futures completes on the first poll");
+    assert_eq!(result, vec![ComponentValue::I32(42)]);
+}
+
+#[tokio::test]
+async fn component_runtime_async_import_that_yields_traps_on_canon_lower_path() {
+    // On the canon-lower path the host function is reached from inside core
+    // execution, whose boundary cannot carry a `ComponentError`; the
+    // documented consequence of yielding there is a guest `unreachable`
+    // trap (see the first-poll contract, #147).
+    let bytes = compile_component(
+        r#"
+(component
+  (type (func (param "lhs" s32) (param "rhs" s32) (result s32)))
+  (import "host-add" (func $host-add (type 0)))
+  (core func $host-add-lower
+    (canon lower (func $host-add))
+  )
+  (core module $caller
+    (import "" "host-add" (func $add (param i32 i32) (result i32)))
+    (func (export "call-add") (param i32 i32) (result i32)
+      local.get 0
+      local.get 1
+      call $add)
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "host-add" (func $host-add-lower))
+      ))
+    )
+  )
+  (func (export "call-add") (param "lhs" s32) (param "rhs" s32) (result s32)
+    (canon lift (core func $caller "call-add"))
+  )
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let polls = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+    let polls_in_fn = std::rc::Rc::clone(&polls);
+    let mut linker = ComponentLinker::new();
+    linker.register_import_async("host-add", move |_store, _args| {
+        yield_once_future(std::rc::Rc::clone(&polls_in_fn))
+    });
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let error = instance
+        .call(
+            &store,
+            "call-add",
+            &[ComponentValue::I32(20), ComponentValue::I32(22)],
+        )
+        .await
+        .expect_err("yielding on the canon-lower path must trap the guest");
+    assert!(
+        matches!(
+            error,
+            ComponentError::GuestTrap {
+                kind: telomere::TrapKind::Unreachable,
+                ..
+            }
+        ),
+        "expected an unreachable guest trap, got {error:?}"
+    );
+    assert_eq!(polls.get(), 1, "the future must be polled exactly once");
+}
+
+#[tokio::test]
+async fn component_runtime_async_resource_drop_that_yields_traps() {
+    // Resource destructors registered with
+    // `register_import_resource_drop_async` share the first-poll contract:
+    // a destructor future that yields fails the drop, which surfaces as a
+    // guest trap because drops execute inside core execution.
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "thing" (type (sub resource)))
+      (export "make" (func (result (own 0))))
+    )
+  )
+  (import "test:host/resources" (instance $i (type $iface)))
+  (alias export $i "thing" (type $thing))
+  (alias export $i "make" (func $make))
+
+  (core func $make-lower (canon lower (func $make)))
+  (core func $drop (canon resource.drop $thing))
+  (core module $caller
+    (import "" "make" (func $make (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "drop-it") (result i32)
+      (call $drop (call $make))
+      (i32.const 0)
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "make" (func $make-lower))
+        (export "drop" (func $drop))
+      ))
+    )
+  )
+  (func (export "drop-it") (result s32)
+    (canon lift (core func $caller "drop-it"))
+  )
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let next_handle = Rc::new(Cell::new(100_u32));
+    let mut host_instance = ComponentLinkerInstance::new();
+    let counter = Rc::clone(&next_handle);
+    host_instance.register_func("make", move |_store, _args| {
+        let handle = counter.get();
+        counter.set(handle + 1);
+        Ok(vec![ComponentValue::Own(handle)])
+    });
+
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("test:host/resources", host_instance);
+    linker.register_import_resource_drop_async(
+        "test:host/resources",
+        "thing",
+        |_store, _handle| Box::pin(std::future::pending()),
+    );
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let error = instance
+        .call(&store, "drop-it", &[])
+        .await
+        .expect_err("a destructor that yields on its first poll must fail the drop");
+    assert!(
+        matches!(
+            error,
+            ComponentError::GuestTrap {
+                kind: telomere::TrapKind::Unreachable,
+                ..
+            }
+        ),
+        "expected an unreachable guest trap, got {error:?}"
+    );
+}

@@ -1732,6 +1732,14 @@ impl Generator {
                 .map(|binding| self.generate_import_trait_method(binding, ScopeDepth::Root, true))
                 .collect::<Result<Vec<_>>>()?;
             Some(quote! {
+                #[doc = " Asynchronous host functions for the generated bindings."]
+                #[doc = ""]
+                #[doc = " First-poll contract: the component runtime is synchronous and polls"]
+                #[doc = " each returned future exactly once, with a no-op waker, when the guest"]
+                #[doc = " calls the function. A future that returns `Poll::Pending` on that poll"]
+                #[doc = " fails the call and is never polled again, so these methods must"]
+                #[doc = " complete without genuinely suspending (awaiting already-ready futures"]
+                #[doc = " is fine). See the first-poll contract on the runtime's `ComponentFuture`."]
                 pub trait ImportsAsync {
                     #(#methods)*
                 }
@@ -1775,6 +1783,12 @@ impl Generator {
         });
         let async_add = async_registrations.map(|registrations| {
             quote! {
+                #[doc = " Registers the host's asynchronous functions with the linker."]
+                #[doc = ""]
+                #[doc = " The registered futures are subject to the component runtime's first-poll"]
+                #[doc = " contract: each is polled once, synchronously, when the guest calls it,"]
+                #[doc = " and a future that yields on that poll fails the call. See the"]
+                #[doc = " `ComponentFuture` type documentation for the full contract."]
                 pub fn add_root_imports_to_linker_async<T>(
                     linker: &mut #runtime::ComponentLinker,
                     host: ::std::rc::Rc<T>,
@@ -1831,6 +1845,14 @@ impl Generator {
                 .map(|binding| self.generate_import_trait_method(binding, ScopeDepth::Nested, true))
                 .collect::<Result<Vec<_>>>()?;
             Some(quote! {
+                #[doc = " Asynchronous host functions for the generated bindings."]
+                #[doc = ""]
+                #[doc = " First-poll contract: the component runtime is synchronous and polls"]
+                #[doc = " each returned future exactly once, with a no-op waker, when the guest"]
+                #[doc = " calls the function. A future that returns `Poll::Pending` on that poll"]
+                #[doc = " fails the call and is never polled again, so these methods must"]
+                #[doc = " complete without genuinely suspending (awaiting already-ready futures"]
+                #[doc = " is fine). See the first-poll contract on the runtime's `ComponentFuture`."]
                 pub trait HostAsync {
                     #(#methods)*
                 }
@@ -1867,6 +1889,12 @@ impl Generator {
                 .map(|binding| self.generate_instance_import_registration(binding, true))
                 .collect::<Result<Vec<_>>>()?;
             Some(quote! {
+                #[doc = " Registers the host's asynchronous functions with the linker."]
+                #[doc = ""]
+                #[doc = " The registered futures are subject to the component runtime's first-poll"]
+                #[doc = " contract: each is polled once, synchronously, when the guest calls it,"]
+                #[doc = " and a future that yields on that poll fails the call. See the"]
+                #[doc = " `ComponentFuture` type documentation for the full contract."]
                 pub fn add_to_linker_async<T>(
                     linker: &mut #runtime::ComponentLinker,
                     host: ::std::rc::Rc<T>,
