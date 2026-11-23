@@ -354,12 +354,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #259: workflow_dispatch runs 45086986197 and
-45086998757 against the PR branch at commit
-`5451a0dc3e2ac4a5625a0921e1a5760405dc5bcf`, and pull-request run
-45085326459, which built the same tree (the branch head's parent is
-`main` at `03352c6b7a81763ac7aa769c40c812ec9db4856f`, so the merge
-tree is the branch head itself; `ubuntu-24.04`, Rust 1.96.0). Every
+against the code of PR #260: workflow_dispatch runs 45089043304 and
+45089382531 against the PR branch at merge commit
+`5e83bf5733738214d30c7d31d5487b812cc0df03` (branch head
+`96cc96fd1170deb60e45c4b4dab2b8252958b6c1` with `main` at
+`5d6bc720f2281a79818dba879dcd3e67c6bdd280` merged in), and
+pull-request run 45088697826, which built the same tree
+(`ubuntu-24.04`, Rust 1.96.0). Every
 run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
@@ -369,19 +370,19 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,459,424 | 1,113,687 |
-| `release` | `component` | 2,455,960 | 1,965,479 |
-| `release` | `wasi` | 2,802,504 | 2,227,687 |
-| `release` | `core-nosimd` | 1,269,032 | 972,711 |
-| `release` | `core-jit` | 1,983,688 | 1,541,047 |
-| `release` | `wasi-threads` | 2,988,416 | 2,365,527 |
+| `release` | `core` | 1,475,376 | 1,128,055 |
+| `release` | `component` | 2,471,912 | 1,979,847 |
+| `release` | `wasi` | 2,818,456 | 2,242,055 |
+| `release` | `core-nosimd` | 1,284,456 | 986,663 |
+| `release` | `core-jit` | 2,006,552 | 1,562,231 |
+| `release` | `wasi-threads` | 3,003,424 | 2,379,479 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,085,560 | 763,527 |
-| `release-size` | `component` | 1,618,000 | 1,189,463 |
-| `release-size` | `wasi` | 1,813,696 | 1,321,015 |
-| `release-size` | `core-nosimd` | 972,272 | 685,287 |
-| `release-size` | `core-jit` | 1,505,640 | 1,069,671 |
-| `release-size` | `wasi-threads` | 1,953,936 | 1,413,575 |
+| `release-size` | `core` | 1,095,256 | 774,487 |
+| `release-size` | `component` | 1,627,712 | 1,200,439 |
+| `release-size` | `wasi` | 1,823,392 | 1,331,975 |
+| `release-size` | `core-nosimd` | 981,312 | 695,799 |
+| `release-size` | `core-jit` | 1,515,416 | 1,081,607 |
+| `release-size` | `wasi-threads` | 1,963,648 | 1,424,551 |
 
 #### Re-baseline history
 
@@ -600,6 +601,36 @@ release-size stripped file +4,288..+4,368 B and stripped `.text`
 configuration are byte-identical in both profiles (16 of 28 gated
 series unchanged). The baseline was re-measured on the merged code
 and updated as recorded above, following the procedure below.
+
+PR #260 (#240, pin fn-pointer handler identity against duplication
+and identical-code folding) was branched before PRs #256–#259
+merged, so current `main` was merged into the branch first (merge
+commit `5e83bf5`, no conflicts); its first CI run then tripped the
+gate on the PR's own change. The PR marks all 512 identity-compared
+op handlers `#[inline(never)]` so the compiler cannot duplicate
+them across codegen units, adds identity barriers (a function-local
+static whose address is passed to `core::hint::black_box`) to the
+byte-identical twin handlers — the shared/indexed load/store
+template families in `crates/telomere/src/runtime/vm/memory.rs`,
+`op_f32_store` / `op_f64_store`, and `op_return` in
+`crates/telomere/src/runtime/vm/control.rs` — documents the
+identity contract on `Op` in `crates/telomere/src/common.rs`, and
+adds `tools/check-fn-identity.py` (wired into CI) with its unit
+tests plus OP_SPECS decode tests. Attribution was isolated by
+measuring current `main` alone (workflow_dispatch run 45089386493,
+gate success), which reproduces the previous baseline exactly on
+all 28 gated series. Growth appears in every configuration that
+links the telomere library and is near-uniform, as expected when
+512 handler bodies stop being inlined into or merged with their
+dispatch sites: release stripped file +15,008..+22,864 B and
+stripped `.text` +13,952..+21,184 B (core-jit grows most because
+it also links the JIT backend handlers annotated in
+`crates/telomere/src/runtime/jit/backend/ops.rs`); release-size
+stripped file +9,040..+9,776 B and stripped `.text`
++10,512..+11,936 B. The `baseline` configuration is byte-identical
+in both profiles (4 of 28 gated series unchanged). The baseline
+was re-measured on the merged code and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
