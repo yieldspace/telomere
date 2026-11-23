@@ -281,6 +281,12 @@ const LOOP_ALLOWANCES: &[LoopAllowance] = &[
         identifier: "for:wake",
         reason: "the wake set is bounded by the host-controlled number of concurrently waiting guest threads and is charged after the wait-queue lock is released.",
     },
+    LoopAllowance {
+        source: "src/common/memory.rs",
+        function: "run_wait_timer",
+        identifier: "while:waiter . is_waiting ()",
+        reason: "the detached wait-timer thread performs no guest work; it sleeps on the waiter's release condvar until the wait resolves or its own deadline expires, and is released on resolution (#270).",
+    },
 ];
 
 #[derive(Debug)]

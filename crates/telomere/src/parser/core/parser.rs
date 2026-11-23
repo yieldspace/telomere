@@ -465,7 +465,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 for expr in &init {
                     validate_const_expr_type(globals, funcs, expr, rt.into())?;
                 }
-                validate_active_elem(tables, 0, rt)?;
+                validate_active_elem(tables, tableidx, rt)?;
 
                 (
                     len + len2 + len3 + len4 + len5,
