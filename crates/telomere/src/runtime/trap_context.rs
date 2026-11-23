@@ -28,7 +28,8 @@ pub(crate) struct CapturedFrame {
     pub(crate) funcidx: Option<u32>,
     /// Frame zero is the faulting dispatch unit; older entries are return PCs.
     /// Fused interpreter dispatch units report their first instruction.
-    /// Native JIT traps have no justified interpreter attribution and report `None`.
+    /// Native JIT traps report the pc recorded in the function's #209
+    /// trap-site table when the trap carries a site, and `None` otherwise.
     pub(crate) pc_index: Option<u32>,
     pub(crate) kind: CapturedFrameKind,
 }
@@ -501,7 +502,7 @@ mod tests {
 
     #[cfg(feature = "jit")]
     #[tokio::test]
-    async fn jit_trap_omits_unjustified_pc() {
+    async fn jit_trap_reports_trap_site_pc() {
         if !crate::jit_supported() {
             return;
         }
@@ -530,6 +531,12 @@ mod tests {
         assert!(matches!(result, VMResult::Unreachable));
         let context = take_context(&store);
         assert!(matches!(&context.result, VMResult::Unreachable));
-        assert_eq!(context.frames[0].pc_index, None);
+        // #209: the native `unreachable` carries a trap site, so the
+        // trapping frame reports the instruction-level pc (the
+        // `unreachable` is the first instruction of the body). Traps
+        // raised by Rust stubs carry no site and still report `None`;
+        // the trap-fixtures corpus pins that case
+        // (`indirect_type_mismatch`).
+        assert_eq!(context.frames[0].pc_index, Some(0));
     }
 }

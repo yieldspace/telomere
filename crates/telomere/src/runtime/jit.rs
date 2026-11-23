@@ -227,13 +227,52 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
         };
         (compiled, code_base)
     };
-    VMResult::Success(unsafe {
+    let exit = unsafe {
         (compiled.entry())(
             ctx as *mut ExecuteContext<'_>,
             code_base,
             ctx.local_base_ptr,
         )
-    })
+    };
+    VMResult::Success(resolve_trap_site(exit, &compiled, code_base, ctx))
+}
+
+/// #209: resolves a native trap exit's site id against the trap-site
+/// table of the function whose entry produced the exit.
+///
+/// This runs at the innermost JIT entry boundary for the trapping
+/// function — the only place where the exit's function is unambiguous,
+/// because trap exits propagate verbatim through native callers. The
+/// resolved instruction pointer is stashed in `ctx.jit_trap_pc` (the
+/// innermost resolution wins; outer boundaries see it already set) and
+/// the exit value is normalised to the bare trap code, so no outer
+/// layer can resolve the same site id against a different function's
+/// table. A site that does not resolve degrades to no pc, never a
+/// wrong one.
+#[cfg(feature = "jit")]
+fn resolve_trap_site(
+    exit: JitNativeExit,
+    compiled: &CompiledFunction,
+    code_base: *const Instr,
+    ctx: &mut ExecuteContext<'_>,
+) -> JitNativeExit {
+    if exit.kind != JitNativeExit::TRAP {
+        return exit;
+    }
+    let (code, site) = abi::split_trap_value(exit.value);
+    if site != 0 && ctx.jit_trap_pc.is_null() {
+        if let Some(pc_index) = compiled.trap_pc(site) {
+            // SAFETY: `pc_index` comes from `compiled`'s own trap-site
+            // table, whose entries are pc indices into the decoded
+            // stream starting at `code_base` — the stream of the very
+            // function `compiled` was built from.
+            ctx.jit_trap_pc = unsafe { code_base.add(pc_index as usize) };
+        }
+    }
+    JitNativeExit {
+        kind: exit.kind,
+        value: code,
+    }
 }
 
 #[cfg(feature = "jit")]
@@ -306,8 +345,16 @@ unsafe fn handle_exit(
         }
         JitNativeExit::TRAP => {
             profile::count_exit(exit.kind);
-            ctx.cont = std::ptr::null();
-            abi::vm_result_from_code(exit.value)
+            // #209: a trap site resolved at the trapping function's own
+            // entry boundary was stashed in `jit_trap_pc`; it is the
+            // only pc a native trap may claim. Site-less traps leave
+            // `cont` null, so capture reports the trapping frame's pc
+            // as unknown instead of trusting a stale continuation.
+            // Exits reaching this point are already normalised by
+            // `resolve_trap_site`; the split is defensive so a sited
+            // value could never decode to a wrong VMResult either.
+            ctx.cont = std::mem::replace(&mut ctx.jit_trap_pc, std::ptr::null());
+            abi::vm_result_from_code(abi::split_trap_value(exit.value).0)
         }
         JitNativeExit::KEEP_GOING => {
             profile::count_exit(exit.kind);

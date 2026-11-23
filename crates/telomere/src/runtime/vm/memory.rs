@@ -7827,6 +7827,7 @@ mod tests {
             budget: u64::MAX,
             reserved: 0,
             budget_epoch: 0,
+            jit_trap_pc: std::ptr::null(),
         }
     }
 

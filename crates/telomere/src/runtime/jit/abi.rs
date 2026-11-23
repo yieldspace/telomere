@@ -78,6 +78,27 @@ impl JitNativeExit {
     }
 }
 
+/// Bit layout of a TRAP exit's `value` (#209): the low 8 bits carry the
+/// `vm_result_code` (codes fit easily; the largest is 16) and the
+/// remaining high bits carry a 1-based trap-site id into the trapping
+/// function's trap-site table. Site 0 means "no site": exits raised by
+/// Rust stubs keep the historic bare-code encoding, so a site-less trap
+/// exit is indistinguishable from a pre-#209 one.
+pub(crate) const TRAP_CODE_MASK: u64 = 0xff;
+pub(crate) const TRAP_SITE_SHIFT: u32 = 8;
+
+/// Packs a trap code and a 1-based trap-site id into a TRAP exit value.
+pub(crate) const fn pack_trap_value(code: u64, site: u64) -> u64 {
+    debug_assert!(code <= TRAP_CODE_MASK);
+    (site << TRAP_SITE_SHIFT) | (code & TRAP_CODE_MASK)
+}
+
+/// Splits a TRAP exit value into its trap code and its 1-based trap-site
+/// id (0 when the exit carries no site).
+pub(crate) const fn split_trap_value(value: u64) -> (u64, u64) {
+    (value & TRAP_CODE_MASK, value >> TRAP_SITE_SHIFT)
+}
+
 pub(crate) fn vm_result_code<T>(result: VMResult<T>) -> u64 {
     match result {
         VMResult::Success(_) => 0,
@@ -128,7 +149,7 @@ pub(crate) fn vm_result_from_code(code: u64) -> VMResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{vm_result_code, vm_result_from_code};
+    use super::{pack_trap_value, split_trap_value, vm_result_code, vm_result_from_code};
     use crate::common::VMResult;
 
     #[test]
@@ -146,6 +167,18 @@ mod tests {
         assert_eq!(vm_result_code(VMResult::<()>::Cancelled), 13);
         assert!(matches!(vm_result_from_code(12), VMResult::FuelExhausted));
         assert!(matches!(vm_result_from_code(13), VMResult::Cancelled));
+    }
+
+    #[test]
+    fn trap_site_packing_round_trips_and_site_zero_is_the_bare_code() {
+        // Site 0 keeps the historic encoding exactly.
+        assert_eq!(pack_trap_value(14, 0), 14);
+        assert_eq!(split_trap_value(14), (14, 0));
+        for code in [1_u64, 3, 14, 16] {
+            for site in [1_u64, 2, 255, 4096, 1 << 40] {
+                assert_eq!(split_trap_value(pack_trap_value(code, site)), (code, site));
+            }
+        }
     }
 
     #[test]

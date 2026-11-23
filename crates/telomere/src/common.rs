@@ -1340,6 +1340,20 @@ pub struct ExecuteContext<'a> {
     pub(crate) reserved: u64,
     /// Ledger epoch captured with the current grant.
     pub(crate) budget_epoch: u64,
+    /// #209: instruction pointer resolved from a native JIT trap site.
+    ///
+    /// When a JIT-compiled function traps in native code, the innermost
+    /// JIT entry boundary resolves the exit's trap-site id against that
+    /// function's trap-site table and stores the trapping instruction's
+    /// pointer here; `handle_exit` then moves it into `cont` for trap
+    /// capture. Null whenever the current trap carries no resolved site
+    /// (stub-raised traps, interpreter execution). Appended at the end of
+    /// the struct: JIT code reads fields through `offset_of!`, so existing
+    /// offsets are unaffected.
+    // Read and written only by the JIT entry boundary (feature `jit`);
+    // the dead_code lint cannot see that use in non-JIT builds.
+    #[allow(dead_code)]
+    pub(crate) jit_trap_pc: *const Instr,
 }
 
 /// Flat `(base, committed_len)` view of the active frame's default local
