@@ -19,6 +19,70 @@ use std::collections::HashSet;
 /// nesting so a hostile binary cannot overflow the stack.
 const MAX_VALUE_NESTING: u32 = 256;
 
+/// Budget for materialising one defined value, on top of the bytes its
+/// encoding actually occupies.
+///
+/// Most decoded nodes consume at least one input byte, so their count is
+/// bounded by the declared encoding length. Some shapes consume none: an
+/// empty record, a flags type with no labels, and above all the elements of
+/// a list whose element type has an empty encoding (a fixed-length list of
+/// length 0, nested arbitrarily). A count such as `0xffffffff` over such an
+/// element would otherwise materialise billions of `ComponentValue`s from a
+/// handful of input bytes and abort the embedding process on allocation.
+/// Every node whose decoding consumed no bytes is charged against this
+/// budget, and list element counts are checked against it (plus the bytes
+/// remaining in the encoding) before any element is materialised.
+const MAX_ZERO_WIDTH_VALUE_NODES: usize = 4096;
+
+/// Per-entry decode budget; see [`MAX_ZERO_WIDTH_VALUE_NODES`].
+struct ValueBudget {
+    /// Global stream position where this entry's encoding starts.
+    entry_start: usize,
+    /// Declared byte length of this entry's encoding.
+    entry_len: usize,
+    /// Zero-width nodes that may still be materialised for this entry.
+    zero_width_remaining: usize,
+}
+
+impl ValueBudget {
+    fn new(entry_start: usize, entry_len: usize) -> Self {
+        Self {
+            entry_start,
+            entry_len,
+            // Byte-backed encodings earn extra room: a long encoding may
+            // legitimately contain many empty sub-values among its bytes.
+            zero_width_remaining: MAX_ZERO_WIDTH_VALUE_NODES.saturating_add(entry_len),
+        }
+    }
+
+    /// Charges one node that was materialised without consuming any bytes.
+    fn charge_zero_width(&mut self) -> ParseResult<()> {
+        if self.zero_width_remaining == 0 {
+            return Err(ComponentParseError::InvalidSignature(
+                "value has too many zero-width elements".to_owned(),
+            ));
+        }
+        self.zero_width_remaining -= 1;
+        Ok(())
+    }
+
+    /// Rejects a list element count that the rest of the encoding cannot
+    /// account for: each element either consumes at least one of the
+    /// remaining bytes or is a zero-width node charged against the budget,
+    /// so a larger count can never decode successfully.
+    fn check_list_count(&self, reader: &impl BinaryReader, count: usize) -> ParseResult<()> {
+        let consumed = reader.read_count().saturating_sub(self.entry_start);
+        let remaining = self.entry_len.saturating_sub(consumed);
+        let accountable = (remaining as u64).saturating_add(self.zero_width_remaining as u64);
+        if count as u64 > accountable {
+            return Err(ComponentParseError::InvalidSignature(format!(
+                "list element count {count} exceeds the value decode budget"
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Whether a value type may appear in the value index space at all.
 ///
 /// `val(t)` has no production for resource handles, so a *defined* value can
@@ -115,7 +179,8 @@ pub fn parse_value_def(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult
     let start = ctx.reader.read_count();
     let value = {
         let mut sized = ctx.reader.take(len as usize);
-        decode_value(ctx.validator, &ty, &mut sized, 0)?
+        let mut budget = ValueBudget::new(start, len as usize);
+        decode_value(ctx.validator, &ty, &mut sized, 0, &mut budget)?
     };
     if ctx.reader.read_count() - start != len as usize {
         return Err(ComponentParseError::InvalidSignature(
@@ -136,24 +201,34 @@ fn decode_value(
     ty: &ValType,
     reader: &mut impl BinaryReader,
     depth: u32,
+    budget: &mut ValueBudget,
 ) -> ParseResult<ComponentValue> {
     if depth > MAX_VALUE_NESTING {
         return Err(ComponentParseError::InvalidSignature(
             "value nesting is too deep".to_owned(),
         ));
     }
-    match ty {
-        ValType::Primitive(prim) => decode_prim(prim, reader),
+    let start = reader.read_count();
+    let value = match ty {
+        ValType::Primitive(prim) => decode_prim(prim, reader)?,
         ValType::Type(id) => match validator.get_type(*id)? {
             Type::DefVal(def) => {
                 let def = def.clone();
-                decode_defval(validator, &def, reader, depth)
+                decode_defval(validator, &def, reader, depth, budget)?
             }
-            _ => Err(ComponentParseError::TypeMismatch(
-                "value type does not resolve to a defined value type".to_owned(),
-            )),
+            _ => {
+                return Err(ComponentParseError::TypeMismatch(
+                    "value type does not resolve to a defined value type".to_owned(),
+                ));
+            }
         },
+    };
+    // A node that consumed no input bytes is not bounded by the encoding
+    // length; charge it against the per-entry zero-width budget.
+    if reader.read_count() == start {
+        budget.charge_zero_width()?;
     }
+    Ok(value)
 }
 
 fn decode_defval(
@@ -161,13 +236,14 @@ fn decode_defval(
     def: &DefValType,
     reader: &mut impl BinaryReader,
     depth: u32,
+    budget: &mut ValueBudget,
 ) -> ParseResult<ComponentValue> {
     match def {
         DefValType::Primitive(prim) => decode_prim(prim, reader),
         DefValType::Record(fields) => {
             let mut values = Vec::with_capacity(fields.len());
             for field in fields {
-                let value = decode_value(validator, &field.ty, reader, depth + 1)?;
+                let value = decode_value(validator, &field.ty, reader, depth + 1, budget)?;
                 values.push((field.label.flat(), value));
             }
             Ok(ComponentValue::Record(values))
@@ -180,7 +256,13 @@ fn decode_defval(
                 ))
             })?;
             let value = match &case.ty {
-                Some(ty) => Some(Box::new(decode_value(validator, ty, reader, depth + 1)?)),
+                Some(ty) => Some(Box::new(decode_value(
+                    validator,
+                    ty,
+                    reader,
+                    depth + 1,
+                    budget,
+                )?)),
                 None => None,
             };
             Ok(ComponentValue::Variant {
@@ -215,9 +297,12 @@ fn decode_defval(
                 Some(len) => *len,
                 None => parse_u32(reader)?.1 as usize,
             };
+            // Reject counts the remaining encoding cannot account for
+            // before materialising any element (see `ValueBudget`).
+            budget.check_list_count(reader, count)?;
             let mut values = Vec::new();
             for _ in 0..count {
-                values.push(decode_value(validator, elem, reader, depth + 1)?);
+                values.push(decode_value(validator, elem, reader, depth + 1, budget)?);
             }
             Ok(ComponentValue::List(values))
         }

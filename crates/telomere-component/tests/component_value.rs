@@ -690,3 +690,135 @@ fn instantiate_with_mismatched_value_arg_is_rejected() {
     let err = compile_err(&component(&[components, values, instances]));
     assert!(err.contains("prim valtype mismatch"), "{err}");
 }
+
+// ---------- zero-width decode budget (Codex P1 regression) ----------
+
+/// Types: 0 = `list<u8, 0>` (empty encoding), 1 = `list<type 0>`.
+fn zero_width_list_types() -> Vec<u8> {
+    let empty_fixed = {
+        let mut v = vec![0x67, U8];
+        v.extend(uleb(0));
+        v
+    };
+    let list_of_empty = vec![0x70, 0x00];
+    section(0x07, vec_of(&[empty_fixed, list_of_empty]))
+}
+
+#[test]
+fn zero_width_list_count_is_rejected_before_materialising() {
+    // The Codex P1 repro shape: a dynamic list of zero-width elements whose
+    // count is 0xffffffff. Each element decodes from zero bytes, so without
+    // a budget this materialises billions of values from a tiny component.
+    let types = zero_width_list_types();
+    let values = section(0x0c, vec_of(&[value_entry(&[0x01], &uleb(0xffff_ffff))]));
+    let bytes = component(&[types, values]);
+    assert!(bytes.len() < 64, "repro stays tiny: {} bytes", bytes.len());
+    let err = compile_err(&bytes);
+    assert!(
+        err.contains("list element count 4294967295 exceeds the value decode budget"),
+        "{err}"
+    );
+}
+
+#[test]
+fn fixed_length_zero_width_list_count_is_rejected() {
+    // Same shape with the count carried by the type instead of the encoding:
+    // type 1 = `list<list<u8, 0>, 0xffffffff>`, value encoding is empty.
+    let empty_fixed = {
+        let mut v = vec![0x67, U8];
+        v.extend(uleb(0));
+        v
+    };
+    let huge_fixed = {
+        let mut v = vec![0x67, 0x00];
+        v.extend(uleb(0xffff_ffff));
+        v
+    };
+    let types = section(0x07, vec_of(&[empty_fixed, huge_fixed]));
+    let values = section(0x0c, vec_of(&[value_entry(&[0x01], &[])]));
+    let err = compile_err(&component(&[types, values]));
+    assert!(
+        err.contains("list element count 4294967295 exceeds the value decode budget"),
+        "{err}"
+    );
+}
+
+#[test]
+fn zero_width_record_fields_are_budgeted() {
+    // A record whose 5000 fields are all `list<u8, 0>` decodes from an empty
+    // encoding; the per-node zero-width budget must stop it even though no
+    // single list count is large.
+    let empty_fixed = {
+        let mut v = vec![0x67, U8];
+        v.extend(uleb(0));
+        v
+    };
+    let record = {
+        let mut v = vec![0x72];
+        let fields: Vec<Vec<u8>> = (0..5000)
+            .map(|i| [name(&format!("f{i}")), vec![0x00]].concat())
+            .collect();
+        v.extend(vec_of(&fields));
+        v
+    };
+    let types = section(0x07, vec_of(&[empty_fixed, record]));
+    let values = section(0x0c, vec_of(&[value_entry(&[0x01], &[])]));
+    let err = compile_err(&component(&[types, values]));
+    assert!(err.contains("too many zero-width elements"), "{err}");
+}
+
+#[tokio::test]
+async fn nested_zero_width_lists_within_budget_are_accepted() {
+    // Three empty lists nested in a dynamic list: zero-width, but far below
+    // the budget, so the value must still decode and resolve.
+    let types = zero_width_list_types();
+    let values = section(0x0c, vec_of(&[value_entry(&[0x01], &uleb(3))]));
+    let exports = section(0x0b, vec_of(&[export_value("v", 0, None)]));
+    let engine = ComponentEngine::new();
+    let program = engine
+        .compile(&component(&[types, values, exports]))
+        .expect("compile should succeed");
+    let store = telomere::Store::new();
+    let linker = ComponentLinker::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    assert_eq!(
+        instance.get_value(&store, "v").expect("value resolves"),
+        ComponentValue::List(vec![
+            ComponentValue::List(vec![]),
+            ComponentValue::List(vec![]),
+            ComponentValue::List(vec![]),
+        ])
+    );
+}
+
+#[tokio::test]
+async fn large_byte_backed_list_is_accepted() {
+    // 10,000 u8 elements, each backed by one encoding byte: the budget must
+    // not reject large values whose size is paid for by their encoding.
+    let list_u8 = vec![0x70, U8];
+    let types = section(0x07, vec_of(&[list_u8]));
+    let mut encoded = uleb(10_000);
+    encoded.extend((0..10_000u32).map(|i| (i % 251) as u8));
+    let values = section(0x0c, vec_of(&[value_entry(&[0x00], &encoded)]));
+    let exports = section(0x0b, vec_of(&[export_value("v", 0, None)]));
+    let engine = ComponentEngine::new();
+    let program = engine
+        .compile(&component(&[types, values, exports]))
+        .expect("compile should succeed");
+    let store = telomere::Store::new();
+    let linker = ComponentLinker::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let ComponentValue::List(items) = instance.get_value(&store, "v").expect("value resolves")
+    else {
+        panic!("expected a list value");
+    };
+    assert_eq!(items.len(), 10_000);
+    assert_eq!(items[0], ComponentValue::U8(0));
+    assert_eq!(items[9999], ComponentValue::U8((9999 % 251) as u8));
+}
