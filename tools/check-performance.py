@@ -7,26 +7,41 @@ the continuation-bridge crossing cost) were all found by hand. Issue #212
 adds the speed twin, consuming the methodology of
 docs/core/interpreter-baseline.md: tools/measure-performance.py measures
 the methodology's L2 corpus in its default/jit build matrix through
-telomere-cli, and this checker compares the medians against
+telomere-cli, and this checker compares the record against
 tools/perf-baseline.json.
 
-The thresholds are conservative absolute ceilings, not derived optima.
-#184 established that a threshold calibrated from an A/A noise floor is
-circular — the floor cannot observe layout-dependent harm, and a floor
-observed on a contaminated machine launders that contamination into the
-definition of acceptable. So the baseline records the observed CI medians
-and their run-to-run spread (see docs/benchmarks/performance.md), and each
-ceiling is a policy margin above the baseline: wide enough that the
-observed spread cannot trip it, narrow enough that the smallest
-regression this gate exists to catch (35%) cannot pass under it. The
-ceiling is provisional and is described that way in the docs; it is not
-lowered without evidence, and the environment is recorded with every
-baseline.
+What is gated, and what is not, follows the observed evidence (five
+same-tree CI runs, recorded in docs/benchmarks/performance.md). The
+GitHub-hosted ubuntu-24.04 fleet is heterogeneous: the five runs landed
+on five different CPU models, and identical code's absolute medians
+varied by 60-200% between runs purely from host allocation. An absolute
+wall-time ceiling would fail pull requests for the runner they happened
+to draw, so absolute medians are recorded and reported as advisory
+warnings only. Ratios computed inside one run on one host are the
+fleet-invariant quantities, and those are what this gate enforces:
+
+- ``jit_feature_tax_ratio`` (jit-build interpreter median / default-build
+  interpreter median) — catches the JIT-feature tax, the regression a
+  single-configuration gate cannot see at all;
+- ``jit_speed_ratio`` (JIT median / jit-build interpreter median) —
+  catches the JIT losing ground against the interpreter on the same
+  host, the aggregate signature of the bridged-crossing regression.
+
+The ceilings are conservative policy margins over the recorded
+baselines, not derived optima: #184 established that a threshold
+calibrated from an A/A noise floor is circular, because the floor cannot
+observe layout-dependent harm and a floor observed under contention
+launders that contention into the definition of acceptable. Each
+ceiling's margin, the observed spread it rests on, and the regressions
+it does and does not catch are documented in
+docs/benchmarks/performance.md.
 
 This checker is stdlib-only, in the style of tools/check-embedder-size.py.
-It fails when a measured median exceeds its ceiling, naming the measured
-value, the ceiling, the baseline, and the baseline source in every
-failure message. A missing series fails closed.
+A gated series that exceeds its ceiling fails, naming the measured
+value, the ceiling, the baseline, and the baseline source. A missing
+series fails closed. An absolute median beyond its advisory ceiling is
+a warning: it never fails the gate, because on this fleet it is as
+likely to be the runner as the code.
 """
 
 import argparse
@@ -40,7 +55,7 @@ DEFAULT_BASELINE = REPO_ROOT / "tools" / "perf-baseline.json"
 DEFAULT_MEASUREMENT = "performance.json"
 
 CELLS = ("default-interp", "jit-interp", "jit-jit")
-RATIO_NAME = "jit_feature_tax_ratio"
+RATIO_SERIES = ("jit_feature_tax_ratio", "jit_speed_ratio")
 
 
 class GateError(RuntimeError):
@@ -63,7 +78,7 @@ def _is_number(value):
 
 
 def check(baseline, measurement):
-    """Return a list of failure strings; an empty list means the gate passes."""
+    """Return (failures, warnings); empty failures means the gate passes."""
     if not isinstance(baseline, dict):
         raise GateError("performance baseline is not a JSON object")
     source = baseline.get("source")
@@ -83,6 +98,7 @@ def check(baseline, measurement):
         )
 
     failures = []
+    warnings = []
     for workload in sorted(thresholds):
         entry = thresholds[workload]
         if not isinstance(entry, dict) or not isinstance(entry.get("cells"), dict):
@@ -91,10 +107,10 @@ def check(baseline, measurement):
         for cell in CELLS:
             limits = entry["cells"].get(cell)
             if not isinstance(limits, dict) or not _is_number(limits.get("baseline_median_ns")) \
-                    or not _is_number(limits.get("ceiling_median_ns")):
+                    or not _is_number(limits.get("advisory_ceiling_ns")):
                 raise GateError(
                     f"performance baseline entry for {workload}/{cell} "
-                    "lacks numeric baseline_median_ns/ceiling_median_ns"
+                    "lacks numeric baseline_median_ns/advisory_ceiling_ns"
                 )
             if not isinstance(measured_cells, dict) or not isinstance(measured_cells.get(cell), dict) \
                     or not _is_number(measured_cells[cell].get("median_ns")):
@@ -104,46 +120,49 @@ def check(baseline, measurement):
                 )
                 continue
             value = measured_cells[cell]["median_ns"]
-            if value > limits["ceiling_median_ns"]:
+            if value > limits["advisory_ceiling_ns"]:
+                warnings.append(
+                    f"performance gate: warning: {workload}/{cell} median wall time "
+                    f"measured {value} ns exceeds the advisory ceiling "
+                    f"{limits['advisory_ceiling_ns']} ns (baseline "
+                    f"{limits['baseline_median_ns']} ns from {source['summary']}); "
+                    "absolute times are not gated on the heterogeneous CI fleet — "
+                    "treat this as a prompt to look, not as a verdict; see "
+                    "docs/benchmarks/performance.md"
+                )
+        measured_derived = derived_by_workload.get(workload)
+        for series in RATIO_SERIES:
+            limits = entry.get(series)
+            if not isinstance(limits, dict) or not _is_number(limits.get("baseline")) \
+                    or not _is_number(limits.get("ceiling")):
+                raise GateError(
+                    f"performance baseline entry for {workload} lacks a numeric "
+                    f"{series} baseline/ceiling"
+                )
+            ratio = None
+            if isinstance(measured_derived, dict) and isinstance(measured_derived.get(series), dict):
+                candidate = measured_derived[series].get("value")
+                if _is_number(candidate):
+                    ratio = candidate
+            if ratio is None:
                 failures.append(
-                    f"performance gate: {workload}/{cell} median wall time measured "
-                    f"{value} ns exceeds ceiling {limits['ceiling_median_ns']} ns "
-                    f"(baseline {limits['baseline_median_ns']} ns from {source['summary']}; "
+                    f"performance gate: no measurement for {workload}/{series}; "
+                    "the performance run did not produce this series"
+                )
+            elif ratio > limits["ceiling"]:
+                failures.append(
+                    f"performance gate: {workload} {series} measured {ratio:.4f} "
+                    f"exceeds ceiling {limits['ceiling']:.4f} "
+                    f"(baseline {limits['baseline']:.4f} from {source['summary']}; "
                     "if this slowdown is intentional, re-baseline as documented "
                     "in docs/benchmarks/performance.md)"
                 )
-        ratio_limits = entry.get(RATIO_NAME)
-        if not isinstance(ratio_limits, dict) or not _is_number(ratio_limits.get("baseline")) \
-                or not _is_number(ratio_limits.get("ceiling")):
-            raise GateError(
-                f"performance baseline entry for {workload} lacks a numeric {RATIO_NAME} baseline/ceiling"
-            )
-        measured_derived = derived_by_workload.get(workload)
-        ratio = None
-        if isinstance(measured_derived, dict) and isinstance(measured_derived.get(RATIO_NAME), dict):
-            candidate = measured_derived[RATIO_NAME].get("value")
-            if _is_number(candidate):
-                ratio = candidate
-        if ratio is None:
-            failures.append(
-                f"performance gate: no measurement for {workload}/{RATIO_NAME}; "
-                "the performance run did not produce this series"
-            )
-        elif ratio > ratio_limits["ceiling"]:
-            failures.append(
-                f"performance gate: {workload} {RATIO_NAME} measured {ratio:.4f} "
-                f"exceeds ceiling {ratio_limits['ceiling']:.4f} "
-                f"(baseline {ratio_limits['baseline']:.4f} from {source['summary']}; "
-                "the jit-feature build's interpreter cell slowed relative to the "
-                "default build's; if this tax is intentional, re-baseline as "
-                "documented in docs/benchmarks/performance.md)"
-            )
-    return failures
+    return failures, warnings
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="fail when a measured performance median exceeds its baseline ceiling"
+        description="fail when a measured performance ratio exceeds its baseline ceiling"
     )
     parser.add_argument(
         "--baseline",
@@ -164,15 +183,17 @@ def main(argv=None):
     try:
         baseline = load_json(args.baseline)
         measurement = load_json(args.measurement)
-        failures = check(baseline, measurement)
+        failures, warnings = check(baseline, measurement)
     except GateError as error:
         print(f"performance gate: error: {error}", file=sys.stderr)
         return 1
+    for warning in warnings:
+        print(warning, file=sys.stderr)
     if failures:
         for failure in failures:
             print(failure, file=sys.stderr)
         return 1
-    print("performance gate: all measured medians are within their ceilings")
+    print("performance gate: all gated ratios are within their ceilings")
     return 0
 
 

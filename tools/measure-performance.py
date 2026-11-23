@@ -21,6 +21,12 @@ interpreter aborts with a host stack overflow at scale on current main)
 and CoreMark (the manifest's pinned digest no longer matches the artifact
 served at the pinned URL, so the corpus fetch fails its own digest check).
 
+The record's derived series are the two within-run ratios the gate
+enforces (see tools/check-performance.py for why ratios, not absolute
+times, are the fleet-invariant quantities): ``jit_feature_tax_ratio``
+(jit-build interpreter median over default-build interpreter median) and
+``jit_speed_ratio`` (JIT median over jit-build interpreter median).
+
 Each (workload, cell) pair runs one unrecorded warm-up and then
 ``--repetitions`` recorded samples, sequentially and back to back, so the
 two interpreter cells of a workload are measured adjacently. Every sample
@@ -223,12 +229,18 @@ def measure(binaries, workloads, artifacts, repetitions, warmups):
         record["cells"][name] = per_cell
         default_median = per_cell["default-interp"]["median_ns"]
         jit_interp_median = per_cell["jit-interp"]["median_ns"]
+        jit_median = per_cell["jit-jit"]["median_ns"]
         record["derived"][name] = {
             "jit_feature_tax_ratio": {
                 "value": jit_interp_median / default_median,
                 "jit_interp_median_ns": jit_interp_median,
                 "default_interp_median_ns": default_median,
-            }
+            },
+            "jit_speed_ratio": {
+                "value": jit_median / jit_interp_median,
+                "jit_median_ns": jit_median,
+                "jit_interp_median_ns": jit_interp_median,
+            },
         }
     return record
 
