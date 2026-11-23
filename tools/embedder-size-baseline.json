@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #273 (branch fix/171-metering-jit at head ba31ed1bd15d823b43f51e2051b0146a72c94b6e \u2014 branch commit 4c9646d (execution metering covers JIT-compiled execution) plus merge commit ba31ed1 bringing in current main 6373f8c, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45160924686 and 45160938599 against the branch and pull-request run 45160922321, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "ba31ed1bd15d823b43f51e2051b0146a72c94b6e",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #275 (branch fix/271-export-resolved-name at head da35d049ee8bbabc43102fe3eed958f656af07a2 \u2014 branch commit 34cf8f5 (retain the resolved (version-matched) export key for the host-export binding lookup) plus merge commit da35d04 bringing in current main 296f712, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45165908240 and 45165914168 against the branch and pull-request run 45165419636, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "da35d049ee8bbabc43102fe3eed958f656af07a2",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45160924686,
-      45160938599
+      45165908240,
+      45165914168
     ],
     "cross_check_run_ids": [
-      45160922321
+      45165419636
     ],
-    "derivation": "Re-baseline for PR #273 (#171, execution metering covers JIT-compiled execution: the store normalisation that disabled the JIT under metering is removed, a metered flag is threaded through the compile path into the JIT emitters, native metering checkpoints are emitted at guest loop headers and at the four fused loops\u2019 back-edges in all three backends, a new MeteringCheckpoint stub refills or raises through vm::checkpoint, and the bulk-memory, table and shared-notify stubs charge with exactly the interpreter\u2019s formulas and ordering). The branch merged current main (6373f8c, the PR #269 squash merge) before measurement, so the first CI run on the merged tree tripped the gate on the PR\u2019s own change. Attribution was isolated by measuring current main (6373f8c) alone (workflow_dispatch run 45160951447, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR\u2019s own. The growth is confined to core-jit, the only configuration that links the JIT emitters and stubs (release stripped file +6,280 B / stripped .text +5,248 B; release-size stripped file +4,744 B / stripped .text +3,840 B): the per-backend checkpoint emitters, the MeteringCheckpoint stub and the stub charge calls. Instrumentation is emitted only for metered stores, so code compiled for unmetered stores is byte-identical; what grows is the runtime\u2019s own code. In the release profile the other library configurations shrink slightly (stripped file and stripped .text \u2212144 B in core, component, wasi, core-nosimd and wasi-threads; \u2212176 B in core-aot), the code-layout effect of removing the metering/JIT normalisation block from the store constructor. In release-size every configuration except core-jit is byte-identical, and the baseline configuration is unchanged in both profiles; 16 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.41% (1,169,031 B to 1,232,263 B), unchanged from after PR #269, because that series does not move in this PR. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #275 (#271, host-export binding lookup retains the resolved (version-matched) export name: RuntimeComponentInstance::resolve_export keeps the key returned by resolve_component_export_key in scope and passes it to ComponentLinker::resolve_export, instead of discarding it and looking the binding up under the requested name). The branch merged current main (296f712, the PR #273 merge, which already contained PRs #269 and #274) before measurement; the merge conflicted in crates/telomere-component/src/runtime/env.rs, where main (PR #268) had added a Value arm to the same match, and the resolution keeps the branch\u2019s block structure and keyed lookup with the Value arm added inside it. The first CI run on the merged tree passed the gate, because every delta is negative. Attribution was isolated by measuring current main (296f712) alone (workflow_dispatch run 45165921937, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR\u2019s own. The shrinkage is confined to the three configurations that link the component runtime (component, wasi, wasi-threads): \u221248 B stripped file and stripped .text in release; in release-size \u221216 B in component and wasi and \u221232 B in wasi-threads \u2014 the code-layout effect of restructuring the Component arm of resolve_export from a match expression into a block with an early return. The other 20 gated series are byte-identical; 12 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.41% (1,169,031 B to 1,232,247 B), unchanged at two decimal places from after PR #273, because that series moves by only \u221216 B here. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -40,22 +40,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2537440,
-          "threshold": 2537440
+          "baseline": 2537392,
+          "threshold": 2537392
         },
         "stripped_text_bytes": {
-          "baseline": 2036823,
-          "threshold": 2036823
+          "baseline": 2036775,
+          "threshold": 2036775
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2881440,
-          "threshold": 2881440
+          "baseline": 2881392,
+          "threshold": 2881392
         },
         "stripped_text_bytes": {
-          "baseline": 2296951,
-          "threshold": 2296951
+          "baseline": 2296903,
+          "threshold": 2296903
         }
       },
       "core-nosimd": {
@@ -90,12 +90,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3068200,
-          "threshold": 3068200
+          "baseline": 3068152,
+          "threshold": 3068152
         },
         "stripped_text_bytes": {
-          "baseline": 2436119,
-          "threshold": 2436119
+          "baseline": 2436071,
+          "threshold": 2436071
         }
       }
     },
@@ -122,22 +122,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1665856,
-          "threshold": 1665856
+          "baseline": 1665840,
+          "threshold": 1665840
         },
         "stripped_text_bytes": {
-          "baseline": 1232263,
-          "threshold": 1232263
+          "baseline": 1232247,
+          "threshold": 1232247
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1861712,
-          "threshold": 1861712
+          "baseline": 1861696,
+          "threshold": 1861696
         },
         "stripped_text_bytes": {
-          "baseline": 1363975,
-          "threshold": 1363975
+          "baseline": 1363959,
+          "threshold": 1363959
         }
       },
       "core-nosimd": {
@@ -172,12 +172,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2003120,
-          "threshold": 2003120
+          "baseline": 2003088,
+          "threshold": 2003088
         },
         "stripped_text_bytes": {
-          "baseline": 1457623,
-          "threshold": 1457623
+          "baseline": 1457591,
+          "threshold": 1457591
         }
       }
     }

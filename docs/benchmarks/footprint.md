@@ -356,12 +356,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #273: workflow_dispatch runs 45160924686 and
-45160938599 against the PR branch at head
-`ba31ed1bd15d823b43f51e2051b0146a72c94b6e` (branch commit `4c9646d`,
-metering covers JIT-compiled execution (#171); and merge commit
-`ba31ed1` bringing in `main` at `6373f8c`), and pull-request run
-45160922321, which built the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
+against the code of PR #275: workflow_dispatch runs 45165908240 and
+45165914168 against the PR branch at head
+`da35d049ee8bbabc43102fe3eed958f656af07a2` (branch commit `34cf8f5`,
+retain the resolved (version-matched) export key for the host-export
+binding lookup (#271); and merge commit `da35d04` bringing in `main`
+at `296f712`), and pull-request run 45165419636, which built the same
+tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
 the stripped `.text` size each have a run-to-run spread of **0 B**
@@ -372,20 +373,20 @@ table below (stripped file / stripped `.text`, in bytes).
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,493,584 | 1,143,303 |
-| `release` | `component` | 2,537,440 | 2,036,823 |
-| `release` | `wasi` | 2,881,440 | 2,296,951 |
+| `release` | `component` | 2,537,392 | 2,036,775 |
+| `release` | `wasi` | 2,881,392 | 2,296,903 |
 | `release` | `core-nosimd` | 1,300,968 | 1,000,199 |
 | `release` | `core-jit` | 2,038,040 | 1,586,951 |
 | `release` | `core-aot` | 1,520,816 | 1,162,215 |
-| `release` | `wasi-threads` | 3,068,200 | 2,436,119 |
+| `release` | `wasi-threads` | 3,068,152 | 2,436,071 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,105,936 | 782,311 |
-| `release-size` | `component` | 1,665,856 | 1,232,263 |
-| `release-size` | `wasi` | 1,861,712 | 1,363,975 |
+| `release-size` | `component` | 1,665,840 | 1,232,247 |
+| `release-size` | `wasi` | 1,861,696 | 1,363,959 |
 | `release-size` | `core-nosimd` | 991,160 | 702,791 |
 | `release-size` | `core-jit` | 1,545,272 | 1,104,343 |
 | `release-size` | `core-aot` | 1,125,368 | 793,879 |
-| `release-size` | `wasi-threads` | 2,003,120 | 1,457,623 |
+| `release-size` | `wasi-threads` | 2,003,088 | 1,457,591 |
 
 #### Re-baseline history
 
@@ -920,6 +921,33 @@ release-size `component` stripped `.text` at +5.41% (1,169,031 B to
 1,232,263 B), unchanged, because that series does not move here. The
 baseline was re-measured on the merged code and updated as recorded
 above, following the procedure below.
+
+PR #275 (#271, host-export binding lookup retains the resolved
+(version-matched) export name: `RuntimeComponentInstance::resolve_export`
+keeps the key returned by `resolve_component_export_key` in scope and
+passes it to `ComponentLinker::resolve_export`, instead of discarding
+it and looking the binding up under the requested name) merged current
+`main` into its branch first; the merge conflicted in
+`crates/telomere-component/src/runtime/env.rs`, where `main` (PR #268)
+had added a `Value` arm to the same match, and the resolution keeps
+the branch’s block structure and keyed lookup with the `Value` arm
+added inside it. The first CI run on the merged tree passed the gate,
+because every delta is negative. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45165921937, gate
+success), which reproduces the previous baseline exactly on all 32
+gated series. The shrinkage is confined to the three configurations
+that link the component runtime (`component`, `wasi`, `wasi-threads`):
+−48 B stripped file and stripped `.text` in `release`, and in
+`release-size` −16 B in `component` and `wasi` and −32 B in
+`wasi-threads`, the code-layout effect of restructuring the
+`Component` arm of `resolve_export` from a match expression into a
+block with an early return. The other 20 gated series are
+byte-identical. Against the original #164 baseline, the largest
+cumulative growth remains release-size `component` stripped `.text`
+at +5.41% (1,169,031 B to 1,232,247 B), unchanged at two decimal
+places, because that series moves by only −16 B here. The baseline
+was re-measured on the merged code and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
