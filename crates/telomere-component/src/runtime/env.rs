@@ -767,39 +767,44 @@ impl RuntimeComponentInstance {
             return Ok(export);
         }
         let export = match &self.source {
-            RuntimeComponentSource::Component(component) => match component
-                .exports
-                .get(&resolve_component_export_key(component, name)?)
-            {
-                Some(ComponentExport::Component(idx)) => {
-                    RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
-                }
-                Some(ComponentExport::Instance(idx)) => {
-                    RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
-                }
-                Some(ComponentExport::Func { idx, .. }) => {
-                    if self.env.parent.is_none() {
-                        if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx) {
-                            if let Some(binding) = self.env.linker.resolve_export(name) {
-                                let export = RuntimeExport::Func(Rc::new(
-                                    linker_binding_to_callable(binding),
-                                ));
-                                self.exports
-                                    .borrow_mut()
-                                    .insert(name.to_owned(), export.clone());
-                                return Ok(export);
+            RuntimeComponentSource::Component(component) => {
+                // Retain the resolved (version-matched) export key: a
+                // re-exported import is registered with the linker under
+                // the export's own name, so the host-export lookup below
+                // must use this key rather than the requested name (#271).
+                let key = resolve_component_export_key(component, name)?;
+                match component.exports.get(&key) {
+                    Some(ComponentExport::Component(idx)) => {
+                        RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
+                    }
+                    Some(ComponentExport::Instance(idx)) => {
+                        RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
+                    }
+                    Some(ComponentExport::Func { idx, .. }) => {
+                        if self.env.parent.is_none() {
+                            if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx)
+                            {
+                                if let Some(binding) = self.env.linker.resolve_export(&key) {
+                                    let export = RuntimeExport::Func(Rc::new(
+                                        linker_binding_to_callable(binding),
+                                    ));
+                                    self.exports
+                                        .borrow_mut()
+                                        .insert(name.to_owned(), export.clone());
+                                    return Ok(export);
+                                }
                             }
                         }
+                        RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
                     }
-                    RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
+                    Some(ComponentExport::Module(idx)) => RuntimeExport::CoreModule(Box::new(
+                        self.env.resolve_core_module(*idx, store)?,
+                    )),
+                    Some(ComponentExport::Resource(_)) | None => {
+                        return Err(ComponentError::ExportNotFound(name.to_owned()))
+                    }
                 }
-                Some(ComponentExport::Module(idx)) => {
-                    RuntimeExport::CoreModule(Box::new(self.env.resolve_core_module(*idx, store)?))
-                }
-                Some(ComponentExport::Resource(_)) | None => {
-                    return Err(ComponentError::ExportNotFound(name.to_owned()))
-                }
-            },
+            }
             RuntimeComponentSource::LinkerInstance(instance) => {
                 let Some(binding) = instance.resolve_export(name) else {
                     return Err(ComponentError::ExportNotFound(name.to_owned()));
