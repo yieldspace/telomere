@@ -186,6 +186,7 @@ macro_rules! define_shared_simd_memory_handler {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $shared_name(
             tail_code: *const Instr,
             ctx: &mut ExecuteContext,
@@ -212,6 +213,7 @@ macro_rules! define_local_simd_memory_handler {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is local.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             $impl::<false, false>(tail_code, ctx)
         }
@@ -235,6 +237,7 @@ macro_rules! define_indexed_shared_simd_memory_handler {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose selected indexed memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $shared_name(
             tail_code: *const Instr,
             ctx: &mut ExecuteContext,
@@ -261,6 +264,7 @@ macro_rules! define_indexed_local_simd_memory_handler {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose selected indexed memory is local.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             $impl::<false, true>(tail_code, ctx)
         }
@@ -921,6 +925,7 @@ define_indexed_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn v128_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let left_buf = &(*tail_code).operand.encoded;
     let right_buf = &(*tail_code.add(1)).operand.encoded;
@@ -1029,6 +1034,7 @@ unsafe fn store_lane_internal<const N: usize, const SHARED: bool, const INDEXED:
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn i8x16_shuffle(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mut lanes = [0u8; 16];
     lanes[0..8].copy_from_slice(&(*tail_code).operand.encoded);
@@ -1185,6 +1191,7 @@ pub unsafe fn f64x2_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i8x16_extract_lane_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1237,6 +1244,7 @@ pub unsafe fn i8x16_extract_lane_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn i8x16_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1318,6 +1326,7 @@ pub unsafe fn i16x8_extract_lane_u(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn i16x8_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1375,6 +1384,7 @@ pub unsafe fn i32x4_extract_lane(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn i32x4_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1436,6 +1446,7 @@ pub unsafe fn i64x2_extract_lane(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn i64x2_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1493,10 +1504,20 @@ pub unsafe fn f32x4_extract_lane(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn f32x4_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `i32x4_replace_lane`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     let lane = (*tail_code).operand.u32 as usize;
     let value = ctx.stack.pop_f32().to_le_bytes();
     let mut bytes = ctx.stack.pop_u128().to_le_bytes();
@@ -1554,10 +1575,20 @@ pub unsafe fn f64x2_extract_lane(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn f64x2_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `i64x2_replace_lane`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     let lane = (*tail_code).operand.u32 as usize;
     let value = ctx.stack.pop_f64().to_le_bytes();
     let mut bytes = ctx.stack.pop_u128().to_le_bytes();
@@ -2107,6 +2138,7 @@ macro_rules! all_true_instruction {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let v: $target = ctx.stack.pop();
             let mut all_true = 0x01;
@@ -2138,6 +2170,7 @@ macro_rules! bitmask_instruction {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let v: $target = ctx.stack.pop();
             let result = v.move_mask();
@@ -2166,6 +2199,7 @@ bitmask_instruction!(i64x2_bitmask, i64x2);
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_v128_bitselect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mask = ctx.stack.pop_u128();
     let b = ctx.stack.pop_u128();
@@ -2191,6 +2225,7 @@ macro_rules! shl_instruction {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let shift = ctx.stack.pop_u32();
             let v: $target = ctx.stack.pop();
@@ -2223,6 +2258,7 @@ macro_rules! shr_instruction {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let shift = ctx.stack.pop_u32();
             let v: $target = ctx.stack.pop();
@@ -2488,6 +2524,7 @@ macro_rules! narrow_instruction {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             use crate::common::stack::StackOperation;
 
@@ -2586,6 +2623,7 @@ macro_rules! extend_instruction {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let v: $from = ctx.stack.pop();
             let v = v.to_array();

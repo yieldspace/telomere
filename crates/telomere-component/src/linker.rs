@@ -1,4 +1,5 @@
 use crate::func::{ComponentParams, ComponentReturn};
+use crate::runtime::name_match;
 use crate::support::common::InstanceHandle;
 use crate::support::Store;
 use crate::{ComponentError, ComponentFuture, ComponentValue};
@@ -34,6 +35,23 @@ pub(crate) struct CoreExportBinding {
 pub(crate) enum LinkerBinding {
     Host(AsyncHostFn),
     Core(CoreExportBinding),
+}
+
+/// Resolves a requested name against the names a linker map was
+/// registered under.
+///
+/// Exact names win. On a miss, a registration on the same semver
+/// compatible track is accepted (see [`name_match`]), mirroring the
+/// rules export lookup uses: a component importing `wasi:io/error@0.2.3`
+/// is satisfied by a provider registered as `wasi:io/error@0.2.6`, and
+/// vice versa. When several registrations share the track, the maximal
+/// version wins.
+fn resolve_registered<V: Clone>(map: &HashMap<String, V>, name: &str) -> Option<V> {
+    if let Some(value) = map.get(name) {
+        return Some(value.clone());
+    }
+    let matched = name_match::compatible_name(name, map.keys().map(String::as_str))?;
+    map.get(matched).cloned()
 }
 
 /// A collection of functions that satisfies a component instance import.
@@ -128,7 +146,7 @@ impl ComponentLinkerInstance {
     }
 
     pub(crate) fn resolve_export(&self, name: &str) -> Option<LinkerBinding> {
-        self.exports.get(name).cloned()
+        resolve_registered(&self.exports, name)
     }
 }
 
@@ -275,7 +293,9 @@ impl ComponentLinker {
     /// Registers a named imported component instance.
     ///
     /// Populate the instance with [ComponentLinkerInstance] before associating
-    /// it with the component import name.
+    /// it with the component import name. Lookups accept the registered
+    /// name exactly or on the same semver compatible track, mirroring
+    /// export lookup (see the module-level resolution rules).
     pub fn register_import_instance(
         &mut self,
         name: impl Into<String>,
@@ -307,11 +327,27 @@ impl ComponentLinker {
     }
 
     pub(crate) fn resolve_import(&self, name: &str) -> Option<LinkerBinding> {
-        self.imports.get(name).cloned()
+        resolve_registered(&self.imports, name)
     }
 
     pub(crate) fn resolve_import_instance(&self, name: &str) -> Option<ComponentLinkerInstance> {
-        self.import_instances.get(name).cloned()
+        resolve_registered(&self.import_instances, name)
+    }
+
+    /// Names a root import registered on an incompatible version track
+    /// for the same interface as `name`, for error messages that name
+    /// both what was expected and what was found.
+    pub(crate) fn incompatible_import(&self, name: &str) -> Option<String> {
+        name_match::incompatible_name(name, self.imports.keys().map(String::as_str))
+            .map(str::to_owned)
+    }
+
+    /// Names an import instance registered on an incompatible version
+    /// track for the same interface as `name`, for error messages that
+    /// name both what was expected and what was found.
+    pub(crate) fn incompatible_import_instance(&self, name: &str) -> Option<String> {
+        name_match::incompatible_name(name, self.import_instances.keys().map(String::as_str))
+            .map(str::to_owned)
     }
 
     /// Registers an asynchronous destructor for a resource type exported by
@@ -357,8 +393,169 @@ impl ComponentLinker {
         instance: &str,
         resource: &str,
     ) -> Option<ResourceDropFn> {
-        self.import_resource_drops
+        if let Some(drop_fn) = self
+            .import_resource_drops
             .get(&(instance.to_owned(), resource.to_owned()))
+        {
+            return Some(drop_fn.clone());
+        }
+        // The resource name must match exactly, but the instance name
+        // follows the same semver-track rules as import resolution: a
+        // guest importing `wasi:io/error@0.2.0` uses the destructor the
+        // host registered for `wasi:io/error@0.2.6`.
+        let matched = name_match::compatible_name(
+            instance,
+            self.import_resource_drops
+                .keys()
+                .filter(|(_, registered_resource)| registered_resource == resource)
+                .map(|(registered_instance, _)| registered_instance.as_str()),
+        )?;
+        self.import_resource_drops
+            .get(&(matched.to_owned(), resource.to_owned()))
             .cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::block_on;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn instance_with_export(export: &str) -> ComponentLinkerInstance {
+        let mut instance = ComponentLinkerInstance::new();
+        instance.register_func(export, |_store, _args| Ok(vec![]));
+        instance
+    }
+
+    fn call(binding: LinkerBinding) -> Vec<ComponentValue> {
+        let LinkerBinding::Host(func) = binding else {
+            panic!("expected a host binding");
+        };
+        let store = Store::new();
+        block_on(func(&store, &[])).expect("host function should succeed")
+    }
+
+    #[test]
+    fn import_instance_resolves_semver_compatible_version() {
+        // The guest imports 0.2.6, the host registered 0.2.0 (#258).
+        let mut linker = ComponentLinker::new();
+        linker.register_import_instance("test:pkg/iface@0.2.0", instance_with_export("from-0.2.0"));
+        let resolved = linker
+            .resolve_import_instance("test:pkg/iface@0.2.6")
+            .expect("compatible version should resolve");
+        assert!(resolved.resolve_export("from-0.2.0").is_some());
+
+        // And the reverse direction resolves too.
+        let mut linker = ComponentLinker::new();
+        linker.register_import_instance("test:pkg/iface@0.2.6", instance_with_export("from-0.2.6"));
+        let resolved = linker
+            .resolve_import_instance("test:pkg/iface@0.2.0")
+            .expect("compatible version should resolve");
+        assert!(resolved.resolve_export("from-0.2.6").is_some());
+    }
+
+    #[test]
+    fn import_instance_exact_registration_wins_over_maximal() {
+        let mut linker = ComponentLinker::new();
+        linker.register_import_instance("test:pkg/iface@0.2.0", instance_with_export("from-0.2.0"));
+        linker.register_import_instance("test:pkg/iface@0.2.6", instance_with_export("from-0.2.6"));
+        // An exact registration beats the maximal version on the track.
+        let resolved = linker
+            .resolve_import_instance("test:pkg/iface@0.2.0")
+            .expect("exact registration should resolve");
+        assert!(resolved.resolve_export("from-0.2.0").is_some());
+        assert!(resolved.resolve_export("from-0.2.6").is_none());
+        // Without an exact registration, the maximal version wins.
+        let resolved = linker
+            .resolve_import_instance("test:pkg/iface@0.2.3")
+            .expect("track lookup should resolve");
+        assert!(resolved.resolve_export("from-0.2.6").is_some());
+    }
+
+    #[test]
+    fn import_instance_incompatible_version_is_rejected_and_named() {
+        let mut linker = ComponentLinker::new();
+        linker.register_import_instance("test:pkg/iface@0.3.0", instance_with_export("from-0.3.0"));
+        assert!(linker
+            .resolve_import_instance("test:pkg/iface@0.2.6")
+            .is_none());
+        assert_eq!(
+            linker.incompatible_import_instance("test:pkg/iface@0.2.6"),
+            Some("test:pkg/iface@0.3.0".to_owned())
+        );
+        // A wholly absent interface has nothing to report.
+        assert!(linker
+            .resolve_import_instance("test:pkg/other@0.2.6")
+            .is_none());
+        assert_eq!(
+            linker.incompatible_import_instance("test:pkg/other@0.2.6"),
+            None
+        );
+    }
+
+    #[test]
+    fn root_import_resolves_semver_compatible_version() {
+        let mut linker = ComponentLinker::new();
+        linker.register_import("test:pkg/func@0.2.0", |_store, _args| {
+            Ok(vec![ComponentValue::S32(20)])
+        });
+        linker.register_import("test:pkg/func@0.2.6", |_store, _args| {
+            Ok(vec![ComponentValue::S32(26)])
+        });
+        // Exact wins.
+        let binding = linker
+            .resolve_import("test:pkg/func@0.2.0")
+            .expect("exact registration should resolve");
+        assert_eq!(call(binding), vec![ComponentValue::S32(20)]);
+        // Otherwise the maximal version on the track wins.
+        let binding = linker
+            .resolve_import("test:pkg/func@0.2.3")
+            .expect("track lookup should resolve");
+        assert_eq!(call(binding), vec![ComponentValue::S32(26)]);
+        // Incompatible tracks do not resolve but are named.
+        assert!(linker.resolve_import("test:pkg/func@0.3.0").is_none());
+        assert_eq!(
+            linker.incompatible_import("test:pkg/func@0.3.0"),
+            Some("test:pkg/func@0.2.6".to_owned())
+        );
+    }
+
+    #[test]
+    fn resource_drop_resolves_compatible_instance_name() {
+        let fired = Rc::new(RefCell::new(Vec::new()));
+        let mut linker = ComponentLinker::new();
+        for version in ["0.2.0", "0.2.6"] {
+            let fired = Rc::clone(&fired);
+            linker.register_import_resource_drop(
+                format!("wasi:io/error@{version}"),
+                "error",
+                move |_store, handle| {
+                    fired.borrow_mut().push((version, handle));
+                    Ok(())
+                },
+            );
+        }
+        let store = Store::new();
+        // Exact registration wins.
+        let drop_fn = linker
+            .resolve_import_resource_drop("wasi:io/error@0.2.0", "error")
+            .expect("exact registration should resolve");
+        block_on(drop_fn(&store, 1)).expect("drop should succeed");
+        // A version on the same track uses the maximal registration.
+        let drop_fn = linker
+            .resolve_import_resource_drop("wasi:io/error@0.2.3", "error")
+            .expect("compatible instance should resolve");
+        block_on(drop_fn(&store, 2)).expect("drop should succeed");
+        assert_eq!(*fired.borrow(), vec![("0.2.0", 1), ("0.2.6", 2)]);
+        // The resource name itself must match exactly, and an
+        // incompatible instance track does not resolve.
+        assert!(linker
+            .resolve_import_resource_drop("wasi:io/error@0.2.3", "other")
+            .is_none());
+        assert!(linker
+            .resolve_import_resource_drop("wasi:io/error@0.3.0", "error")
+            .is_none());
     }
 }

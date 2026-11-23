@@ -7370,6 +7370,64 @@ mod tests {
     }
 
     #[test]
+    fn op_specs_decode_through_baseline_lookup() {
+        // #240: decode_baseline_op recognises a handler purely by
+        // fn-pointer identity against OP_SPECS. For every spec whose
+        // decoder accepts a synthetic zero-operand stream, the lookup
+        // path must produce the same BaselineOp as calling the spec's
+        // decoder directly; a mismatch means the stored op pointer did
+        // not identify the spec (the failure mode measured for
+        // op_unreachable in #209, where the decoder fell back to the
+        // current-VM-handler continuation stub).
+        for spec in OP_SPECS {
+            let mut head = i32_operand(0);
+            head.op = spec.op;
+            let code = [head, i32_operand(0), i32_operand(0), i32_operand(0)];
+            let direct = std::panic::catch_unwind(|| (spec.decode)(&code, 0));
+            let Ok(Ok(direct)) = direct else {
+                continue;
+            };
+            let via_lookup = decode_baseline_op(&code, 0)
+                .expect("spec op must decode through the OP_SPECS lookup");
+            assert_eq!(
+                std::mem::discriminant(&direct),
+                std::mem::discriminant(&via_lookup),
+                "OP_SPECS lookup decoded a different BaselineOp variant",
+            );
+            if let (
+                BaselineOp::RuntimeContinuationStub {
+                    kind: direct_kind, ..
+                },
+                BaselineOp::RuntimeContinuationStub {
+                    kind: lookup_kind, ..
+                },
+            ) = (&direct, &via_lookup)
+            {
+                assert_eq!(direct_kind, lookup_kind);
+            }
+        }
+    }
+
+    #[test]
+    fn op_specs_alias_entries_share_their_decoder() {
+        // Several OP_SPECS entries are alias re-exports of one handler
+        // (e.g. op_mem_copy / op_mem_copy_local). decode_baseline_op
+        // returns the first identity match, so entries that share an op
+        // pointer must also share the decoder, or the later entries
+        // would be silently unreachable.
+        for (index, spec) in OP_SPECS.iter().enumerate() {
+            for other in &OP_SPECS[index + 1..] {
+                if std::ptr::fn_addr_eq(spec.op, other.op) {
+                    assert!(
+                        std::ptr::fn_addr_eq(spec.decode, other.decode),
+                        "OP_SPECS entries share an op but not a decoder",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn baseline_plan_rejects_zero_width_op() {
         let code = [op_instr(op_i32_const as Op), i32_operand(7)];
 

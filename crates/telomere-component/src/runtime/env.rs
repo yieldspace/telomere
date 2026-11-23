@@ -643,26 +643,28 @@ impl RuntimeEnv {
                 "import '{}' is not an instance",
                 name
             ))),
-            None => self
-                .linker
-                .resolve_import_instance(name)
-                .map(|instance| {
-                    Rc::new(RuntimeComponentInstance::new_linker(
+            None => {
+                if let Some(instance) = self.linker.resolve_import_instance(name) {
+                    return Ok(Rc::new(RuntimeComponentInstance::new_linker(
                         instance,
                         Rc::new(self.clone_shallow()),
-                    ))
-                })
-                .or_else(|| {
-                    self.parent
-                        .as_ref()
-                        .and_then(|parent| parent.lookup_import_instance(name).ok())
-                })
-                .ok_or_else(|| {
-                    ComponentError::Unsupported(format!(
-                        "instance import '{}' is not supported by linker",
-                        name
-                    ))
-                }),
+                    )));
+                }
+                if let Some(parent) = &self.parent {
+                    if let Ok(instance) = parent.lookup_import_instance(name) {
+                        return Ok(instance);
+                    }
+                }
+                if let Some(found) = self.linker.incompatible_import_instance(name) {
+                    return Err(ComponentError::Link(format!(
+                        "instance import '{name}' is unresolved (found incompatible version {found})"
+                    )));
+                }
+                Err(ComponentError::Unsupported(format!(
+                    "instance import '{}' is not supported by linker",
+                    name
+                )))
+            }
         }
     }
 
@@ -681,10 +683,15 @@ impl RuntimeEnv {
                     .as_ref()
                     .map(|parent| parent.lookup_import_func(name))
                     .unwrap_or_else(|| {
-                        Err(ComponentError::Link(format!(
-                            "function import '{}' is unresolved",
-                            name
-                        )))
+                        Err(match self.linker.incompatible_import(name) {
+                            Some(found) => ComponentError::Link(format!(
+                                "function import '{name}' is unresolved (found incompatible version {found})"
+                            )),
+                            None => ComponentError::Link(format!(
+                                "function import '{}' is unresolved",
+                                name
+                            )),
+                        })
                     })
             }
         }
@@ -727,10 +734,10 @@ fn resolve_component_export_key(
         return Ok(name.to_owned());
     }
     let available = component.exports.keys().map(String::as_str);
-    if let Some(matched) = name_match::compatible_export_name(name, available.clone()) {
+    if let Some(matched) = name_match::compatible_name(name, available.clone()) {
         return Ok(matched.to_owned());
     }
-    if let Some(found) = name_match::incompatible_export_name(name, available) {
+    if let Some(found) = name_match::incompatible_name(name, available) {
         return Err(ComponentError::ExportNotFound(format!(
             "{name} (found incompatible version {found})"
         )));

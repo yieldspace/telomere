@@ -143,6 +143,12 @@ jobs:
       - name: Test JIT test coverage checker
         run: python3 tools/test_check_jit_test_coverage.py
 
+      - name: Check fn-pointer identity coverage
+        run: python3 tools/check-fn-identity.py
+
+      - name: Test fn-pointer identity checker
+        run: python3 tools/test_check_fn_identity.py
+
       - name: Test embedder size gate checker
         run: python3 tools/test_check_embedder_size.py
 
@@ -231,6 +237,12 @@ jobs:
 
       - name: JIT regression tests
         run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test jit
+
+      # #240: the OP_SPECS decode tests pin the fn-pointer identity
+      # contract in an optimised build, where identical-code folding and
+      # ThinLTO duplication actually occur.
+      - name: OP_SPECS fn-identity tests
+        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --lib op_specs_
 
       - name: JIT-gated tests outside the jit and wast targets
         env:
