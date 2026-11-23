@@ -356,12 +356,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #281: workflow_dispatch runs 45184156762 and
-45184172624 against the PR branch at head
-`b981705af163e9b9a04d5603aed1b6176f73603d` (branch commit `a20c782`,
-parser validates kind-6 element segments against the declared
-table (#279); and merge commit `b981705` bringing in `main` at
-`bfa7df4`), and pull-request run 45184047623, which built the same
+against the code of PR #283: workflow_dispatch runs 45189155375 and
+45189167325 against the PR branch at head
+`46ac0aaeb6af667995d7e70089b5494f473b237c` (branch commit `f2ebe0e`,
+restore tail dispatch in `op_f64_const` (#277); and merge commit
+`46ac0aa` bringing in `main` at
+`057bb2a`), and pull-request run 45189083410, which built the same
 tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -372,21 +372,21 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,490,024 | 1,142,583 |
-| `release` | `component` | 2,533,424 | 2,036,087 |
-| `release` | `wasi` | 2,877,424 | 2,296,215 |
+| `release` | `core` | 1,490,040 | 1,142,583 |
+| `release` | `component` | 2,533,440 | 2,036,087 |
+| `release` | `wasi` | 2,877,440 | 2,296,215 |
 | `release` | `core-nosimd` | 1,297,424 | 999,479 |
 | `release` | `core-jit` | 2,034,528 | 1,586,391 |
-| `release` | `core-aot` | 1,517,464 | 1,161,687 |
-| `release` | `wasi-threads` | 3,065,880 | 2,436,775 |
+| `release` | `core-aot` | 1,517,480 | 1,161,687 |
+| `release` | `wasi-threads` | 3,065,896 | 2,436,775 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,102,776 | 781,879 |
-| `release-size` | `component` | 1,662,264 | 1,231,751 |
+| `release-size` | `component` | 1,662,248 | 1,231,735 |
 | `release-size` | `wasi` | 1,858,120 | 1,363,463 |
 | `release-size` | `core-nosimd` | 987,936 | 702,279 |
 | `release-size` | `core-jit` | 1,541,600 | 1,103,671 |
 | `release-size` | `core-aot` | 1,122,224 | 793,463 |
-| `release-size` | `wasi-threads` | 2,000,520 | 1,457,879 |
+| `release-size` | `wasi-threads` | 2,000,504 | 1,457,863 |
 
 #### Re-baseline history
 
@@ -1028,6 +1028,35 @@ series are byte-identical. Against the original #164 baseline,
 the largest cumulative growth remains release-size `component`
 stripped `.text` at +5.37% (1,169,031 B to 1,231,751 B), up
 from +5.36%. The baseline was re-measured on the merged code
+and updated as recorded above, following the procedure below.
+
+PR #283 (#277, a long `f64.const` loop aborts the host with a
+stack overflow under the interpreter: the #240 identity barrier
+in `op_f64_const` passed the address of its function-local
+static to `black_box`, which materialises its argument in an
+address-taken stack slot, and that slot made LLVM drop the
+sibling call for the dispatch, so every execution left a live
+host frame behind — the f64-kernel aborted at n = 1,000,000,
+with the overflow threshold at n ≈ 258,683; the fix replaces
+the barrier in that one handler with a volatile load of the
+same static, which keeps the body distinct from `op_i64_const`
+but leaves no frame state, and the `Op` contract comment now
+records the hazard) merged current `main` into its branch
+first; the merge was conflict-free (`main` does not touch
+`numeric.rs`, and the two sides' `common.rs` changes are in
+disjoint regions). Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45189182011, gate
+success), which reproduces the previous baseline exactly on
+all 32 gated series. 9 of the 32 gated series change: the
+`release` stripped file size grows by exactly +16 B in `core`,
+`component`, `wasi`, `core-aot` and `wasi-threads` (stripped
+`.text` unchanged there), and `release-size` `component` and
+`wasi-threads` shrink by exactly −16 B in both the stripped
+file and stripped `.text` sizes; the remaining 23 series are
+byte-identical. Against the original #164 baseline, the
+largest cumulative growth remains release-size `component`
+stripped `.text` at +5.36% (1,169,031 B to 1,231,735 B), down
+from +5.37%. The baseline was re-measured on the merged code
 and updated as recorded above, following the procedure below.
 
 ### Threshold derivation
