@@ -866,6 +866,10 @@ runners, so they cannot carry a threshold. The checker's unit tests are
 2. Take a fresh measurement of the exact code in the pull request: run the
    `Embedder footprint` workflow on the pull request (or dispatch it
    against the branch) and download the `embedder-footprint` artifact.
+   The upload step runs even when the size gate step fails, so the
+   artifact of the failing run — the run that prompted the re-baseline —
+   is available; there is no need to recover values from the measure
+   step's log output.
 3. Update `tools/embedder-size-baseline.json` in the same pull request: set
    each changed row's `baseline` and `threshold` to the newly measured
    stripped sizes, and rewrite the `source` block to name the new commit,
