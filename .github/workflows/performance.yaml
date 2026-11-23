@@ -1,0 +1,97 @@
+name: Performance gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "src/**"
+      - "tools/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/performance.yaml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  measure:
+    name: Measure performance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: performance-gate
+
+      # The measure script compiles the methodology's checked-in WAT
+      # workloads (tools/baseline/artifacts.json) with wasm-tools, the
+      # same tool tools/measure-interpreter-baseline.py requires. The
+      # release is pinned by version and SHA-256, mirroring the corpus
+      # manifest's digest pinning.
+      - name: Install wasm-tools (pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.263.0
+          archive="wasm-tools-${version}-x86_64-linux.tar.gz"
+          curl -sL --fail -o "/tmp/${archive}" \
+            "https://github.com/bytecodealliance/wasm-tools/releases/download/v${version}/${archive}"
+          echo "21c036c1740a0552124c79c6e2170cb61c5b016005671a6d5bc06cf642165431  /tmp/${archive}" | sha256sum -c -
+          tar -xzf "/tmp/${archive}" -C /tmp
+          echo "/tmp/wasm-tools-${version}-x86_64-linux" >> "$GITHUB_PATH"
+
+      - name: Build telomere-cli (default features)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p telomere-cli \
+            --target-dir target/perf-gate/default
+
+      - name: Build telomere-cli (jit feature)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p telomere-cli --features jit \
+            --target-dir target/perf-gate/jit
+
+      - name: Measure performance workloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/measure-performance.py \
+            --default-bin target/perf-gate/default/release/telomere-cli \
+            --jit-bin target/perf-gate/jit/release/telomere-cli \
+            --out performance.json | tee performance-measure.log
+
+      - name: Check performance regression gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/check-performance.py performance.json
+
+      # Run even when the gate (or another check above) fails: the
+      # failing runs are exactly the ones whose measurements are needed
+      # for investigation and re-baselining (#272). `!cancelled()` keeps
+      # the step skipped when the job itself is cancelled. The gate step
+      # above still fails the job on a violation; this only preserves
+      # the measurement artifact.
+      - name: Upload performance measurements
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-measurement
+          path: |
+            performance.json
+          if-no-files-found: error

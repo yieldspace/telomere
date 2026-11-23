@@ -56,6 +56,7 @@ resolution in `ComponentProgram`.
 | Document | Status | Use it for |
 | --- | --- | --- |
 | [benchmarks/footprint.md](benchmarks/footprint.md) | Local measurement | Measured `telomere-cli` binary size, peak RSS, and cold start, plus the reproduction script and the list of unmeasured targets. |
+| [benchmarks/performance.md](benchmarks/performance.md) | CI gate | The performance-regression gate (#212): gated workloads and cells, observed CI variance, ceilings, and the deliberate re-baseline procedure. |
 | [core/interpreter-baseline.md](core/interpreter-baseline.md) | Current methodology | Reproducible interpreter-baseline procedure and raw-record update rules. |
 | [core/coremark-benchmark.md](core/coremark-benchmark.md) | Historical (superseded) | Retained CoreMark provenance; not a current baseline. |
 
