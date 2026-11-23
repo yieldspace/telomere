@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #281 (branch fix/279-elem-tableidx at head b981705af163e9b9a04d5603aed1b6176f73603d \u2014 branch commit a20c782 (parser validates kind-6 element segments against the declared table (#279)) plus merge commit b981705 bringing in current main bfa7df4, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45184156762 and 45184172624 against the branch and pull-request run 45184047623, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "b981705af163e9b9a04d5603aed1b6176f73603d",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #283 (branch fix/277-f64-kernel-stack at head 46ac0aaeb6af667995d7e70089b5494f473b237c \u2014 branch commit f2ebe0e (restore tail dispatch in op_f64_const (#277)) plus merge commit 46ac0aa bringing in current main 057bb2a, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45189155375 and 45189167325 against the branch and pull-request run 45189083410, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "46ac0aaeb6af667995d7e70089b5494f473b237c",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45184156762,
-      45184172624
+      45189155375,
+      45189167325
     ],
     "cross_check_run_ids": [
-      45184047623
+      45189083410
     ],
-    "derivation": "Re-baseline for PR #281 (#279, the parser validates kind-6 element segments against table 0 instead of the declared table: parse_elem parsed the segment's tableidx and checked the table exists, but passed a literal 0 to validate_active_elem, so a segment declared for another table was type-checked against table 0's element type \u2014 externref segments declared for a funcref table were accepted and funcref segments for such a table were rejected; the fix passes the parsed tableidx, one line in parser/core/parser.rs, plus a new regression suite tests/elem_validation.rs). The branch merged current main (bfa7df4, containing PRs #269, #273, #278, #275, #276 and #280) before measurement; the merge was conflict-free. Attribution was isolated by measuring current main (bfa7df4) alone (workflow_dispatch run 45184187750, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. 14 of the 32 gated series change, each by exactly +16 B in both the stripped file and stripped .text sizes, confined to configurations that link the parser (release component / wasi / wasi-threads; release-size core / component / core-jit / wasi-threads); the remaining 18 series are byte-identical. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.37% (1,169,031 B to 1,231,751 B), up from +5.36%. Run-to-run spread was again 0 B for every gated series across the three samples."
+    "derivation": "Re-baseline for PR #283 (#277, a long f64.const loop aborts the host with a stack overflow under the interpreter: the #240 identity barrier in op_f64_const passed the address of its function-local static to black_box, which materialises its argument in an address-taken stack slot, and that slot made LLVM drop the sibling call for the dispatch, so every execution left a live host frame behind \u2014 the f64-kernel aborted at n = 1,000,000 with the overflow threshold at n \u2248 258,683; the fix replaces the barrier in that one handler with a volatile load of the same static, which keeps the body distinct from op_i64_const but leaves no frame state, and the Op contract comment in common.rs now records the hazard; regression test f64_const_loop_keeps_direct_threading in tests/call_threading.rs). The branch merged current main (057bb2a, containing PRs #269, #273, #278, #275, #276, #280 and #281) before measurement; the merge was conflict-free (main does not touch numeric.rs, and the two sides' common.rs changes are in disjoint regions). Attribution was isolated by measuring current main (057bb2a) alone (workflow_dispatch run 45189182011, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. 9 of the 32 gated series change: the release stripped file size grows by exactly +16 B in core, component, wasi, core-aot and wasi-threads (stripped .text unchanged there), and release-size component and wasi-threads shrink by exactly \u221216 B in both the stripped file and stripped .text sizes; the remaining 23 series are byte-identical. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.36% (1,169,031 B to 1,231,735 B), down from +5.37%. Run-to-run spread was again 0 B for every gated series across the three samples."
   },
   "thresholds": {
     "release": {
@@ -30,8 +30,8 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1490024,
-          "threshold": 1490024
+          "baseline": 1490040,
+          "threshold": 1490040
         },
         "stripped_text_bytes": {
           "baseline": 1142583,
@@ -40,8 +40,8 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2533424,
-          "threshold": 2533424
+          "baseline": 2533440,
+          "threshold": 2533440
         },
         "stripped_text_bytes": {
           "baseline": 2036087,
@@ -50,8 +50,8 @@
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2877424,
-          "threshold": 2877424
+          "baseline": 2877440,
+          "threshold": 2877440
         },
         "stripped_text_bytes": {
           "baseline": 2296215,
@@ -80,8 +80,8 @@
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1517464,
-          "threshold": 1517464
+          "baseline": 1517480,
+          "threshold": 1517480
         },
         "stripped_text_bytes": {
           "baseline": 1161687,
@@ -90,8 +90,8 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3065880,
-          "threshold": 3065880
+          "baseline": 3065896,
+          "threshold": 3065896
         },
         "stripped_text_bytes": {
           "baseline": 2436775,
@@ -122,12 +122,12 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1662264,
-          "threshold": 1662264
+          "baseline": 1662248,
+          "threshold": 1662248
         },
         "stripped_text_bytes": {
-          "baseline": 1231751,
-          "threshold": 1231751
+          "baseline": 1231735,
+          "threshold": 1231735
         }
       },
       "wasi": {
@@ -172,12 +172,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2000520,
-          "threshold": 2000520
+          "baseline": 2000504,
+          "threshold": 2000504
         },
         "stripped_text_bytes": {
-          "baseline": 1457879,
-          "threshold": 1457879
+          "baseline": 1457863,
+          "threshold": 1457863
         }
       }
     }

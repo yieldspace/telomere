@@ -877,6 +877,18 @@ pub union Operand {
 /// this contract: if a future change folds another `OP_SPECS` pair, they
 /// fail.
 ///
+/// One barrier takes a different form: `op_f64_const` volatile-loads its
+/// function-local static instead of passing its address to `black_box`.
+/// `black_box` materialises its argument in an address-taken stack slot,
+/// and in that handler the slot made LLVM drop the sibling call for the
+/// dispatch, leaking a host frame on every execution until a long
+/// `f64.const` loop overflowed the host stack (#277). The volatile load
+/// references the same per-handler static, so the body stays distinct,
+/// but it leaves no frame state behind. Barrier sites are therefore not
+/// automatically dispatch-safe: a handler whose barrier form costs it
+/// the tail call reintroduces the #277 leak, so new or changed barriers
+/// on hot dispatch paths need their generated dispatch checked.
+///
 /// Replacing pointer identity with explicit op ids in `Instr` would remove
 /// this contract, but that is a dispatch-representation change owned by
 /// #179/#189 and is deliberately not part of #240.

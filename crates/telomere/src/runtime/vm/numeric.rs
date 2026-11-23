@@ -317,13 +317,25 @@ pub unsafe fn op_f32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 #[inline(never)]
 pub unsafe fn op_f64_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     // #240: fn-pointer identity is load-bearing for this handler (see the
-    // `Op` contract in `common.rs`). The address of a function-local static
+    // `Op` contract in `common.rs`). Referencing a function-local static
     // keeps this body distinct from `op_i64_const`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // The reference is a volatile load, not the `black_box` of the static's
+    // address used at the other barrier sites: `black_box` materialises its
+    // argument in an address-taken stack slot, and in this handler that
+    // slot made LLVM drop the sibling call for the `call_next` dispatch,
+    // so every execution left a live frame behind and a long `f64.const`
+    // loop overflowed the host stack (#277). A volatile load of a static
+    // that is never written cannot be elided or folded to a constant, and
+    // it leaves no frame state, so the dispatch stays a tail jump.
     {
         static FN_IDENTITY: u8 = 0;
-        std::hint::black_box(&raw const FN_IDENTITY);
+        // SAFETY: `FN_IDENTITY` is a live function-local static that is
+        // never written, so a volatile read of it is in-bounds and cannot
+        // race; the value itself is unused.
+        let _ = unsafe { std::ptr::read_volatile(&raw const FN_IDENTITY) };
     }
     trace!("op_f64_const");
     vm_try!(ctx.stack.push_f64((*tail_code).operand.f64));
