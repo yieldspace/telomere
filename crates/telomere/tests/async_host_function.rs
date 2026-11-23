@@ -10,14 +10,12 @@ use std::{collections::VecDeque, future::Future, pin::Pin};
 use telomere::MemoryWaitPending;
 use telomere::{
     component_support::common::{FuncType, ValType},
-    get_global,
-    host_abi::{
-        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, Instr,
-    },
-    instantiate_native_async_module, link_async_host_function_with_export_name,
-    link_async_host_function_with_function_idx, link_host_function_with_function_idx, Completion,
-    CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, Registry, ResultValue, Store,
-    StoreState, VMResult, WasmValue,
+    get_global, instantiate_native_async_module, instantiate_native_module,
+    link_async_host_function_with_export_name, link_async_host_function_with_function_idx,
+    link_host_function_with_function_idx, AsyncHostFnDefinition, AsyncHostModule, Completion,
+    CompletionPayload, ExecutionDriver, HostCallPending, HostContext, HostFnDefinition, HostFuture,
+    HostModule, PendingOp, Registry, ResultValue, Store, StoreState, TokioDriver, VMResult,
+    WasmValue,
 };
 
 struct MockDriver {
@@ -38,7 +36,9 @@ impl ExecutionDriver for MockDriver {
     fn submit(&mut self, op: PendingOp) {
         self.submitted += 1;
         match op {
-            PendingOp::HostCall(HostCallPending { task_id, future }) => {
+            PendingOp::HostCall(HostCallPending {
+                task_id, future, ..
+            }) => {
                 self.inflight.push_back(Box::pin(async move {
                     Completion {
                         task_id,
@@ -87,29 +87,106 @@ impl ExecutionDriver for MockDriver {
     }
 }
 
+/// A driver that retains submitted futures itself and polls them in
+/// submission order, returning the first completion that is ready.
+/// Unlike `TokioDriver`'s unordered set, this delivers a retained
+/// completion from an earlier, cancelled execution before the fresh
+/// execution's own completion — the ordering an embedder driver may
+/// legitimately produce.
+struct PollingDriver {
+    inflight: VecDeque<Pin<Box<dyn Future<Output = Completion>>>>,
+}
+
+impl PollingDriver {
+    fn new() -> Self {
+        Self {
+            inflight: VecDeque::new(),
+        }
+    }
+}
+
+impl ExecutionDriver for PollingDriver {
+    fn submit(&mut self, op: PendingOp) {
+        match op {
+            PendingOp::HostCall(HostCallPending {
+                task_id, future, ..
+            }) => {
+                self.inflight.push_back(Box::pin(async move {
+                    Completion {
+                        task_id,
+                        payload: CompletionPayload::HostCall {
+                            result: future.await,
+                        },
+                    }
+                }));
+            }
+            #[cfg(feature = "threads")]
+            PendingOp::MemoryWait(MemoryWaitPending {
+                task_id,
+                shared,
+                wait,
+                timeout_ns,
+                fp,
+                interrupt,
+            }) => {
+                self.inflight.push_back(Box::pin(async move {
+                    let payload = match wait
+                        .wait_result_interruptible(shared, timeout_ns, interrupt)
+                        .await
+                    {
+                        VMResult::Success(value) => CompletionPayload::ResumeWithI32 { fp, value },
+                        VMResult::Cancelled => CompletionPayload::Interrupted,
+                        _ => unreachable!("memory wait resolves only with a code or cancellation"),
+                    };
+                    Completion { task_id, payload }
+                }));
+            }
+            #[cfg(feature = "unstable-internals")]
+            PendingOp::WasmAsync(op) => {
+                panic!(
+                    "unexpected wasm async pending op for task {} in polling driver",
+                    op.task_id
+                );
+            }
+        }
+    }
+
+    fn next_completion<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<Completion>> + 'a>> {
+        let inflight = &mut self.inflight;
+        Box::pin(std::future::poll_fn(move |cx| {
+            let mut index = 0;
+            while index < inflight.len() {
+                match inflight[index].as_mut().poll(cx) {
+                    std::task::Poll::Ready(completion) => {
+                        inflight.remove(index);
+                        return std::task::Poll::Ready(Some(completion));
+                    }
+                    std::task::Poll::Pending => index += 1,
+                }
+            }
+            if inflight.is_empty() {
+                std::task::Poll::Ready(None)
+            } else {
+                std::task::Poll::Pending
+            }
+        }))
+    }
+}
+
 struct ScalarState {
     calls: AtomicUsize,
 }
 
-fn async_add_one(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    let slot = ctx.return_slot();
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_add_one(cx: &mut HostContext<'_, '_>) -> HostFuture {
+    let state = cx.store().state;
+    let WasmValue::I32(value) = cx.args()[0] else {
+        panic!("async_add_one expects an i32 argument");
+    };
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<ScalarState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
-        slot.write(&(value + 1).to_le_bytes());
-        VMResult::Success(return_addr)
+        VMResult::Success(vec![WasmValue::I32(value + 1)])
     })
 }
 
@@ -118,26 +195,17 @@ struct RoundTripState {
     seen: Mutex<Vec<(i32, i64)>>,
 }
 
-fn async_swap_results(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let local_ref = ctx.local_reference();
-    let lhs = i32::from_le_bytes(ctx.stack.local_bytes(&local_ref, 0, 4).try_into().unwrap());
-    let rhs = i64::from_le_bytes(ctx.stack.local_bytes(&local_ref, 4, 8).try_into().unwrap());
-    let slot = ctx.return_slot();
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 12, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_swap_results(cx: &mut HostContext<'_, '_>) -> HostFuture {
+    let state = cx.store().state;
+    let (WasmValue::I32(lhs), WasmValue::I64(rhs)) = (cx.args()[0], cx.args()[1]) else {
+        panic!("async_swap_results expects (i32, i64) arguments");
+    };
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<RoundTripState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
         state.seen.lock().unwrap().push((lhs, rhs));
-        let mut result = [0u8; 12];
-        result[0..8].copy_from_slice(&rhs.to_le_bytes());
-        result[8..12].copy_from_slice(&lhs.to_le_bytes());
-        slot.write(&result);
-        VMResult::Success(return_addr)
+        VMResult::Success(vec![WasmValue::I64(rhs), WasmValue::I32(lhs)])
     })
 }
 
@@ -145,19 +213,15 @@ struct StartState {
     calls: AtomicUsize,
 }
 
-fn async_init(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_init(cx: &mut HostContext<'_, '_>) -> HostFuture {
+    let state = cx.store().state;
     Box::pin(async move {
         tokio::task::yield_now().await;
         unsafe { state.get::<StartState>() }
             .unwrap()
             .calls
             .fetch_add(1, Ordering::SeqCst);
-        VMResult::Success(return_addr)
+        VMResult::Success(vec![])
     })
 }
 
@@ -165,53 +229,31 @@ struct CallIndirectState {
     calls: AtomicUsize,
 }
 
-fn async_double(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    let slot = ctx.return_slot();
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_double(cx: &mut HostContext<'_, '_>) -> HostFuture {
+    let state = cx.store().state;
+    let WasmValue::I32(value) = cx.args()[0] else {
+        panic!("async_double expects an i32 argument");
+    };
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<CallIndirectState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
-        slot.write(&(value * 2).to_le_bytes());
-        VMResult::Success(return_addr)
+        VMResult::Success(vec![WasmValue::I32(value * 2)])
     })
 }
 
-fn async_fail(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let (_prev_local_ref, _return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(_prev_local_ref);
+fn async_fail(_cx: &mut HostContext<'_, '_>) -> HostFuture {
     Box::pin(async move {
         tokio::task::yield_now().await;
         VMResult::InvalidOperand
     })
 }
 
-fn sync_add_two(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    let slot = ctx.return_slot();
-    slot.write(&(value + 2).to_le_bytes());
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
+fn sync_add_two(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let WasmValue::I32(value) = cx.args()[0] else {
+        return VMResult::Unreachable;
+    };
+    VMResult::Success(vec![WasmValue::I32(value + 2)])
 }
 
 #[tokio::test]
@@ -222,8 +264,8 @@ async fn async_import_returns_scalar_after_yield() {
     let store = Store::new_with_state(StoreState::from_static(state));
     let mut registry = Registry::new();
     let host = instantiate_native_async_module(
-        AsyncNativeModule {
-            functions: vec![AsyncHostFunctionDefinition {
+        AsyncHostModule {
+            functions: vec![AsyncHostFnDefinition {
                 name: Some("add-one".to_owned()),
                 signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
                 fp: async_add_one,
@@ -256,8 +298,8 @@ async fn sync_run_rejects_async_host_imports() {
     let store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_native_async_module(
-        AsyncNativeModule {
-            functions: vec![AsyncHostFunctionDefinition {
+        AsyncHostModule {
+            functions: vec![AsyncHostFnDefinition {
                 name: Some("add-one".to_owned()),
                 signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
                 fp: async_add_one,
@@ -299,8 +341,8 @@ async fn async_import_roundtrips_multi_value_params_and_results() {
     let store = Store::new_with_state(StoreState::from_static(state));
     let mut registry = Registry::new();
     let host = instantiate_native_async_module(
-        AsyncNativeModule {
-            functions: vec![AsyncHostFunctionDefinition {
+        AsyncHostModule {
+            functions: vec![AsyncHostFnDefinition {
                 name: Some("swap".to_owned()),
                 signature: FuncType::new(
                     vec![ValType::I32, ValType::I64],
@@ -344,8 +386,8 @@ async fn async_import_can_run_from_start_function() {
     let store = Store::new_with_state(StoreState::from_static(state));
     let registry = Registry::new();
     let host = instantiate_native_async_module(
-        AsyncNativeModule {
-            functions: vec![AsyncHostFunctionDefinition {
+        AsyncHostModule {
+            functions: vec![AsyncHostFnDefinition {
                 name: Some("init".to_owned()),
                 signature: FuncType::new(vec![], vec![]),
                 fp: async_init,
@@ -511,8 +553,8 @@ async fn async_import_can_run_with_custom_driver() {
     let store = Store::new_with_state(StoreState::from_static(state));
     let mut registry = Registry::new();
     let host = instantiate_native_async_module(
-        AsyncNativeModule {
-            functions: vec![AsyncHostFunctionDefinition {
+        AsyncHostModule {
+            functions: vec![AsyncHostFnDefinition {
                 name: Some("add-one".to_owned()),
                 signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
                 fp: async_add_one,
@@ -553,4 +595,356 @@ async fn async_import_can_run_with_custom_driver() {
     ));
     assert_eq!(driver.submitted, 1);
     assert_eq!(state.calls.load(Ordering::SeqCst), 1);
+}
+
+/// Regression test for the #216 review (use-after-free): a submitted
+/// host-call future is owned by the embedder's driver and may still be
+/// polled after the execution that submitted it has been dropped, so the
+/// future must never write into the task's stack. Cancelling the run frees
+/// the scheduler and its stacks while the `TokioDriver` retains the
+/// submitted future in its in-flight set; polling it to completion
+/// afterwards must be harmless, and the same driver must still drive a
+/// fresh run to the correct result (the scheduler applies the values when
+/// it applies the completion).
+#[tokio::test]
+async fn dropped_execution_leaves_retained_driver_future_harmless() {
+    let state = Box::leak(Box::new(ScalarState {
+        calls: AtomicUsize::new(0),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let mut registry = Registry::new();
+    let host = instantiate_native_async_module(
+        AsyncHostModule {
+            functions: vec![AsyncHostFnDefinition {
+                name: Some("add-one".to_owned()),
+                signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                fp: async_add_one,
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "add-one" (func $add-one (param i32) (result i32)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $add-one))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let mut driver = TokioDriver::new();
+    {
+        let args = ResultValue::new(vec![WasmValue::I32(41)]);
+        let run =
+            telomere::run_module_function_with_driver(&instance, &store, "run", &args, &mut driver);
+        tokio::pin!(run);
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        // One poll runs the guest until the host call has been submitted to
+        // the driver and the run suspends waiting for its completion.
+        assert!(matches!(
+            run.as_mut().poll(&mut cx),
+            std::task::Poll::Pending
+        ));
+        // Dropping `run` here cancels the execution: the scheduler and the
+        // task stacks are freed while the driver still holds the submitted
+        // host-call future.
+    }
+
+    // Polling the retained future to completion must not touch the dropped
+    // stacks; it only produces the callback's values as the payload.
+    let completion = driver
+        .next_completion()
+        .await
+        .expect("retained host call must still complete");
+    assert!(matches!(
+        completion.payload,
+        CompletionPayload::HostCall { .. }
+    ));
+    assert_eq!(state.calls.load(Ordering::SeqCst), 1);
+
+    // The same driver remains usable for a fresh run, whose scheduler
+    // applies the retained values protocol and produces the result.
+    let result = telomere::run_module_function_with_driver(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(41)]),
+        &mut driver,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I32(42)])
+    ));
+    assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+}
+
+/// Regression test for the #216 re-review (stale completion): when an
+/// execution is cancelled and its driver is reused *without* being
+/// drained, the driver still holds the cancelled run's completion,
+/// and a driver that delivers completions in submission order (here
+/// `PollingDriver`) hands that retained outcome to the fresh run
+/// before the fresh run's own completion. Completions are bound to the execution that submitted
+/// them, so the fresh run's scheduler must discard the retained
+/// outcome (the cancelled call's result, 42) instead of applying it to
+/// its own task: the fresh call with argument 100 must produce its own
+/// result, 101.
+#[tokio::test]
+async fn retained_completion_is_not_applied_to_a_reused_driver_run() {
+    let state = Box::leak(Box::new(ScalarState {
+        calls: AtomicUsize::new(0),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let mut registry = Registry::new();
+    let host = instantiate_native_async_module(
+        AsyncHostModule {
+            functions: vec![AsyncHostFnDefinition {
+                name: Some("add-one".to_owned()),
+                signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                fp: async_add_one,
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "add-one" (func $add-one (param i32) (result i32)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $add-one))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let mut driver = PollingDriver::new();
+    {
+        let args = ResultValue::new(vec![WasmValue::I32(41)]);
+        let run =
+            telomere::run_module_function_with_driver(&instance, &store, "run", &args, &mut driver);
+        tokio::pin!(run);
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        // One poll runs the guest until the host call has been submitted
+        // to the driver and the run suspends waiting for its completion.
+        assert!(matches!(
+            run.as_mut().poll(&mut cx),
+            std::task::Poll::Pending
+        ));
+        // Dropping `run` here cancels the execution. Unlike the sibling
+        // test above, the driver is deliberately *not* drained: the
+        // retained completion is still in its in-flight set.
+    }
+
+    // Reusing the driver as-is must not let the stale completion leak
+    // into the fresh run: its result is 101, not the cancelled call's 42.
+    let result = telomere::run_module_function_with_driver(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(100)]),
+        &mut driver,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I32(101)])
+    ));
+    assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+}
+
+fn async_add_one_i64(cx: &mut HostContext<'_, '_>) -> HostFuture {
+    let state = cx.store().state;
+    let WasmValue::I64(value) = cx.args()[0] else {
+        panic!("async_add_one_i64 expects an i64 argument");
+    };
+    Box::pin(async move {
+        tokio::task::yield_now().await;
+        let state = unsafe { state.get::<ScalarState>() }.unwrap();
+        state.calls.fetch_add(1, Ordering::SeqCst);
+        VMResult::Success(vec![WasmValue::I64(value + 1)])
+    })
+}
+
+/// Signature-mismatch variant of the stale-completion regression: the
+/// cancelled run's host call returns an `i32`, while the fresh run that
+/// reuses the undrained driver calls a host function returning an
+/// `i64`. Applying the retained outcome would write the stale result
+/// into a return area laid out for the new signature; the fresh run
+/// must instead observe only its own call's result.
+#[tokio::test]
+async fn retained_completion_is_not_applied_across_signatures() {
+    let state = Box::leak(Box::new(ScalarState {
+        calls: AtomicUsize::new(0),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let mut registry = Registry::new();
+    let host = instantiate_native_async_module(
+        AsyncHostModule {
+            functions: vec![
+                AsyncHostFnDefinition {
+                    name: Some("add-one".to_owned()),
+                    signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                    fp: async_add_one,
+                },
+                AsyncHostFnDefinition {
+                    name: Some("add-one-i64".to_owned()),
+                    signature: FuncType::new(vec![ValType::I64], vec![ValType::I64]),
+                    fp: async_add_one_i64,
+                },
+            ],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "add-one" (func $add-one (param i32) (result i32)))
+          (import "host" "add-one-i64" (func $add-one-i64 (param i64) (result i64)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $add-one)
+          (func (export "run-i64") (param i64) (result i64)
+            local.get 0
+            call $add-one-i64))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let mut driver = PollingDriver::new();
+    {
+        let args = ResultValue::new(vec![WasmValue::I32(41)]);
+        let run =
+            telomere::run_module_function_with_driver(&instance, &store, "run", &args, &mut driver);
+        tokio::pin!(run);
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        assert!(matches!(
+            run.as_mut().poll(&mut cx),
+            std::task::Poll::Pending
+        ));
+        // Cancel the i32 run; its completion stays in the driver.
+    }
+
+    let result = telomere::run_module_function_with_driver(
+        &instance,
+        &store,
+        "run-i64",
+        &ResultValue::new(vec![WasmValue::I64(100)]),
+        &mut driver,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I64(101)])
+    ));
+    assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+}
+
+#[cfg(feature = "threads")]
+struct SharedMemoryState {
+    direct_some: AtomicUsize,
+    closure_some: AtomicUsize,
+}
+
+/// Host callback for the shared-memory regression test: reads a byte from
+/// the caller's shared memory and writes a marker byte back, both through
+/// the closure-based accessor.
+#[cfg(feature = "threads")]
+fn fill_shared_caller_memory(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let state = cx.store().state;
+    let (WasmValue::I32(src), WasmValue::I32(dst)) = (cx.args()[0], cx.args()[1]) else {
+        return VMResult::Unreachable;
+    };
+    let state = unsafe { state.get::<SharedMemoryState>() }.unwrap();
+    // The direct accessor cannot hand out a shared memory as `&mut Memory`.
+    if cx.caller_memory().is_some() {
+        state.direct_some.fetch_add(1, Ordering::SeqCst);
+    }
+    let byte = cx.with_caller_memory(|memory| {
+        let byte = memory.get(src as usize).copied().unwrap_or(0);
+        memory
+            .get_mut(dst as usize..dst as usize + 1)
+            .expect("marker write must be in bounds")[0] = 0x2A;
+        byte
+    });
+    match byte {
+        Some(byte) => {
+            state.closure_some.fetch_add(1, Ordering::SeqCst);
+            VMResult::Success(vec![WasmValue::I32(i32::from(byte))])
+        }
+        None => VMResult::Unreachable,
+    }
+}
+
+/// Regression test for the #216 review (shared-memory regression): a guest
+/// whose default memory is shared must still be able to pass pointers to
+/// host callbacks. `HostContext::caller_memory` returns `None` for a shared
+/// caller memory, so the closure-based `with_caller_memory` accessor —
+/// equivalent to the raw surface's pre-#216 accessor — must dispatch to the
+/// shared memory under its lock.
+#[cfg(feature = "threads")]
+#[tokio::test]
+async fn host_callback_reaches_shared_caller_memory_via_closure() {
+    let state = Box::leak(Box::new(SharedMemoryState {
+        direct_some: AtomicUsize::new(0),
+        closure_some: AtomicUsize::new(0),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let mut registry = Registry::new();
+    let host = instantiate_native_module(
+        HostModule {
+            functions: vec![HostFnDefinition {
+                name: Some("fill".to_owned()),
+                signature: FuncType::new(vec![ValType::I32, ValType::I32], vec![ValType::I32]),
+                fp: fill_shared_caller_memory,
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host);
+    run_wast_with(
+        r#"
+        (module
+          (import "host" "fill" (func $fill (param i32 i32) (result i32)))
+          (memory 1 2 shared)
+          (func (export "run") (result i32)
+            (i32.store8 (i32.const 0) (i32.const 7))
+            (i32.add
+              (i32.mul (call $fill (i32.const 0) (i32.const 16)) (i32.const 256))
+              (i32.load8_u (i32.const 16)))))
+        (assert_return (invoke "run") (i32.const 1834))
+        "#,
+        &store,
+        &mut registry,
+    )
+    .await;
+    // The host read the byte 7 at address 0 and wrote 0x2A at address 16,
+    // which the guest then observed: 7 * 256 + 42 = 1834.
+    assert_eq!(state.direct_some.load(Ordering::SeqCst), 0);
+    assert_eq!(state.closure_some.load(Ordering::SeqCst), 1);
 }

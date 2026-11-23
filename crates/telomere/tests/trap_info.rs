@@ -10,11 +10,10 @@ use std::{
     thread,
 };
 use telomere::{
-    component_support::runtime::run_core_export_sync_reentrant,
-    host_abi::{ExecuteContext, Instr},
-    instantiate, link_host_function_with_function_idx, run_module_function, InstanceHandle,
+    component_support::runtime::run_core_export_sync_reentrant, instantiate,
+    link_host_function_with_function_idx, run_module_function, HostContext, InstanceHandle,
     IoReadBinaryReader, Registry, ResultValue, RuntimeConfig, Store, StoreState, TrapFrameKind,
-    TrapInfo, TrapKind, VMResult, WasmParser,
+    TrapInfo, TrapKind, VMResult, WasmParser, WasmValue,
 };
 
 #[cfg(feature = "jit")]
@@ -196,16 +195,12 @@ struct ReentryState {
     observed_none_while_active: AtomicBool,
 }
 
-fn return_from_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let (previous_local_reference, return_address) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(previous_local_reference);
-    VMResult::Success(return_address)
+fn return_from_host(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    VMResult::Success(vec![])
 }
 
-fn reentering_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let state = unsafe { ctx.store.state.get::<ReentryState>() }
+fn reentering_host(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let state = unsafe { cx.store().state.get::<ReentryState>() }
         .expect("reentry tests require ReentryState in StoreState");
     let instance = state
         .instance
@@ -214,18 +209,18 @@ fn reentering_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
         .clone()
         .expect("reentry instance must be installed before guest execution");
     let inner =
-        run_core_export_sync_reentrant(&instance, ctx.store, "inner", &ResultValue::new(vec![]))
+        run_core_export_sync_reentrant(&instance, cx.store(), "inner", &ResultValue::new(vec![]))
             .expect("synchronous reentry itself must be supported");
     assert!(matches!(inner, VMResult::Unreachable));
 
     match state.mode {
-        ReentryMode::Recover => return_from_host(ctx),
+        ReentryMode::Recover => return_from_host(cx),
         ReentryMode::Propagate => VMResult::Unreachable,
         ReentryMode::ProbeActiveCallGuard => {
             state
                 .observed_none_while_active
-                .store(ctx.store.take_last_trap().is_none(), Ordering::SeqCst);
-            return_from_host(ctx)
+                .store(cx.store().take_last_trap().is_none(), Ordering::SeqCst);
+            return_from_host(cx)
         }
     }
 }

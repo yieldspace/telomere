@@ -158,6 +158,12 @@ jobs:
       - name: Test embedder size gate checker
         run: python3 tools/test_check_embedder_size.py
 
+      - name: Test performance gate checker
+        run: python3 tools/test_check_performance.py
+
+      - name: Test performance gate measure script
+        run: python3 tools/test_measure_performance.py
+
       - name: Test aot-load symbol checker
         run: python3 tools/test_check_aot_load_symbols.py
 
