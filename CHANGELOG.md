@@ -29,6 +29,11 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ComponentError::GuestTrap` preserves the core `TrapKind` for guest traps
   crossing the component boundary, so component-level callers can match on
   the trap cause instead of parsing a message string.
+- `HostContext::with_memory` and `HostContext::with_caller_memory` closure
+  accessors on the public host boundary (#216). Unlike `memory` /
+  `caller_memory`, which return `None` when the default memory is shared,
+  the closure form dispatches to a shared memory under its lock, restoring
+  the reach the raw pre-#216 callback surface had.
 
 ### Changed
 
@@ -86,6 +91,13 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Fixed baseline JIT trap emission to continue scanning and emit labels for enclosing live
   paths with a normalized cached-register stack depth.
+- A submitted asynchronous host call's future no longer writes its result
+  values into the suspended task's return slot when it is polled (#216
+  review). The future is owned by the embedder's driver and could still be
+  polled after the submitting execution was dropped — freeing the scheduler
+  and the task stack — which wrote through a dangling slot pointer. The
+  future now resolves to the callback's values, and the scheduler performs
+  the validated return-slot write when it applies the completion.
 
 ### Removed
 

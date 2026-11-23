@@ -48,10 +48,18 @@ HostFn = fn(&mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>>
 and an asynchronous one returns a `HostFuture` resolving to the same value
 shape. `HostContext` carries the decoded arguments, the owning `Store`
 (including embedder state), the calling instance/function identity, and
-guest-memory access through the public `Memory` type. The runtime adapter
-decodes the arguments from the frame's local area, validates and writes the
-returned values into the frame's return slot, and completes the frame
-return, so embedders never complete a frame through raw stack state.
+guest-memory access through the public `Memory` type: `memory` /
+`caller_memory` hand out a local default memory directly, and
+`with_memory` / `with_caller_memory` run a closure against either a local
+or a shared default memory (a shared memory cannot be handed out as
+`&mut Memory`, so the closure runs under its lock). The runtime adapter
+decodes the arguments from the frame's local area and completes the frame
+return, so embedders never complete a frame through raw stack state. For
+synchronous callbacks the adapter validates and writes the returned values
+into the frame's return slot itself; for asynchronous callbacks the future
+resolves to the values and the scheduler performs that write when it
+applies the completion, because the driver-owned future may be polled
+after the submitting execution has been dropped.
 
 Native modules are built from `HostFnDefinition`/`AsyncHostFnDefinition`
 collected in `HostModule`/`AsyncHostModule`. Six root entry points cover

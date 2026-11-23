@@ -1720,7 +1720,7 @@ fn start_public_async_host_call_with(
     ctx.effect
         .push_pending(PendingOp::HostCall(HostCallPending {
             task_id,
-            future: HostCallFuture::from_raw(future),
+            future: HostCallFuture::from_public(future),
             frame_reference,
         }));
     ctx.cont = return_addr;

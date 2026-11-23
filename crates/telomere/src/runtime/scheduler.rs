@@ -1,6 +1,8 @@
 #[cfg(feature = "threads")]
 use super::memory_effect::MemoryWaitPending;
-use super::memory_effect::{Completion, CompletionPayload, HostCallPending, PendingOp};
+use super::memory_effect::{
+    Completion, CompletionPayload, HostCallPending, HostCallResult, PendingOp,
+};
 use super::trap_context::{capture_trap_context, TrapContext};
 use crate::{
     common::{
@@ -321,71 +323,109 @@ impl<'a> Scheduler<'a> {
                     });
                 }
             }
-            CompletionPayload::HostCall { result } => match result.into_raw() {
-                VMResult::Success(fp) => {
-                    let runtime = self.store.lock_runtime_or_panic();
-                    let fp = {
-                        let task = self.tasks.get_mut(task_index).unwrap();
-                        StablePc::from_raw_in_frame(&runtime, &task.stack, task.local_reference, fp)
-                    };
-                    let mut complete_result = None;
-                    {
-                        let task = self.tasks.get_mut(task_index).unwrap();
-                        task.pending_effects -= 1;
-                        task.fp = fp;
-                        if task.pending_effects == 0 {
-                            if let Some(result) = task.terminal_result.take() {
-                                complete_result = Some((result, task.terminal_trap.take()));
-                            } else {
-                                task.ready_flag = ReadyFlag::Ready;
-                                self.ready_count += 1;
+            CompletionPayload::HostCall { result } => {
+                // A public-boundary host call resolves to its callback's
+                // values rather than a resume address. Write the values
+                // into the suspended frame's return slot here, where the
+                // scheduler owns the task's stack, and reduce the outcome
+                // to the raw resume form handled below. The submitted
+                // future itself never touches the stack, so a driver may
+                // safely keep polling it even after the submitting
+                // execution has been dropped.
+                let result = match result.into_result() {
+                    HostCallResult::Resume(result) => result,
+                    HostCallResult::Values {
+                        result: VMResult::Success(values),
+                        return_addr,
+                        result_types,
+                    } => match host_frame {
+                        Some(frame) => {
+                            let task = self.tasks.get_mut(task_index).unwrap();
+                            // SAFETY: `frame` is the host frame recorded when
+                            // this call was submitted; its return slot is the
+                            // start of its local area, and the pointer is used
+                            // only for this write while the task is held here.
+                            let slot = unsafe { task.stack.local_area_mut_ptr(&frame) };
+                            match crate::host::write_result_values(slot, &result_types, &values) {
+                                VMResult::Success(_) => VMResult::Success(return_addr),
+                                other => other.propagate_failure(),
                             }
                         }
-                    }
-                    if let Some((result, trap)) = complete_result {
-                        let task = self.tasks.remove(task_index).unwrap();
-                        self.completed_tasks.push(CompletedTask {
-                            stack: task.stack,
-                            result,
-                            trap,
-                        });
-                    }
-                }
-                other => {
-                    let result = vm_result_to_unit(other);
-                    let trap = {
+                        None => VMResult::InvalidOperand,
+                    },
+                    HostCallResult::Values { result: other, .. } => other.propagate_failure(),
+                };
+                match result {
+                    VMResult::Success(fp) => {
                         let runtime = self.store.lock_runtime_or_panic();
-                        let task = self.tasks.get(task_index).unwrap();
-                        capture_trap_context(
-                            &runtime,
-                            &task.stack,
-                            host_frame.unwrap_or(task.local_reference),
-                            None,
-                            &result,
-                            task.task_id,
-                        )
-                    };
-                    let mut complete_result = None;
-                    {
-                        let task = self.tasks.get_mut(task_index).unwrap();
-                        task.pending_effects -= 1;
-                        if task.pending_effects == 0 {
-                            complete_result = Some((result, trap));
-                        } else {
-                            task.terminal_result = Some(result);
-                            task.terminal_trap = Some(trap);
+                        let fp = {
+                            let task = self.tasks.get_mut(task_index).unwrap();
+                            StablePc::from_raw_in_frame(
+                                &runtime,
+                                &task.stack,
+                                task.local_reference,
+                                fp,
+                            )
+                        };
+                        let mut complete_result = None;
+                        {
+                            let task = self.tasks.get_mut(task_index).unwrap();
+                            task.pending_effects -= 1;
+                            task.fp = fp;
+                            if task.pending_effects == 0 {
+                                if let Some(result) = task.terminal_result.take() {
+                                    complete_result = Some((result, task.terminal_trap.take()));
+                                } else {
+                                    task.ready_flag = ReadyFlag::Ready;
+                                    self.ready_count += 1;
+                                }
+                            }
+                        }
+                        if let Some((result, trap)) = complete_result {
+                            let task = self.tasks.remove(task_index).unwrap();
+                            self.completed_tasks.push(CompletedTask {
+                                stack: task.stack,
+                                result,
+                                trap,
+                            });
                         }
                     }
-                    if let Some((result, trap)) = complete_result {
-                        let task = self.tasks.remove(task_index).unwrap();
-                        self.completed_tasks.push(CompletedTask {
-                            stack: task.stack,
-                            result,
-                            trap: Some(trap),
-                        });
+                    other => {
+                        let result = vm_result_to_unit(other);
+                        let trap = {
+                            let runtime = self.store.lock_runtime_or_panic();
+                            let task = self.tasks.get(task_index).unwrap();
+                            capture_trap_context(
+                                &runtime,
+                                &task.stack,
+                                host_frame.unwrap_or(task.local_reference),
+                                None,
+                                &result,
+                                task.task_id,
+                            )
+                        };
+                        let mut complete_result = None;
+                        {
+                            let task = self.tasks.get_mut(task_index).unwrap();
+                            task.pending_effects -= 1;
+                            if task.pending_effects == 0 {
+                                complete_result = Some((result, trap));
+                            } else {
+                                task.terminal_result = Some(result);
+                                task.terminal_trap = Some(trap);
+                            }
+                        }
+                        if let Some((result, trap)) = complete_result {
+                            let task = self.tasks.remove(task_index).unwrap();
+                            self.completed_tasks.push(CompletedTask {
+                                stack: task.stack,
+                                result,
+                                trap: Some(trap),
+                            });
+                        }
                     }
                 }
-            },
+            }
             CompletionPayload::Interrupted => {
                 let result = VMResult::Cancelled;
                 let trap = {
@@ -640,7 +680,7 @@ mod tests {
         Completion, CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, ReadyFlag,
         Scheduler, Task, TokioDriver,
     };
-    use crate::runtime::memory_effect::HostCallFuture;
+    use crate::runtime::memory_effect::{HostCallFuture, HostCallResult};
     use crate::{
         common::{CallFrameCache, LocalReference, StablePc, Stack},
         Store, VMResult,
@@ -662,7 +702,10 @@ mod tests {
         let completion = driver.next_completion().await.unwrap();
         match completion.payload {
             CompletionPayload::HostCall { result } => {
-                assert!(matches!(result.into_raw(), VMResult::Success(ptr) if ptr.is_null()));
+                assert!(matches!(
+                    result.into_result(),
+                    HostCallResult::Resume(VMResult::Success(ptr)) if ptr.is_null()
+                ));
             }
             other => panic!("unexpected completion: {other:?}"),
         }

@@ -11,9 +11,34 @@ use std::sync::Arc;
 #[cfg(feature = "threads")]
 use crate::common::{MeteringHandle, SharedMemoryObject, SharedWaitRegistration};
 use crate::{
-    common::{stack::LocalReference, AsyncHostFuture, Instr},
+    common::{stack::LocalReference, AsyncHostFuture, Instr, ResultType, WasmValue},
     VMResult,
 };
+
+/// The result of a finished host-call future, in interpreter terms, before
+/// the scheduler applies it to the suspended task.
+///
+/// The public-boundary variant deliberately carries the callback's values
+/// instead of a resume address: a submitted future is owned by the
+/// embedder's driver and may still be polled after the execution that
+/// submitted it has been dropped (for example when a driver is reused after
+/// a cancelled run), so the future itself must never write into the task's
+/// stack. The scheduler owns the stack and performs the return-slot write
+/// when it applies the completion.
+pub(crate) enum HostCallResult {
+    /// Raw internal convention: the future resolved directly to the resume
+    /// address (or a trap); any result values were already placed by the
+    /// host function itself under the raw calling convention.
+    Resume(VMResult<*const Instr>),
+    /// Public-boundary convention: the scheduler validates `result`'s
+    /// values against `result_types`, writes them into the host frame's
+    /// return slot, and resumes at `return_addr`.
+    Values {
+        result: VMResult<Vec<WasmValue>>,
+        return_addr: *const Instr,
+        result_types: ResultType,
+    },
+}
 
 /// The result of a completed asynchronous host call, as handed back to the
 /// runtime by an execution driver.
@@ -23,15 +48,11 @@ use crate::{
 /// [`Completion`], so the token's type stays behind this public boundary
 /// (issue #216).
 pub struct HostCallOutcome {
-    result: VMResult<*const Instr>,
+    result: HostCallResult,
 }
 
 impl HostCallOutcome {
-    pub(crate) fn from_raw(result: VMResult<*const Instr>) -> Self {
-        Self { result }
-    }
-
-    pub(crate) fn into_raw(self) -> VMResult<*const Instr> {
+    pub(crate) fn into_result(self) -> HostCallResult {
         self.result
     }
 }
@@ -47,12 +68,24 @@ impl fmt::Debug for HostCallOutcome {
 /// The future is opaque: a driver polls it to completion and forwards the
 /// resulting [`HostCallOutcome`] back to the runtime as the completion
 /// payload, without naming any interpreter-internal type (issue #216).
+/// Polling the future never writes into the suspended task's stack — the
+/// scheduler performs the return-slot write when it applies the completion —
+/// so polling a future whose submitting execution has been dropped is
+/// harmless.
 pub struct HostCallFuture {
-    future: Pin<Box<dyn Future<Output = VMResult<*const Instr>> + 'static>>,
+    future: Pin<Box<dyn Future<Output = HostCallResult> + 'static>>,
 }
 
 impl HostCallFuture {
     pub(crate) fn from_raw(future: AsyncHostFuture) -> Self {
+        Self {
+            future: Box::pin(async move { HostCallResult::Resume(future.await) }),
+        }
+    }
+
+    pub(crate) fn from_public(
+        future: Pin<Box<dyn Future<Output = HostCallResult> + 'static>>,
+    ) -> Self {
         Self { future }
     }
 }
@@ -62,7 +95,7 @@ impl Future for HostCallFuture {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.future.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(HostCallOutcome::from_raw(result)),
+            Poll::Ready(result) => Poll::Ready(HostCallOutcome { result }),
             Poll::Pending => Poll::Pending,
         }
     }

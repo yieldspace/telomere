@@ -18,6 +18,7 @@ use std::{future::Future, pin::Pin};
 
 use crate::{
     common::{ExecuteContext, FuncType, Instr, Memory, ResultType, ValType, WasmValue},
+    runtime::memory_effect::HostCallResult,
     Store, VMResult,
 };
 
@@ -72,12 +73,36 @@ impl<'ctx, 'env> HostContext<'ctx, 'env> {
         self.ctx.memory()
     }
 
+    /// Runs `f` against the default memory of the instance that owns the
+    /// called function, if that instance has one, and returns its result.
+    ///
+    /// Unlike [`memory`](Self::memory), this accessor also reaches a
+    /// **shared** default memory: a shared memory cannot be handed out as a
+    /// plain `&mut Memory`, so the closure runs while the runtime holds the
+    /// shared memory's lock.
+    pub fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
+        self.ctx.with_memory(f)
+    }
+
     /// The default memory of the *calling* instance, if it has one.
     ///
     /// Host functions linked into a native module usually want the caller's
     /// memory: it is the guest memory their arguments point into.
     pub fn caller_memory(&mut self) -> Option<&mut Memory> {
         self.ctx.caller_memory()
+    }
+
+    /// Runs `f` against the default memory of the *calling* instance, if it
+    /// has one, and returns its result.
+    ///
+    /// Unlike [`caller_memory`](Self::caller_memory), this accessor also
+    /// reaches a **shared** caller memory: a shared memory cannot be handed
+    /// out as a plain `&mut Memory`, so the closure runs while the runtime
+    /// holds the shared memory's lock. Host functions linked into a native
+    /// module usually want the caller's memory: it is the guest memory
+    /// their arguments point into.
+    pub fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
+        self.ctx.with_caller_memory(f)
     }
 }
 
@@ -196,7 +221,7 @@ fn value_matches_type(ty: ValType, value: &WasmValue) -> bool {
 /// Validates `values` against the declared result types and writes them, in
 /// declaration order at cumulative stack-size offsets, into the return slot
 /// at `slot`. Returns the total result size in bytes.
-fn write_result_values(
+pub(crate) fn write_result_values(
     slot: *mut u8,
     results: &ResultType,
     values: &[WasmValue],
@@ -278,18 +303,23 @@ pub(crate) fn invoke_public_host_function(
 /// Adapter behind every asynchronous public host function: decodes the
 /// arguments and runs the public callback while the frame is live, completes
 /// the frame return eagerly (mirroring the raw async contract), and returns
-/// a future that writes the callback's results into the captured return slot
-/// before resolving to the resume address.
+/// a future that resolves to the callback's values.
+///
+/// The future deliberately does **not** write the values into the frame's
+/// return slot: it is handed to an embedder-owned driver and may still be
+/// polled after the execution that submitted it has been dropped, when the
+/// task's stack no longer exists. The scheduler, which owns the stack,
+/// validates the values against the declared result types and writes them
+/// into the return slot when it applies the completion.
 pub(crate) fn start_public_async_host_call(
     ctx: &mut ExecuteContext,
     fp: AsyncHostFn,
-) -> VMResult<Pin<Box<dyn Future<Output = VMResult<*const Instr>> + 'static>>> {
+) -> VMResult<Pin<Box<dyn Future<Output = HostCallResult> + 'static>>> {
     let signature = current_signature(ctx);
     let args = decode_args(ctx, &signature.0);
     let mut cx = HostContext::new(ctx, args);
     let future = fp(&mut cx);
     let ctx = cx.ctx;
-    let slot = ctx.return_slot();
     let return_size = signature
         .1
         .iter()
@@ -301,13 +331,10 @@ pub(crate) fn start_public_async_host_call(
     ctx.set_local_reference(previous_local_reference);
     let result_types = signature.1.clone();
     let future = Box::pin(async move {
-        let values = match future.await {
-            VMResult::Success(values) => values,
-            other => return other.propagate_failure(),
-        };
-        match write_result_values(slot.as_mut_ptr(), &result_types, &values) {
-            VMResult::Success(_) => VMResult::Success(return_addr),
-            other => other.propagate_failure(),
+        HostCallResult::Values {
+            result: future.await,
+            return_addr,
+            result_types,
         }
     });
     VMResult::Success(future)
