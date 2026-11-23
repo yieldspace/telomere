@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions ‘Embedder footprint’ runs for PR #257 (branch fix/186-operand-stack-reserve at commit e13eaf7a43a3bcf1f39e1eaded3d767ce294cd44, the merge of main 9b4d3f3c4e5d65407796399251c639937090b918 into the PR head 862bbe2db450ceaa82115de0f2356a83f2aa8170; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45072019203 and 45072026952 against the branch and pull-request run 45071971685, which built the same merge tree, produced byte-identical sizes for every gated series",
-    "commit": "e13eaf7a43a3bcf1f39e1eaded3d767ce294cd44",
+    "summary": "GitHub Actions ‘Embedder footprint’ runs for PR #259 (branch fix/258-import-name-match at commit 5451a0dc3e2ac4a5625a0921e1a5760405dc5bcf, whose parent is current main 03352c6b7a81763ac7aa769c40c812ec9db4856f, so the pull-request merge tree is the branch head itself and no merge commit was needed; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45086986197 and 45086998757 against the branch and pull-request run 45085326459, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "5451a0dc3e2ac4a5625a0921e1a5760405dc5bcf",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45072019203,
-      45072026952
+      45086986197,
+      45086998757
     ],
     "cross_check_run_ids": [
-      45071971685
+      45085326459
     ],
-    "derivation": "Re-baseline for PR #257 (#186, reserve validated max operand depth at frame entry). The PR computes the validated maximum operand depth at parse time in pipeline::optimize_function from the type checker’s stack snapshots (the original stream’s fold; on the pipeline path the maximum of that fold and the reachable CanonFunc blocks’ fold), stores it as LoweredFunction.max_operand_bytes carried into CallRecipe, checks frame_end + bound <= stack length once at frame entry on every frame-construction path (overflow still traps StackOverflow, only detected earlier), and removes the per-push bounds checks from the seven _fast push functions (push_u32_fast / push_u64_fast / push_u128_fast, push_copy_from_ptr, local_get{4,8,16}_from_base) in crates/telomere/src/common/stack.rs, each of which now carries a debug_assert and the reservation invariant it relies on; checked pushes remain on non-frame paths (embedder staging, scheduler resume, host in-place results). Attribution was isolated by measuring current main (9b4d3f3) alone (workflow_dispatch run 45072035005): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR’s own. The baseline configuration, which links no library code, is byte-identical in both profiles (4 of 28 gated series unchanged). Every library configuration shrinks in both profiles, because the _fast pushes are inlined into handlers across the library and their removed checks outweigh the single entry check and the added field: release stripped file -1,720..-4,568 B and stripped .text -2,096..-3,824 B; release-size (opt-level z, fat LTO, one codegen unit) stripped file -7,248..-8,160 B and stripped .text -4,320..-5,216 B. No series grows, so the gate passed on the merged tree before this re-baseline; the baseline is updated anyway so the recorded numbers keep tracking the code on main. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, ‘Size regression gate (#164)’."
+    "derivation": "Re-baseline for PR #259 (#258, component import lookup applies the #117 NameMap semver rules). The PR generalises crates/telomere-component/src/runtime/name_match.rs (compatible_name / incompatible_name, one shared implementation for export and import names) and routes every import-resolution path in crates/telomere-component/src/linker.rs through a resolve_registered helper (exact match first, otherwise the highest version on the compatible track): root func imports, instance imports, funcs inside an imported instance, and the instance part of a resource drop (the resource name itself stays exact, which also fixes the instance half of #118’s drop path); when only an incompatible version is registered, the error now names both the expected and found versions, in the same format as the #117 export-side error. Attribution was isolated by measuring current main (03352c6) alone (workflow_dispatch run 45087010624, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR’s own. Growth is confined to the configurations that link telomere-component (component, wasi, wasi-threads): release stripped file +10,016..+10,032 B and stripped .text +9,552 B; release-size (opt-level z, fat LTO, one codegen unit) stripped file +4,288..+4,368 B and stripped .text +3,728..+3,808 B. The baseline configuration and every core configuration (core, core-nosimd, core-jit) are byte-identical in both profiles, so 16 of 28 gated series are unchanged and 12 move. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, ‘Size regression gate (#164)’."
   },
   "thresholds": {
     "release": {
@@ -40,22 +40,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2445928,
-          "threshold": 2445928
+          "baseline": 2455960,
+          "threshold": 2455960
         },
         "stripped_text_bytes": {
-          "baseline": 1955927,
-          "threshold": 1955927
+          "baseline": 1965479,
+          "threshold": 1965479
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2792488,
-          "threshold": 2792488
+          "baseline": 2802504,
+          "threshold": 2802504
         },
         "stripped_text_bytes": {
-          "baseline": 2218135,
-          "threshold": 2218135
+          "baseline": 2227687,
+          "threshold": 2227687
         }
       },
       "core-nosimd": {
@@ -80,12 +80,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2978384,
-          "threshold": 2978384
+          "baseline": 2988416,
+          "threshold": 2988416
         },
         "stripped_text_bytes": {
-          "baseline": 2355975,
-          "threshold": 2355975
+          "baseline": 2365527,
+          "threshold": 2365527
         }
       }
     },
@@ -112,22 +112,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1613632,
-          "threshold": 1613632
+          "baseline": 1618000,
+          "threshold": 1618000
         },
         "stripped_text_bytes": {
-          "baseline": 1185655,
-          "threshold": 1185655
+          "baseline": 1189463,
+          "threshold": 1189463
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1809408,
-          "threshold": 1809408
+          "baseline": 1813696,
+          "threshold": 1813696
         },
         "stripped_text_bytes": {
-          "baseline": 1317287,
-          "threshold": 1317287
+          "baseline": 1321015,
+          "threshold": 1321015
         }
       },
       "core-nosimd": {
@@ -152,12 +152,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1949648,
-          "threshold": 1949648
+          "baseline": 1953936,
+          "threshold": 1953936
         },
         "stripped_text_bytes": {
-          "baseline": 1409847,
-          "threshold": 1409847
+          "baseline": 1413575,
+          "threshold": 1413575
         }
       }
     }

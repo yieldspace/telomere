@@ -2,7 +2,9 @@ mod common;
 
 use common::instantiate_wat;
 use telomere::Registry;
-use telomere_component::{ComponentEngine, ComponentError, ComponentLinker, ComponentValue};
+use telomere_component::{
+    ComponentEngine, ComponentError, ComponentLinker, ComponentLinkerInstance, ComponentValue,
+};
 
 fn compile_component(text: &str) -> Vec<u8> {
     wat::parse_str(text).expect("component wat must be valid")
@@ -747,6 +749,99 @@ async fn component_export_lookup_rejects_incompatible_version_with_found_and_exp
         .call(&store, "get", &[])
         .await
         .expect_err("incompatible export version must be rejected");
+    let message = error.to_string();
+    assert!(
+        message.contains("test:pkg/iface@0.2.6"),
+        "error should name the expected version: {message}"
+    );
+    assert!(
+        message.contains("test:pkg/iface@0.3.0"),
+        "error should name the found version: {message}"
+    );
+}
+
+fn versioned_import_component(version: &str) -> Vec<u8> {
+    compile_component(&format!(
+        r#"
+(component
+  (type $get-func (func (result s32)))
+  (type $iface (instance (export "get" (func (type $get-func)))))
+
+  (import "test:pkg/iface@{version}" (instance $i (type $iface)))
+  (alias export $i "get" (func $get))
+  (export "run" (func $get))
+)
+"#
+    ))
+}
+
+fn get_instance_returning(value: i32) -> ComponentLinkerInstance {
+    let mut instance = ComponentLinkerInstance::new();
+    instance.register_func("get", move |_store, _args| {
+        Ok(vec![ComponentValue::S32(value)])
+    });
+    instance
+}
+
+async fn call_versioned_import(
+    guest_version: &str,
+    linker: ComponentLinker,
+) -> Result<Vec<ComponentValue>, ComponentError> {
+    let bytes = versioned_import_component(guest_version);
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let store = telomere::Store::new();
+    let instance = engine.instantiate(&program, &store, &linker).await?;
+    instance.call(&store, "run", &[]).await
+}
+
+#[tokio::test]
+async fn component_import_lookup_accepts_semver_compatible_version() {
+    // The guest imports the interface at 0.2.6; the host registered it at
+    // 0.2.0. Both are on the 0.2.x track, so the import resolves (#258).
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("test:pkg/iface@0.2.0", get_instance_returning(42));
+    let result = call_versioned_import("0.2.6", linker)
+        .await
+        .expect("semver-compatible import lookup should succeed");
+    assert_eq!(result, vec![ComponentValue::S32(42)]);
+
+    // And the reverse direction resolves too: the guest imports 0.2.0 and
+    // the host registered 0.2.6.
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("test:pkg/iface@0.2.6", get_instance_returning(42));
+    let result = call_versioned_import("0.2.0", linker)
+        .await
+        .expect("semver-compatible import lookup should succeed");
+    assert_eq!(result, vec![ComponentValue::S32(42)]);
+}
+
+#[tokio::test]
+async fn component_import_lookup_prefers_exact_registration() {
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("test:pkg/iface@0.2.0", get_instance_returning(20));
+    linker.register_import_instance("test:pkg/iface@0.2.6", get_instance_returning(26));
+    // An exact registration wins over the maximal version on the track.
+    let result = call_versioned_import("0.2.0", linker.clone())
+        .await
+        .expect("exact import lookup should succeed");
+    assert_eq!(result, vec![ComponentValue::S32(20)]);
+    // Without an exact registration, the maximal version on the track wins.
+    let result = call_versioned_import("0.2.3", linker)
+        .await
+        .expect("track import lookup should succeed");
+    assert_eq!(result, vec![ComponentValue::S32(26)]);
+}
+
+#[tokio::test]
+async fn component_import_lookup_rejects_incompatible_version_with_found_and_expected() {
+    // 0.3.0 is a different track from the imported 0.2.6, so the import is
+    // still rejected, and the error names both versions (#258).
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("test:pkg/iface@0.3.0", get_instance_returning(42));
+    let error = call_versioned_import("0.2.6", linker)
+        .await
+        .expect_err("incompatible import version must be rejected");
     let message = error.to_string();
     assert!(
         message.contains("test:pkg/iface@0.2.6"),

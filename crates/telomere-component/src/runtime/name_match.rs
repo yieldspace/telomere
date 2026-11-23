@@ -1,6 +1,6 @@
-//! Semver-compatible matching for component export names.
+//! Semver-compatible matching for component names.
 //!
-//! Component export names may carry a semver version, for example
+//! Component names may carry a semver version, for example
 //! `wasi:cli/run@0.2.0`. Following the name-resolution rules used by the
 //! Component Model ecosystem (as implemented by Wasmtime's `NameMap`), a
 //! lookup for one version may resolve to a definition at another version on
@@ -10,8 +10,8 @@
 //!   module);
 //! - for `major >= 1`, every version with the same major is on one track;
 //! - for `0.x` with `minor >= 1`, every patch release within that minor is on
-//!   one track, so a component exporting `wasi:cli/run@0.2.0` satisfies a
-//!   lookup for `wasi:cli/run@0.2.6`, and vice versa;
+//!   one track, so a definition registered as `wasi:cli/run@0.2.0`
+//!   satisfies a lookup for `wasi:cli/run@0.2.6`, and vice versa;
 //! - `0.0.x` versions and prerelease versions have no compatible track and
 //!   only ever match exactly.
 //!
@@ -54,10 +54,14 @@ pub(crate) fn compatible_track(name: &str) -> Option<(String, Version)> {
 
 /// Finds the name in `available` that is semver-compatible with `requested`.
 ///
+/// Used both for a component's own export names and for the names a
+/// linker registration is stored under, so import resolution and export
+/// resolution follow exactly the same rules.
+///
 /// `available` must not contain `requested` itself (exact matches are the
 /// caller's responsibility). When several names share the requested track,
 /// the one with the maximal version is returned.
-pub(crate) fn compatible_export_name<'a>(
+pub(crate) fn compatible_name<'a>(
     requested: &str,
     available: impl Iterator<Item = &'a str>,
 ) -> Option<&'a str> {
@@ -84,9 +88,9 @@ pub(crate) fn compatible_export_name<'a>(
 /// `requested` but on an incompatible track, for use in error messages that
 /// name both what was expected and what was found.
 ///
-/// Returns the maximal-version such name, or `None` when no export shares
-/// the requested name's unversioned prefix.
-pub(crate) fn incompatible_export_name<'a>(
+/// Returns the maximal-version such name, or `None` when no available
+/// name shares the requested name's unversioned prefix.
+pub(crate) fn incompatible_name<'a>(
     requested: &str,
     available: impl Iterator<Item = &'a str>,
 ) -> Option<&'a str> {
@@ -144,13 +148,13 @@ mod tests {
         // The #117 case: the guest exports 0.2.0, the host asks for 0.2.6.
         let available = ["wasi:cli/run@0.2.0"];
         assert_eq!(
-            compatible_export_name("wasi:cli/run@0.2.6", available.iter().copied()),
+            compatible_name("wasi:cli/run@0.2.6", available.iter().copied()),
             Some("wasi:cli/run@0.2.0")
         );
         // And the reverse direction resolves too.
         let available = ["wasi:cli/run@0.2.6"];
         assert_eq!(
-            compatible_export_name("wasi:cli/run@0.2.0", available.iter().copied()),
+            compatible_name("wasi:cli/run@0.2.0", available.iter().copied()),
             Some("wasi:cli/run@0.2.6")
         );
     }
@@ -159,11 +163,11 @@ mod tests {
     fn compatible_lookup_prefers_maximal_version_on_track() {
         let available = ["a:b/c@1.0.0", "a:b/c@1.0.1", "a:b/c@0.9.9"];
         assert_eq!(
-            compatible_export_name("a:b/c@1.0.2", available.iter().copied()),
+            compatible_name("a:b/c@1.0.2", available.iter().copied()),
             Some("a:b/c@1.0.1")
         );
         assert_eq!(
-            compatible_export_name("a:b/c@1.1.0", available.iter().copied()),
+            compatible_name("a:b/c@1.1.0", available.iter().copied()),
             Some("a:b/c@1.0.1")
         );
     }
@@ -173,31 +177,31 @@ mod tests {
         // Different minor within 0.x.
         let available = ["wasi:cli/run@0.3.0"];
         assert_eq!(
-            compatible_export_name("wasi:cli/run@0.2.6", available.iter().copied()),
+            compatible_name("wasi:cli/run@0.2.6", available.iter().copied()),
             None
         );
         // Different major.
         let available = ["a:b/c@2.0.0"];
         assert_eq!(
-            compatible_export_name("a:b/c@1.0.0", available.iter().copied()),
+            compatible_name("a:b/c@1.0.0", available.iter().copied()),
             None
         );
         // 0.0.x has no track.
         let available = ["a:b/c@0.0.2"];
         assert_eq!(
-            compatible_export_name("a:b/c@0.0.1", available.iter().copied()),
+            compatible_name("a:b/c@0.0.1", available.iter().copied()),
             None
         );
         // Prereleases never widen.
         let available = ["a:b/c@0.2.0"];
         assert_eq!(
-            compatible_export_name("a:b/c@0.2.1-rc.1", available.iter().copied()),
+            compatible_name("a:b/c@0.2.1-rc.1", available.iter().copied()),
             None
         );
         // Unversioned names and different interfaces never match.
         let available = ["wasi:cli/run", "wasi:cli/other@0.2.0"];
         assert_eq!(
-            compatible_export_name("wasi:cli/run@0.2.6", available.iter().copied()),
+            compatible_name("wasi:cli/run@0.2.6", available.iter().copied()),
             None
         );
     }
@@ -210,18 +214,18 @@ mod tests {
             "other:pkg/x@9.9.9",
         ];
         assert_eq!(
-            incompatible_export_name("wasi:cli/run@0.2.6", available.iter().copied()),
+            incompatible_name("wasi:cli/run@0.2.6", available.iter().copied()),
             Some("wasi:cli/run@0.3.0")
         );
         let available = ["wasi:cli/other@0.3.0"];
         assert_eq!(
-            incompatible_export_name("wasi:cli/run@0.2.6", available.iter().copied()),
+            incompatible_name("wasi:cli/run@0.2.6", available.iter().copied()),
             None
         );
         // Unversioned requests have nothing to report.
         let available = ["wasi:cli/run@0.3.0"];
         assert_eq!(
-            incompatible_export_name("wasi:cli/run", available.iter().copied()),
+            incompatible_name("wasi:cli/run", available.iter().copied()),
             None
         );
     }
