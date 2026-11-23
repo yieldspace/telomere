@@ -386,6 +386,26 @@ impl A64Masm {
         }
     }
 
+    /// Fixed-length variant of the plain mov_imm for relocation sites
+    /// (#197): always emits MOVZ + MOVK (8 bytes) so a placeholder can be
+    /// patched with any value without changing the sequence length.
+    pub fn mov_imm_u32_reloc(&mut self, rd: WReg, value: u32) {
+        self.insn(enc::MOVZ_W | ((value & 0xffff) << 5) | rd.bits());
+        self.insn(enc::MOVK_W | (1 << 21) | (((value >> 16) & 0xffff) << 5) | rd.bits());
+    }
+
+    /// Fixed-length variant of the plain mov_imm for relocation sites
+    /// (#197): always emits MOVZ + MOVK x3 (16 bytes), including zero
+    /// chunks, so a placeholder can be patched with any value without
+    /// changing the sequence length.
+    pub fn mov_imm_u64_reloc(&mut self, rd: XReg, value: u64) {
+        self.insn(enc::MOVZ_X | (((value & 0xffff) as u32) << 5) | rd.bits());
+        for hw in 1..4 {
+            let part = ((value >> (hw * 16)) & 0xffff) as u32;
+            self.insn(enc::MOVK_X | ((hw as u32) << 21) | (part << 5) | rd.bits());
+        }
+    }
+
     pub fn blr_x(&mut self, rn: XReg) {
         self.insn(enc::BLR | (rn.bits() << 5));
     }
@@ -942,6 +962,14 @@ impl A64BaselineMasm {
 
     pub fn mov_imm_u64(&mut self, rd: u8, value: u64) {
         self.inner.mov_imm_u64(Self::x(rd), value);
+    }
+
+    pub fn mov_imm_u32_reloc(&mut self, rd: u8, value: u32) {
+        self.inner.mov_imm_u32_reloc(Self::w(rd), value);
+    }
+
+    pub fn mov_imm_u64_reloc(&mut self, rd: u8, value: u64) {
+        self.inner.mov_imm_u64_reloc(Self::x(rd), value);
     }
 
     pub fn stp_pre_x_sp(&mut self, rt: u8, rt2: u8) {

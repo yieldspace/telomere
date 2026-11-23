@@ -240,6 +240,20 @@ impl X64BaselineMasm {
         self.store_slot64(rd, RAX).expect("virtual register fits");
     }
 
+    /// Relocation-site variant of the plain mov_imm (#197). The plain
+    /// encoding is already fixed-length (REX + B8 + imm32), so this is the
+    /// same sequence; the separate name marks the site as patchable.
+    pub fn mov_imm_u32_reloc(&mut self, rd: u8, value: u32) {
+        self.mov_imm_u32(rd, value);
+    }
+
+    /// Relocation-site variant of the plain mov_imm (#197). The plain
+    /// encoding is already fixed-length (REX.W + B8 + imm64), so this is
+    /// the same sequence; the separate name marks the site as patchable.
+    pub fn mov_imm_u64_reloc(&mut self, rd: u8, value: u64) {
+        self.mov_imm_u64(rd, value);
+    }
+
     pub fn stp_pre_x_sp(&mut self, rt: u8, rt2: u8) {
         self.stp_pre(rt, rt2);
     }

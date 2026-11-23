@@ -234,6 +234,20 @@ impl Riscv64BaselineMasm {
         self.store_slot64(rd, T0).expect("virtual register fits");
     }
 
+    /// Relocation-site variant of the plain mov_imm (#197): the li
+    /// part is fixed-length so the sequence can be patched in place.
+    pub fn mov_imm_u32_reloc(&mut self, rd: u8, value: u32) {
+        self.li_reloc32(T0, i64::from(value as i32));
+        self.store_slot32(rd, T0).expect("virtual register fits");
+    }
+
+    /// Relocation-site variant of the plain mov_imm (#197): the li
+    /// part is fixed-length so the sequence can be patched in place.
+    pub fn mov_imm_u64_reloc(&mut self, rd: u8, value: u64) {
+        self.li_reloc(T0, value as i64);
+        self.store_slot64(rd, T0).expect("virtual register fits");
+    }
+
     pub fn stp_pre_x_sp(&mut self, rt: u8, rt2: u8) {
         self.stp_pre(rt, rt2);
     }
@@ -870,6 +884,50 @@ impl Riscv64BaselineMasm {
         self.slli(rd, rd, 12);
         if low != 0 {
             self.addi(rd, rd, low).expect("low li fits");
+        }
+    }
+
+    /// Fixed-length variant of the plain mov_imm for relocation sites (#197):
+    /// decomposes the value into six sign-extended 12-bit chunks with the
+    /// same recurrence as li, but always emits every chunk (11
+    /// instructions, 44 bytes), so a placeholder can be patched with any
+    /// value without changing the sequence length.
+    fn li_reloc(&mut self, rd: u8, value: i64) {
+        let mut chunks = [0i32; 6];
+        let mut rest = value;
+        for chunk in &mut chunks {
+            let low = ((rest << 52) >> 52) as i32;
+            *chunk = low;
+            rest = (rest - i64::from(low)) >> 12;
+        }
+        debug_assert_eq!(rest, 0, "six 12-bit chunks cover any i64");
+        self.addi(rd, ZERO, chunks[5]).expect("top li chunk fits");
+        for chunk in chunks[..5].iter().rev() {
+            self.slli(rd, rd, 12);
+            self.addi(rd, rd, *chunk).expect("li chunk fits");
+        }
+    }
+
+    /// Fixed-length  for a sign-extended 32-bit value (#197): three
+    /// 12-bit chunks, always emitted (5 instructions, 20 bytes).
+    fn li_reloc32(&mut self, rd: u8, value: i64) {
+        debug_assert_eq!(
+            value,
+            i64::from(value as i32),
+            "value must be a sign-extended i32"
+        );
+        let mut chunks = [0i32; 3];
+        let mut rest = value;
+        for chunk in &mut chunks {
+            let low = ((rest << 52) >> 52) as i32;
+            *chunk = low;
+            rest = (rest - i64::from(low)) >> 12;
+        }
+        debug_assert_eq!(rest, 0, "three 12-bit chunks cover a sign-extended i32");
+        self.addi(rd, ZERO, chunks[2]).expect("top li chunk fits");
+        for chunk in chunks[..2].iter().rev() {
+            self.slli(rd, rd, 12);
+            self.addi(rd, rd, *chunk).expect("li chunk fits");
         }
     }
 

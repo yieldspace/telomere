@@ -5,7 +5,11 @@ mod backend;
 #[cfg(feature = "jit")]
 mod cache;
 #[cfg(feature = "jit")]
+mod emit_env;
+#[cfg(feature = "jit")]
 pub(crate) mod profile;
+#[cfg(all(test, feature = "jit"))]
+mod reloc_tests;
 #[cfg(feature = "jit")]
 mod stubs;
 
