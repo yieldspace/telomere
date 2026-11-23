@@ -356,14 +356,15 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #289: workflow_dispatch runs 45268180814 and
-45268200208 against the PR branch at head
-`457b2094d81e43a7452dbe56ba0aacc09c804f7f` (branch commits
+against the code of PR #289: workflow_dispatch runs 45275778085 and
+45275802105 against the PR branch at head
+`e38f6ee4b2cc27dec06b3264fac3b44e4dd27422` (branch commits
 `36fb96d`, embedder-configurable resource limits via LimitsConfig
-(#126), and `457b209`, enforce the total-page ceiling on host-side
-memory growth; and merge commit `f77c527` bringing in `main` at
-`20e7e94`), and pull-request run 45268166014, which built the same
-tree (`ubuntu-24.04`, Rust 1.96.0). Every run
+(#126), `457b209`, enforce the total-page ceiling on host-side
+memory growth, and `e38f6ee`, preflight the aggregate memory
+minimum before allocating; and merge commit `f77c527` bringing in
+`main` at `20e7e94`), and pull-request run 45275751247, which built
+the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
 the stripped `.text` size each have a run-to-run spread of **0 B**
@@ -373,21 +374,21 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,586,464 | 1,200,487 |
-| `release` | `component` | 2,666,816 | 2,115,351 |
-| `release` | `wasi` | 3,010,832 | 2,375,479 |
-| `release` | `core-nosimd` | 1,395,728 | 1,055,655 |
-| `release` | `core-jit` | 2,135,840 | 1,645,287 |
-| `release` | `core-aot` | 1,617,088 | 1,221,303 |
-| `release` | `wasi-threads` | 3,226,640 | 2,542,999 |
+| `release` | `core` | 1,586,016 | 1,200,055 |
+| `release` | `component` | 2,666,768 | 2,115,319 |
+| `release` | `wasi` | 3,010,784 | 2,375,447 |
+| `release` | `core-nosimd` | 1,395,280 | 1,055,223 |
+| `release` | `core-jit` | 2,135,296 | 1,644,775 |
+| `release` | `core-aot` | 1,616,560 | 1,220,791 |
+| `release` | `wasi-threads` | 3,226,272 | 2,542,647 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,110,248 | 783,127 |
-| `release-size` | `component` | 1,671,944 | 1,233,991 |
-| `release-size` | `wasi` | 1,867,944 | 1,365,815 |
-| `release-size` | `core-nosimd` | 995,504 | 703,623 |
-| `release-size` | `core-jit` | 1,551,616 | 1,106,231 |
-| `release-size` | `core-aot` | 1,130,112 | 795,079 |
-| `release-size` | `wasi-threads` | 2,010,248 | 1,460,167 |
+| `release-size` | `core` | 1,110,488 | 783,383 |
+| `release-size` | `component` | 1,671,928 | 1,234,007 |
+| `release-size` | `wasi` | 1,867,928 | 1,365,831 |
+| `release-size` | `core-nosimd` | 995,728 | 703,863 |
+| `release-size` | `core-jit` | 1,551,664 | 1,106,311 |
+| `release-size` | `core-aot` | 1,129,968 | 794,951 |
+| `release-size` | `wasi-threads` | 2,010,264 | 1,460,183 |
 
 #### Re-baseline history
 
@@ -1231,6 +1232,41 @@ stripped file series at +9.58% (2,433,656 B to
 2,666,816 B), up from +9.50%. The baseline was
 re-measured on the merged code and updated as recorded
 above, following the procedure below.
+
+A review follow-up on PR #289 re-baselined the gate again.
+The total-page ceiling was still being enforced inside the
+instantiation loop that creates a module's defined memories
+one by one, so a module whose aggregate minimum exceeded
+the ceiling was refused only after its earlier memories had
+already been created and adopted by the store — and since
+memories are never removed, their pages permanently
+consumed the store total. Instantiation now preflights the
+aggregate minimum of the defined memories before creating
+any of them; imported memories already live in the store
+and are already counted in the total, so they are not
+summed again, and a refused module leaves the store total
+unchanged. A regression test covers a two-memory module
+whose minima sum past the cap, followed by a module that
+uses the whole cap. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45277043309,
+gate success), which reproduces the pre-#126 baseline
+exactly on all 32 gated series; the only code change since
+the previous baseline on this branch is the preflight
+commit, so every delta below is that commit's own. In
+`release`, every configuration that links the library
+shrinks slightly — stripped file −48 B in `component` and
+`wasi` to −544 B in `core-jit`, stripped `.text` −32 B to
+−512 B — as the preflight replaces the per-memory check
+inside the creation loop; the `baseline` configuration is
+byte-identical in both profiles. In `release-size` the
+deltas are small and mixed: stripped file −144 B in
+`core-aot` to +240 B in `core`, stripped `.text` −128 B to
++256 B. Against the original #164 baseline, the largest
+cumulative growth remains the `release` `component`
+stripped file series at +9.58% (2,433,656 B to
+2,666,768 B), unchanged to two decimals. The baseline was
+re-measured on the branch and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
