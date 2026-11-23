@@ -51,6 +51,12 @@ pub(crate) struct Reloc {
 pub(crate) struct Emission {
     pub bytes: Vec<u8>,
     pub relocs: Vec<Reloc>,
+    /// #209: the trap-site table recorded during emission, in the same
+    /// form the JIT cache stores per function (`trap_sites[site - 1]` is
+    /// the decoded-stream pc index of trap site `site`). Recorded in
+    /// both modes so an AoT artifact can serialize it next to the code
+    /// and loaded functions recover instruction-level trap pcs too.
+    pub trap_sites: Vec<u32>,
 }
 
 /// A callee the emitter may take the wasm direct-call fast path to.

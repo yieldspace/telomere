@@ -60,12 +60,16 @@ frame 0: func=0 name=run module=oob_load kind=wasm pc=0
 
 ## JIT pc rule
 
-Native JIT traps currently report no pc for the trapping frame (#209
-tracks trap-site tables that would give them one); caller frames carry
-decoded-stream return pcs that must equal the interpreter's. The runner
-therefore asserts, for the JIT pass, that every claimed pc equals the
-expected pc, and that a trapping wasm frame claims none. When #209 lands,
-the corpus expectations gain JIT pcs as a deliberate golden update.
+Since #209, a trap raised at a native JIT trap site reports the trapping
+frame's pc, resolved through the trapping function's trap-site table;
+caller frames carry decoded-stream return pcs that must equal the
+interpreter's. The runner therefore asserts, for the JIT pass, that every
+claimed pc equals the expected pc, and — for the fixtures listed in
+`JIT_PC_REQUIRED_FIXTURES` in the runner (native-site traps: `unreachable`,
+`oob_load`, `oob_store`, `div_zero`, `div_overflow`, `rem_zero`,
+`deep_chain`) — that the trapping frame does claim it. Traps raised by
+Rust stubs or entry checks (call_indirect type checks, table access, host
+reentry, stack-depth guards) carry no site and keep reporting no pc.
 
 ## Coverage
 

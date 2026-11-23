@@ -294,6 +294,7 @@ fn emit_all_jit(store: &Store, instance: &CorpusInstance) -> Vec<(u32, Result<Ve
         let func = runtime.get_func(*funcaddr);
         if let FunctionBody::Wasm { code, op_lens, .. } = &func.body {
             let result = backend::emit_baseline_function(*funcaddr, code, op_lens, &runtime)
+                .map(|emitted| emitted.code)
                 .map_err(|err| format!("{err:?}"));
             out.push((func.funcidx, result));
         }

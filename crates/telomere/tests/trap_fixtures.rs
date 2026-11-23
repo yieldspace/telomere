@@ -8,8 +8,9 @@
 //! then — when the `jit` feature is compiled in and the target supports it —
 //! executes it again on a JIT-enabled store and asserts the engines agree:
 //! same kind, same frame sequence, and the same pc wherever the JIT claims
-//! one (native JIT traps currently claim no pc for the trapping frame; #209
-//! tracks giving them one, at which point these expectations gain JIT pcs).
+//! one. Since #209, a trap raised at a native JIT trap site must claim the
+//! trapping frame's pc exactly (see `JIT_PC_REQUIRED_FIXTURES`); traps
+//! raised by Rust stubs or entry checks carry no site and claim none.
 //!
 //! Expectations live in data files, not code, so the trap-message work in
 //! #131 can extend the same corpus. Regenerate a file after an intentional
@@ -57,6 +58,22 @@ const REQUIRED_FIXTURES: &[&str] = &[
     "tail_call_chain",
     "host_frame_chain",
     "recursion_truncated",
+];
+
+/// Fixtures whose trap is raised at a native JIT trap site (#209): on
+/// the JIT pass the trapping frame must report the expected pc, not
+/// merely agree when it claims one. Fixtures absent here trap through
+/// Rust stubs or entry checks — call_indirect type checks, table
+/// access, host reentry, stack-depth guards — whose exits carry no
+/// trap site, so their trapping frame keeps reporting no pc.
+const JIT_PC_REQUIRED_FIXTURES: &[&str] = &[
+    "deep_chain",
+    "div_overflow",
+    "div_zero",
+    "oob_load",
+    "oob_store",
+    "rem_zero",
+    "unreachable",
 ];
 
 fn fixtures_dir() -> PathBuf {
@@ -304,6 +321,7 @@ fn compare_frame(
     want: &ExpectedFrame,
     want_depth: u32,
     engine: Engine,
+    jit_pc_required: bool,
     problems: &mut Vec<String>,
 ) {
     if frame.funcidx != want.funcidx {
@@ -347,14 +365,13 @@ fn compare_frame(
                         want.pc
                     ));
                 }
-            }
-            if frame.depth == 0 && frame.kind == TrapFrameKind::Wasm && frame.pc_index.is_some() {
-                problems.push(
-                    "trapping wasm frame claims a JIT pc; native JIT traps report none \
-                     until #209 lands trap-site tables — if that work landed, update the \
-                     corpus expectations instead of weakening this check"
-                        .to_owned(),
-                );
+            } else if jit_pc_required && frame.depth == 0 && frame.kind == TrapFrameKind::Wasm {
+                problems.push(format!(
+                    "frame {want_depth}: JIT claims no pc for a trap raised at a \
+                     native trap site; #209 requires the trapping frame to report \
+                     the expected pc {:?}",
+                    want.pc
+                ));
             }
         }
     }
@@ -363,10 +380,16 @@ fn compare_frame(
 /// Compares one published trace against the fixture expectation. The
 /// interpreter must match exactly, including every pc. The JIT must agree
 /// on kind, truncation, and the full frame identity sequence, and on the pc
-/// of every frame where it claims one; it claims none for a native trapping
-/// frame today (see the module docs), and its overflow depth — hence the
-/// total frame count of a truncated trace — is its own.
-fn compare(info: &TrapInfo, expected: &Expected, engine: Engine) -> Result<(), String> {
+/// of every frame where it claims one; for fixtures whose trap is raised
+/// at a native trap site (`jit_pc_required`, #209) it must claim the
+/// trapping frame's pc. Its overflow depth — hence the total frame count
+/// of a truncated trace — is its own.
+fn compare(
+    info: &TrapInfo,
+    expected: &Expected,
+    engine: Engine,
+    jit_pc_required: bool,
+) -> Result<(), String> {
     let mut problems = Vec::new();
     if info.kind.as_str() != expected.kind_label {
         problems.push(format!(
@@ -436,7 +459,14 @@ fn compare(info: &TrapInfo, expected: &Expected, engine: Engine) -> Result<(), S
             let candidate = rotated_head(expected, head_len, rotation);
             let mut trial = Vec::new();
             for (frame, want) in info.frames[..head_len].iter().zip(&candidate) {
-                compare_frame(frame, want, frame.depth, engine, &mut trial);
+                compare_frame(
+                    frame,
+                    want,
+                    frame.depth,
+                    engine,
+                    jit_pc_required,
+                    &mut trial,
+                );
             }
             if trial.is_empty() {
                 chosen = Some(candidate);
@@ -463,7 +493,14 @@ fn compare(info: &TrapInfo, expected: &Expected, engine: Engine) -> Result<(), S
                     frame.depth
                 ));
             }
-            compare_frame(frame, &head[position], frame.depth, engine, &mut problems);
+            compare_frame(
+                frame,
+                &head[position],
+                frame.depth,
+                engine,
+                jit_pc_required,
+                &mut problems,
+            );
         } else {
             let want = &expected.frames[position];
             let DepthSpec::Tail(index) = want.depth else {
@@ -480,7 +517,14 @@ fn compare(info: &TrapInfo, expected: &Expected, engine: Engine) -> Result<(), S
                     frame.depth
                 ));
             }
-            compare_frame(frame, want, want_depth, engine, &mut problems);
+            compare_frame(
+                frame,
+                want,
+                want_depth,
+                engine,
+                jit_pc_required,
+                &mut problems,
+            );
         }
     }
     if problems.is_empty() {
@@ -704,13 +748,18 @@ async fn corpus_matches_expectations_on_interpreter_and_jit() {
                 continue;
             }
         };
-        if let Err(error) = compare(&interp_info, &expected, Engine::Interpreter) {
+        if let Err(error) = compare(&interp_info, &expected, Engine::Interpreter, false) {
             failures.push(format!("{name} [interpreter]: {error}"));
         }
 
         if jit_active && !skipped.contains(name.as_str()) {
             let jit_info = run_fixture(&name, &wat, &directives, Engine::Jit).await;
-            if let Err(error) = compare(&jit_info, &expected, Engine::Jit) {
+            if let Err(error) = compare(
+                &jit_info,
+                &expected,
+                Engine::Jit,
+                JIT_PC_REQUIRED_FIXTURES.contains(&name.as_str()),
+            ) {
                 failures.push(format!(
                     "{name} [jit]: {error} (if the JIT cannot compile this fixture at all, \
                      add it to jit-skip.list with a reason instead of weakening the check)"
@@ -773,7 +822,7 @@ async fn mutated_expectation_is_rejected() {
     let directives = parse_directives(&wat);
     let info = run_fixture(name, &wat, &directives, Engine::Interpreter).await;
     let mut expected = load_expected(name).expect("div_zero expectation must parse");
-    compare(&info, &expected, Engine::Interpreter)
+    compare(&info, &expected, Engine::Interpreter, false)
         .expect("unmutated expectation must match before mutation");
     let frame = expected
         .frames
@@ -782,7 +831,7 @@ async fn mutated_expectation_is_rejected() {
         .expect("div_zero expectation must carry a pc to mutate");
     frame.pc = frame.pc.map(|pc| pc + 1);
     assert!(
-        compare(&info, &expected, Engine::Interpreter).is_err(),
+        compare(&info, &expected, Engine::Interpreter, false).is_err(),
         "an off-by-one pc in a fixture expectation must fail the comparison"
     );
 }

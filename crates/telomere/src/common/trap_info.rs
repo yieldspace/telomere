@@ -103,9 +103,10 @@ pub struct TrapFrame {
     ///
     /// Frame zero identifies the faulting instruction; older frames identify
     /// return addresses, the instruction after their call sites. A fused
-    /// superinstruction reports its first instruction, native JIT traps report
-    /// `None` when no interpreter attribution is justified, and tail calls
-    /// elide frames by design.
+    /// superinstruction reports its first instruction. A native JIT trap
+    /// reports the faulting instruction when its exit carries a trap site
+    /// resolved through the function's trap-site table (#209), and `None`
+    /// when the trap has no site; tail calls elide frames by design.
     pub pc_index: Option<u32>,
     /// The kind of runtime frame that was captured.
     pub kind: TrapFrameKind,

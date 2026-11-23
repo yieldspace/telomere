@@ -1,3 +1,4 @@
+use super::EmittedFunction;
 use crate::common::{
     decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
     decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind,
@@ -5,8 +6,8 @@ use crate::common::{
     LocalBinop64Op, LocalCmp32Op, LocalCmp64Op, LocalFastRhsShape, LocalReference, LocalUnary32Op,
     LocalUnary64Op, MemArg, ObjectRef, VMResult, PAGE_SIZE,
 };
-use crate::runtime::jit::abi::{vm_result_code, JitNativeExit};
-use crate::runtime::jit::emit_env::{EmitEnv, FastCallee, Reloc, RelocKind};
+use crate::runtime::jit::abi::{pack_trap_value, vm_result_code, JitNativeExit};
+use crate::runtime::jit::emit_env::{Emission, EmitEnv, FastCallee, Reloc, RelocKind};
 use crate::runtime::jit::profile::{self, Counter};
 use crate::runtime::jit::stubs::StubId;
 
@@ -25,12 +26,16 @@ pub(crate) fn emit_baseline_function<E: EmitEnv>(
     op_lens: &[u16],
     env: E,
     plan: &BaselinePlan,
-) -> Result<(Vec<u8>, Vec<Reloc>), ()> {
+) -> Result<Emission, ()> {
     let mut emitter = Emitter::new(funcaddr, code, op_lens, env, plan);
     emitter.emit()?;
     let relocs = emitter.env.take_relocs();
-    let bytes = emitter.finish()?;
-    Ok((bytes, relocs))
+    let emitted = emitter.finish()?;
+    Ok(Emission {
+        bytes: emitted.code,
+        relocs,
+        trap_sites: emitted.trap_sites,
+    })
 }
 
 #[allow(dead_code)]
@@ -149,6 +154,15 @@ struct Emitter<'a, E: EmitEnv> {
     labels: Vec<Option<usize>>,
     fixups: Vec<Fixup>,
     stack_depth: usize,
+    /// #209: decoded-stream pc index of every native trap site emitted
+    /// so far, in emission order; trap exits carry the 1-based index
+    /// into this table as their site id.
+    trap_sites: Vec<u32>,
+    /// Decoded-stream pc index of the plan op currently being emitted.
+    /// Every `return_trap` reached while emitting it — directly or via a
+    /// per-op helper (bounds check, div check, stack-slots check) —
+    /// belongs to that op.
+    current_pc: usize,
 }
 
 impl<E: EmitEnv> std::ops::Deref for Emitter<'_, E> {
@@ -182,6 +196,8 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
             labels: vec![None; wasm.len().saturating_add(1)],
             fixups: Vec::new(),
             stack_depth: 0,
+            trap_sites: Vec::new(),
+            current_pc: 0,
         }
     }
 
@@ -190,6 +206,7 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
         let mut op_index = 0usize;
         while let Some(entry) = self.plan.entries().get(op_index) {
             let cursor = entry.pc_index;
+            self.current_pc = cursor;
             self.labels[cursor] = Some(self.offset());
             let op = entry.op.clone();
             match self.emit_op_or_runtime(cursor, op)? {
@@ -240,7 +257,7 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
                 }
             }
         }
-        self.return_trap(VMResult::<()>::InvalidOperand);
+        self.return_trap_without_site(VMResult::<()>::InvalidOperand);
         Ok(())
     }
 
@@ -2327,7 +2344,7 @@ impl<E: EmitEnv> BaselineOpEmitter<'_, '_, E> {
 }
 
 impl<'a, E: EmitEnv> Emitter<'a, E> {
-    fn finish(mut self) -> Result<Vec<u8>, ()> {
+    fn finish(mut self) -> Result<EmittedFunction, ()> {
         let epilogue = self.offset();
         self.restore_and_ret();
         for fixup in &self.fixups {
@@ -2345,7 +2362,11 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
             let target = self.resolve_label(fixup.target_index).unwrap_or(epilogue);
             patch_branch(self.masm.as_mut_bytes(), fixup.at, target, fixup.kind)?;
         }
-        Ok(self.masm.into_bytes())
+        let code = self.masm.into_bytes();
+        Ok(EmittedFunction {
+            code,
+            trap_sites: self.trap_sites,
+        })
     }
 
     fn resolve_label(&self, target_index: usize) -> Option<usize> {
@@ -3315,6 +3336,19 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
     }
 
     fn return_trap<T>(&mut self, result: VMResult<T>) {
+        // #209: tag the exit with the next trap-site id so the trap can
+        // be attributed to the instruction currently being emitted.
+        self.trap_sites.push(self.current_pc as u32);
+        let site = self.trap_sites.len() as u64;
+        self.mov_imm_u64(0, JitNativeExit::TRAP);
+        self.mov_imm_u64(1, pack_trap_value(vm_result_code(result), site));
+        self.branch_to_epilogue();
+    }
+
+    /// Emits a trap exit with no trap site (#209 site 0). Used only for
+    /// the defensive end-of-plan fallthrough, which corresponds to no
+    /// interpreter instruction and must not claim a pc.
+    fn return_trap_without_site<T>(&mut self, result: VMResult<T>) {
         self.mov_imm_u64(0, JitNativeExit::TRAP);
         self.mov_imm_u64(1, vm_result_code(result));
         self.branch_to_epilogue();
