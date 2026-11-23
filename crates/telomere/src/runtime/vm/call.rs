@@ -761,8 +761,7 @@ unsafe fn internal_op_call_cached_u16_low7_guard(
     }
 
     let data_ptr = ctx.stack.peek_u32_fast_from_top(4);
-    let cached =
-        vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(data_ptr as usize));
+    let cached = vm_try!(unsafe { ctx.default_local_memory_view() }.read_u16_at(data_ptr as usize));
     if cached & 0x80 == 0 {
         return VMResult::Success(NumericTransitionCallOutcome::Fallback);
     }

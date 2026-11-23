@@ -771,7 +771,7 @@ pub unsafe fn op_local_get4x3_i32_add_const_binop_i32_add_tee4_i32_const_store(
     let value = unsafe { (*tail_code.add(6)).operand.i32 as u32 };
     let memarg = unsafe { (*tail_code.add(7)).operand.memarg };
     let start = vm_try!(compute_memory_offset(memarg, result));
-    vm_try!(unsafe { ctx.default_local_memory_mut_unchecked() }.write_u32_at(start, value));
+    vm_try!(unsafe { ctx.default_local_memory_view() }.write_u32_at(start, value));
     let skip = unsafe { (*tail_code.add(8)).operand.u32 as isize };
     call_next(tail_code, skip, ctx)
 }

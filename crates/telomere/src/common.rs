@@ -1319,6 +1319,13 @@ pub struct ExecuteContext<'a> {
     pub local_reference: LocalReference,
     pub(crate) local_base_ptr: *mut u8,
     pub(crate) default_local_memory_ptr: *mut Memory,
+    // #187: flat (base, committed length) snapshot of the default local
+    // memory, refreshed together with `default_local_memory_ptr`. Scalar
+    // handlers validate accesses against this pair with a single compare
+    // instead of dereferencing the `Memory` struct on every access. Null
+    // base / zero length unless the frame's default memory is local.
+    pub(crate) default_local_memory_base: *mut u8,
+    pub(crate) default_local_memory_len: usize,
     pub(crate) current_instance_globals_ptr: *const ObjectRef,
     pub(crate) global_values_ptr: *mut store::GlobalValue,
     pub(crate) current_frame: CallFrameCache,
@@ -1333,6 +1340,127 @@ pub struct ExecuteContext<'a> {
     pub(crate) reserved: u64,
     /// Ledger epoch captured with the current grant.
     pub(crate) budget_epoch: u64,
+}
+
+/// Flat `(base, committed_len)` view of the active frame's default local
+/// memory (#187).
+///
+/// `ExecuteContext` snapshots the pair at every frame transition — the same
+/// refresh discipline as `default_local_memory_ptr` — and the interpreter's
+/// `memory.grow` handlers re-snapshot it after growing, so within a frame
+/// the pair always describes the memory that frame observes. Scalar
+/// handlers validate each access with a single `offset + N <= len`
+/// comparison against this view instead of dereferencing the `Memory`
+/// struct and re-checking `data_size()` on every access.
+///
+/// The view exists only for local memories. For a shared default memory the
+/// context caches a null base and the shared handlers keep going through
+/// `StoreInner` under its locking discipline: a cached length for a shared
+/// memory could go stale under a concurrent grow (memory only grows, so a
+/// stale length would stay safe, but it would spuriously trap valid
+/// accesses), so shared paths are deliberately not flattened.
+///
+/// The accessors mirror the `Memory::read_*_at` / `write_*` semantics,
+/// including the little-endian unaligned accesses and the
+/// `MemoryIndexOutOfRange` trap. Because the bounds arithmetic is done in
+/// u64, the check stays sound for any offset even though the offsets that
+/// reach this view today come from u32 wasm operands; a future memory64
+/// only has to feed wider offsets into the same check.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DefaultLocalMemoryView {
+    base: *mut u8,
+    len: usize,
+}
+
+impl DefaultLocalMemoryView {
+    /// The single bounds comparison every accessor performs before touching
+    /// memory. On success returns the raw pointer to `offset`, which lies
+    /// inside the committed prefix of the memory's mmap reservation.
+    #[inline(always)]
+    fn checked_ptr(&self, offset: usize, n: usize) -> VMResult<*mut u8> {
+        if offset as u64 + n as u64 > self.len as u64 {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        // SAFETY: the comparison above proves `offset + n <= len`, so the
+        // pointer stays inside the committed region of the reservation the
+        // view was snapshotted from.
+        VMResult::Success(unsafe { self.base.add(offset) })
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u8_at(&self, offset: usize) -> VMResult<u8> {
+        let ptr = vm_try!(self.checked_ptr(offset, 1));
+        // SAFETY: `checked_ptr` validated the 1-byte range.
+        VMResult::Success(unsafe { *ptr })
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i8_at(&self, offset: usize) -> VMResult<i8> {
+        VMResult::Success(vm_try!(self.read_u8_at(offset)) as i8)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u16_at(&self, offset: usize) -> VMResult<u16> {
+        let ptr = vm_try!(self.checked_ptr(offset, 2));
+        // SAFETY: `checked_ptr` validated the 2-byte range.
+        VMResult::Success(u16::from_le(unsafe { ptr.cast::<u16>().read_unaligned() }))
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i16_at(&self, offset: usize) -> VMResult<i16> {
+        VMResult::Success(vm_try!(self.read_u16_at(offset)) as i16)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u32_at(&self, offset: usize) -> VMResult<u32> {
+        let ptr = vm_try!(self.checked_ptr(offset, 4));
+        // SAFETY: `checked_ptr` validated the 4-byte range.
+        VMResult::Success(u32::from_le(unsafe { ptr.cast::<u32>().read_unaligned() }))
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i32_at(&self, offset: usize) -> VMResult<i32> {
+        VMResult::Success(vm_try!(self.read_u32_at(offset)) as i32)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u64_at(&self, offset: usize) -> VMResult<u64> {
+        let ptr = vm_try!(self.checked_ptr(offset, 8));
+        // SAFETY: `checked_ptr` validated the 8-byte range.
+        VMResult::Success(u64::from_le(unsafe { ptr.cast::<u64>().read_unaligned() }))
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_bytes(&self, offset: usize, bytes: &[u8]) -> VMResult<()> {
+        let ptr = vm_try!(self.checked_ptr(offset, bytes.len()));
+        // SAFETY: `checked_ptr` validated the `bytes.len()` range. `ptr::copy`
+        // (memmove semantics) keeps this correct even if a caller ever
+        // passes a source slice that aliases the guest memory.
+        unsafe { std::ptr::copy(bytes.as_ptr(), ptr, bytes.len()) };
+        VMResult::Success(())
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_u32_at(&self, offset: usize, value: u32) -> VMResult<()> {
+        let ptr = vm_try!(self.checked_ptr(offset, 4));
+        // SAFETY: `checked_ptr` validated the 4-byte range.
+        unsafe { ptr.cast::<u32>().write_unaligned(value.to_le()) };
+        VMResult::Success(())
+    }
+
+    /// Pushes `N` bytes read from `offset` onto the operand stack. The
+    /// stack-side write relies on the frame-entry operand reservation
+    /// (#186), exactly like `Memory::push_to_stack` calling
+    /// `Stack::push_copy_from_ptr`.
+    #[inline(always)]
+    pub(crate) fn push_to_stack<const N: usize>(
+        &self,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
+        let ptr = vm_try!(self.checked_ptr(offset, N));
+        unsafe { stack.push_copy_from_ptr::<N>(ptr) }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1366,15 +1494,46 @@ fn snapshot_memory_kind(kind: CachedMemoryKind) -> SnapshotMemoryKind {
 
 impl ExecuteContext<'_> {
     fn refresh_default_local_memory_ptr(&mut self) {
-        self.default_local_memory_ptr = match self.current_frame.memory0_kind {
-            CachedMemoryKind::Local => self
-                .gc
-                .local_memory_mut(unsafe {
-                    LocalMemoryId::from_raw_unchecked(self.current_frame.memory0_raw)
-                })
-                .memory_mut() as *mut Memory,
-            CachedMemoryKind::None | CachedMemoryKind::Shared => std::ptr::null_mut(),
+        let (memory_ptr, memory_base, memory_len) = match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => {
+                let memory = self
+                    .gc
+                    .local_memory_mut(unsafe {
+                        LocalMemoryId::from_raw_unchecked(self.current_frame.memory0_raw)
+                    })
+                    .memory_mut();
+                (
+                    memory as *mut Memory,
+                    memory.data_mut_ptr(),
+                    memory.data_size(),
+                )
+            }
+            CachedMemoryKind::None | CachedMemoryKind::Shared => {
+                (std::ptr::null_mut(), std::ptr::null_mut(), 0)
+            }
         };
+        self.default_local_memory_ptr = memory_ptr;
+        self.default_local_memory_base = memory_base;
+        self.default_local_memory_len = memory_len;
+    }
+
+    /// Re-snapshots the flat (base, committed length) pair of the default
+    /// local memory after an in-frame `memory.grow` may have changed the
+    /// committed length (#187).
+    ///
+    /// The base pointer never moves for an mmap-backed `Memory` (growth
+    /// only commits more of the reservation), but the length does, and the
+    /// spec requires later accesses in the same frame to observe the grown
+    /// length. The interpreter's grow handlers call this after growing;
+    /// frame transitions refresh the pair through
+    /// `refresh_default_local_memory_ptr`, so no other in-frame path can
+    /// leave it stale. A no-op when the frame has no default local memory.
+    pub(crate) fn refresh_default_local_memory_len(&mut self) {
+        if !self.default_local_memory_ptr.is_null() {
+            let memory = unsafe { &*self.default_local_memory_ptr };
+            self.default_local_memory_base = memory.data_ptr() as *mut u8;
+            self.default_local_memory_len = memory.data_size();
+        }
     }
 
     fn refresh_jit_global_ptrs(&mut self) {
@@ -1481,6 +1640,24 @@ impl ExecuteContext<'_> {
     pub unsafe fn default_local_memory_mut_unchecked(&mut self) -> &mut Memory {
         debug_assert!(!self.default_local_memory_ptr.is_null());
         unsafe { &mut *self.default_local_memory_ptr }
+    }
+
+    /// Returns the flat (base, committed length) view of the active frame's
+    /// default local memory (#187).
+    ///
+    /// # Safety
+    /// The active frame must have a default local memory and the cached
+    /// (base, length) pair must have been refreshed from the current frame
+    /// after the last frame transition, exactly like
+    /// `default_local_memory_unchecked`. The view must not be used after a
+    /// frame transition or after a `memory.grow` that bypassed
+    /// `refresh_default_local_memory_len`.
+    pub(crate) unsafe fn default_local_memory_view(&self) -> DefaultLocalMemoryView {
+        debug_assert!(!self.default_local_memory_base.is_null());
+        DefaultLocalMemoryView {
+            base: self.default_local_memory_base,
+            len: self.default_local_memory_len,
+        }
     }
     #[inline(always)]
     fn memory_slot_at(&self, memidx: u32) -> Option<InstanceMemorySlot> {

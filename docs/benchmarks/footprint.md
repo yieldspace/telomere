@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #261: workflow_dispatch runs 45091414099 and
-45091418075 against the PR branch at merge commit
-`eb90479f63a1a68c51298b9d8d246a6564edd7ca` (branch head
-`0628570ce0ef32c73912ad5f3fb34d545b03fb4d` with `main` at
-`133bf4ba693d0c8beca43935678b12e8bbb920f6` merged in), and
-pull-request run 45091317129, which built the same tree
+against the code of PR #262: workflow_dispatch runs 45096189255 and
+45096200688 against the PR branch at merge commit
+`4c12a5f3dcdd85e91b52db1363655caf35c5dad2` (branch head
+`31e80be68aa9358cdb86994831662eca7c0a7f70` with `main` at
+`3121c3a6efe48cd625b9b9d4e16469cbda7de099` merged in), and
+pull-request run 45096136125, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). Every
 run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
@@ -370,19 +370,19 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,475,376 | 1,128,055 |
-| `release` | `component` | 2,471,912 | 1,979,847 |
-| `release` | `wasi` | 2,818,456 | 2,242,055 |
-| `release` | `core-nosimd` | 1,284,456 | 986,663 |
-| `release` | `core-jit` | 2,009,624 | 1,564,551 |
-| `release` | `wasi-threads` | 3,003,424 | 2,379,479 |
+| `release` | `core` | 1,478,816 | 1,131,383 |
+| `release` | `component` | 2,475,352 | 1,983,175 |
+| `release` | `wasi` | 2,821,896 | 2,245,383 |
+| `release` | `core-nosimd` | 1,286,184 | 988,279 |
+| `release` | `core-jit` | 2,011,688 | 1,566,455 |
+| `release` | `wasi-threads` | 3,008,224 | 2,384,151 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,095,256 | 774,487 |
-| `release-size` | `component` | 1,627,712 | 1,200,439 |
-| `release-size` | `wasi` | 1,823,392 | 1,331,975 |
-| `release-size` | `core-nosimd` | 981,312 | 695,799 |
-| `release-size` | `core-jit` | 1,517,288 | 1,082,855 |
-| `release-size` | `wasi-threads` | 1,963,648 | 1,424,551 |
+| `release-size` | `core` | 1,097,832 | 776,983 |
+| `release-size` | `component` | 1,630,336 | 1,202,983 |
+| `release-size` | `wasi` | 1,826,016 | 1,334,535 |
+| `release-size` | `core-nosimd` | 982,992 | 697,399 |
+| `release-size` | `core-jit` | 1,530,808 | 1,095,015 |
+| `release-size` | `wasi-threads` | 1,967,344 | 1,428,007 |
 
 #### Re-baseline history
 
@@ -664,6 +664,44 @@ release-size stripped file +1,872 B / stripped `.text`
 +1,248 B) and the other 24 gated series are byte-identical.
 The baseline was re-measured on the merged code and updated as
 recorded above, following the procedure below.
+
+PR #262 (#187, scalar linear-memory access does 2–3 range checks
+and a pointer chase per op; flatten to one compare against a
+frame-cached (base, len)) merged current `main` into its branch
+first (merge commit `4c12a5f`, no conflicts); its first CI run
+then tripped the gate on the PR's own change. The PR snapshots
+the default local memory's (base, committed len) in
+`ExecuteContext` alongside the memory pointer, adds
+`DefaultLocalMemoryView` in `crates/telomere/src/common.rs`
+(checked access is a single u64 compare, `offset + N <= len`,
+returning `MemoryIndexOutOfRange`), routes every scalar handler
+on the default local path through it (94 call sites plus the
+hand-written helpers in `crates/telomere/src/runtime/vm/memory.rs`,
+`store_internal_local` in `vm.rs`, the u32 store in
+`superinstructions.rs`, and the u16 load in `call.rs`), and
+re-snapshots the length in the two `memory.grow` handlers;
+shared memory keeps the previous locked path because its cached
+pointer is null. The PR's only other change is a new integration
+test file, which is not linked into the embedder. Attribution
+was isolated by measuring current `main` alone
+(workflow_dispatch run 45096211898, gate success), which
+reproduces the previous baseline exactly on all 28 gated
+series. The growth appears in every configuration that links
+the telomere library: release stripped file +1,728..+4,800 B
+and stripped `.text` +1,616..+4,672 B (`wasi-threads` largest);
+release-size stripped file +1,680..+13,520 B and stripped
+`.text` +1,600..+12,160 B, where release-size `core-jit` is
+the outlier — under the release-size profile's optimisation
+settings the flattened handlers land differently in the one
+configuration that links both the interpreter and the JIT,
+while the same configuration grows least in the release
+profile (+2,064 B / +1,904 B); the per-configuration variation
+is the code-layout effect of the one library change, as in
+earlier re-baselines. The `baseline` configuration, which
+links no library code, is byte-identical in both profiles
+(4 of 28 gated series unchanged). The baseline was re-measured
+on the merged code and updated as recorded above, following
+the procedure below.
 
 ### Threshold derivation
 
