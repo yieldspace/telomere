@@ -356,39 +356,36 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #267: workflow_dispatch runs 45120276581 and
-45120284790 against the PR branch at head
-`f988123a67220089cba96f5e8b960c15498ddcb5` (branch commit
-`f3746033c8bec2629df9865cf6f71dd1f235d85b` with `main` at
-`2505d8c` merged in at merge commit
-`d5acd0b43042e7d655199f2690f5090f27273ecc`, plus two merge
-follow-up fixes), and
-pull-request run 45120209665, which built the same tree
-(`ubuntu-24.04`, Rust 1.96.0). Every
-run produced byte-identical sizes: for all sixteen
-profile/configuration rows, the raw file size, the `.text` size, the
-stripped file size, and the stripped `.text` size each have a run-to-run
-spread of **0 B** across the three samples. The observed values are the
-baselines in the table below (stripped file / stripped `.text`, in bytes).
+against the code of PR #268: workflow_dispatch runs 45138823545 and
+45138835861 against the PR branch at head
+`5536558521eca906c8ba5b2613fed4f3c4ded378` (branch commits `5b404d4`,
+the #241 value index space, and `5536558`, the Codex P1 `ValueBudget`
+follow-up, on `main` at `3e1d335`), and pull-request run 45136051551,
+which built the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
+produced byte-identical sizes: for all sixteen profile/configuration
+rows, the raw file size, the `.text` size, the stripped file size, and
+the stripped `.text` size each have a run-to-run spread of **0 B**
+across the three samples. The observed values are the baselines in the
+table below (stripped file / stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,478,832 | 1,131,399 |
-| `release` | `component` | 2,475,368 | 1,983,191 |
-| `release` | `wasi` | 2,821,912 | 2,245,399 |
+| `release` | `component` | 2,525,936 | 2,027,911 |
+| `release` | `wasi` | 2,869,968 | 2,288,039 |
 | `release` | `core-nosimd` | 1,286,200 | 988,295 |
 | `release` | `core-jit` | 2,016,976 | 1,569,751 |
 | `release` | `core-aot` | 1,506,352 | 1,150,583 |
-| `release` | `wasi-threads` | 3,008,240 | 2,384,167 |
+| `release` | `wasi-threads` | 3,056,280 | 2,426,807 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,097,848 | 776,999 |
-| `release-size` | `component` | 1,630,352 | 1,202,999 |
-| `release-size` | `wasi` | 1,826,016 | 1,334,535 |
+| `release-size` | `component` | 1,659,016 | 1,228,023 |
+| `release-size` | `wasi` | 1,854,872 | 1,359,751 |
 | `release-size` | `core-nosimd` | 983,008 | 697,415 |
 | `release-size` | `core-jit` | 1,532,440 | 1,095,175 |
 | `release-size` | `core-aot` | 1,117,216 | 788,503 |
-| `release-size` | `wasi-threads` | 1,967,360 | 1,428,023 |
+| `release-size` | `wasi-threads` | 1,996,184 | 1,453,223 |
 
 #### Re-baseline history
 
@@ -833,6 +830,34 @@ values recorded here supersede those). The other 12 of the
 16 gated series are byte-identical. The baseline was
 re-measured on the merged code and updated as recorded
 above, following the procedure below.
+
+PR #268 (#241, component model value index space: `Sort::Value`, sort
+0x02, value imports/exports) was branched on current `main`, so its
+first CI run tripped the gate on the PR's own change. The PR implements
+the value index space end to end in `telomere-component` (decode,
+validation, instantiation and link-time resolution of value
+imports/exports, static literal decoding of the value section, and the
+linker's `register_import_value`). A follow-up commit answers a Codex P1
+review finding: a list whose element type has an empty encoding decoded
+its element count without consuming any input bytes, so a 26-byte
+component could materialise billions of values and abort the embedding
+process on allocation; the value decoder now charges every node
+materialised without consuming input bytes against a zero-width budget
+(`ValueBudget`) and checks list element counts against the remaining
+encoding bytes plus that budget before any element is materialised.
+Attribution was isolated by measuring current `main` alone
+(workflow_dispatch run 45138848073, gate success), which reproduces the
+previous baseline exactly on all 32 gated series. The growth is confined
+to the three configurations that link the component runtime: `component`
+(release stripped file +50,568 B / stripped `.text` +44,720 B;
+release-size stripped file +28,664 B / stripped `.text` +25,024 B),
+`wasi` (release +48,056 B / +42,640 B; release-size +28,856 B / +25,216
+B) and `wasi-threads` (release +48,040 B / +42,640 B; release-size
++28,824 B / +25,200 B). The other 20 gated series are byte-identical.
+Against the original #164 baseline, the largest cumulative growth is now
+release-size `component` stripped `.text` at +5.05% (1,169,031 B to
+1,228,023 B), up from +3.54%. The baseline was re-measured on the branch
+code and updated as recorded above, following the procedure below.
 
 ### Threshold derivation
 
