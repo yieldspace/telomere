@@ -1583,6 +1583,44 @@ pub(crate) fn checkpoint(ctx: &mut ExecuteContext) -> VMResult<()> {
     }
 }
 
+/// #171: [`checkpoint`] over split `ExecuteContext` fields, for the JIT
+/// bulk stubs, which must keep `ctx.gc` borrowed while a copy/init
+/// helper invokes per-chunk (or per-element) checkpoints. The arithmetic
+/// is identical to [`checkpoint`]; the interpreter's own bulk handlers
+/// use the `vm_checkpoint!` field form of the same logic.
+// Only the JIT stubs call this; it is dead code in interpreter-only builds.
+#[allow(dead_code)]
+pub(crate) fn checkpoint_fields(
+    metering: Option<&crate::common::MeteringHandle>,
+    budget: &mut u64,
+    reserved: &mut u64,
+    budget_epoch: &mut u64,
+) -> VMResult<()> {
+    match budget.checked_sub(1) {
+        Some(next) if *reserved == 0 => {
+            *budget = next;
+            VMResult::Success(())
+        }
+        Some(next) => {
+            let metering = metering.expect("metered checkpoint budget requires a metering handle");
+            if metering.is_interrupted() {
+                VMResult::Cancelled
+            } else {
+                *budget = next;
+                VMResult::Success(())
+            }
+        }
+        None => {
+            let metering = metering
+                .expect("only metered execution contexts can exhaust their checkpoint budget");
+            match metering.refill_checkpoint_budget(budget, reserved, budget_epoch) {
+                Ok(()) => VMResult::Success(()),
+                Err(reason) => reason.into_vm_result(),
+            }
+        }
+    }
+}
+
 /// Charges several execution checkpoints before a native bulk operation runs.
 ///
 /// A zero amount is a no-op. The fast path spends only the caller-owned budget. The slow path

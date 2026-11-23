@@ -2,9 +2,11 @@
 
 ## Status and Scope
 
-Telomere provides opt-in, Store-scoped metering for the interpreter. It gives an
+Telomere provides opt-in, Store-scoped metering for guest execution. It gives an
 embedder a finite fuel budget and a cancellation handle for untrusted or
-otherwise bounded guest execution.
+otherwise bounded guest execution. The same accounting applies to the
+interpreter and to JIT-compiled code; see
+[Metering and the JIT](#metering-and-the-jit).
 
 Metering is disabled by default. A Store without metering exposes no metering
 handle, so fuel and cancellation cannot be configured accidentally on a Store
@@ -38,7 +40,7 @@ not a per-module or per-function limit.
 ## Fuel Unit
 
 An ordinary fuel unit is one **checkpoint**, not one WebAssembly instruction.
-The interpreter charges checkpoints at:
+Execution charges checkpoints at:
 
 - Wasm `loop` back-edges;
 - `return_call` and `return_call_indirect` tail-call transitions; and
@@ -102,8 +104,10 @@ later native bounds or capacity check rejects the operation.
 After a native bulk operation has begun, cancellation does not stop it midway:
 it reaches its normal result, including any normal trap, before the next
 cancellation observation. Together with cancellation at every metered
-checkpoint, the worst-case cancellation response is one checkpoint plus at
-most one maximum native bulk operation. This is a bounded-work contract, not a
+checkpoint, the interpreter's worst-case cancellation response is one checkpoint plus at
+most one maximum native bulk operation. Compiled code observes cancellation
+at grant boundaries instead; see [Metering and the JIT](#metering-and-the-jit).
+This is a bounded-work contract, not a
 fixed wall-clock promise.
 
 Shared-memory `memory.atomic.notify` is different from guest-sized native bulk
@@ -281,14 +285,69 @@ implicitly repeated primitives, code outside that source set, or host calls.
 The runtime checkpoint contract above, targeted regressions, and review of
 those other paths remain necessary.
 
-## JIT Boundary
+## Metering and the JIT
 
-Metered execution is interpreter-only in this release. If both
-`RuntimeConfig::metering.enabled` and `RuntimeConfig::jit.enabled` are set,
-Store construction normalizes `jit.enabled` to `false`; the effective value is
-visible through `store.runtime_config()`. The Store will not populate or use its
-JIT cache while metering is enabled.
+Metering covers JIT-compiled code on every supported JIT target (x86_64,
+aarch64, riscv64). Enabling metering no longer disables JIT compilation:
+a Store with both `RuntimeConfig::metering.enabled` and
+`RuntimeConfig::jit.enabled` set keeps the JIT enabled, populates its JIT
+cache, and runs compiled code under the same fuel unit and the same
+interrupt results as the interpreter.
 
-This is a safety boundary rather than a performance fallback. The experimental
-JIT remains unsuitable for untrusted guests, and JIT checkpointing is deferred
-to a separate design.
+This works because metering is a property of the Store and the Store's JIT
+cache is private to it. Whether the owning Store is metered is fixed at
+Store construction, so the emitters bake the answer into the compiled
+code: an unmetered Store's code is byte-identical to a build without
+metering support, and a metered Store's code carries a checkpoint at
+every point the interpreter would charge one.
+
+- At a guest `loop` header the compiled code decrements the current
+  grant in place. When the grant is exhausted it calls a runtime stub
+  that takes the next grant — or raises `FuelExhausted` / `Cancelled` —
+  through the same cold path the interpreter uses, and then continues in
+  native code.
+- The fully-native fused loops (the list search / reverse / relink and
+  update-store loops) carry the same in-place checkpoint at their native
+  back-edge. On grant exhaustion they resume the interpreter at the fused
+  instruction, whose handler performs the refill-or-raise checkpoint and
+  continues from locals that are in sync at that point.
+- Bulk operations, `table.init`, the internally-looping CRC pair stub,
+  and the shared-memory `atomic.notify` postcharge are charged by the
+  JIT runtime stubs with the same formulas, the same
+  charge-before-work order, and the same no-refund rules as the
+  interpreter handlers.
+
+Two behavioural differences from the interpreter remain, both bounded by
+the grant chunk:
+
+- The compiled fast path does not poll the cancellation flag on every
+  checkpoint (the flag lives behind the metering ledger's mutex and
+  cannot be read from native code). A cancellation is observed at the
+  next grant refill, so worst-case cancellation latency in compiled code
+  is one chunk (4,096 checkpoints) plus at most one native bulk
+  operation, instead of a single checkpoint.
+- Ordinary calls are not checkpoints in either engine, by design (see
+  [Fuel Unit](#fuel-unit)), so compiled code charges no per-call fuel.
+
+AoT artifacts are the one exclusion: emission without a live Store
+cannot know whether the loading Store will be metered, so AoT-emitted
+code is uninstrumented. An AoT loader must refuse to install artifacts
+into a metered Store (or emit a metered variant); no such loader ships
+in this release.
+
+Measured instrumentation overhead (fleur-du-lapin, x86_64, release,
+2026-11-23; median of 5 runs per configuration, JIT store with metering
+enabled and unlimited fuel vs the same store unmetered): a minimal
+counting loop whose body is a compare, an increment, and a back-edge —
+one checkpoint per ~4.6 ns of guest work — slowed by roughly 4–10%
+across three sessions (about 0.2–0.45 ns per checkpoint; the host was
+shared, so treat the range as indicative). A call-only workload
+(recursive `fib`, which contains no loop headers and therefore no
+checkpoints) showed no measurable difference and consumed zero fuel,
+confirming that ordinary calls stay uncharged in compiled code. Stores
+without metering emit byte-identical code to a build without this
+instrumentation, so their overhead is zero by construction.
+
+The experimental JIT remains unsuitable for untrusted guests for the
+reasons in `SECURITY.md`; metering coverage does not change that
+position.
