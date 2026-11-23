@@ -91,6 +91,10 @@ pub(crate) mod common;
 /// Component-model adapters form the documented boundary used by component crates.
 #[warn(missing_docs)]
 pub mod component_support;
+
+/// Embedder observability: the documented `tracing` targets Telomere emits on.
+#[warn(missing_docs)]
+pub mod diagnostics;
 #[doc(hidden)]
 pub(crate) mod parser;
 #[doc(hidden)]

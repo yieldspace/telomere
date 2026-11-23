@@ -27,7 +27,25 @@ use crate::{
     },
     WasmParserError,
 };
-use tracing::trace;
+/// Developer traces for the instruction parser.
+///
+/// These are debug-only, mirroring `runtime/trace.rs`: `parse_inst` and
+/// `parse_instrs` recurse once per control-nesting level inside the
+/// documented 512 KiB release stack budget (see
+/// `docs/core/parser-limits.md`), and live `tracing` callsites in those
+/// frames grow each level's stack use (~128 B per level at the 512-block
+/// limit, measured for #144). The embedder-facing event contract lives in
+/// `crate::diagnostics`; these per-opcode traces are not part of it.
+#[cfg(debug_assertions)]
+macro_rules! trace {
+    ($($l:expr),*) => {
+        tracing::trace!($($l),*);
+    };
+}
+#[cfg(not(debug_assertions))]
+macro_rules! trace {
+    ($($l:expr),*) => {};
+}
 
 // #202: SIMD instruction dispatch is intentionally dormant without the optional SIMD parser.
 #[cfg_attr(not(feature = "simd"), allow(unused_macros))]

@@ -192,7 +192,7 @@ impl TrapKind {
         }
     }
 
-    fn from_vm_result(result: &VMResult<()>) -> Option<Self> {
+    pub(crate) fn from_vm_result(result: &VMResult<()>) -> Option<Self> {
         match result {
             VMResult::Success(()) => None,
             VMResult::Unreachable => Some(Self::Unreachable),

@@ -26,6 +26,9 @@ fn trace_stack_overflow(args: fmt::Arguments<'_>) {
     if stack_trace_overflow_enabled() {
         eprintln!("[telomere-stack] {args}");
     }
+    if tracing::level_enabled!(tracing::Level::DEBUG) {
+        tracing::debug!(target: crate::diagnostics::TARGET_STACK, "{args}");
+    }
 }
 #[inline(always)]
 fn trusted_write_u32(dst: &mut [u8], value: u32) {
