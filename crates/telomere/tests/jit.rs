@@ -1943,6 +1943,128 @@ async fn jit_i64_store_const_base_trap_does_not_partially_write() {
     )
 ))]
 #[tokio::test]
+async fn jit_const_base_load_with_effective_address_at_2_pow_32_traps() {
+    // #263: the interpreter and the JIT share the optimizer's const-base
+    // fold; an overflowing fold must trap on both paths.
+    let wat = r#"
+        (module
+          (memory 1)
+          (func (export "run") (result i32)
+            i32.const 1
+            i32.load offset=4294967295))
+        "#;
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(wat, &store, &registry).await;
+
+    let before = store.jit_cache_stats();
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    let after = store.jit_cache_stats();
+
+    assert!(matches!(result, VMResult::MemoryIndexOutOfRange));
+    assert_jit_accepted(before, after);
+
+    let interpreter_result = invoke_interpreter(wat, "run", Vec::new()).await;
+    assert!(matches!(
+        interpreter_result,
+        VMResult::MemoryIndexOutOfRange
+    ));
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_const_base_store_with_overflowing_effective_address_traps_without_writing() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "store") (param i32)
+            i32.const 1
+            local.get 0
+            i32.store offset=4294967295)
+          (func (export "load0") (result i32)
+            i32.const 0
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let store_result = telomere::run_module_function(
+        &instance,
+        &store,
+        "store",
+        &ResultValue::new(vec![WasmValue::I32(777)]),
+    )
+    .await;
+    let after_store = store.jit_cache_stats();
+    let load_result =
+        telomere::run_module_function(&instance, &store, "load0", &ResultValue::new(vec![])).await;
+    let after_load = store.jit_cache_stats();
+
+    assert!(matches!(store_result, VMResult::MemoryIndexOutOfRange));
+    // The wrapped address is 0; the store must not have written there.
+    assert_success_i32(load_result, 0);
+    assert_jit_accepted(before, after_store);
+    assert_jit_accepted(after_store, after_load);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_const_base_in_range_load_still_returns_value() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 16) "\2a\00\00\00")
+          (func (export "run") (result i32)
+            i32.const 4
+            i32.load offset=12))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    let after = store.jit_cache_stats();
+
+    assert_success_i32(result, 42);
+    assert_jit_accepted(before, after);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
 async fn jit_br_if_preserves_vm_stack_value_after_continuation_bridge() {
     let store = jit_store();
     let registry = Registry::new();
