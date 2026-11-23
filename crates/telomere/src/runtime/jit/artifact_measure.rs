@@ -72,8 +72,8 @@ async fn measure_module(source: &[u8], totals: &mut Totals) {
             continue;
         };
         match backend::emit_baseline_function(funcaddr, code, op_lens, &runtime) {
-            Ok(bytes) => {
-                module_emitted += bytes.len();
+            Ok(emitted) => {
+                module_emitted += emitted.code.len();
                 module_funcs += 1;
             }
             Err(_) => {
