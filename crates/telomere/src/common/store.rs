@@ -266,7 +266,9 @@ pub struct JitConfig {
     /// Enables the core JIT only when Telomere is compiled with the `jit`
     /// Cargo feature and the current target is supported.
     pub enabled: bool,
-    /// Upper bound for cached machine code owned by this store.
+    /// Upper bound for cached machine code owned by this store, counted
+    /// in emitted code bytes (each function rounded up to the 16-byte
+    /// code alignment), not in page-rounded mapping sizes.
     pub code_cache_max_bytes: u32,
 }
 

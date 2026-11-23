@@ -48,8 +48,15 @@ closed if `--jit` is requested on an unsupported build or target.
   the callee and install a store-local cache entry.
 - The emitter is a single-pass Rust native emitter. Telomere does not use LLVM
   or an external code generator.
-- Executable memory is W^X through `mmap-rs`; each compiled function owns an
-  executable mapping that is not made writable again.
+- Executable memory is W^X. Compiled functions are packed into 256 KiB code
+  slabs: each slab is one shared backing (memfd on Linux, POSIX shared memory
+  on macOS) mapped twice — a writable view used only while the slab is open,
+  and an executable view that is never writable. When a slab fills or is
+  sealed, its writable view is unmapped permanently; a slab is never made
+  writable again. Where shared backing is unavailable, the arena falls back
+  to one mapping per function, flipped from writable to executable exactly
+  once. The code cache charges its cap in emitted code bytes, not in
+  page-rounded mapping sizes.
 - Unsupported direct native op shapes fail closed into JIT ABI helpers or
   continuation bridges. Opcode coverage alone does not decide whole-function
   acceptance.
