@@ -65,6 +65,7 @@ macro_rules! atomic_load_op {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(atomic_start(tail_code, ctx));
             let value = vm_try!(ctx.gc.$reader(ctx.default_local_memory_id_unchecked(), start));
@@ -89,6 +90,7 @@ macro_rules! atomic_load_op_shared {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(atomic_start(tail_code, ctx));
             let value = vm_try!(ctx.gc.$reader(ctx.default_shared_memory_id_unchecked(), start));
@@ -113,6 +115,7 @@ macro_rules! atomic_store_op {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
@@ -141,6 +144,7 @@ macro_rules! atomic_store_op_shared {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
@@ -169,6 +173,7 @@ macro_rules! atomic_rmw_op {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
@@ -199,6 +204,7 @@ macro_rules! atomic_rmw_op_shared {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
@@ -229,6 +235,7 @@ macro_rules! atomic_cmpxchg_op {
         #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let expected = ctx.stack.$pop() as $ty;
@@ -260,6 +267,7 @@ macro_rules! atomic_cmpxchg_op_shared {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let expected = ctx.stack.$pop() as $ty;
@@ -290,6 +298,7 @@ macro_rules! atomic_load_op_indexed {
         /// # Safety
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
+        #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx.gc.$reader_local(ctx.local_memory_id_at_unchecked(memidx), start));
@@ -309,6 +318,7 @@ macro_rules! atomic_load_op_indexed {
         /// # Safety
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
+        #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx.gc.$reader_shared(ctx.shared_memory_id_at_unchecked(memidx), start));
@@ -332,6 +342,7 @@ macro_rules! atomic_store_op_indexed {
         /// # Safety
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
+        #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
@@ -351,6 +362,7 @@ macro_rules! atomic_store_op_indexed {
         /// # Safety
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
+        #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
@@ -374,6 +386,7 @@ macro_rules! atomic_rmw_op_indexed {
         /// # Safety
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
+        #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $pop_ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
@@ -399,6 +412,7 @@ macro_rules! atomic_rmw_op_indexed {
         /// # Safety
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
+        #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $pop_ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
@@ -428,6 +442,7 @@ macro_rules! atomic_cmpxchg_op_indexed {
         /// # Safety
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
+        #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let expected = ctx.stack.$pop() as $ty;
@@ -454,6 +469,7 @@ macro_rules! atomic_cmpxchg_op_indexed {
         /// # Safety
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
+        #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let expected = ctx.stack.$pop() as $ty;
@@ -2110,6 +2126,7 @@ atomic_cmpxchg_op_indexed!(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_notify(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2134,6 +2151,7 @@ pub unsafe fn op_memory_atomic_notify(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose default memory is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_notify_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2162,6 +2180,7 @@ pub unsafe fn op_memory_atomic_notify_shared(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory slot is local.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_notify_indexed_unshared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2186,6 +2205,7 @@ pub unsafe fn op_memory_atomic_notify_indexed_unshared(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory slot is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_notify_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2250,6 +2270,7 @@ unsafe fn push_wait_effect(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_wait32(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2273,6 +2294,7 @@ pub unsafe fn op_memory_atomic_wait32(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose default memory is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_wait32_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2314,6 +2336,7 @@ pub unsafe fn op_memory_atomic_wait32_shared(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory slot is local.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_wait32_indexed_unshared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2337,6 +2360,7 @@ pub unsafe fn op_memory_atomic_wait32_indexed_unshared(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory slot is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_wait32_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2379,6 +2403,7 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_wait64(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2402,6 +2427,7 @@ pub unsafe fn op_memory_atomic_wait64(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose default memory is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_wait64_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2443,6 +2469,7 @@ pub unsafe fn op_memory_atomic_wait64_shared(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory slot is local.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_wait64_indexed_unshared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2466,6 +2493,7 @@ pub unsafe fn op_memory_atomic_wait64_indexed_unshared(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory slot is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_memory_atomic_wait64_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2508,6 +2536,7 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
+#[inline(never)]
 pub unsafe fn op_atomic_fence(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     ctx.gc
         .local_atomic_fence(ctx.default_local_memory_id_unchecked());
@@ -2527,6 +2556,7 @@ pub unsafe fn op_atomic_fence(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose default memory is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_atomic_fence_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

@@ -817,6 +817,63 @@ pub union Operand {
     pub start_host_function: HostFunction,
 }
 
+/// One interpreter instruction handler in the direct-threaded dispatch.
+///
+/// # Handler identity contract (#240)
+///
+/// Handlers are identified by **function-pointer identity**: the optimizer
+/// pipeline, the instantiator, and the JIT baseline decoder
+/// (`decode_baseline_op` over `OP_SPECS`) all recognise a handler by
+/// comparing an [`Instr`]'s stored `Op` against a handler item with
+/// `std::ptr::fn_addr_eq` (directly, or through an `op_eq` helper).
+///
+/// Rust does **not** guarantee that a function item has a single address in
+/// a linked binary. Under the workspace release profile (`codegen-units = 1`,
+/// ThinLTO), the linker/LTO can import an internal-linkage handler into
+/// several modules and internalise a copy in each, so two references to the
+/// "same" handler can hold different addresses and `fn_addr_eq` returns
+/// `false` for identical handlers. This is measured, not hypothetical:
+///
+/// - #209: `op_unreachable` (a one-line constant return) existed as two
+///   local symbols with one mangled hash in a release test binary, so the
+///   JIT baseline decoder did not recognise it and trap pc attribution was
+///   silently lost in release builds only.
+/// - #240: `special_function_vm_end` was likewise duplicated as two local
+///   symbols in 20 of 28 release test binaries on x86_64-linux / 1.96.0.
+///
+/// The defence is mechanical: **every handler that is compared by identity
+/// must be annotated `#[inline(never)]`**. The attribute forces a single
+/// global emission instead of per-module internalised copies (#209 verified
+/// the symbol change with `nm`: local x2 -> global x1). When you add a
+/// handler, or compare an existing one by identity for the first time, add
+/// the attribute to its definition — including the macro template or proc
+/// macro that generates it, where applicable. `tools/check-fn-identity.py`
+/// enforces this in CI by resolving every identity-compared handler to its
+/// definition and requiring the attribute.
+///
+/// Identity also fails in the opposite direction: **several handlers can
+/// share one address**. When two handlers' bodies become byte-identical
+/// after optimisation — the i64/f64 and i32/f32 twins on the untyped bit
+/// representation (`op_i64_const`/`op_f64_const`, the local-base load/store
+/// families, the SIMD replace-lane pair), or a provably redundant mask
+/// (`op_i32_crc16_update16_masked`, whose `& 0xffff` the CRC helper never
+/// observes) — identical-code folding merges the fn items, `fn_addr_eq`
+/// returns `true` for *different* handlers, and the JIT baseline decoder
+/// silently picks the first matching `OP_SPECS` entry for both. This was
+/// measured in-tree: 17 `OP_SPECS` pointer groups in an optimised test
+/// binary, 9 of them with different decoders. `#[inline(never)]` does not
+/// prevent folding. The defence for a handler whose body would otherwise
+/// fold into a twin is an identity barrier at the top of the body: the
+/// address of a function-local `static` passed to `std::hint::black_box`
+/// (for macro templates, one static per expansion). Two runtime tests in
+/// the JIT backend (`op_specs_decode_through_baseline_lookup`,
+/// `op_specs_alias_entries_share_their_decoder`) pin the decode side of
+/// this contract: if a future change folds another `OP_SPECS` pair, they
+/// fail.
+///
+/// Replacing pointer identity with explicit op ids in `Instr` would remove
+/// this contract, but that is a dispatch-representation change owned by
+/// #179/#189 and is deliberately not part of #240.
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
 #[derive(Clone, Copy)]
 pub union Instr {
