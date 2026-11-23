@@ -356,6 +356,9 @@ pub struct LimitsConfig {
     /// store-wide total. Growth is charged against the ceiling on every
     /// path: guest `memory.grow` instructions and growth performed by
     /// host callbacks through the `HostContext` memory accessors alike.
+    /// Instantiation compares the aggregate minimum of the module's
+    /// defined memories against the ceiling before creating any of
+    /// them, so a refused module leaves the store total unchanged.
     pub max_total_memory_pages: Option<u64>,
     /// Ceiling on the element count of any single table in the store.
     /// A table whose declared minimum exceeds the ceiling fails to

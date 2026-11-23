@@ -730,13 +730,29 @@ pub async fn instantiate(
 
         let memory_ceiling = store.runtime_config().memory.max_memory_pages;
         let total_memory_cap = store.runtime_config().limits.max_total_memory_pages;
+        if let Some(cap) = total_memory_cap {
+            // Preflight the aggregate minimum of the module's defined
+            // memories before creating any of them. Memories are adopted
+            // by the store as they are created and never removed, so
+            // refusing mid-loop would leave the earlier memories - and
+            // their pages, charged to the total budget - behind
+            // permanently. Imported memories are not summed here: they
+            // already live in the store, so their pages are already
+            // included in `total_memory_pages()` and charging them again
+            // would double-count. Nothing else can change the store
+            // total while instantiation runs, so this single check is
+            // equivalent to re-checking before every creation.
+            let defined_minimum_total: u64 = mems
+                .iter()
+                .skip(memories.len())
+                .map(|mem| u64::from(mem.limits.min))
+                .sum();
+            if runtime.total_memory_pages() + defined_minimum_total > cap {
+                return VMResult::ResourceLimitExceeded;
+            }
+        }
         for mem in mems.iter().skip(memories.len()) {
             let limits = mem.limits;
-            if let Some(cap) = total_memory_cap {
-                if runtime.total_memory_pages() + u64::from(limits.min) > cap {
-                    return VMResult::ResourceLimitExceeded;
-                }
-            }
             let effective_max = limits.max.unwrap_or(memory_ceiling).min(memory_ceiling);
             let memory = if mem.shared {
                 runtime.new_shared_memory(limits.min, effective_max)

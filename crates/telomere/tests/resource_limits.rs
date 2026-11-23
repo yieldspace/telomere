@@ -164,6 +164,27 @@ async fn total_memory_pages_cap_blocks_instantiation() {
 }
 
 #[tokio::test]
+async fn failed_multi_memory_instantiation_consumes_no_budget() {
+    let store = store_with_limits(|limits| limits.max_total_memory_pages = Some(3));
+    let registry = Registry::new();
+
+    // Two defined memories whose minima sum past the cap, although each
+    // one fits on its own. Refusing this module must not charge the
+    // budget for the first memory: memories are adopted by the store as
+    // they are created and never removed, so a refusal issued mid-loop
+    // would leave the earlier memory (and its pages) behind permanently.
+    let too_big = instantiate_wat_result("(module (memory 2) (memory 2))", &store, &registry).await;
+    assert!(
+        matches!(too_big, VMResult::ResourceLimitExceeded),
+        "expected ResourceLimitExceeded, got {too_big}"
+    );
+
+    // The failed instantiation consumed no budget: a module that uses
+    // the entire cap still instantiates afterwards.
+    instantiate_wat_ok("(module (memory 3))", &store, &registry).await;
+}
+
+#[tokio::test]
 async fn total_memory_pages_cap_blocks_growth_with_minus_one() {
     let store = store_with_limits(|limits| limits.max_total_memory_pages = Some(3));
     let registry = Registry::new();
