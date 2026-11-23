@@ -356,12 +356,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #275: workflow_dispatch runs 45165908240 and
-45165914168 against the PR branch at head
-`da35d049ee8bbabc43102fe3eed958f656af07a2` (branch commit `34cf8f5`,
-retain the resolved (version-matched) export key for the host-export
-binding lookup (#271); and merge commit `da35d04` bringing in `main`
-at `296f712`), and pull-request run 45165419636, which built the same
+against the code of PR #276: workflow_dispatch runs 45169595430 and
+45169601657 against the PR branch at head
+`276a0e41ff732ad12d66df383ea48dc88b35c692` (branch commit `278de94`,
+release atomic.wait timer threads when the wait resolves (#270); and
+merge commit `276a0e4` bringing in `main` at `92b66b3`), and
+pull-request run 45169582070, which built the same
 tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -378,7 +378,7 @@ table below (stripped file / stripped `.text`, in bytes).
 | `release` | `core-nosimd` | 1,300,968 | 1,000,199 |
 | `release` | `core-jit` | 2,038,040 | 1,586,951 |
 | `release` | `core-aot` | 1,520,816 | 1,162,215 |
-| `release` | `wasi-threads` | 3,068,152 | 2,436,071 |
+| `release` | `wasi-threads` | 3,069,760 | 2,437,351 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,105,936 | 782,311 |
 | `release-size` | `component` | 1,665,840 | 1,232,247 |
@@ -386,7 +386,7 @@ table below (stripped file / stripped `.text`, in bytes).
 | `release-size` | `core-nosimd` | 991,160 | 702,791 |
 | `release-size` | `core-jit` | 1,545,272 | 1,104,343 |
 | `release-size` | `core-aot` | 1,125,368 | 793,879 |
-| `release-size` | `wasi-threads` | 2,003,088 | 1,457,591 |
+| `release-size` | `wasi-threads` | 2,004,176 | 1,458,391 |
 
 #### Re-baseline history
 
@@ -948,6 +948,33 @@ at +5.41% (1,169,031 B to 1,232,247 B), unchanged at two decimal
 places, because that series moves by only −16 B here. The baseline
 was re-measured on the merged code and updated as recorded above,
 following the procedure below.
+
+PR #276 (#270, atomic.wait timer threads are released when the wait
+resolves: the detached timer thread spawned per finite-timeout shared
+wait slept until the original deadline even after notification or
+interrupt resolved the wait, and registrations already resolved
+before polling still spawned one; `SharedWaiter` now carries a
+release (`Mutex`, `Condvar`) pair signalled by the successful CAS
+claim in `try_mark_notified` / `try_mark_interrupted`, the timer
+sleeps in `wait_timeout` and exits as soon as the wait is resolved,
+and already-resolved registrations spawn no thread) merged current
+`main` into its branch first; the merge was conflict-free (main's
+only change to `crates/telomere/src/common/memory.rs` was the
+`push_to_stack` visibility narrowing from PR #269, disjoint from the
+wait-timer code). Its first CI run on the merged tree then tripped
+the gate on the PR's own change. Attribution was isolated by
+measuring current `main` alone (workflow_dispatch run 45169608064,
+gate success), which reproduces the previous baseline exactly on
+all 32 gated series. The growth is confined to `wasi-threads`, the
+configuration with the threads feature that compiles the shared-wait
+timer code (release stripped file +1,608 B / stripped `.text`
++1,280 B; release-size +1,088 B / +800 B). The other 30 gated
+series are byte-identical. Against the original #164 baseline, the
+largest cumulative growth remains release-size `component` stripped
+`.text` at +5.41% (1,169,031 B to 1,232,247 B), unchanged, because
+that series does not move here. The baseline was re-measured on the
+merged code and updated as recorded above, following the procedure
+below.
 
 ### Threshold derivation
 
