@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #264 (branch fix/263-const-fold-oob at merge commit 9e4171425404979a13f8fd39b866dc9d4156d084 \u2014 branch head f490e1b6c16ad43a0f4bd24f7de2101117c42f8c with current main 8d69b4b230788ceea4ce97a9e9b36f34e3938e8b merged in without conflicts, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45098230216 and 45098239411 against the branch and pull-request run 45098217560, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "9e4171425404979a13f8fd39b866dc9d4156d084",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #265 (branch fix/197-jit-relocations at merge commit 83d2372420ff675f2f6de3ec80d275a51dd745a1 \u2014 branch head 3646905ff2cd6780160184f70e95936aece61c46 with current main e91089baa9a889e83d2e615a5bf0dbed62addf87 merged in without conflicts, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45112476845 and 45112481681 against the branch and pull-request run 45112159380, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "83d2372420ff675f2f6de3ec80d275a51dd745a1",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45098230216,
-      45098239411
+      45112476845,
+      45112481681
     ],
     "cross_check_run_ids": [
-      45098217560
+      45112159380
     ],
-    "derivation": "Re-baseline for PR #264 (#263, const-base memarg fold must not wrap past 2^32). The PR changes the optimizer\u2019s three copies of fold_const_base_memarg (crates/telomere/src/parser/core/optimizer/pipeline/analysis.rs, select.rs, and versioning.rs) from wrapping_add to checked_add, refusing the const-base specialisation on overflow so the generic op\u2019s checked runtime address computation traps with MemoryIndexOutOfRange; it adds regression tests only besides. Attribution was isolated by measuring current main (8d69b4b) alone (workflow_dispatch run 45098248974, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR\u2019s own. The delta is a flat +16 B in stripped file and stripped .text in every release configuration that links the telomere library (core, component, wasi, core-nosimd, core-jit, wasi-threads) and in the release-size core, core-nosimd, and wasi-threads configurations \u2014 the few extra instructions of the checked fold landing in the linked library code; the release-size component, wasi, and core-jit configurations are byte-identical, as is the baseline configuration, which links no library code, in both profiles (10 of 28 gated series unchanged). Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #265 (#197, record relocations in the JIT emitters). The PR generalises the three baseline JIT emitters over a monomorphised EmitEnv: the JIT implementation reproduces the previous behaviour from the live store, while the AoT implementation supplies recipes from the parsed Module and records stub addresses / funcaddr immediates as placeholders plus a relocation table (RelocKind::{Stub(StubId), FuncAddr(funcidx)}); the 44 stubs gain a single source of truth (StubId table + fingerprint), and the patcher rewrites each site at the same length after verifying the placeholder. Attribution was isolated by measuring current main (e91089b) alone (workflow_dispatch run 45112486937, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR\u2019s own. Only the core-jit configuration links telomere-jit-codegen and the JIT emitters into the minimal embedder, so the delta is confined to its four gated series: release stripped file +2,552 B / stripped .text +848 B; release-size stripped file +720 B / stripped .text \u2212672 B (the release-size .text shrink is the code-layout effect of the emitter refactor under that profile\u2019s optimisation settings, as in earlier re-baselines). The other 24 gated series are byte-identical. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -70,12 +70,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2011704,
-          "threshold": 2011704
+          "baseline": 2014256,
+          "threshold": 2014256
         },
         "stripped_text_bytes": {
-          "baseline": 1566471,
-          "threshold": 1566471
+          "baseline": 1567319,
+          "threshold": 1567319
         }
       },
       "wasi-threads": {
@@ -142,12 +142,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1530808,
-          "threshold": 1530808
+          "baseline": 1531528,
+          "threshold": 1531528
         },
         "stripped_text_bytes": {
-          "baseline": 1095015,
-          "threshold": 1095015
+          "baseline": 1094343,
+          "threshold": 1094343
         }
       },
       "wasi-threads": {

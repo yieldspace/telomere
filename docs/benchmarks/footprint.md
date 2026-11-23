@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #264: workflow_dispatch runs 45098230216 and
-45098239411 against the PR branch at merge commit
-`9e4171425404979a13f8fd39b866dc9d4156d084` (branch head
-`f490e1b6c16ad43a0f4bd24f7de2101117c42f8c` with `main` at
-`8d69b4b230788ceea4ce97a9e9b36f34e3938e8b` merged in), and
-pull-request run 45098217560, which built the same tree
+against the code of PR #265: workflow_dispatch runs 45112476845 and
+45112481681 against the PR branch at merge commit
+`83d2372420ff675f2f6de3ec80d275a51dd745a1` (branch head
+`3646905ff2cd6780160184f70e95936aece61c46` with `main` at
+`e91089baa9a889e83d2e615a5bf0dbed62addf87` merged in), and
+pull-request run 45112159380, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). Every
 run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
@@ -374,14 +374,14 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | `release` | `component` | 2,475,368 | 1,983,191 |
 | `release` | `wasi` | 2,821,912 | 2,245,399 |
 | `release` | `core-nosimd` | 1,286,200 | 988,295 |
-| `release` | `core-jit` | 2,011,704 | 1,566,471 |
+| `release` | `core-jit` | 2,014,256 | 1,567,319 |
 | `release` | `wasi-threads` | 3,008,240 | 2,384,167 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,097,848 | 776,999 |
 | `release-size` | `component` | 1,630,336 | 1,202,983 |
 | `release-size` | `wasi` | 1,826,016 | 1,334,535 |
 | `release-size` | `core-nosimd` | 983,008 | 697,415 |
-| `release-size` | `core-jit` | 1,530,808 | 1,095,015 |
+| `release-size` | `core-jit` | 1,531,528 | 1,094,343 |
 | `release-size` | `wasi-threads` | 1,967,360 | 1,428,023 |
 
 #### Re-baseline history
@@ -728,6 +728,32 @@ are byte-identical, as is the `baseline` configuration, which
 links no library code, in both profiles (10 of 28 gated series
 unchanged). The baseline was re-measured on the merged code and
 updated as recorded above, following the procedure below.
+
+PR #265 (#197, record relocations in the JIT emitters) merged
+current `main` into its branch first (merge commit `83d2372`,
+no conflicts); its first CI run then tripped the gate on the
+PR's own change. The PR generalises the three baseline JIT
+emitters over a monomorphised `EmitEnv`: the JIT implementation
+reproduces the previous behaviour from the live store, while
+the AoT implementation supplies recipes from the parsed
+`Module` and records stub addresses and funcaddr immediates as
+placeholders plus a relocation table
+(`RelocKind::{Stub(StubId), FuncAddr(funcidx)}`), with a StubId
+table and fingerprint as the single source of truth for the 44
+stubs; the patcher rewrites each site at the same length after
+verifying the placeholder. Attribution was isolated by
+measuring current `main` alone (workflow_dispatch run
+45112486937, gate success), which reproduces the previous
+baseline exactly on all 28 gated series. Only the `core-jit`
+configuration links `telomere-jit-codegen` into the minimal
+embedder, so the delta is confined to its four gated series
+(release stripped file +2,552 B / stripped `.text` +848 B;
+release-size stripped file +720 B / stripped `.text` −672 B —
+the release-size `.text` shrink is the code-layout effect of
+the emitter refactor under that profile's optimisation
+settings) and the other 24 gated series are byte-identical.
+The baseline was re-measured on the merged code and updated as
+recorded above, following the procedure below.
 
 ### Threshold derivation
 
