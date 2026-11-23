@@ -708,3 +708,174 @@ async fn indexed_simd_memory_access_roundtrips_for_local_nonzero_memidx() {
 async fn indexed_simd_memory_access_roundtrips_for_shared_nonzero_memidx() {
     assert_indexed_simd_memory_roundtrip("1 2 shared").await;
 }
+
+// #263: a const-base load/store folds the i32.const address into the
+// memarg offset at selection time. The folded offset becomes the entire
+// effective address, so a sum that overflows u32 must trap with
+// MemoryIndexOutOfRange instead of wrapping into an in-bounds address.
+#[tokio::test]
+async fn const_base_load_with_effective_address_at_or_beyond_2_pow_32_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "at_2_pow_32") (result i32)
+            i32.const 1
+            i32.load offset=4294967295)
+          (func (export "beyond_2_pow_32") (result i32)
+            i32.const 2
+            i32.load offset=4294967295)
+          (func (export "negative_base") (result i32)
+            i32.const -1
+            i32.load offset=1)
+          (func (export "i64_at_2_pow_32") (result i64)
+            i32.const 1
+            i64.load offset=4294967295)
+          (func (export "f64_at_2_pow_32") (result f64)
+            i32.const 1
+            f64.load offset=4294967295)
+          (func (export "fused") (param i32) (result i32)
+            (local i32)
+            i32.const 1
+            i32.load offset=4294967295
+            local.get 0
+            i32.add
+            local.set 1
+            local.get 1))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for name in [
+        "at_2_pow_32",
+        "beyond_2_pow_32",
+        "negative_base",
+        "i64_at_2_pow_32",
+        "f64_at_2_pow_32",
+    ] {
+        assert_memory_oob(
+            run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await,
+        );
+    }
+    assert_memory_oob(
+        run_module_function(
+            &instance,
+            &store,
+            "fused",
+            &ResultValue::new(vec![WasmValue::I32(7)]),
+        )
+        .await,
+    );
+}
+
+#[tokio::test]
+async fn const_base_store_with_overflowing_effective_address_traps_without_writing() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "store32") (param i32)
+            i32.const 1
+            local.get 0
+            i32.store offset=4294967295)
+          (func (export "store64") (param i64)
+            i32.const 1
+            local.get 0
+            i64.store offset=4294967295)
+          (func (export "load0") (result i32)
+            i32.const 0
+            i32.load)
+          (func (export "load4") (result i32)
+            i32.const 4
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_memory_oob(
+        run_module_function(
+            &instance,
+            &store,
+            "store32",
+            &ResultValue::new(vec![WasmValue::I32(777)]),
+        )
+        .await,
+    );
+    assert_memory_oob(
+        run_module_function(
+            &instance,
+            &store,
+            "store64",
+            &ResultValue::new(vec![WasmValue::I64(555)]),
+        )
+        .await,
+    );
+    // The wrapped addresses are 0 and 0..8; nothing may have been written.
+    assert_success_i32(call_i32(&instance, &store, "load0", vec![]).await, 0);
+    assert_success_i32(call_i32(&instance, &store, "load4", vec![]).await, 0);
+}
+
+#[tokio::test]
+async fn const_base_in_range_and_u32_boundary_accesses_behave_like_generic() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 16) "\2a\00\00\00")
+          (func (export "in_range") (result i32)
+            i32.const 4
+            i32.load offset=12)
+          (func (export "sum_is_u32_max") (result i32)
+            i32.const 0
+            i32.load offset=4294967295)
+          (func (export "store_in_range") (param i32)
+            i32.const 8
+            local.get 0
+            i32.store offset=8)
+          (func (export "load16") (result i32)
+            i32.const 16
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    // The fold still applies for in-range sums and returns the stored value.
+    assert_success_i32(call_i32(&instance, &store, "in_range", vec![]).await, 42);
+    // base + offset == u32::MAX does not overflow the fold, but the access
+    // is far past the one-page memory, so it traps on the bounds check.
+    assert_memory_oob(
+        run_module_function(
+            &instance,
+            &store,
+            "sum_is_u32_max",
+            &ResultValue::new(vec![]),
+        )
+        .await,
+    );
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "store_in_range",
+            &ResultValue::new(vec![WasmValue::I32(0x1234_5678)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "load16", vec![]).await,
+        0x1234_5678,
+    );
+}

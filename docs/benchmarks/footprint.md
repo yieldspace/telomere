@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #262: workflow_dispatch runs 45096189255 and
-45096200688 against the PR branch at merge commit
-`4c12a5f3dcdd85e91b52db1363655caf35c5dad2` (branch head
-`31e80be68aa9358cdb86994831662eca7c0a7f70` with `main` at
-`3121c3a6efe48cd625b9b9d4e16469cbda7de099` merged in), and
-pull-request run 45096136125, which built the same tree
+against the code of PR #265: workflow_dispatch runs 45112476845 and
+45112481681 against the PR branch at merge commit
+`83d2372420ff675f2f6de3ec80d275a51dd745a1` (branch head
+`3646905ff2cd6780160184f70e95936aece61c46` with `main` at
+`e91089baa9a889e83d2e615a5bf0dbed62addf87` merged in), and
+pull-request run 45112159380, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). Every
 run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
@@ -370,19 +370,19 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,478,816 | 1,131,383 |
-| `release` | `component` | 2,475,352 | 1,983,175 |
-| `release` | `wasi` | 2,821,896 | 2,245,383 |
-| `release` | `core-nosimd` | 1,286,184 | 988,279 |
-| `release` | `core-jit` | 2,011,688 | 1,566,455 |
-| `release` | `wasi-threads` | 3,008,224 | 2,384,151 |
+| `release` | `core` | 1,478,832 | 1,131,399 |
+| `release` | `component` | 2,475,368 | 1,983,191 |
+| `release` | `wasi` | 2,821,912 | 2,245,399 |
+| `release` | `core-nosimd` | 1,286,200 | 988,295 |
+| `release` | `core-jit` | 2,014,256 | 1,567,319 |
+| `release` | `wasi-threads` | 3,008,240 | 2,384,167 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,097,832 | 776,983 |
+| `release-size` | `core` | 1,097,848 | 776,999 |
 | `release-size` | `component` | 1,630,336 | 1,202,983 |
 | `release-size` | `wasi` | 1,826,016 | 1,334,535 |
-| `release-size` | `core-nosimd` | 982,992 | 697,399 |
-| `release-size` | `core-jit` | 1,530,808 | 1,095,015 |
-| `release-size` | `wasi-threads` | 1,967,344 | 1,428,007 |
+| `release-size` | `core-nosimd` | 983,008 | 697,415 |
+| `release-size` | `core-jit` | 1,531,528 | 1,094,343 |
+| `release-size` | `wasi-threads` | 1,967,360 | 1,428,023 |
 
 #### Re-baseline history
 
@@ -702,6 +702,58 @@ links no library code, is byte-identical in both profiles
 (4 of 28 gated series unchanged). The baseline was re-measured
 on the merged code and updated as recorded above, following
 the procedure below.
+
+PR #264 (#263, const-folded load with effective address ≥ 2^32
+does not trap (returns 0)) merged current `main` into its branch
+first (merge commit `9e41714`, no conflicts); its first CI run
+then tripped the gate on the PR's own change. The PR changes the
+optimizer's three copies of `fold_const_base_memarg`
+(`crates/telomere/src/parser/core/optimizer/pipeline/analysis.rs`,
+`select.rs`, and `versioning.rs`) from `wrapping_add` to
+`checked_add`, refusing the const-base specialisation when
+base + offset overflows u32 so the generic op's checked runtime
+address computation traps with `MemoryIndexOutOfRange`; its only
+other changes are regression tests, which are not linked into
+the embedder. Attribution was isolated by measuring current
+`main` alone (workflow_dispatch run 45098248974, gate success),
+which reproduces the previous baseline exactly on all 28 gated
+series. The delta is a flat +16 B in stripped file and stripped
+`.text` in every release configuration that links the telomere
+library (`core`, `component`, `wasi`, `core-nosimd`, `core-jit`,
+`wasi-threads`) and in the release-size `core`, `core-nosimd`,
+and `wasi-threads` configurations — the few extra instructions
+of the checked fold landing in the linked library code; the
+release-size `component`, `wasi`, and `core-jit` configurations
+are byte-identical, as is the `baseline` configuration, which
+links no library code, in both profiles (10 of 28 gated series
+unchanged). The baseline was re-measured on the merged code and
+updated as recorded above, following the procedure below.
+
+PR #265 (#197, record relocations in the JIT emitters) merged
+current `main` into its branch first (merge commit `83d2372`,
+no conflicts); its first CI run then tripped the gate on the
+PR's own change. The PR generalises the three baseline JIT
+emitters over a monomorphised `EmitEnv`: the JIT implementation
+reproduces the previous behaviour from the live store, while
+the AoT implementation supplies recipes from the parsed
+`Module` and records stub addresses and funcaddr immediates as
+placeholders plus a relocation table
+(`RelocKind::{Stub(StubId), FuncAddr(funcidx)}`), with a StubId
+table and fingerprint as the single source of truth for the 44
+stubs; the patcher rewrites each site at the same length after
+verifying the placeholder. Attribution was isolated by
+measuring current `main` alone (workflow_dispatch run
+45112486937, gate success), which reproduces the previous
+baseline exactly on all 28 gated series. Only the `core-jit`
+configuration links `telomere-jit-codegen` into the minimal
+embedder, so the delta is confined to its four gated series
+(release stripped file +2,552 B / stripped `.text` +848 B;
+release-size stripped file +720 B / stripped `.text` −672 B —
+the release-size `.text` shrink is the code-layout effect of
+the emitter refactor under that profile's optimisation
+settings) and the other 24 gated series are byte-identical.
+The baseline was re-measured on the merged code and updated as
+recorded above, following the procedure below.
 
 ### Threshold derivation
 

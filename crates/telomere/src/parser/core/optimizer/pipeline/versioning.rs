@@ -1098,7 +1098,11 @@ fn specialize_local_scaled_index_block_ops(
 
 fn fold_const_base_memarg(base: u32, memarg: Option<&LoweredOperand>) -> Option<LoweredOperand> {
     let mut memarg = raw_memarg(memarg)?;
-    memarg.offset = memarg.offset.wrapping_add(base);
+    // The folded offset becomes the entire effective address of the
+    // const-base op, so an overflowing sum must refuse the fold: the true
+    // effective address is >= 2^32 and the generic (checked) path has to
+    // trap with MemoryIndexOutOfRange instead of wrapping in-bounds (#263).
+    memarg.offset = memarg.offset.checked_add(base)?;
     Some(LoweredOperand::Raw(unsafe { Operand { memarg }.encoded }))
 }
 

@@ -876,7 +876,11 @@ fn fold_const_base_memarg(
 ) -> Option<[u8; 8]> {
     let base = raw_i32(base)? as u32;
     let mut memarg = raw_memarg(memarg)?;
-    memarg.offset = memarg.offset.wrapping_add(base);
+    // The folded offset becomes the entire effective address of the
+    // const-base op, so an overflowing sum must refuse the fold: the true
+    // effective address is >= 2^32 and the generic (checked) path has to
+    // trap with MemoryIndexOutOfRange instead of wrapping in-bounds (#263).
+    memarg.offset = memarg.offset.checked_add(base)?;
     Some(unsafe { Operand { memarg }.encoded })
 }
 
