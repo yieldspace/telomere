@@ -86,6 +86,15 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Extended the public-surface guard to enumerate `#[macro_export]` macros
   across all of `src/` and freeze the discovered root `vm_try!` and
   `with_count!` macros in the committed snapshot.
+- Defined the component host-function execution contract (#147): the
+  component runtime is synchronous, so futures handed to the `*_async`
+  linker registrations (`register_import_async`, `register_func_async`,
+  `register_import_resource_drop_async`, and the generated `HostAsync` /
+  `ImportsAsync` bindings) are polled exactly once and must complete on
+  that first poll. The contract is now stated on every async registration
+  method, on `ComponentFuture`, and in the generated binding docs, and the
+  error returned for a yielding host future names the contract and the
+  remedy. No signatures changed.
 
 ### Fixed
 

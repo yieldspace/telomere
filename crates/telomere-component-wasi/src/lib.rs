@@ -10,6 +10,9 @@
 //! and standard I/O inheritance - are configured through [`WasiState`]. The
 //! provider supplies default wall and monotonic clocks plus secure random values.
 //! Install its interfaces with [`add_to_linker_sync`] or [`add_to_linker_async`].
+//! The provider's implementations complete synchronously, so both forms
+//! satisfy the component runtime's first-poll contract for host functions
+//! (see `telomere_component::ComponentFuture`).
 //! The generated [`bindings`] module is the typed WIT-facing API for callers
 //! that need to invoke or implement these interfaces directly.
 //!

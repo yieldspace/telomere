@@ -409,6 +409,11 @@ fn component_host_trampoline(cx: &mut HostContext) -> VMResult<Vec<WasmValue>> {
     let args = cx.args().to_vec();
     match binding.call_sync(cx.store(), &args) {
         Ok(results) => VMResult::Success(results),
+        // The core host boundary cannot carry a `ComponentError`, so every
+        // failure of the bound callable -- including a host future that
+        // yields under the first-poll contract -- surfaces to the guest as
+        // an `unreachable` trap. That is the documented behaviour for the
+        // canon-lower path; component-level calls return the error itself.
         Err(_) => VMResult::Unreachable,
     }
 }
@@ -451,6 +456,12 @@ fn call_core_export_sync(
     }
 }
 
+/// The single enforcement point of the first-poll contract documented on
+/// [`crate::ComponentFuture`]: a host future gets exactly one poll with a
+/// no-op waker, and `Poll::Pending` is an error, never a suspension. Every
+/// host-function and resource-destructor invocation in the component
+/// runtime goes through here, so this is the only place the contract is
+/// implemented.
 fn run_ready_future_sync<F, T>(future: F, context: &str) -> Result<T, ComponentError>
 where
     F: Future<Output = T>,
@@ -461,7 +472,10 @@ where
     match future.as_mut().poll(&mut cx) {
         Poll::Ready(output) => Ok(output),
         Poll::Pending => Err(ComponentError::Runtime(format!(
-            "{context} yielded in sync execution"
+            "{context} yielded in sync execution: component host functions must \
+             complete on their first poll (the component runtime is synchronous \
+             and never drives host futures past one poll); return a ready future \
+             or register the synchronous form instead"
         ))),
     }
 }

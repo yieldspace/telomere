@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #286 (branch fix/282-ref-is-null-tail at head 91dd280f3c81d03cc7ee3fb3b88f8d806166d4af \u2014 branch commit d3005b1 (restore tail dispatch in op_ref_is_null (#282)) plus merge commit 91dd280 bringing in current main 94a0eca, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45206926698 and 45206945651 against the branch and pull-request run 45206866309, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "91dd280f3c81d03cc7ee3fb3b88f8d806166d4af",
+    "summary": "GitHub Actions 'Embedder footprint' runs for PR #284 (branch fix/147-async-facade at head d49017889bc96fc71fb2d2c164f5a8d4ac8f1719 \u2014 branch commit e9c8e52 (state the component host-function first-poll contract on the async registration surface (#147)) plus merge commit d490178 bringing in current main 8c748aa, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45218637130 and 45218665766 against the branch and pull-request run 45217434943, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "d49017889bc96fc71fb2d2c164f5a8d4ac8f1719",
     "date": "2026-11-24",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45206926698,
-      45206945651
+      45218637130,
+      45218665766
     ],
     "cross_check_run_ids": [
-      45206866309
+      45217434943
     ],
-    "derivation": "Re-baseline for PR #286 (#282, op_ref_is_null has the same non-tail dispatch as op_f64_const: the #240 identity barrier in crates/telomere/src/runtime/vm/refs.rs is replaced with the volatile-load form proven in #277, restoring the handler's tail dispatch). The branch merged current main (94a0eca, containing PR #287) before measurement; the only conflict was in crates/telomere/tests/call_threading.rs, where both sides had appended a same-shaped loop test at the same location (main's f64.const test from #277 and this branch's ref.is_null test), resolved by keeping both tests. After the merge the op_ref_is_null replacement is present exactly once, the only remaining black_box barrier is op_return's intentional exception, and a full disassembly audit of the merged tree shows 261 TAIL / 1 NONTAIL among the named barrier handlers (the only NONTAIL being op_return), with op_ref_is_null verified TAIL by direct disassembly. Attribution was isolated by measuring current main (94a0eca) alone (workflow_dispatch run 45206965424, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. 18 of the 32 gated series change, all by \u00b116 B except one at \u221232 B: in release, stripped file grows by +16 B in core, component, core-aot, core-nosimd, wasi and wasi-threads, and stripped .text is unchanged everywhere; in release-size, stripped file shrinks by \u221216 B in component, core, core-aot, core-nosimd and wasi and by \u221232 B in wasi-threads, grows by +16 B in core-jit, and stripped .text shrinks by \u221216 B in component, core, core-aot, core-nosimd and wasi-threads. The baseline configuration is byte-identical in both profiles. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.47% (1,169,031 B to 1,232,983 B), unchanged from +5.47%. Run-to-run spread was again 0 B for every gated series across the three samples."
+    "derivation": "Re-baseline for PR #284 (#147, the component async registration surface states its first-poll contract: canonical contract text on ComponentFuture, first-poll warnings on all six *_async registration methods and the bindgen traits/functions, a corrected false doc claim on register_func_async, and a self-explanatory Pending error message; the decision and roadmap are recorded in docs/component-model/new-component-runtime.md). The branch merged current main (8c748aa, containing PR #286) before measurement, with no conflicts. Attribution was isolated by measuring current main (8c748aa) alone (workflow_dispatch run 45219214659, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. Only 6 of the 32 gated series change, all in stripped file bytes with stripped .text unchanged everywhere: release component and wasi grow by +208 B and wasi-threads by +224 B; release-size component grows by +208 B and wasi and wasi-threads by +224 B. The growth is confined to the configurations that link the component runtime and carries no .text change, consistent with the new contract/warning string literals this PR adds to telomere-component. The remaining 26 series, including the baseline configuration in both profiles, are byte-identical. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.47% (1,169,031 B to 1,232,983 B), unchanged from +5.47%. Run-to-run spread was again 0 B for every gated series across the three samples."
   },
   "thresholds": {
     "release": {
@@ -40,8 +40,8 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2537440,
-          "threshold": 2537440
+          "baseline": 2537648,
+          "threshold": 2537648
         },
         "stripped_text_bytes": {
           "baseline": 2037815,
@@ -50,8 +50,8 @@
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2881440,
-          "threshold": 2881440
+          "baseline": 2881648,
+          "threshold": 2881648
         },
         "stripped_text_bytes": {
           "baseline": 2297943,
@@ -90,8 +90,8 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3070808,
-          "threshold": 3070808
+          "baseline": 3071032,
+          "threshold": 3071032
         },
         "stripped_text_bytes": {
           "baseline": 2438887,
@@ -122,8 +122,8 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1670296,
-          "threshold": 1670296
+          "baseline": 1670504,
+          "threshold": 1670504
         },
         "stripped_text_bytes": {
           "baseline": 1232983,
@@ -132,8 +132,8 @@
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1866168,
-          "threshold": 1866168
+          "baseline": 1866392,
+          "threshold": 1866392
         },
         "stripped_text_bytes": {
           "baseline": 1364711,
@@ -172,8 +172,8 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2008552,
-          "threshold": 2008552
+          "baseline": 2008776,
+          "threshold": 2008776
         },
         "stripped_text_bytes": {
           "baseline": 1459111,
