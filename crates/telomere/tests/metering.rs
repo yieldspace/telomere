@@ -1012,10 +1012,7 @@ fn metered_jit_store(initial_fuel: Option<u64>) -> Store {
     let mut runtime_config = RuntimeConfig::default();
     runtime_config.metering.enabled = true;
     runtime_config.metering.initial_fuel = initial_fuel;
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     Store::new_with_runtime_config(runtime_config)
 }
 

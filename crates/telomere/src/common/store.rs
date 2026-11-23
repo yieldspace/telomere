@@ -296,7 +296,7 @@ impl FunctionInstanceData {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// Configures the optional lazy baseline JIT for a [`Store`].
 ///
 /// Set [`enabled`](Self::enabled) only after checking [`crate::jit_supported`].
@@ -304,19 +304,6 @@ pub struct JitConfig {
     /// Enables the core JIT only when Telomere is compiled with the `jit`
     /// Cargo feature and the current target is supported.
     pub enabled: bool,
-    /// Upper bound for cached machine code owned by this store, counted
-    /// in emitted code bytes (each function rounded up to the 16-byte
-    /// code alignment), not in page-rounded mapping sizes.
-    pub code_cache_max_bytes: u32,
-}
-
-impl Default for JitConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            code_cache_max_bytes: 4 * 1024 * 1024,
-        }
-    }
 }
 
 #[non_exhaustive]
@@ -335,6 +322,67 @@ impl Default for MemoryConfig {
             } else {
                 4096
             },
+        }
+    }
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Embedder-configured resource limits for a [`Store`].
+///
+/// Every limit defaults to the runtime's previous behaviour, so an
+/// embedder that sets nothing observes no change: there is no store-wide
+/// memory total and no table cap beyond each module's declared maximum,
+/// the guest value stack is [`DEFAULT_VALUE_STACK_BYTES`](Self::DEFAULT_VALUE_STACK_BYTES),
+/// and the JIT code cache keeps its historical 4 MiB ceiling.
+///
+/// The per-memory page ceiling is configured separately through
+/// [`MemoryConfig::max_memory_pages`]: a memory's effective maximum is the
+/// smaller of its module-declared maximum and that ceiling. The store-wide
+/// total in this struct applies on top of it, across all of the store's
+/// linear memories.
+///
+/// Exceeding a limit while instantiating fails with
+/// [`VMResult::ResourceLimitExceeded`](crate::VMResult::ResourceLimitExceeded).
+/// Growth instructions never trap on a limit: `memory.grow` and
+/// `table.grow` return -1, exactly as they do when exceeding a
+/// module-declared maximum. A smaller value stack surfaces as the existing
+/// [`VMResult::StackOverflow`](crate::VMResult::StackOverflow) trap.
+pub struct LimitsConfig {
+    /// Ceiling on the total number of pages held by all linear memories
+    /// in the store, local and shared combined. `None` imposes no
+    /// store-wide total.
+    pub max_total_memory_pages: Option<u64>,
+    /// Ceiling on the element count of any single table in the store.
+    /// A table whose declared minimum exceeds the ceiling fails to
+    /// instantiate; growth beyond the ceiling returns -1. `None` leaves
+    /// each table bounded only by its declared maximum.
+    pub max_table_elements: Option<u32>,
+    /// Size in bytes of the guest value stack allocated for each
+    /// execution. Deeper guest recursion needs a larger stack; a smaller
+    /// stack bounds the host memory one execution can consume.
+    pub value_stack_bytes: u32,
+    /// Upper bound for cached machine code owned by this store, counted
+    /// in emitted code bytes (each function rounded up to the 16-byte
+    /// code alignment), not in page-rounded mapping sizes.
+    pub max_code_cache_bytes: u32,
+}
+
+impl LimitsConfig {
+    /// The guest value stack size used when no limit is configured
+    /// (128 KiB, the size the runtime previously hardcoded).
+    pub const DEFAULT_VALUE_STACK_BYTES: u32 = 128 * 1024;
+    /// The JIT code cache ceiling used when no limit is configured.
+    pub const DEFAULT_MAX_CODE_CACHE_BYTES: u32 = 4 * 1024 * 1024;
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_total_memory_pages: None,
+            max_table_elements: None,
+            value_stack_bytes: Self::DEFAULT_VALUE_STACK_BYTES,
+            max_code_cache_bytes: Self::DEFAULT_MAX_CODE_CACHE_BYTES,
         }
     }
 }
@@ -370,6 +418,8 @@ pub struct RuntimeConfig {
     pub metering: MeteringConfig,
     /// Diagnostic data retained for later reporting.
     pub diagnostics: DiagnosticsConfig,
+    /// Embedder-configured resource limits for this store.
+    pub limits: LimitsConfig,
 }
 
 #[repr(C, align(4))]
@@ -501,6 +551,7 @@ pub struct StoreInner {
     shared_memories: Vec<Arc<SharedMemoryObject>>,
     pub(crate) segments: StoreSegments,
     next_instance_id: u32,
+    limits: LimitsConfig,
 }
 
 macro_rules! define_store_local_shared_const_read {
@@ -644,6 +695,39 @@ impl StoreInner {
         Self {
             next_instance_id: 1,
             ..Self::default()
+        }
+    }
+
+    pub(crate) fn set_limits(&mut self, limits: LimitsConfig) {
+        self.limits = limits;
+    }
+
+    pub(crate) fn limits(&self) -> LimitsConfig {
+        self.limits
+    }
+
+    /// Total pages currently held by all linear memories in this store,
+    /// local and shared combined.
+    pub(crate) fn total_memory_pages(&self) -> u64 {
+        let local: u64 = self
+            .local_memories
+            .iter()
+            .map(|memory| u64::from(memory.page_size()))
+            .sum();
+        let shared: u64 = self
+            .shared_memories
+            .iter()
+            .map(|memory| u64::from(memory.page_size()))
+            .sum();
+        local + shared
+    }
+
+    /// Whether growing one memory by `page_size_delta` pages would keep
+    /// the store within its configured total-memory ceiling.
+    pub(crate) fn total_memory_growth_allowed(&self, page_size_delta: u32) -> bool {
+        match self.limits.max_total_memory_pages {
+            None => true,
+            Some(cap) => self.total_memory_pages() + u64::from(page_size_delta) <= cap,
         }
     }
 
@@ -1216,6 +1300,9 @@ impl StoreInner {
         id: LocalMemoryId,
         page_size_delta: u32,
     ) -> VMResult<i32> {
+        if !self.total_memory_growth_allowed(page_size_delta) {
+            return VMResult::Success(-1);
+        }
         self.local_memory_mut(id).grow(page_size_delta)
     }
 
@@ -1225,6 +1312,9 @@ impl StoreInner {
         id: SharedMemoryId,
         page_size_delta: u32,
     ) -> VMResult<i32> {
+        if !self.total_memory_growth_allowed(page_size_delta) {
+            return VMResult::Success(-1);
+        }
         self.shared_memory(id).grow(page_size_delta)
     }
 
@@ -2053,8 +2143,10 @@ impl Store {
             .metering
             .enabled
             .then(|| MeteringHandle::new(runtime_config.metering.initial_fuel));
+        let mut inner = StoreInner::new();
+        inner.set_limits(runtime_config.limits);
         Self {
-            runtime: Arc::new(Mutex::new(StoreInner::new())),
+            runtime: Arc::new(Mutex::new(inner)),
             identity: Arc::new(()),
             segments: Mutex::new(StoreSegments::default()),
             next_instance_id: AtomicU32::new(1),

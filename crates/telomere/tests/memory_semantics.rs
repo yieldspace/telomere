@@ -50,6 +50,7 @@ async fn call_v128(
             VMResult::Unimplemented => VMResult::Unimplemented,
             VMResult::FuelExhausted => VMResult::FuelExhausted,
             VMResult::Cancelled => VMResult::Cancelled,
+            VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
         },
     }
 }
@@ -73,6 +74,7 @@ fn vm_result_map_unit(result: VMResult<ResultValue>) -> VMResult<i32> {
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
         VMResult::Cancelled => VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
     }
 }
 

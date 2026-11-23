@@ -256,10 +256,8 @@ pub(crate) async fn run(
     let state = Box::new(CoreWasiPreview1State::new(path, guest_argv, stdio));
     let state_ptr = unsafe { StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State) };
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: jit,
-        code_cache_max_bytes: jit_code_cache_mib.saturating_mul(1024 * 1024),
-    };
+    runtime_config.jit = JitConfig { enabled: jit };
+    runtime_config.limits.max_code_cache_bytes = jit_code_cache_mib.saturating_mul(1024 * 1024);
     let store = Store::new_with_state_and_runtime_config(state_ptr, runtime_config);
     let mut registry = Registry::new();
     let host = vm_result_to_anyhow(
@@ -521,6 +519,7 @@ fn describe_vm_result<T>(result: &VMResult<T>) -> &'static str {
         VMResult::Unimplemented => "unimplemented",
         VMResult::FuelExhausted => "fuel exhausted",
         VMResult::Cancelled => "cancelled",
+        VMResult::ResourceLimitExceeded => "resource limit exceeded",
     }
 }
 

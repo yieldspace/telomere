@@ -364,6 +364,7 @@ mod tests {
             VMResult::Unimplemented => return VMResult::Unimplemented,
             VMResult::FuelExhausted => return VMResult::FuelExhausted,
             VMResult::Cancelled => return VMResult::Cancelled,
+            VMResult::ResourceLimitExceeded => return VMResult::ResourceLimitExceeded,
         };
         ctx.set_local_reference(local_reference);
         VMResult::Success(entry_pc)

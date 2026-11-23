@@ -44,10 +44,7 @@ fn parse_module(wat: &str) -> telomere::Module {
 ))]
 fn jit_store() -> Store {
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     Store::new_with_runtime_config(runtime_config)
 }
 

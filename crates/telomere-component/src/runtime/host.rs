@@ -544,6 +544,10 @@ pub(super) fn vm_result_to_component_error(
             kind: telomere::TrapKind::Cancelled,
             message: format!("{context} interrupted: cancelled"),
         },
+        CoreVMResult::ResourceLimitExceeded => ComponentError::GuestTrap {
+            kind: telomere::TrapKind::ResourceLimitExceeded,
+            message: format!("{context} failed: resource limit exceeded"),
+        },
     }
 }
 

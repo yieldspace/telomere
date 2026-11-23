@@ -65,6 +65,15 @@ pub enum VMResult<V> {
     FuelExhausted,
     /// A watchdog requested Store execution cancellation at a metering checkpoint.
     Cancelled,
+    /// Instantiation would have exceeded a resource limit configured by
+    /// the embedder through [`LimitsConfig`](crate::LimitsConfig): a
+    /// store-wide linear-memory total, or a table whose declared minimum
+    /// exceeds the configured element ceiling.
+    ///
+    /// Growth instructions do not raise this failure: `memory.grow` and
+    /// `table.grow` report an exceeded limit by returning -1, exactly as
+    /// they do for a module-declared maximum.
+    ResourceLimitExceeded,
 }
 
 impl<V> fmt::Display for VMResult<V> {
@@ -92,6 +101,7 @@ impl<V> fmt::Display for VMResult<V> {
             VMResult::Unimplemented => "unimplemented",
             VMResult::FuelExhausted => "fuel exhausted",
             VMResult::Cancelled => "cancelled",
+            VMResult::ResourceLimitExceeded => "resource limit exceeded",
         })
     }
 }
@@ -153,6 +163,7 @@ impl<V> VMResult<V> {
             VMResult::Unimplemented => VMResult::Unimplemented,
             VMResult::FuelExhausted => VMResult::FuelExhausted,
             VMResult::Cancelled => VMResult::Cancelled,
+            VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
         }
     }
 
@@ -214,6 +225,9 @@ impl<V> VMResult<V> {
             }
             VMResult::Cancelled => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: Cancelled")
+            }
+            VMResult::ResourceLimitExceeded => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: ResourceLimitExceeded")
             }
         }
     }

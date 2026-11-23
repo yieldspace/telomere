@@ -348,10 +348,7 @@ async fn jit_trap_keeps_caller_pcs_and_golden_frame_sequence() {
     }
 
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     let store = Store::new_with_runtime_config(runtime_config);
     let info = run_trap(
         r#"
@@ -441,10 +438,7 @@ async fn jit_trap_sites_match_interpreter_at_distinct_sites_in_one_function() {
 
     let interpreter_store = Store::new();
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     let jit_store = Store::new_with_runtime_config(runtime_config);
 
     let mut pcs = Vec::new();
@@ -488,10 +482,7 @@ async fn jit_nested_trap_attributes_every_frame_like_the_interpreter() {
     let interpreter_store = Store::new();
     let interp = run_any_trap(WAT, "run", &interpreter_store).await;
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     let jit_store = Store::new_with_runtime_config(runtime_config);
     let jit = run_any_trap(WAT, "run", &jit_store).await;
 
@@ -537,10 +528,7 @@ async fn jit_stub_trap_in_jit_caller_keeps_no_pc_but_caller_pc() {
     let interpreter_store = Store::new();
     let interp = run_any_trap(WAT, "run", &interpreter_store).await;
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     let jit_store = Store::new_with_runtime_config(runtime_config);
     let jit = run_any_trap(WAT, "run", &jit_store).await;
 

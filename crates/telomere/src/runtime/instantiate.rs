@@ -729,8 +729,14 @@ pub async fn instantiate(
         let inst_addr = runtime.object_ref_for_instance(inst_id);
 
         let memory_ceiling = store.runtime_config().memory.max_memory_pages;
+        let total_memory_cap = store.runtime_config().limits.max_total_memory_pages;
         for mem in mems.iter().skip(memories.len()) {
             let limits = mem.limits;
+            if let Some(cap) = total_memory_cap {
+                if runtime.total_memory_pages() + u64::from(limits.min) > cap {
+                    return VMResult::ResourceLimitExceeded;
+                }
+            }
             let effective_max = limits.max.unwrap_or(memory_ceiling).min(memory_ceiling);
             let memory = if mem.shared {
                 runtime.new_shared_memory(limits.min, effective_max)
@@ -851,8 +857,20 @@ pub async fn instantiate(
         for init in &global_init {
             globals.push(vm_try!(init_global(&mut runtime, init, &globals, &funcs)));
         }
-        let mut table_instances: Vec<ObjectRef> =
-            m_tables.iter().map(|v| runtime.new_table(*v)).collect();
+        let table_cap = store.runtime_config().limits.max_table_elements;
+        let mut table_instances: Vec<ObjectRef> = Vec::with_capacity(m_tables.len());
+        for table_type in m_tables.iter() {
+            let mut table_type = *table_type;
+            if let Some(cap) = table_cap {
+                if table_type.limits.min > cap {
+                    return VMResult::ResourceLimitExceeded;
+                }
+                // Clamping the stored maximum makes `table.grow` enforce
+                // the ceiling through the existing declared-max path.
+                table_type.limits.max = Some(table_type.limits.max.unwrap_or(cap).min(cap));
+            }
+            table_instances.push(runtime.new_table(table_type));
+        }
         tables.append(&mut table_instances);
 
         let res = (|| {
@@ -944,7 +962,7 @@ pub async fn instantiate(
         let addr = InstanceHandle::new(store, inst_id, instance_id);
 
         let has_start = if let Some(start) = start {
-            let mut stack = Stack::new(128 * 1024);
+            let mut stack = Stack::new(store.runtime_config().limits.value_stack_bytes as usize);
             let funcaddr = vm_try!(VMResult::from_option(
                 instance.funcs.get(start.0 as usize),
                 || {

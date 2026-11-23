@@ -1078,6 +1078,7 @@ fn runtime_atomic_start_indexed(
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
         VMResult::Cancelled => VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
     }
 }
 
@@ -1331,6 +1332,7 @@ fn unit_result<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
         VMResult::Cancelled => VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
     }
 }
 
