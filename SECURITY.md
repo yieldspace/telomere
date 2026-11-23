@@ -45,6 +45,13 @@ filed as ordinary issues than as security reports:
   disables its JIT rather than offering an unmetered JIT execution path;
 - crashes reachable from a malformed or hostile component, including the
   resource-handle abort described in [examples/README.md](examples/README.md);
+- the public API boundary deliberately does not wrap calls in
+  `catch_unwind`: panics from embedder host callbacks propagate to the
+  embedder, and catching an unwind that crossed the interpreter's unsafe
+  blocks could leave the store in an unknown state. Reachable internal
+  invariant violations are instead converted to error returns at the site
+  (see issue #128); unwind-soundness of the unsafe core is tracked
+  separately;
 - resource exhaustion by a guest whose embedder intentionally disables
   metering or chooses unlimited fuel. The library metering API bounds only its
   documented checkpointed interpreter paths and precharges native bulk work by

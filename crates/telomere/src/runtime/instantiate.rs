@@ -310,44 +310,95 @@ pub async fn instantiate(
             ));
             match (&import.desc, export) {
                 (ImportDesc::TypeIdx(tidx), ExportDesc::Func(funcidx)) => {
-                    let import_ft = fts.get(*tidx).unwrap();
-                    let export_ft_idx = ext_module.functions[funcidx.0 as usize];
-                    let export_ft = ext_module
-                        .function_types
-                        .get(export_ft_idx.0 as usize)
-                        .unwrap();
+                    // #128: every index in this linking match resolves
+                    // fail-closed. The parser validates these indices for
+                    // parsed modules, but a registry entry whose indices
+                    // disagree with its module is unlinkable, never a
+                    // host panic.
+                    let import_ft = vm_try!(VMResult::from_option(fts.get(*tidx), || {
+                        tracing::trace!("import type index out of range");
+                        VMResult::Unlinkable
+                    }));
+                    let export_ft_idx = vm_try!(VMResult::from_option(
+                        ext_module.functions.get(funcidx.0 as usize),
+                        || {
+                            tracing::trace!("export function index out of range");
+                            VMResult::Unlinkable
+                        }
+                    ));
+                    let export_ft = vm_try!(VMResult::from_option(
+                        ext_module.function_types.get(export_ft_idx.0 as usize),
+                        || {
+                            tracing::trace!("export function type index out of range");
+                            VMResult::Unlinkable
+                        }
+                    ));
                     if import_ft != export_ft {
                         tracing::trace!("import function type");
                         return VMResult::Unlinkable;
                     }
-                    let funcaddr = ext_inst.funcs.as_slice()[funcidx.0 as usize];
+                    let funcaddr = vm_try!(VMResult::from_option(
+                        ext_inst.funcs.as_slice().get(funcidx.0 as usize),
+                        || {
+                            tracing::trace!("export function address out of range");
+                            VMResult::Unlinkable
+                        }
+                    ));
+                    let funcaddr = *funcaddr;
                     let funcidx = funcs.len();
                     funcs.push(funcaddr);
                     tracing::trace!("linking: {funcidx} => {funcaddr:?}")
                 }
                 (ImportDesc::GlobalType(import_gt), ExportDesc::Global(global_idx)) => {
-                    let export_gt = ext_module.globals.get(global_idx.0 as usize).unwrap();
+                    let export_gt = vm_try!(VMResult::from_option(
+                        ext_module.globals.get(global_idx.0 as usize),
+                        || {
+                            tracing::trace!("export global index out of range");
+                            VMResult::Unlinkable
+                        }
+                    ));
                     if import_gt != export_gt {
                         tracing::trace!("import global type");
                         return VMResult::Unlinkable;
                     }
-                    globals.push(ext_inst.globals.as_slice()[global_idx.0 as usize]);
+                    let global_addr = vm_try!(VMResult::from_option(
+                        ext_inst.globals.as_slice().get(global_idx.0 as usize),
+                        || {
+                            tracing::trace!("export global address out of range");
+                            VMResult::Unlinkable
+                        }
+                    ));
+                    globals.push(*global_addr);
                 }
                 (ImportDesc::TableType(import_tt), ExportDesc::Table(idx)) => {
-                    let export_tt = ext_module.tables[idx.0 as usize];
+                    let export_tt = vm_try!(VMResult::from_option(
+                        ext_module.tables.get(idx.0 as usize),
+                        || {
+                            tracing::trace!("export table index out of range");
+                            VMResult::Unlinkable
+                        }
+                    ));
+                    let export_tt = *export_tt;
                     tracing::trace!("{export_tt:?}");
 
                     if import_tt.reftype != export_tt.reftype {
                         tracing::trace!("import table type");
                         return VMResult::Unlinkable;
                     }
-                    let addr = ext_inst.tables.as_slice()[idx.0 as usize];
+                    let addr = vm_try!(VMResult::from_option(
+                        ext_inst.tables.as_slice().get(idx.0 as usize),
+                        || {
+                            tracing::trace!("export table address out of range");
+                            VMResult::Unlinkable
+                        }
+                    ));
+                    let addr = *addr;
                     vm_try!(validate_limit(
                         import_tt.limits,
                         runtime.get_table(addr).1.len() as u32,
                         export_tt.limits
                     ));
-                    tables.push(ext_inst.tables.as_slice()[idx.0 as usize]);
+                    tables.push(addr);
                 }
                 (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
                     let memory_addr = *vm_try!(VMResult::from_option(
@@ -357,7 +408,13 @@ pub async fn instantiate(
                             VMResult::Unlinkable
                         }
                     ));
-                    let limits = ext_module.mems[_idx.0 as usize];
+                    let limits = vm_try!(VMResult::from_option(
+                        ext_module.mems.get(_idx.0 as usize),
+                        || {
+                            tracing::trace!("export memory index out of range");
+                            VMResult::Unlinkable
+                        }
+                    ));
 
                     if mt.shared != limits.shared {
                         tracing::trace!("import shared memory flag mismatch");
@@ -530,24 +587,39 @@ pub async fn instantiate(
                             let offset =
                                 vm_try!(execute_offset_const_expr(&mut runtime, &globals, offset))
                                     as usize;
-                            let table_addr = tables[idx.0 as usize];
+                            let table_addr =
+                                *vm_try!(VMResult::from_option(tables.get(idx.0 as usize), || {
+                                    VMResult::TableIndexOutOfRange
+                                }));
                             let instance = runtime.get_table(table_addr);
 
                             if instance.0.reftype != elem.kind {
-                                panic!("reftype mismatch")
+                                // #128: the parser validates active segments
+                                // against the declared table type, so a
+                                // mismatch means a module producer broke an
+                                // internal invariant; fail closed instead of
+                                // aborting the host.
+                                return VMResult::Unlinkable;
                             }
                             if offset + idxs.len() > instance.1.len() {
                                 return VMResult::TableIndexOutOfRange;
                             }
                             for (idx, funcidx) in idxs.iter().enumerate() {
-                                instance.1[offset + idx] = funcs[*funcidx as usize].get();
+                                let func_addr = vm_try!(VMResult::from_option(
+                                    funcs.get(*funcidx as usize),
+                                    || VMResult::InvalidOperand
+                                ));
+                                instance.1[offset + idx] = func_addr.get();
                             }
                         }
                         ElemInit::ConstExpr(idxs) => {
                             let offset =
                                 vm_try!(execute_offset_const_expr(&mut runtime, &globals, offset))
                                     as usize;
-                            let table_addr = tables[idx.0 as usize];
+                            let table_addr =
+                                *vm_try!(VMResult::from_option(tables.get(idx.0 as usize), || {
+                                    VMResult::TableIndexOutOfRange
+                                }));
                             let instance = runtime.get_table(table_addr);
                             if offset + idxs.len() > instance.1.len() {
                                 return VMResult::TableIndexOutOfRange;
@@ -597,7 +669,14 @@ pub async fn instantiate(
 
         let has_start = if let Some(start) = start {
             let mut stack = Stack::new(128 * 1024);
-            let funcaddr = instance.funcs[start.0 as usize];
+            let funcaddr = vm_try!(VMResult::from_option(
+                instance.funcs.get(start.0 as usize),
+                || {
+                    tracing::error!("start function index out of range");
+                    VMResult::Unlinkable
+                }
+            ));
+            let funcaddr = *funcaddr;
             let funcinst = runtime.get_func(funcaddr);
             let func_instance = runtime.instance(funcinst.instance);
             if funcinst.is_host_func() {
@@ -674,7 +753,12 @@ pub async fn instantiate(
 
     if has_start {
         scheduler.run().await;
-        let completed = scheduler.completed_tasks.pop().unwrap();
+        // #128: the start task was pushed above and `run` drives it with
+        // the built-in driver, so a completion must exist; if the invariant
+        // is ever broken, fail closed instead of aborting the host.
+        let Some(completed) = scheduler.completed_tasks.pop() else {
+            return VMResult::InvalidOperand;
+        };
         {
             let mut runtime = store.lock_runtime_or_panic();
             runtime.set_last_trap(completed.trap);
@@ -731,13 +815,25 @@ pub fn aliasing(
         let exportname = (*exportname).to_owned();
         match export_desc {
             ExportDesc::Func(idx) => {
-                let tidx = ext_module.functions[idx.0 as usize];
-                let ft = &ext_module.function_types[tidx.0 as usize];
+                // #128: registry indices resolve fail-closed, as in
+                // `instantiate`'s import linking.
+                let tidx = vm_try!(VMResult::from_option(
+                    ext_module.functions.get(idx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
+                let ft = vm_try!(VMResult::from_option(
+                    ext_module.function_types.get(tidx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
                 let new_tidx = function_types.len();
                 let new_funcidx = functions.len();
                 function_types.push(ft.clone());
                 functions.push(TypeIdx(new_tidx as u32));
-                let addr = ext_instance.funcs.as_slice()[idx.0 as usize];
+                let addr = vm_try!(VMResult::from_option(
+                    ext_instance.funcs.as_slice().get(idx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
+                let addr = *addr;
                 function_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -745,10 +841,17 @@ pub fn aliasing(
                 ));
             }
             ExportDesc::Global(idx) => {
-                let gt = ext_module.globals[idx.0 as usize];
+                let gt = vm_try!(VMResult::from_option(
+                    ext_module.globals.get(idx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
                 let new_gidx = globals.len();
-                globals.push(gt);
-                let addr = ext_instance.globals.as_slice()[idx.0 as usize];
+                globals.push(*gt);
+                let addr = vm_try!(VMResult::from_option(
+                    ext_instance.globals.as_slice().get(idx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
+                let addr = *addr;
                 global_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -756,10 +859,17 @@ pub fn aliasing(
                 ));
             }
             ExportDesc::Mem(idx) => {
-                let mt = ext_module.mems[idx.0 as usize];
+                let mt = vm_try!(VMResult::from_option(
+                    ext_module.mems.get(idx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
                 let new_memidx = memories.len();
-                memories.push(mt);
-                let addr = ext_instance.mems.as_slice()[idx.0 as usize];
+                memories.push(*mt);
+                let addr = vm_try!(VMResult::from_option(
+                    ext_instance.mems.as_slice().get(idx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
+                let addr = *addr;
                 memory_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -767,10 +877,17 @@ pub fn aliasing(
                 ));
             }
             ExportDesc::Table(idx) => {
-                let tt = ext_module.tables[idx.0 as usize];
+                let tt = vm_try!(VMResult::from_option(
+                    ext_module.tables.get(idx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
                 let new_tableidx = tables.len();
-                tables.push(tt);
-                table_addrs.push(ext_instance.tables.as_slice()[idx.0 as usize]);
+                tables.push(*tt);
+                let table_addr = vm_try!(VMResult::from_option(
+                    ext_instance.tables.as_slice().get(idx.0 as usize),
+                    || VMResult::Unlinkable
+                ));
+                table_addrs.push(*table_addr);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Table(TableIdx(new_tableidx as u32)),
@@ -825,7 +942,10 @@ pub(crate) fn link_host_function_with_function_idx_impl(
         return Ok(());
     };
     let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
-    let funcaddr = instance.funcs.as_slice()[funcidx as usize];
+    let Some(funcaddr) = instance.funcs.as_slice().get(funcidx as usize).copied() else {
+        tracing::error!("function index out of range");
+        return Ok(());
+    };
     {
         let func = runtime.get_func_mut(funcaddr);
         func.replace_host_code_pointer(f);
@@ -862,12 +982,17 @@ pub(crate) fn link_host_function_with_export_name_impl(
     };
     let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
     let module = runtime.get_module(instance.module_addr);
-    let export = &module.exports.find(name).unwrap();
-    let func_idx = if let ExportDesc::Func(v) = export {
-        v.0
-    } else {
-        unreachable!()
+    // #128: the name is embedder input; an unknown or non-function
+    // export is a rejected link, never a host panic.
+    let Some(export) = module.exports.find(name) else {
+        tracing::error!("unknown export");
+        return Ok(());
     };
+    let ExportDesc::Func(func_idx) = export else {
+        tracing::error!("export is not a function");
+        return Ok(());
+    };
+    let func_idx = func_idx.0;
     drop(runtime);
     link_host_function_with_function_idx_impl(addr, func_idx, f, store)
 }
@@ -899,7 +1024,10 @@ pub(crate) fn link_async_host_function_with_function_idx_impl(
         return Ok(());
     };
     let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
-    let funcaddr = instance.funcs.as_slice()[funcidx as usize];
+    let Some(funcaddr) = instance.funcs.as_slice().get(funcidx as usize).copied() else {
+        tracing::error!("function index out of range");
+        return Ok(());
+    };
     {
         let func = runtime.get_func_mut(funcaddr);
         func.replace_async_host_code_pointer(f);
@@ -937,12 +1065,17 @@ pub(crate) fn link_async_host_function_with_export_name_impl(
     };
     let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
     let module = runtime.get_module(instance.module_addr);
-    let export = &module.exports.find(name).unwrap();
-    let func_idx = if let ExportDesc::Func(v) = export {
-        v.0
-    } else {
-        unreachable!()
+    // #128: the name is embedder input; an unknown or non-function
+    // export is a rejected link, never a host panic.
+    let Some(export) = module.exports.find(name) else {
+        tracing::error!("unknown export");
+        return Ok(());
     };
+    let ExportDesc::Func(func_idx) = export else {
+        tracing::error!("export is not a function");
+        return Ok(());
+    };
+    let func_idx = func_idx.0;
     drop(runtime);
     link_async_host_function_with_function_idx_impl(addr, func_idx, f, store)
 }
@@ -2167,5 +2300,224 @@ mod tests {
         let target = unsafe { code[call_index + 1].operand.call_recipe_ref };
         assert_eq!(target.funcidx, 1);
         assert_eq!(target.resolved_recipe_slot(), Some(expected_slot));
+    }
+    // ---- #128 regression tests: crafted link/instantiation state must
+    // fail closed with an error, never abort the host. ----
+
+    #[tokio::test]
+    async fn linking_import_from_out_of_range_func_export_fails_closed() {
+        let mut exporter = parse_wat_for_test(r#"(module (func) (export "f" (func 0)))"#);
+        exporter.exs.0[0].1 = crate::common::ExportDesc::Func(crate::common::FuncIdx(7));
+        let store = Store::new();
+        let mut registry = Registry::new();
+        let VMResult::Success(inst) = instantiate(exporter, &store, &registry).await else {
+            panic!("exporter must instantiate");
+        };
+        registry.register("m", inst);
+        let importer = parse_wat_for_test(r#"(module (import "m" "f" (func)))"#);
+        let result = instantiate(importer, &store, &registry).await;
+        assert!(
+            matches!(result, VMResult::Unlinkable),
+            "out-of-range func export must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn linking_import_from_out_of_range_global_export_fails_closed() {
+        let mut exporter =
+            parse_wat_for_test(r#"(module (global i32 (i32.const 0)) (export "g" (global 0)))"#);
+        exporter.exs.0[0].1 = crate::common::ExportDesc::Global(crate::common::GlobalIdx(7));
+        let store = Store::new();
+        let mut registry = Registry::new();
+        let VMResult::Success(inst) = instantiate(exporter, &store, &registry).await else {
+            panic!("exporter must instantiate");
+        };
+        registry.register("m", inst);
+        let importer = parse_wat_for_test(r#"(module (import "m" "g" (global i32)))"#);
+        let result = instantiate(importer, &store, &registry).await;
+        assert!(
+            matches!(result, VMResult::Unlinkable),
+            "out-of-range global export must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn linking_import_from_out_of_range_table_export_fails_closed() {
+        let mut exporter =
+            parse_wat_for_test(r#"(module (table 1 funcref) (export "t" (table 0)))"#);
+        exporter.exs.0[0].1 = crate::common::ExportDesc::Table(crate::common::TableIdx(7));
+        let store = Store::new();
+        let mut registry = Registry::new();
+        let VMResult::Success(inst) = instantiate(exporter, &store, &registry).await else {
+            panic!("exporter must instantiate");
+        };
+        registry.register("m", inst);
+        let importer = parse_wat_for_test(r#"(module (import "m" "t" (table 1 funcref)))"#);
+        let result = instantiate(importer, &store, &registry).await;
+        assert!(
+            matches!(result, VMResult::Unlinkable),
+            "out-of-range table export must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn active_elem_segment_with_mismatched_table_reftype_fails_closed() {
+        let mut module = parse_wat_for_test(
+            r#"(module
+              (table 1 funcref)
+              (func $f)
+              (elem (i32.const 0) $f))"#,
+        );
+        // The parser never produces this pairing (it validates the segment
+        // against the table); a crafted in-crate module can (#128).
+        module.tables[0].reftype = crate::common::RefType::ExternRef;
+        let store = Store::new();
+        let registry = Registry::new();
+        let result = instantiate(module, &store, &registry).await;
+        assert!(
+            matches!(result, VMResult::Unlinkable),
+            "reftype-mismatched elem segment must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_indirect_with_out_of_range_callee_index_fails_closed() {
+        let (store, instance) = instantiate_wat_for_test(
+            r#"(module
+              (type $t (func))
+              (table 1 funcref)
+              (func $f (type $t))
+              (elem (i32.const 0) $f)
+              (func (export "run") (call_indirect (type $t) (i32.const 0))))"#,
+        )
+        .await;
+        {
+            let mut runtime = store.lock_runtime_or_panic();
+            let object_ref = instance
+                .object_ref_for_store(&store)
+                .expect("instance must belong to store");
+            let (table_addr, real_func_addr) = {
+                let instance_data = runtime.get_instance(object_ref);
+                (instance_data.tables[0], instance_data.funcs[0])
+            };
+            // Install a function record whose index lies outside its
+            // module's function index space (#128).
+            let mut bogus = runtime.get_func(real_func_addr).clone();
+            bogus.funcidx = 9999;
+            let bogus_addr = runtime.new_func(&bogus);
+            runtime.get_table(table_addr).1[0] = bogus_addr.get();
+        }
+        let result = crate::runtime::run_module_function(
+            &instance,
+            &store,
+            "run",
+            &crate::ResultValue::new(vec![]),
+        )
+        .await;
+        assert!(
+            matches!(result, VMResult::InvalidOperand),
+            "call_indirect on a bogus callee must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_indirect_with_out_of_range_expected_type_fails_closed() {
+        let (store, instance) = instantiate_wat_for_test(
+            r#"(module
+              (type $t (func))
+              (table 1 funcref)
+              (func $f (type $t))
+              (elem (i32.const 0) $f)
+              (func (export "run") (call_indirect (type $t) (i32.const 0))))"#,
+        )
+        .await;
+        {
+            let mut runtime = store.lock_runtime_or_panic();
+            let object_ref = instance
+                .object_ref_for_store(&store)
+                .expect("instance must belong to store");
+            let run_addr = runtime.get_instance(object_ref).funcs[1];
+            let func = runtime.get_func_mut(run_addr);
+            let crate::common::store::FunctionBody::Wasm { code, .. } = &mut func.body else {
+                panic!("expected a wasm function body");
+            };
+            let mut instrs: Vec<Instr> = code.to_vec();
+            let pos = instrs
+                .iter()
+                .position(|instr| {
+                    std::ptr::fn_addr_eq(
+                        unsafe { instr.op },
+                        vm::op_call_indirect
+                            as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
+                    )
+                })
+                .expect("run must contain a call_indirect");
+            // Operand layout: [op][table index][expected type index].
+            instrs[pos + 2].operand.u32 = 9999;
+            *code = instrs.into();
+        }
+        let result = crate::runtime::run_module_function(
+            &instance,
+            &store,
+            "run",
+            &crate::ResultValue::new(vec![]),
+        )
+        .await;
+        assert!(
+            matches!(result, VMResult::InvalidOperand),
+            "call_indirect with a bogus expected type must fail closed, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fused_binop_with_invalid_descriptor_kind_fails_closed() {
+        // The optimizer fuses this shape into op_local_binop32_set4.
+        let (store, instance) = instantiate_wat_for_test(
+            r#"(module
+              (func (export "run") (param i32) (result i32)
+                (local i32)
+                local.get 0
+                i32.const 1
+                i32.mul
+                local.set 1
+                i32.const 7))"#,
+        )
+        .await;
+        {
+            let mut runtime = store.lock_runtime_or_panic();
+            let object_ref = instance
+                .object_ref_for_store(&store)
+                .expect("instance must belong to store");
+            let run_addr = runtime.get_instance(object_ref).funcs[0];
+            let func = runtime.get_func_mut(run_addr);
+            let crate::common::store::FunctionBody::Wasm { code, .. } = &mut func.body else {
+                panic!("expected a wasm function body");
+            };
+            let mut instrs: Vec<Instr> = code.to_vec();
+            let pos = instrs
+                .iter()
+                .position(|instr| {
+                    std::ptr::fn_addr_eq(
+                        unsafe { instr.op },
+                        vm::op_local_binop32_set4
+                            as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
+                    )
+                })
+                .expect("run must contain a fused local_binop32_set4");
+            // The descriptor kind operand is the slot right after the op.
+            instrs[pos + 1].operand.u32 = u32::MAX;
+            *code = instrs.into();
+        }
+        let result = crate::runtime::run_module_function(
+            &instance,
+            &store,
+            "run",
+            &crate::ResultValue::new(vec![crate::WasmValue::I32(3)]),
+        )
+        .await;
+        assert!(
+            matches!(result, VMResult::InvalidOperand),
+            "fused op with an invalid descriptor kind must fail closed, got {result:?}"
+        );
     }
 }

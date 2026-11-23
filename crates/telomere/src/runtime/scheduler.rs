@@ -175,10 +175,17 @@ impl ExecutionDriver for TokioDriver {
             PendingOp::MemoryWait(op) => self.submit_memory_wait(op),
             #[cfg(feature = "unstable-internals")]
             PendingOp::WasmAsync(op) => {
-                panic!(
-                    "Wasm async pending op is not implemented yet for task {}",
-                    op.task_id
-                )
+                // #128: an unimplemented pending op must not abort the
+                // host. Report it straight back as a completion; the
+                // scheduler terminates the task with
+                // VMResult::Unimplemented when it applies it.
+                let task_id = op.task_id;
+                self.inflight.push(Box::pin(async move {
+                    Completion {
+                        task_id,
+                        payload: CompletionPayload::WasmAsync,
+                    }
+                }));
             }
         }
     }
@@ -407,7 +414,42 @@ impl<'a> Scheduler<'a> {
                 }
             }
             CompletionPayload::WasmAsync => {
-                panic!("Wasm async completion is not implemented yet")
+                // #128: a driver can hand back this payload for an op the
+                // runtime does not implement. Terminate the task with
+                // Unimplemented (mirroring the Interrupted arm) instead of
+                // aborting the host.
+                let result = VMResult::Unimplemented;
+                let trap = {
+                    let runtime = self.store.lock_runtime_or_panic();
+                    let task = self.tasks.get(task_index).unwrap();
+                    capture_trap_context(
+                        &runtime,
+                        &task.stack,
+                        task.local_reference,
+                        None,
+                        &result,
+                        task.task_id,
+                    )
+                };
+                let mut complete_result = None;
+                {
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    task.pending_effects -= 1;
+                    if task.pending_effects == 0 {
+                        complete_result = Some((result, trap));
+                    } else {
+                        task.terminal_result = Some(result);
+                        task.terminal_trap = Some(trap);
+                    }
+                }
+                if let Some((result, trap)) = complete_result {
+                    let task = self.tasks.remove(task_index).unwrap();
+                    self.completed_tasks.push(CompletedTask {
+                        stack: task.stack,
+                        result,
+                        trap: Some(trap),
+                    });
+                }
             }
         }
     }
@@ -693,5 +735,67 @@ mod tests {
         assert!(matches!(&context.result, VMResult::StackOverflow));
         assert_eq!(context.task_id, 7);
         assert_eq!(context.frames[0].pc_index, None);
+    }
+
+    // #128: the unimplemented WasmAsync pending op must not abort the
+    // host; the driver reports it back as a completion instead.
+    #[cfg(feature = "unstable-internals")]
+    #[tokio::test]
+    async fn tokio_driver_reports_wasm_async_op_as_completion() {
+        let mut driver = TokioDriver::new();
+        driver.submit(PendingOp::WasmAsync(crate::runtime::WasmAsyncPending {
+            task_id: 7,
+        }));
+        let completion = driver
+            .next_completion()
+            .await
+            .expect("wasm async op must produce a completion, not a panic");
+        assert_eq!(completion.task_id, 7);
+        assert!(matches!(completion.payload, CompletionPayload::WasmAsync));
+    }
+
+    // #128: applying a WasmAsync completion terminates the task with
+    // Unimplemented instead of aborting the host.
+    #[cfg(feature = "unstable-internals")]
+    #[test]
+    fn wasm_async_completion_terminates_task_with_unimplemented() {
+        let store = Store::new();
+        let mut stack = Stack::new(std::mem::size_of::<crate::common::stack::CallStackInfo>());
+        let local_reference = match stack.function_call_cached(
+            0,
+            0,
+            0,
+            CallFrameCache::dummy(),
+            LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            StablePc::from_raw(0),
+        ) {
+            VMResult::Success(local_reference) => local_reference,
+            other => panic!("frame must exactly fill the test stack: {other:?}"),
+        };
+        let mut scheduler = Scheduler::new(&store);
+        scheduler.push(Task {
+            task_id: 7,
+            stack,
+            local_reference,
+            pending_effects: 1,
+            ready_flag: ReadyFlag::NonReady,
+            fp: StablePc::from_raw(0),
+            terminal_result: None,
+            terminal_trap: None,
+        });
+
+        scheduler.apply_completion(Completion {
+            task_id: 7,
+            payload: CompletionPayload::WasmAsync,
+        });
+
+        let completed = scheduler
+            .completed_tasks
+            .pop()
+            .expect("wasm async completion must finish the task");
+        assert!(matches!(completed.result, VMResult::Unimplemented));
     }
 }
