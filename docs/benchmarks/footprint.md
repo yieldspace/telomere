@@ -356,14 +356,16 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #266: workflow_dispatch runs 45115393274 and
-45115397566 against the PR branch at merge commit
-`41dc4b069048d143dba66ca7c89c6b8c92b2ef72` (branch head
-`b8e280f22f80d61d5d6fb8c6d7d9d71148e5c173` with `main` at
-`a4177b48c678bba83e7a3e816bd0db45e07744e0` merged in), and
-pull-request run 45115342631, which built the same tree
+against the code of PR #267: workflow_dispatch runs 45120276581 and
+45120284790 against the PR branch at head
+`f988123a67220089cba96f5e8b960c15498ddcb5` (branch commit
+`f3746033c8bec2629df9865cf6f71dd1f235d85b` with `main` at
+`2505d8c` merged in at merge commit
+`d5acd0b43042e7d655199f2690f5090f27273ecc`, plus two merge
+follow-up fixes), and
+pull-request run 45120209665, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). Every
-run produced byte-identical sizes: for all fourteen
+run produced byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
 spread of **0 B** across the three samples. The observed values are the
@@ -376,16 +378,16 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | `release` | `component` | 2,475,368 | 1,983,191 |
 | `release` | `wasi` | 2,821,912 | 2,245,399 |
 | `release` | `core-nosimd` | 1,286,200 | 988,295 |
-| `release` | `core-jit` | 2,016,640 | 1,569,447 |
-| `release` | `core-aot` | 1,506,264 | 1,150,503 |
+| `release` | `core-jit` | 2,016,976 | 1,569,751 |
+| `release` | `core-aot` | 1,506,352 | 1,150,583 |
 | `release` | `wasi-threads` | 3,008,240 | 2,384,167 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,097,848 | 776,999 |
 | `release-size` | `component` | 1,630,352 | 1,202,999 |
 | `release-size` | `wasi` | 1,826,016 | 1,334,535 |
 | `release-size` | `core-nosimd` | 983,008 | 697,415 |
-| `release-size` | `core-jit` | 1,532,408 | 1,095,159 |
-| `release-size` | `core-aot` | 1,117,160 | 788,423 |
+| `release-size` | `core-jit` | 1,532,440 | 1,095,175 |
+| `release-size` | `core-aot` | 1,117,216 | 788,503 |
 | `release-size` | `wasi-threads` | 1,967,360 | 1,428,023 |
 
 #### Re-baseline history
@@ -789,6 +791,48 @@ change linked into non-JIT configurations. The other 25
 gated series are byte-identical. The baseline was re-measured
 on the merged code and updated as recorded above, following
 the procedure below.
+
+PR #267 (#200, split the AoT load path from the JIT emitters)
+merged current `main` into its branch first (merge commit
+`d5acd0b`); its first CI run then tripped the gate on the
+merged tree. The PR adds a non-default `aot-load` feature to
+the telomere crate (store code cache, runtime stubs,
+native-call ABI and executable code memory, but no compiler)
+and makes `jit` imply it plus the codegen crate's new `emit`
+feature for the assembler/emitter layer; in an aot-load-only
+build a compile request consults the cache only and otherwise
+reports the typed `VMResult::Unimplemented` so the
+interpreter takes over. It also adds the `core-aot`
+configuration to the footprint ladder and to this gate, and a
+symbol checker (`tools/check-aot-load-symbols.py`) asserting
+emitter symbols are absent from an aot-load-only embedder.
+The merge conflicted in the module declarations of
+`runtime/jit.rs`, because #197 had added emitter-side modules
+while this PR reclassified the load-side ones; the resolution
+keeps the PR's classification (stubs and profile are load
+side, `aot-load`; `emit_env` and the reloc tests are emitter
+side, `jit`). Two follow-up fixes were needed: #209's
+`resolve_trap_site`, whose only caller is the aot-load entry
+bridge, is gated `aot-load` instead of `jit` (body unchanged),
+and the PR's corpus measurement harness reads
+`EmittedFunction.code` now that #209 returns the code plus
+the trap-site table. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45120292330,
+gate success), which reproduces the previous baseline exactly
+on all 14 gated series main measures (main has no `core-aot`
+configuration). The deltas are confined to the two
+configurations that link the native-code machinery and are
+pure code-layout shift from the cfg refactor: `core-jit`
+(release stripped file +336 B / stripped `.text` +304 B;
+release-size stripped file +32 B / stripped `.text` +16 B)
+and `core-aot` (release stripped file +88 B / stripped
+`.text` +80 B; release-size stripped file +56 B / stripped
+`.text` +80 B, against the first values this PR recorded for
+the new series from a fleur measurement; the CI-measured
+values recorded here supersede those). The other 12 of the
+16 gated series are byte-identical. The baseline was
+re-measured on the merged code and updated as recorded
+above, following the procedure below.
 
 ### Threshold derivation
 
