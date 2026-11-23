@@ -838,8 +838,10 @@ pub unsafe fn op_i32_trunc_f32_s(
     let a = ctx.stack.pop_f32();
     if (i32::MIN as f32) <= a && a < (i32::MAX as f32) {
         vm_try!(ctx.stack.push_i32(a as i32));
+    } else if a.is_nan() {
+        return VMResult::InvalidConversion;
     } else {
-        return VMResult::InvalidOperand;
+        return VMResult::IntegerOverflow;
     }
     call_next(tail_code, 0, ctx)
 }
@@ -867,8 +869,10 @@ pub unsafe fn op_i32_trunc_f32_u(
     let a = ctx.stack.pop_f32();
     if -1.0 < a && a < (u32::MAX as f32) {
         vm_try!(ctx.stack.push_u32(a.trunc() as u32));
+    } else if a.is_nan() {
+        return VMResult::InvalidConversion;
     } else {
-        return VMResult::InvalidOperand;
+        return VMResult::IntegerOverflow;
     }
     call_next(tail_code, 0, ctx)
 }
@@ -896,8 +900,10 @@ pub unsafe fn op_i32_trunc_f64_s(
     let a = ctx.stack.pop_f64().trunc();
     if (i32::MIN as f64) <= a && a <= (i32::MAX as f64) {
         vm_try!(ctx.stack.push_i32(a as i32));
+    } else if a.is_nan() {
+        return VMResult::InvalidConversion;
     } else {
-        return VMResult::InvalidOperand;
+        return VMResult::IntegerOverflow;
     }
     call_next(tail_code, 0, ctx)
 }
@@ -925,8 +931,10 @@ pub unsafe fn op_i32_trunc_f64_u(
     let a = ctx.stack.pop_f64().trunc();
     if -1.0 < a && a <= (u32::MAX as f64) {
         vm_try!(ctx.stack.push_u32(a as u32));
+    } else if a.is_nan() {
+        return VMResult::InvalidConversion;
     } else {
-        return VMResult::InvalidOperand;
+        return VMResult::IntegerOverflow;
     }
     call_next(tail_code, 0, ctx)
 }
@@ -954,8 +962,10 @@ pub unsafe fn op_i64_trunc_f32_s(
     let a = ctx.stack.pop_f32();
     if (i64::MIN as f32) <= a && a < (i64::MAX as f32) {
         vm_try!(ctx.stack.push_i64(a as i64));
+    } else if a.is_nan() {
+        return VMResult::InvalidConversion;
     } else {
-        return VMResult::InvalidOperand;
+        return VMResult::IntegerOverflow;
     }
     call_next(tail_code, 0, ctx)
 }
@@ -983,8 +993,10 @@ pub unsafe fn op_i64_trunc_f32_u(
     let a = ctx.stack.pop_f32();
     if -1.0 < a && a < (u64::MAX as f32) {
         vm_try!(ctx.stack.push_u64(a.trunc() as u64));
+    } else if a.is_nan() {
+        return VMResult::InvalidConversion;
     } else {
-        return VMResult::InvalidOperand;
+        return VMResult::IntegerOverflow;
     }
     call_next(tail_code, 0, ctx)
 }
@@ -1012,8 +1024,10 @@ pub unsafe fn op_i64_trunc_f64_s(
     let a = ctx.stack.pop_f64();
     if (i64::MIN as f64) <= a && a < (i64::MAX as f64) {
         vm_try!(ctx.stack.push_i64(a as i64));
+    } else if a.is_nan() {
+        return VMResult::InvalidConversion;
     } else {
-        return VMResult::InvalidOperand;
+        return VMResult::IntegerOverflow;
     }
     call_next(tail_code, 0, ctx)
 }
@@ -1041,8 +1055,10 @@ pub unsafe fn op_i64_trunc_f64_u(
     let a = ctx.stack.pop_f64();
     if -1. < a && a < (u64::MAX as f64) {
         vm_try!(ctx.stack.push_u64(a as u64));
+    } else if a.is_nan() {
+        return VMResult::InvalidConversion;
     } else {
-        return VMResult::InvalidOperand;
+        return VMResult::IntegerOverflow;
     }
     call_next(tail_code, 0, ctx)
 }
@@ -2194,7 +2210,11 @@ pub unsafe fn op_i32_div_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let a = ctx.stack.pop_i32();
     let b = ctx.stack.pop_i32();
     let r = vm_try!(VMResult::from_option(b.checked_div(a), || {
-        VMResult::InvalidOperand
+        if a == 0 {
+            VMResult::DivideByZero
+        } else {
+            VMResult::IntegerOverflow
+        }
     }));
     vm_try!(ctx.stack.push_i32(r));
     trace!("op_i32_div_s: {a} {b} => {r}");
@@ -2221,7 +2241,7 @@ pub unsafe fn op_i32_div_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let a = ctx.stack.pop_u32();
     let b = ctx.stack.pop_u32();
     let r = vm_try!(VMResult::from_option(b.checked_div(a), || {
-        VMResult::InvalidOperand
+        VMResult::DivideByZero
     }));
     vm_try!(ctx.stack.push_u32(r));
     trace!("op_i32_div_u: {a} {b} => {r}");
@@ -2248,7 +2268,11 @@ pub unsafe fn op_i64_div_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let a = ctx.stack.pop_i64();
     let b = ctx.stack.pop_i64();
     let r = vm_try!(VMResult::from_option(b.checked_div(a), || {
-        VMResult::InvalidOperand
+        if a == 0 {
+            VMResult::DivideByZero
+        } else {
+            VMResult::IntegerOverflow
+        }
     }));
     vm_try!(ctx.stack.push_i64(r));
     trace!("op_i64_div_s: {a} {b} => {r}");
@@ -2275,7 +2299,7 @@ pub unsafe fn op_i64_div_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let a = ctx.stack.pop_u64();
     let b = ctx.stack.pop_u64();
     let r = vm_try!(VMResult::from_option(b.checked_div(a), || {
-        VMResult::InvalidOperand
+        VMResult::DivideByZero
     }));
     vm_try!(ctx.stack.push_u64(r));
     trace!("op_i64_div_u: {a} {b} => {r}");
@@ -2396,7 +2420,7 @@ pub unsafe fn op_i32_rem_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let b = ctx.stack.pop_i32();
     let a = ctx.stack.pop_i32();
     if b == 0 {
-        return VMResult::InvalidOperand;
+        return VMResult::DivideByZero;
     }
     vm_try!(ctx.stack.push_i32(a.wrapping_rem(b)));
     call_next(tail_code, 0, ctx)
@@ -2422,7 +2446,7 @@ pub unsafe fn op_i32_rem_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
     let r = vm_try!(VMResult::from_option(a.checked_rem(b), || {
-        VMResult::InvalidOperand
+        VMResult::DivideByZero
     }));
     vm_try!(ctx.stack.push_u32(r));
     call_next(tail_code, 0, ctx)
@@ -2448,7 +2472,7 @@ pub unsafe fn op_i64_rem_s(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let b = ctx.stack.pop_i64();
     let a = ctx.stack.pop_i64();
     if b == 0 {
-        return VMResult::InvalidOperand;
+        return VMResult::DivideByZero;
     }
     vm_try!(ctx.stack.push_i64(a.wrapping_rem(b)));
     call_next(tail_code, 0, ctx)
@@ -2474,7 +2498,7 @@ pub unsafe fn op_i64_rem_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
     let r = vm_try!(VMResult::from_option(a.checked_rem(b), || {
-        VMResult::InvalidOperand
+        VMResult::DivideByZero
     }));
     vm_try!(ctx.stack.push_u64(r));
     call_next(tail_code, 0, ctx)

@@ -50,6 +50,8 @@ pub(crate) fn encode(kernel: LoweredKernelFunction) -> LoweredFunction {
         jump_table,
         block_map,
         materialized_preview: None,
+        // Filled in by `optimize_function`, which owns the stack snapshots.
+        max_operand_bytes: 0,
     }
 }
 

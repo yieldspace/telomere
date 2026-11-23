@@ -150,8 +150,16 @@ pub enum TrapKind {
     Unlinkable,
     /// The runtime could not reserve or grow guest memory.
     MemoryAllocationFailed,
-    /// A guest instruction received an invalid dynamic operand.
+    /// A runtime-internal invariant was violated; not a WebAssembly spec trap.
     InvalidOperand,
+    /// A guest integer division or remainder had a zero divisor.
+    DivideByZero,
+    /// A guest signed integer division overflowed (most negative value / -1),
+    /// or a float-to-integer truncation conversion had an out-of-range
+    /// magnitude, including infinities.
+    IntegerOverflow,
+    /// A guest float-to-integer truncation conversion received NaN.
+    InvalidConversion,
     /// The runtime does not implement this execution path yet.
     Unimplemented,
     /// Finite Store fuel was exhausted at a metering checkpoint.
@@ -174,6 +182,9 @@ impl TrapKind {
             Self::Unlinkable => "unlinkable",
             Self::MemoryAllocationFailed => "memory allocation failed",
             Self::InvalidOperand => "invalid operand",
+            Self::DivideByZero => "divide by zero",
+            Self::IntegerOverflow => "integer overflow",
+            Self::InvalidConversion => "invalid conversion",
             Self::Unimplemented => "unimplemented",
             Self::FuelExhausted => "fuel exhausted",
             Self::Cancelled => "cancelled",
@@ -193,6 +204,9 @@ impl TrapKind {
             VMResult::Unlinkable => Some(Self::Unlinkable),
             VMResult::MemoryAllocationFailed => Some(Self::MemoryAllocationFailed),
             VMResult::InvalidOperand => Some(Self::InvalidOperand),
+            VMResult::DivideByZero => Some(Self::DivideByZero),
+            VMResult::IntegerOverflow => Some(Self::IntegerOverflow),
+            VMResult::InvalidConversion => Some(Self::InvalidConversion),
             VMResult::Unimplemented => Some(Self::Unimplemented),
             VMResult::FuelExhausted => Some(Self::FuelExhausted),
             VMResult::Cancelled => Some(Self::Cancelled),
@@ -257,6 +271,16 @@ impl fmt::Display for TrapInfo {
         Ok(())
     }
 }
+
+impl fmt::Display for TrapKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::error::Error for TrapKind {}
+
+impl std::error::Error for TrapInfo {}
 
 #[cfg(test)]
 mod tests {

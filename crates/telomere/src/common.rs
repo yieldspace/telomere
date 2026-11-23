@@ -946,6 +946,14 @@ pub(crate) struct LoweredFunction {
     pub(crate) jump_table: Vec<LoweredJumpTarget>,
     pub(crate) block_map: Vec<LoweredBlockMap>,
     pub(crate) materialized_preview: Option<MaterializedFunction>,
+    /// Maximum operand-stack depth, in bytes, that validated execution of
+    /// this function can reach above its frame (#186). Computed by the
+    /// optimizer pipeline from the validator's per-instruction stack
+    /// snapshots; the runtime reserves this much headroom at frame entry so
+    /// in-function pushes need no per-push bounds check. Zero means "not
+    /// computed" (only for hand-built values in tests); real modules always
+    /// pass through `optimize_function`, which fills this in.
+    pub(crate) max_operand_bytes: u32,
 }
 
 impl LoweredFunction {
@@ -979,6 +987,7 @@ impl LoweredFunction {
             jump_table: Vec::new(),
             block_map: Vec::new(),
             materialized_preview: Some(MaterializedFunction { instrs, op_lens }),
+            max_operand_bytes: 0,
         }
     }
 

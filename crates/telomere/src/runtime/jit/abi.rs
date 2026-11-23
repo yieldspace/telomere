@@ -94,6 +94,9 @@ pub(crate) fn vm_result_code<T>(result: VMResult<T>) -> u64 {
         VMResult::Unimplemented => 10,
         VMResult::FuelExhausted => 12,
         VMResult::Cancelled => 13,
+        VMResult::DivideByZero => 14,
+        VMResult::IntegerOverflow => 15,
+        VMResult::InvalidConversion => 16,
     }
 }
 
@@ -116,6 +119,9 @@ pub(crate) fn vm_result_from_code(code: u64) -> VMResult<()> {
         10 => VMResult::Unimplemented,
         12 => VMResult::FuelExhausted,
         13 => VMResult::Cancelled,
+        14 => VMResult::DivideByZero,
+        15 => VMResult::IntegerOverflow,
+        16 => VMResult::InvalidConversion,
         _ => VMResult::InvalidOperand,
     }
 }
@@ -140,5 +146,18 @@ mod tests {
         assert_eq!(vm_result_code(VMResult::<()>::Cancelled), 13);
         assert!(matches!(vm_result_from_code(12), VMResult::FuelExhausted));
         assert!(matches!(vm_result_from_code(13), VMResult::Cancelled));
+    }
+
+    #[test]
+    fn precise_trap_causes_round_trip_through_jit_trap_codes() {
+        assert_eq!(vm_result_code(VMResult::<()>::DivideByZero), 14);
+        assert_eq!(vm_result_code(VMResult::<()>::IntegerOverflow), 15);
+        assert_eq!(vm_result_code(VMResult::<()>::InvalidConversion), 16);
+        assert!(matches!(vm_result_from_code(14), VMResult::DivideByZero));
+        assert!(matches!(vm_result_from_code(15), VMResult::IntegerOverflow));
+        assert!(matches!(
+            vm_result_from_code(16),
+            VMResult::InvalidConversion
+        ));
     }
 }

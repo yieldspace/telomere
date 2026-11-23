@@ -25,6 +25,9 @@ fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::MemoryAllocationFailed => VMResult::MemoryAllocationFailed,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
+        VMResult::DivideByZero => VMResult::DivideByZero,
+        VMResult::IntegerOverflow => VMResult::IntegerOverflow,
+        VMResult::InvalidConversion => VMResult::InvalidConversion,
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
         VMResult::Cancelled => VMResult::Cancelled,
@@ -637,6 +640,7 @@ mod tests {
         let store = Store::new();
         let mut stack = Stack::new(std::mem::size_of::<crate::common::stack::CallStackInfo>());
         let local_reference = match stack.function_call_cached(
+            0,
             0,
             0,
             CallFrameCache::dummy(),

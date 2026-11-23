@@ -354,13 +354,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #254: workflow_dispatch runs 45060131072 and
-45060142935 against the PR branch at commit
-`fb01564eb0d7f252d3b24da100b325d5e7d56796` (the merge of the PR head
-`3420455b6ee3a6614cc397fc8b4023c28c20bdbc` with `main` at
-`4d3b77441d337a6ec8c2586c1e856b1f749be87c`), and pull-request run
-45060031215, which built the same merge tree (`ubuntu-24.04`, Rust
-1.96.0). Every run produced byte-identical sizes: for all fourteen
+against the code of PR #259: workflow_dispatch runs 45086986197 and
+45086998757 against the PR branch at commit
+`5451a0dc3e2ac4a5625a0921e1a5760405dc5bcf`, and pull-request run
+45085326459, which built the same tree (the branch head's parent is
+`main` at `03352c6b7a81763ac7aa769c40c812ec9db4856f`, so the merge
+tree is the branch head itself; `ubuntu-24.04`, Rust 1.96.0). Every
+run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
 spread of **0 B** across the three samples. The observed values are the
@@ -368,20 +368,20 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
-| `release` | `baseline` | 345656 | 261679 |
-| `release` | `core` | 1,466,280 | 1,117,239 |
-| `release` | `component` | 2,452,544 | 1,959,303 |
-| `release` | `wasi` | 2,798,520 | 2,221,287 |
-| `release` | `core-nosimd` | 1,277,032 | 978,151 |
-| `release` | `core-jit` | 1,991,488 | 1,542,583 |
-| `release` | `wasi-threads` | 2,978,224 | 2,356,423 |
-| `release-size` | `baseline` | 296384 | 228114 |
-| `release-size` | `core` | 1,073,824 | 756,071 |
-| `release-size` | `component` | 1,604,488 | 1,180,631 |
-| `release-size` | `wasi` | 1,806,808 | 1,317,911 |
-| `release-size` | `core-nosimd` | 965,112 | 681,143 |
-| `release-size` | `core-jit` | 1,487,664 | 1,060,855 |
-| `release-size` | `wasi-threads` | 1,926,360 | 1,399,287 |
+| `release` | `baseline` | 345,656 | 261,679 |
+| `release` | `core` | 1,459,424 | 1,113,687 |
+| `release` | `component` | 2,455,960 | 1,965,479 |
+| `release` | `wasi` | 2,802,504 | 2,227,687 |
+| `release` | `core-nosimd` | 1,269,032 | 972,711 |
+| `release` | `core-jit` | 1,983,688 | 1,541,047 |
+| `release` | `wasi-threads` | 2,988,416 | 2,365,527 |
+| `release-size` | `baseline` | 296,384 | 228,114 |
+| `release-size` | `core` | 1,085,560 | 763,527 |
+| `release-size` | `component` | 1,618,000 | 1,189,463 |
+| `release-size` | `wasi` | 1,813,696 | 1,321,015 |
+| `release-size` | `core-nosimd` | 972,272 | 685,287 |
+| `release-size` | `core-jit` | 1,505,640 | 1,069,671 |
+| `release-size` | `wasi-threads` | 1,953,936 | 1,413,575 |
 
 #### Re-baseline history
 
@@ -515,6 +515,91 @@ release-size stripped file +528..+2,000 B, stripped `.text`
 excludes carry part of the change. The baseline was re-measured on
 the merged code and updated as recorded above, following the
 procedure below.
+
+PR #256 (#143, VMResult std-error surface with distinct trap causes)
+merged current `main` into its branch first; its first CI run on the
+merged tree then tripped the gate on the PR's own change. The PR splits
+the three spec trap causes that `InvalidOperand` used to merge into
+payload-free `DivideByZero` / `IntegerOverflow` / `InvalidConversion`
+variants across the interpreter, the JIT stubs and all three JIT
+backends (the trap-code ABI appends codes 14-16 without renumbering),
+implements `Display` and `std::error::Error` for `VMResult`, `TrapKind`
+and `TrapInfo` (trap variants display as the spec messages), adds
+`ComponentError::GuestTrap` so a guest trap's kind survives the
+component layer, and centralises the `vm_try!` propagation match -
+previously inlined at 1,143 call sites - into one cold
+`VMResult::propagate_failure` function. A follow-up on the merged tree
+classifies float-to-integer truncation failures by `is_nan` in the
+interpreter handlers and the JIT stubs (NaN is an invalid conversion;
+an out-of-range magnitude, including infinities, is an integer
+overflow), which the #131 trap-message table merged from `main`
+asserts separately. Attribution was isolated by measuring current
+`main` alone (workflow_dispatch run 45066161931), which reproduces
+the previous baseline exactly on all 28 gated series. The `baseline`
+configuration is byte-identical in both profiles. In the `release`
+profile the propagation centralisation dominates and the library
+configurations move slightly in both directions (stripped file
+-6,080..+4,136 B; stripped `.text` -1,728..+2,736 B), while in the
+`release-size` profile (`opt-level = "z"`, fat LTO, one codegen unit)
+the new Display/Error surface grows every library configuration
+(stripped file +10,760..+31,432 B; stripped `.text` +4,592..+15,776 B;
+the largest single delta is +1.8% of its series). The baseline was
+re-measured on the merged code and updated as recorded above,
+following the procedure below.
+
+PR #257 (#186, reserve validated max operand depth at frame entry)
+merged current `main` into its branch first. The change computes the
+validated maximum operand depth at parse time in
+`pipeline::optimize_function` from the type checker's stack snapshots,
+stores it as `LoweredFunction.max_operand_bytes` carried into
+`CallRecipe`, checks `frame_end + bound` against the stack length once
+at frame entry on every frame-construction path (overflow still traps
+`StackOverflow`, only detected earlier), and removes the per-push
+bounds checks from the seven `_fast` push functions in
+`crates/telomere/src/common/stack.rs`, each of which now carries a
+debug_assert and the reservation invariant it relies on; checked
+pushes remain on non-frame paths (embedder staging, scheduler resume,
+host in-place results). Attribution was isolated by measuring current
+`main` alone (workflow_dispatch run 45072035005), which reproduces
+the previous baseline exactly on all 28 gated series. The `baseline`
+configuration is byte-identical in both profiles (4 of 28 gated
+series unchanged), and every library configuration shrinks in both
+profiles — the `_fast` pushes are inlined into handlers across the
+library, so their removed checks outweigh the single entry check and
+the added field (release stripped file -1,720..-4,568 B, stripped
+`.text` -2,096..-3,824 B; release-size stripped file -7,248..-8,160 B,
+stripped `.text` -4,320..-5,216 B). No series grows, so unlike the
+re-baselines above the gate had already passed on the merged tree;
+the baseline was re-measured on the merged code and updated as
+recorded above, following the procedure below, so the recorded
+numbers keep tracking the code on `main`.
+
+PR #259 (#258, component import lookup applies the #117 NameMap
+semver rules) needed no merge commit: its branch head already sits
+directly on current `main`, so its first CI run measured the PR's own
+change and tripped the gate. The PR generalises
+`crates/telomere-component/src/runtime/name_match.rs`
+(`compatible_name` / `incompatible_name`, one shared implementation
+for export and import names) and routes every import-resolution path
+in `crates/telomere-component/src/linker.rs` through a
+`resolve_registered` helper (exact match first, otherwise the
+highest version on the compatible track): root func imports,
+instance imports, funcs inside an imported instance, and the
+instance part of a resource drop (the resource name itself stays
+exact, which also fixes the instance half of #118's drop path);
+when only an incompatible version is registered, the error now
+names both the expected and found versions, in the same format as
+the #117 export-side error. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45087010624, gate
+success), which reproduces the previous baseline exactly on all 28
+gated series. Growth is confined to the configurations that link
+`telomere-component` (`component`, `wasi`, `wasi-threads`): release
+stripped file +10,016..+10,032 B and stripped `.text` +9,552 B;
+release-size stripped file +4,288..+4,368 B and stripped `.text`
++3,728..+3,808 B. The `baseline` configuration and every core
+configuration are byte-identical in both profiles (16 of 28 gated
+series unchanged). The baseline was re-measured on the merged code
+and updated as recorded above, following the procedure below.
 
 ### Threshold derivation
 
