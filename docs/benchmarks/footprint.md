@@ -354,13 +354,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #257: workflow_dispatch runs 45072019203 and
-45072026952 against the PR branch at commit
-`e13eaf7a43a3bcf1f39e1eaded3d767ce294cd44` (the merge of `main` at
-`9b4d3f3c4e5d65407796399251c639937090b918` into the PR head
-`862bbe2db450ceaa82115de0f2356a83f2aa8170`), and pull-request run
-45071971685, which built the same merge tree (`ubuntu-24.04`, Rust
-1.96.0). Every run produced byte-identical sizes: for all fourteen
+against the code of PR #259: workflow_dispatch runs 45086986197 and
+45086998757 against the PR branch at commit
+`5451a0dc3e2ac4a5625a0921e1a5760405dc5bcf`, and pull-request run
+45085326459, which built the same tree (the branch head's parent is
+`main` at `03352c6b7a81763ac7aa769c40c812ec9db4856f`, so the merge
+tree is the branch head itself; `ubuntu-24.04`, Rust 1.96.0). Every
+run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
 spread of **0 B** across the three samples. The observed values are the
@@ -370,18 +370,18 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,459,424 | 1,113,687 |
-| `release` | `component` | 2,445,928 | 1,955,927 |
-| `release` | `wasi` | 2,792,488 | 2,218,135 |
+| `release` | `component` | 2,455,960 | 1,965,479 |
+| `release` | `wasi` | 2,802,504 | 2,227,687 |
 | `release` | `core-nosimd` | 1,269,032 | 972,711 |
 | `release` | `core-jit` | 1,983,688 | 1,541,047 |
-| `release` | `wasi-threads` | 2,978,384 | 2,355,975 |
+| `release` | `wasi-threads` | 2,988,416 | 2,365,527 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,085,560 | 763,527 |
-| `release-size` | `component` | 1,613,632 | 1,185,655 |
-| `release-size` | `wasi` | 1,809,408 | 1,317,287 |
+| `release-size` | `component` | 1,618,000 | 1,189,463 |
+| `release-size` | `wasi` | 1,813,696 | 1,321,015 |
 | `release-size` | `core-nosimd` | 972,272 | 685,287 |
 | `release-size` | `core-jit` | 1,505,640 | 1,069,671 |
-| `release-size` | `wasi-threads` | 1,949,648 | 1,409,847 |
+| `release-size` | `wasi-threads` | 1,953,936 | 1,413,575 |
 
 #### Re-baseline history
 
@@ -573,6 +573,33 @@ re-baselines above the gate had already passed on the merged tree;
 the baseline was re-measured on the merged code and updated as
 recorded above, following the procedure below, so the recorded
 numbers keep tracking the code on `main`.
+
+PR #259 (#258, component import lookup applies the #117 NameMap
+semver rules) needed no merge commit: its branch head already sits
+directly on current `main`, so its first CI run measured the PR's own
+change and tripped the gate. The PR generalises
+`crates/telomere-component/src/runtime/name_match.rs`
+(`compatible_name` / `incompatible_name`, one shared implementation
+for export and import names) and routes every import-resolution path
+in `crates/telomere-component/src/linker.rs` through a
+`resolve_registered` helper (exact match first, otherwise the
+highest version on the compatible track): root func imports,
+instance imports, funcs inside an imported instance, and the
+instance part of a resource drop (the resource name itself stays
+exact, which also fixes the instance half of #118's drop path);
+when only an incompatible version is registered, the error now
+names both the expected and found versions, in the same format as
+the #117 export-side error. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45087010624, gate
+success), which reproduces the previous baseline exactly on all 28
+gated series. Growth is confined to the configurations that link
+`telomere-component` (`component`, `wasi`, `wasi-threads`): release
+stripped file +10,016..+10,032 B and stripped `.text` +9,552 B;
+release-size stripped file +4,288..+4,368 B and stripped `.text`
++3,728..+3,808 B. The `baseline` configuration and every core
+configuration are byte-identical in both profiles (16 of 28 gated
+series unchanged). The baseline was re-measured on the merged code
+and updated as recorded above, following the procedure below.
 
 ### Threshold derivation
 
