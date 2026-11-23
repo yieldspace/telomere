@@ -356,12 +356,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #286: workflow_dispatch runs 45206926698 and
-45206945651 against the PR branch at head
-`91dd280f3c81d03cc7ee3fb3b88f8d806166d4af` (branch commit `d3005b1`,
-restore tail dispatch in `op_ref_is_null` (#282); and merge commit
-`91dd280` bringing in `main` at
-`94a0eca`), and pull-request run 45206866309, which built the same
+against the code of PR #284: workflow_dispatch runs 45218637130 and
+45218665766 against the PR branch at head
+`d49017889bc96fc71fb2d2c164f5a8d4ac8f1719` (branch commit `e9c8e52`,
+state the component host-function first-poll contract on the
+async registration surface (#147); and merge commit
+`d490178` bringing in `main` at
+`8c748aa`), and pull-request run 45217434943, which built the same
 tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -373,20 +374,20 @@ table below (stripped file / stripped `.text`, in bytes).
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,494,040 | 1,144,311 |
-| `release` | `component` | 2,537,440 | 2,037,815 |
-| `release` | `wasi` | 2,881,440 | 2,297,943 |
+| `release` | `component` | 2,537,648 | 2,037,815 |
+| `release` | `wasi` | 2,881,648 | 2,297,943 |
 | `release` | `core-nosimd` | 1,301,408 | 1,001,207 |
 | `release` | `core-jit` | 2,034,656 | 1,584,023 |
 | `release` | `core-aot` | 1,521,480 | 1,163,415 |
-| `release` | `wasi-threads` | 3,070,808 | 2,438,887 |
+| `release` | `wasi-threads` | 3,071,032 | 2,438,887 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,110,824 | 783,127 |
-| `release-size` | `component` | 1,670,296 | 1,232,983 |
-| `release-size` | `wasi` | 1,866,168 | 1,364,711 |
+| `release-size` | `component` | 1,670,504 | 1,232,983 |
+| `release-size` | `wasi` | 1,866,392 | 1,364,711 |
 | `release-size` | `core-nosimd` | 996,000 | 703,543 |
 | `release-size` | `core-jit` | 1,551,472 | 1,105,671 |
 | `release-size` | `core-aot` | 1,130,272 | 794,711 |
-| `release-size` | `wasi-threads` | 2,008,552 | 1,459,111 |
+| `release-size` | `wasi-threads` | 2,008,776 | 1,459,111 |
 
 #### Re-baseline history
 
@@ -1115,6 +1116,35 @@ in the library configurations except `core-jit` (+16 B),
 and stripped `.text` shrinks by −16 B in `component`,
 `core`, `core-aot`, `core-nosimd` and `wasi-threads`. The
 `baseline` configuration is byte-identical in both profiles.
+Against the original #164 baseline, the largest cumulative
+growth remains release-size `component` stripped `.text` at
++5.47% (1,169,031 B to 1,232,983 B), unchanged from +5.47%.
+The baseline was re-measured on the merged code and updated
+as recorded above, following the procedure below.
+
+PR #284 (#147, the component async registration surface
+states its first-poll contract: canonical contract text on
+`ComponentFuture`, first-poll warnings on all six `*_async`
+registration methods and the bindgen traits/functions, a
+corrected false doc claim on `register_func_async`, and a
+self-explanatory `Pending` error message; the decision and
+roadmap are recorded in
+`docs/component-model/new-component-runtime.md`) merged
+current `main` into its branch first, with no conflicts.
+Attribution was isolated by measuring current `main` alone
+(workflow_dispatch run 45219214659, gate success), which
+reproduces the previous baseline exactly on all 32 gated
+series. Only 6 of the 32 gated series change, all in
+stripped file bytes with stripped `.text` unchanged
+everywhere: `release` `component` and `wasi` grow by
++208 B and `wasi-threads` by +224 B; `release-size`
+`component` grows by +208 B and `wasi` and `wasi-threads`
+by +224 B. The growth is confined to the configurations
+that link the component runtime and carries no `.text`
+change, consistent with the new contract/warning string
+literals this PR adds to `telomere-component`. The
+remaining 26 series, including the `baseline`
+configuration in both profiles, are byte-identical.
 Against the original #164 baseline, the largest cumulative
 growth remains release-size `component` stripped `.text` at
 +5.47% (1,169,031 B to 1,232,983 B), unchanged from +5.47%.
