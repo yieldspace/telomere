@@ -2,14 +2,6 @@ name: Performance gate
 
 on:
   workflow_dispatch:
-  # TEMPORARY, establishment only: lets this branch produce same-tree CI
-  # runs before the workflow exists on the default branch (workflow_dispatch
-  # requires that). Removed before merge; the measured code and tooling are
-  # identical with or without this trigger. See
-  # docs/benchmarks/performance.md, "Observed run-to-run variance on CI".
-  push:
-    branches:
-      - "fix/212-perf-gate"
   pull_request:
     paths:
       - "crates/**"
