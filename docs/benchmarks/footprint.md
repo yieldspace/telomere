@@ -111,11 +111,13 @@ a higher layer into a lower-layer result.
 | `wasi` | `component` + `telomere-component-wasi` with `simd,wasi` | `examples/wasi-component-args.wasm` → `0` |
 | `core-nosimd` | `telomere` without optional features | `examples/add.wasm` → `3` |
 | `core-jit` | `core` with `simd,jit` | `examples/add.wasm` → `3` |
+| `core-aot` | `core` with `simd,aot-load` (#200; load path without emitters) | `examples/add.wasm` → `3` |
 | `wasi-threads` | `wasi` with `simd,threads,wasi` | `examples/wasi-component-args.wasm` → `0` |
 
 The `baseline`, `core`, `component`, `wasi`, `core-nosimd`, `core-jit`, and
 `wasi-threads` names are the configuration contract for
 [#140](https://github.com/yieldspace/telomere/issues/140)'s RISC-V follow-up.
+`core-aot` was added later by #200 and is gated by the same #164 mechanism.
 The headline ladder retains SIMD because it is the supported default; a
 SIMD-off headline would not describe the supported path. Thus `minimal` does
 not mean "fewest bytes".
@@ -354,14 +356,16 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #266: workflow_dispatch runs 45115393274 and
-45115397566 against the PR branch at merge commit
-`41dc4b069048d143dba66ca7c89c6b8c92b2ef72` (branch head
-`b8e280f22f80d61d5d6fb8c6d7d9d71148e5c173` with `main` at
-`a4177b48c678bba83e7a3e816bd0db45e07744e0` merged in), and
-pull-request run 45115342631, which built the same tree
+against the code of PR #267: workflow_dispatch runs 45120276581 and
+45120284790 against the PR branch at head
+`f988123a67220089cba96f5e8b960c15498ddcb5` (branch commit
+`f3746033c8bec2629df9865cf6f71dd1f235d85b` with `main` at
+`2505d8c` merged in at merge commit
+`d5acd0b43042e7d655199f2690f5090f27273ecc`, plus two merge
+follow-up fixes), and
+pull-request run 45120209665, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). Every
-run produced byte-identical sizes: for all fourteen
+run produced byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size, the
 stripped file size, and the stripped `.text` size each have a run-to-run
 spread of **0 B** across the three samples. The observed values are the
@@ -374,14 +378,16 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | `release` | `component` | 2,475,368 | 1,983,191 |
 | `release` | `wasi` | 2,821,912 | 2,245,399 |
 | `release` | `core-nosimd` | 1,286,200 | 988,295 |
-| `release` | `core-jit` | 2,016,640 | 1,569,447 |
+| `release` | `core-jit` | 2,016,976 | 1,569,751 |
+| `release` | `core-aot` | 1,506,352 | 1,150,583 |
 | `release` | `wasi-threads` | 3,008,240 | 2,384,167 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,097,848 | 776,999 |
 | `release-size` | `component` | 1,630,352 | 1,202,999 |
 | `release-size` | `wasi` | 1,826,016 | 1,334,535 |
 | `release-size` | `core-nosimd` | 983,008 | 697,415 |
-| `release-size` | `core-jit` | 1,532,408 | 1,095,159 |
+| `release-size` | `core-jit` | 1,532,440 | 1,095,175 |
+| `release-size` | `core-aot` | 1,117,216 | 788,503 |
 | `release-size` | `wasi-threads` | 1,967,360 | 1,428,023 |
 
 #### Re-baseline history
@@ -786,6 +792,48 @@ gated series are byte-identical. The baseline was re-measured
 on the merged code and updated as recorded above, following
 the procedure below.
 
+PR #267 (#200, split the AoT load path from the JIT emitters)
+merged current `main` into its branch first (merge commit
+`d5acd0b`); its first CI run then tripped the gate on the
+merged tree. The PR adds a non-default `aot-load` feature to
+the telomere crate (store code cache, runtime stubs,
+native-call ABI and executable code memory, but no compiler)
+and makes `jit` imply it plus the codegen crate's new `emit`
+feature for the assembler/emitter layer; in an aot-load-only
+build a compile request consults the cache only and otherwise
+reports the typed `VMResult::Unimplemented` so the
+interpreter takes over. It also adds the `core-aot`
+configuration to the footprint ladder and to this gate, and a
+symbol checker (`tools/check-aot-load-symbols.py`) asserting
+emitter symbols are absent from an aot-load-only embedder.
+The merge conflicted in the module declarations of
+`runtime/jit.rs`, because #197 had added emitter-side modules
+while this PR reclassified the load-side ones; the resolution
+keeps the PR's classification (stubs and profile are load
+side, `aot-load`; `emit_env` and the reloc tests are emitter
+side, `jit`). Two follow-up fixes were needed: #209's
+`resolve_trap_site`, whose only caller is the aot-load entry
+bridge, is gated `aot-load` instead of `jit` (body unchanged),
+and the PR's corpus measurement harness reads
+`EmittedFunction.code` now that #209 returns the code plus
+the trap-site table. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45120292330,
+gate success), which reproduces the previous baseline exactly
+on all 14 gated series main measures (main has no `core-aot`
+configuration). The deltas are confined to the two
+configurations that link the native-code machinery and are
+pure code-layout shift from the cfg refactor: `core-jit`
+(release stripped file +336 B / stripped `.text` +304 B;
+release-size stripped file +32 B / stripped `.text` +16 B)
+and `core-aot` (release stripped file +88 B / stripped
+`.text` +80 B; release-size stripped file +56 B / stripped
+`.text` +80 B, against the first values this PR recorded for
+the new series from a fleur measurement; the CI-measured
+values recorded here supersede those). The other 12 of the
+16 gated series are byte-identical. The baseline was
+re-measured on the merged code and updated as recorded
+above, following the procedure below.
+
 ### Threshold derivation
 
 With an observed spread of 0 B, the derived headroom over the baseline is
@@ -1132,3 +1180,105 @@ TELOMERE_JIT_BIN=/tmp/telomere-cli-jit python3 tools/measure-cold-start.py
 The historical CLI tables in that section were filled in from a single run of
 that sequence. The #139 embedder and Linux data have the separate environments,
 commands, and JSON artifact records stated above.
+
+## AOT load path split (#200)
+
+#200 splits the native-code *load* path from the JIT *emitters* so an
+embedder can carry precompiled code without carrying a compiler.
+
+- The `telomere` crate gains a non-default `aot-load` feature: the runtime
+  stubs, the native-call ABI, the per-store code cache, and
+  `telomere-jit-codegen::code_memory` (allocation, protection, relocation
+  application). It pulls in no emitter and no assembler.
+- `jit` now implies `aot-load` and additionally enables the new non-default
+  `emit` feature of `telomere-jit-codegen`, which gates that crate's
+  architecture backends and macro-assembler layer (its `arch` and `masm`
+  modules). `code_memory` stays available without `emit`.
+- In an `aot-load`-only build, compile-on-miss in the call path becomes
+  cache-consult-only: a miss returns the typed `Unimplemented` VM error and
+  the call falls back to the interpreter, exactly like a function the JIT
+  rejects. Nothing in the build can compile at runtime; the two
+  function-layout structs the emitters consume (`MemoryJitLayout`,
+  `GlobalValueJitLayout`) stay behind `jit`.
+
+### Symbol-absence check
+
+`tools/check-aot-load-symbols.py` builds the `core-aot` embedder and fails
+if any emitter symbol (`emit_baseline_function`, `emit_baseline_plan`,
+`build_baseline_plan`) is present, with load-path symbols (`CodeArena`,
+`StoreJitCache`, `instantiate`) as positive controls. It is wired into the
+`aot-load` CI job and into the footprint workflow after the size gate. The
+check deliberately builds the `dev` profile: under the workspace release
+profiles, LTO inlines `emit_baseline_function` away even in a real `jit`
+binary (measured on a control build), so a release-profile absence check
+would pass vacuously; in a dev build the emitter entry points survive as
+symbols whenever the emitter layer is linked. The checker's unit tests
+(`tools/test_check_aot_load_symbols.py`) cover the symbol-matching rules.
+
+### Measured ladder
+
+Measured 2026-11-23 with `tools/measure-embedder-footprint.py --sizes-only`
+on the #200 change branch (stripped file / stripped `.text`, bytes; RSS and
+timing steps skipped locally because the measuring host lacks
+`/usr/bin/time` — CI runs the full tool). The interpreter-only cell is the
+existing `core` configuration; the `jit` + `aot-load` cell is `core-jit`
+(`jit` implies `aot-load`, so it is the same build).
+
+Linux x86_64 (fleur-du-lapin, Intel Xeon Gold 6140, Rust 1.96.0):
+
+| Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
+| --- | --- | ---: | ---: |
+| `release` | `core` (interp-only) | 1,478,824 | 1,131,399 |
+| `release` | `core-aot` | 1,506,264 | 1,150,503 |
+| `release` | `core-jit` | 2,012,016 | 1,566,759 |
+| `release-size` | `core` (interp-only) | 1,097,856 | 776,999 |
+| `release-size` | `core-aot` | 1,117,160 | 788,423 |
+| `release-size` | `core-jit` | 1,530,864 | 1,095,079 |
+
+macOS arm64 (Mac mini, Apple M2 Pro, Rust 1.96.0):
+
+| Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
+| --- | --- | ---: | ---: |
+| `release` | `core` (interp-only) | 1,388,264 | 1,013,268 |
+| `release` | `core-aot` | 1,438,632 | 1,030,808 |
+| `release` | `core-jit` | 1,873,176 | 1,430,536 |
+| `release-size` | `core` (interp-only) | 770,640 | 598,428 |
+| `release-size` | `core-aot` | 787,376 | 607,604 |
+| `release-size` | `core-jit` | 1,004,416 | 815,464 |
+
+Derived deltas (stripped file / stripped `.text`):
+
+| Delta | Linux `release` | Linux `release-size` | macOS `release` | macOS `release-size` |
+| --- | ---: | ---: | ---: | ---: |
+| Load path (`core-aot` − `core`) | +27,440 / +19,104 | +19,304 / +11,424 | +50,368 / +17,540 | +16,736 / +9,176 |
+| Emitters (`core-jit` − `core-aot`) | +505,752 / +416,256 | +413,704 / +306,656 | +434,544 / +399,728 | +217,040 / +207,860 |
+
+The load path costs roughly 11–19 KB of `.text`; the emitters cost
+208–416 KB of `.text` depending on profile and target — that emitter cost
+is what an `aot-load` embedder no longer pays. The interpreter-only cell
+did not regress: in the same Linux runs, `core` measured −8 B (release
+stripped file) and +8 B (release-size) against the #164 baseline above,
+which is code-layout noise from the cfg refactor, and the `core-aot` rows
+were added to `tools/embedder-size-baseline.json` so the #164 gate covers
+the new cell from its first CI run.
+
+### Artifact side
+
+No serialized AoT artifact format exists yet: the codec (#196), the
+artifact container and its load path (#198), and the `telomere compile`
+producer (#199) own it, so there are no artifact bytes to record against
+wasm bytes. As the closest measurable proxy for what the load path would
+carry, an in-crate measurement harness
+(`runtime::jit::artifact_measure`, an ignored test run on demand) emitted
+every function of the pinned wasm-testsuite corpus with the baseline
+backend and summed the emitted code bytes against the source wasm bytes:
+
+| Corpus | Modules | Functions emitted | Wasm bytes | Emitted code bytes | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 147 root `.wast` files + `examples/add.wasm` | 1,465 instantiated (134 failed: imports/unsupported) | 5,904 (0 rejected) | 272,481 | 8,031,517 | 29.48× |
+
+The ratio is dominated by fixed per-function emission overhead: the spec
+suite's modules are mostly tiny single-purpose functions, so 29.48× is a
+property of this corpus, not a bulk-code expansion factor, and it excludes
+any container or relocation-record overhead. The artifact-bytes column of
+this comparison belongs to #198/#201, once the format exists to measure.

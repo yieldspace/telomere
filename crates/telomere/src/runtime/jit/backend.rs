@@ -162,7 +162,3 @@ fn patch_relocation_site(bytes: &mut [u8], reloc: Reloc, value: u64) -> Result<(
 fn patch_relocation_site(_bytes: &mut [u8], _reloc: Reloc, _value: u64) -> Result<(), ()> {
     Err(())
 }
-
-pub(crate) fn supported() -> bool {
-    telomere_jit_codegen::target::supported()
-}

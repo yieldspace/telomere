@@ -54,4 +54,12 @@ vm-profile = []
 vm-diagnostics = []
 measure-switches = []
 unstable-internals = []
-jit = ["dep:telomere-jit-codegen"]
+# Executing precompiled native code: the JIT cache / load path, runtime
+# stubs, the native-call ABI, and executable code memory -- but no compiler.
+# An `aot-load` build can run code installed into the cache by an AoT loader
+# and reports every runtime compile request as `VMResult::Unimplemented`
+# (the interpreter takes over), exactly like a JIT-rejected function.
+aot-load = ["dep:telomere-jit-codegen"]
+# Compiling WebAssembly to native code at runtime. Implies `aot-load` and
+# adds the emitter backends plus the codegen crate's assemblers.
+jit = ["aot-load", "telomere-jit-codegen/emit"]

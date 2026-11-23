@@ -9,6 +9,17 @@ keywords.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+# The per-architecture macro assemblers (`arch`) and the assembler error
+# surface (`masm`). Only code that *emits* native code needs this; the
+# executable-memory and target modules are what an AoT loader links.
+emit = []
+
+[dev-dependencies]
+# The crate's own tests assemble test stubs, so they build with `emit` even
+# though the feature is off by default.
+telomere-jit-codegen = { path = ".", features = ["emit"] }
+
 [dependencies]
 mmap-rs.workspace = true
 

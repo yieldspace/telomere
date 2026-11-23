@@ -19,6 +19,7 @@ threads = [
     "telomere-component-wasi?/threads",
 ]
 jit = ["telomere/jit"]
+aot-load = ["telomere/aot-load"]
 component = ["dep:telomere-component"]
 wasi = ["component", "dep:telomere-component-wasi"]
 

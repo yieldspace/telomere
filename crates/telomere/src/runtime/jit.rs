@@ -1,60 +1,76 @@
-#[cfg(feature = "jit")]
+//! Native-code execution support: the store cache / load path, runtime
+//! stubs, the native-call ABI, and the interpreter entry bridges.
+//!
+//! In an `aot-load`-only build (no `jit` feature), the stub table, the
+//! cache's install path, and the entry bridges are reachable only from
+//! native code -- code an AoT loader installs -- and from the emitters that
+//! would take their addresses, so Rust-side reachability reports them as
+//! dead. They are the load ABI and must stay; the scoped allowance below
+//! records that instead of deleting or feature-gating the surface away.
+#![cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+
+#[cfg(feature = "aot-load")]
 mod abi;
+#[cfg(all(test, feature = "jit"))]
+mod artifact_measure;
 #[cfg(feature = "jit")]
 mod backend;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 mod cache;
 #[cfg(feature = "jit")]
 mod emit_env;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) mod profile;
 #[cfg(all(test, feature = "jit"))]
 mod reloc_tests;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 mod stubs;
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 use crate::{
     common::{store::FunctionBody, ExecuteContext, Instr, VMResult},
     runtime::vm,
 };
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 use std::cell::Cell;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 thread_local! {
     static JIT_ENTRY_DEPTH: Cell<usize> = const { Cell::new(0) };
     static JIT_INTERPRETER_STOP_AT: Cell<*const Instr> = const { Cell::new(std::ptr::null()) };
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub use abi::JitNativeExit;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub use cache::JitCacheStats;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) use cache::{CompiledFunction, StoreJitCache};
 
-/// Returns whether the JIT is compiled in and available for the current target.
+/// Returns whether this build can execute native code on the current
+/// target: the cache / load path (the `aot-load` feature, implied by `jit`)
+/// is compiled in and the target is one the native ABI supports.
 ///
-/// A `true` result only means the target can run JIT code; enable it for a
-/// particular store with [`crate::JitConfig`].
+/// This is the internal execution predicate. The public
+/// [`crate::jit_supported`] is stricter: it additionally requires the `jit`
+/// feature, because only that feature can *compile* code at runtime.
 pub fn supported() -> bool {
-    jit_supported()
+    native_supported()
 }
 
-#[cfg(feature = "jit")]
-fn jit_supported() -> bool {
+#[cfg(feature = "aot-load")]
+fn native_supported() -> bool {
     telomere_jit_codegen::target::supported()
 }
 
-#[cfg(not(feature = "jit"))]
-fn jit_supported() -> bool {
+#[cfg(not(feature = "aot-load"))]
+fn native_supported() -> bool {
     false
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) unsafe fn enter_current_frame(ctx: &mut ExecuteContext<'_>) -> VMResult<()> {
     let _profile_guard = profile::RunGuard::new();
     let code_base = ctx.code();
@@ -83,7 +99,7 @@ pub(crate) unsafe fn enter_current_frame(ctx: &mut ExecuteContext<'_>) -> VMResu
     unsafe { handle_exit(exit, code_base, ctx) }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) unsafe fn enter_current_frame_from_jit_call(
     ctx: &mut ExecuteContext<'_>,
 ) -> JitNativeExit {
@@ -95,7 +111,7 @@ pub(crate) unsafe fn enter_current_frame_from_jit_call(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) unsafe fn enter_current_frame_from_lazy_call(
     ctx: &mut ExecuteContext<'_>,
     continuation: *const Instr,
@@ -129,7 +145,7 @@ pub(crate) unsafe fn enter_current_frame_from_lazy_call(
     unsafe { handle_exit(exit, code_base, ctx) }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) unsafe fn run_interpreter_continue_from_jit_call(
     pc: *const crate::common::Instr,
     stop_pc: *const crate::common::Instr,
@@ -155,7 +171,7 @@ pub(crate) unsafe fn run_interpreter_continue_from_jit_call(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) fn should_stop_interpreter_at(pc: *const Instr) -> bool {
     JIT_INTERPRETER_STOP_AT.with(|stop| {
         let target = stop.get();
@@ -163,7 +179,7 @@ pub(crate) fn should_stop_interpreter_at(pc: *const Instr) -> bool {
     })
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 pub(crate) fn interpreter_stop_active() -> bool {
     // Return-call and function-return handlers must leave the interpreter loop
     // whenever any bridge owns control. The loop then decides whether the
@@ -171,7 +187,7 @@ pub(crate) fn interpreter_stop_active() -> bool {
     JIT_INTERPRETER_STOP_AT.with(|stop| !stop.get().is_null())
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 unsafe fn absolutize_fallback_index(
     exit: JitNativeExit,
     code_base: *const crate::common::Instr,
@@ -183,9 +199,9 @@ unsafe fn absolutize_fallback_index(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitNativeExit> {
-    if !backend::supported() || !ctx.store.runtime_config().jit.enabled {
+    if !supported() || !ctx.store.runtime_config().jit.enabled {
         return VMResult::Unimplemented;
     }
     let funcaddr = ctx.current_frame.code_addr;
@@ -220,11 +236,7 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
                 compiled
             }
             _ => {
-                let max_bytes = ctx.store.runtime_config().jit.code_cache_max_bytes;
-                let compiled = vm_try!(ctx
-                    .store
-                    .jit_cache()
-                    .get_or_compile(funcaddr, &func.body, ctx.gc, max_bytes));
+                let compiled = vm_try!(load_or_compile(ctx.store, ctx.gc, funcaddr, &func.body));
                 ctx.gc.set_jit_cached_compiled_func(funcaddr, &compiled);
                 compiled
             }
@@ -253,7 +265,7 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
 /// layer can resolve the same site id against a different function's
 /// table. A site that does not resolve degrades to no pc, never a
 /// wrong one.
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 fn resolve_trap_site(
     exit: JitNativeExit,
     compiled: &CompiledFunction,
@@ -279,15 +291,51 @@ fn resolve_trap_site(
     }
 }
 
+/// Resolves native code for `funcaddr` after the per-frame cache missed.
+///
+/// With the `jit` feature this compiles the function on demand. Without it
+/// (an `aot-load`-only build) the store cache is consulted and nothing else:
+/// a function no AoT loader installed reports `VMResult::Unimplemented` --
+/// the same typed result a JIT-rejected function produces -- and the caller
+/// falls back to the interpreter. An `aot-load`-only build therefore cannot
+/// compile at runtime, and the request surfaces as a typed result, never a
+/// panic and never a silent compile.
 #[cfg(feature = "jit")]
+fn load_or_compile(
+    store: &crate::Store,
+    runtime: &crate::common::store::StoreInner,
+    funcaddr: crate::common::ObjectRef,
+    body: &FunctionBody,
+) -> VMResult<std::sync::Arc<CompiledFunction>> {
+    let max_bytes = store.runtime_config().jit.code_cache_max_bytes;
+    store
+        .jit_cache()
+        .get_or_compile(funcaddr, body, runtime, max_bytes)
+}
+
+#[cfg(all(feature = "aot-load", not(feature = "jit")))]
+fn load_or_compile(
+    store: &crate::Store,
+    _runtime: &crate::common::store::StoreInner,
+    funcaddr: crate::common::ObjectRef,
+    _body: &FunctionBody,
+) -> VMResult<std::sync::Arc<CompiledFunction>> {
+    profile::count(profile::Counter::CompileAttempt);
+    match store.jit_cache().get_cached(funcaddr) {
+        Some(compiled) => VMResult::Success(compiled),
+        None => VMResult::Unimplemented,
+    }
+}
+
+#[cfg(feature = "aot-load")]
 struct JitEntryDepthGuard;
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 struct JitInterpreterStopGuard {
     previous: *const Instr,
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 impl JitInterpreterStopGuard {
     fn new(stop_pc: *const Instr) -> Self {
         // Continuation bridges can re-enter the interpreter while an outer bridge
@@ -302,21 +350,21 @@ impl JitInterpreterStopGuard {
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 impl Drop for JitEntryDepthGuard {
     fn drop(&mut self) {
         JIT_ENTRY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 impl Drop for JitInterpreterStopGuard {
     fn drop(&mut self) {
         JIT_INTERPRETER_STOP_AT.with(|stop| stop.set(self.previous));
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 unsafe fn handle_exit(
     exit: JitNativeExit,
     _code_base: *const crate::common::Instr,
@@ -371,7 +419,7 @@ unsafe fn handle_exit(
     }
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot-load")]
 unsafe fn trace_fallback_exit(
     ctx: &ExecuteContext<'_>,
     kind: &'static str,
@@ -408,4 +456,67 @@ unsafe fn trace_fallback_exit(
         return;
     }
     eprintln!("[telomere-jit] {kind} funcidx={funcidx} pc={pc_index}");
+}
+
+#[cfg(all(test, feature = "aot-load", not(feature = "jit")))]
+mod aot_load_tests {
+    use crate::{
+        instantiate, run_module_function, InstanceHandle, IoReadBinaryReader, Registry,
+        ResultValue, RuntimeConfig, Store, VMResult, WasmParser, WasmValue,
+    };
+
+    fn parse_wat(wat_src: &str) -> crate::Module {
+        let bytes = wat::parse_str(wat_src).expect("test WAT must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        WasmParser::new(&mut reader)
+            .parse_module()
+            .expect("test module must parse")
+    }
+
+    async fn instantiate_wat(store: &Store, wat_src: &str) -> InstanceHandle {
+        let registry = Registry::new();
+        match instantiate(parse_wat(wat_src), store, &registry).await {
+            VMResult::Success(instance) => instance,
+            other => panic!("test module must instantiate: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn aot_load_only_build_reports_no_jit_compilation() {
+        assert!(
+            !crate::jit_supported(),
+            "an aot-load-only build cannot compile, so jit_supported must be false"
+        );
+    }
+
+    #[tokio::test]
+    async fn aot_load_only_build_interprets_instead_of_compiling() {
+        let mut runtime_config = RuntimeConfig::default();
+        runtime_config.jit.enabled = true;
+        let store = Store::new_with_runtime_config(runtime_config);
+        let instance = instantiate_wat(
+            &store,
+            r#"
+            (module
+              (func (export "run") (result i32)
+                i32.const 42))
+            "#,
+        )
+        .await;
+
+        let result = run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+            }
+            other => panic!(
+                "the interpreter must produce the result when no native code is installed: {other:?}"
+            ),
+        }
+        let stats = store.jit_cache_stats();
+        assert_eq!(
+            stats.compiled_functions, 0,
+            "an aot-load-only build must not compile at runtime"
+        );
+    }
 }
