@@ -194,6 +194,10 @@ pub(crate) struct Scheduler<'a> {
     pub(crate) completed_tasks: Vec<CompletedTask>,
     pub(crate) store: &'a Store,
     ready_count: u32,
+    /// Host frames of in-flight host calls, by task, retained so an
+    /// asynchronously completing trap is attributed to the host frame
+    /// (#211) rather than to the already-resumed caller frame.
+    host_call_frames: std::collections::HashMap<u32, LocalReference>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -204,6 +208,7 @@ impl<'a> Scheduler<'a> {
             completed_tasks: vec![],
             store,
             ready_count: 0,
+            host_call_frames: std::collections::HashMap::new(),
         }
     }
 
@@ -217,6 +222,10 @@ impl<'a> Scheduler<'a> {
 
     fn submit_pending_ops<D: ExecutionDriver>(&mut self, driver: &mut D) {
         while let Some(op) = self.pending_queue.pop_front() {
+            if let PendingOp::HostCall(pending) = &op {
+                self.host_call_frames
+                    .insert(pending.task_id, pending.frame_reference);
+            }
             driver.submit(op);
         }
     }
@@ -228,6 +237,11 @@ impl<'a> Scheduler<'a> {
             .position(|task| task.task_id == completion.task_id)
         else {
             return;
+        };
+        let host_frame = if matches!(completion.payload, CompletionPayload::HostCall { .. }) {
+            self.host_call_frames.remove(&completion.task_id)
+        } else {
+            None
         };
         match completion.payload {
             CompletionPayload::Resume { fp } => {
@@ -307,7 +321,7 @@ impl<'a> Scheduler<'a> {
                     });
                 }
             }
-            CompletionPayload::HostCall { result } => match result {
+            CompletionPayload::HostCall { result } => match result.into_raw() {
                 VMResult::Success(fp) => {
                     let runtime = self.store.lock_runtime_or_panic();
                     let fp = {
@@ -345,7 +359,7 @@ impl<'a> Scheduler<'a> {
                         capture_trap_context(
                             &runtime,
                             &task.stack,
-                            task.local_reference,
+                            host_frame.unwrap_or(task.local_reference),
                             None,
                             &result,
                             task.task_id,
@@ -626,6 +640,7 @@ mod tests {
         Completion, CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, ReadyFlag,
         Scheduler, Task, TokioDriver,
     };
+    use crate::runtime::memory_effect::HostCallFuture;
     use crate::{
         common::{CallFrameCache, LocalReference, StablePc, Stack},
         Store, VMResult,
@@ -636,12 +651,18 @@ mod tests {
         let mut driver = TokioDriver::new();
         driver.submit(PendingOp::HostCall(HostCallPending {
             task_id: 3,
-            future: Box::pin(async { VMResult::Success(std::ptr::null()) }),
+            future: HostCallFuture::from_raw(Box::pin(async {
+                VMResult::Success(std::ptr::null())
+            })),
+            frame_reference: LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
         }));
         let completion = driver.next_completion().await.unwrap();
         match completion.payload {
             CompletionPayload::HostCall { result } => {
-                assert!(matches!(result, VMResult::Success(ptr) if ptr.is_null()));
+                assert!(matches!(result.into_raw(), VMResult::Success(ptr) if ptr.is_null()));
             }
             other => panic!("unexpected completion: {other:?}"),
         }

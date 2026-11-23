@@ -32,6 +32,20 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking:** replaced the raw host-linking ABI with a designed public
+  boundary (#216). Host callbacks are now `HostFn`/`AsyncHostFn` functions
+  receiving a `HostContext` (decoded `WasmValue` arguments, the owning
+  `Store`, guest-memory access) and returning `VMResult<Vec<WasmValue>>`;
+  native modules are `HostModule`/`AsyncHostModule` built from
+  `HostFnDefinition`/`AsyncHostFnDefinition`. The `telomere::host_abi`
+  module is removed, `Module::codes` is crate-private, and the driver
+  surface exposes opaque `HostCallFuture`/`HostCallOutcome` wrappers
+  instead of interpreter continuations. The raw ABI (raw `ExecuteContext`
+  callbacks, `NativeModule`, `link_raw_*` / `instantiate_raw_*` entry
+  points) remains available behind the opt-in `unstable-internals`
+  feature. The component-model host trampoline and the telomere test
+  suite's ordinary host functions migrated to the new boundary; the CLI's
+  Preview1 support stays on the raw opt-in surface pending #137.
 - **Breaking:** split the spec trap causes out of `VMResult::InvalidOperand`.
   Integer division/remainder by zero now returns `VMResult::DivideByZero`,
   signed division overflow returns `VMResult::IntegerOverflow`, and a failed

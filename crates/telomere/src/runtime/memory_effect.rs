@@ -1,15 +1,86 @@
-use std::fmt;
+use std::{
+    fmt,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 #[cfg(feature = "threads")]
 use std::sync::Arc;
 
 #[cfg(feature = "threads")]
 use crate::common::{MeteringHandle, SharedMemoryObject, SharedWaitRegistration};
-use crate::{common::AsyncHostFuture, VMResult};
+use crate::{
+    common::{stack::LocalReference, AsyncHostFuture, Instr},
+    VMResult,
+};
+
+/// The result of a completed asynchronous host call, as handed back to the
+/// runtime by an execution driver.
+///
+/// The payload is the interpreter's internal resume token; drivers only
+/// forward it from a finished [`HostCallFuture`] to the runtime through
+/// [`Completion`], so the token's type stays behind this public boundary
+/// (issue #216).
+pub struct HostCallOutcome {
+    result: VMResult<*const Instr>,
+}
+
+impl HostCallOutcome {
+    pub(crate) fn from_raw(result: VMResult<*const Instr>) -> Self {
+        Self { result }
+    }
+
+    pub(crate) fn into_raw(self) -> VMResult<*const Instr> {
+        self.result
+    }
+}
+
+impl fmt::Debug for HostCallOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostCallOutcome").finish_non_exhaustive()
+    }
+}
+
+/// A pending asynchronous host call, exposed to execution drivers.
+///
+/// The future is opaque: a driver polls it to completion and forwards the
+/// resulting [`HostCallOutcome`] back to the runtime as the completion
+/// payload, without naming any interpreter-internal type (issue #216).
+pub struct HostCallFuture {
+    future: Pin<Box<dyn Future<Output = VMResult<*const Instr>> + 'static>>,
+}
+
+impl HostCallFuture {
+    pub(crate) fn from_raw(future: AsyncHostFuture) -> Self {
+        Self { future }
+    }
+}
+
+impl Future for HostCallFuture {
+    type Output = HostCallOutcome;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.future.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(HostCallOutcome::from_raw(result)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl fmt::Debug for HostCallFuture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostCallFuture").finish_non_exhaustive()
+    }
+}
 
 pub struct HostCallPending {
     pub task_id: u32,
-    pub future: AsyncHostFuture,
+    pub future: HostCallFuture,
+    /// The frame of the host call itself, retained by the runtime so that a
+    /// trap completing asynchronously is attributed to the host frame
+    /// (#211) even though the frame is finished eagerly for resumption.
+    pub(crate) frame_reference: LocalReference,
 }
 
 #[cfg(feature = "threads")]
@@ -85,10 +156,15 @@ pub struct Completion {
 #[derive(Debug)]
 pub enum CompletionPayload {
     #[allow(dead_code)]
-    Resume { fp: usize },
+    Resume {
+        fp: usize,
+    },
     // #202: Shared-memory wait completion is intentionally dormant without threads support.
     #[cfg_attr(not(feature = "threads"), allow(dead_code))]
-    ResumeWithI32 { fp: usize, value: i32 },
+    ResumeWithI32 {
+        fp: usize,
+        value: i32,
+    },
     /// A pending shared-memory wait was cut short by
     /// [`MeteringHandle::interrupt`] (#177). The task terminates with
     /// [`VMResult::Cancelled`] instead of resuming with a wait result
@@ -96,7 +172,7 @@ pub enum CompletionPayload {
     #[cfg_attr(not(feature = "threads"), allow(dead_code))]
     Interrupted,
     HostCall {
-        result: VMResult<*const crate::common::Instr>,
+        result: HostCallOutcome,
     },
     #[allow(dead_code)]
     WasmAsync,

@@ -97,8 +97,10 @@ pub(crate) fn capture_trap_context(
             Some(function) => {
                 let kind = match &function.body {
                     FunctionBody::Wasm { .. } => CapturedFrameKind::Wasm,
-                    FunctionBody::Host(_) => CapturedFrameKind::Host,
-                    FunctionBody::AsyncHost(_) => CapturedFrameKind::AsyncHost,
+                    FunctionBody::Host(_) | FunctionBody::PublicHost(_) => CapturedFrameKind::Host,
+                    FunctionBody::AsyncHost(_) | FunctionBody::PublicAsyncHost(_) => {
+                        CapturedFrameKind::AsyncHost
+                    }
                 };
                 (Some(function.funcidx), kind)
             }
@@ -358,7 +360,9 @@ mod tests {
         VMResult::Success(entry_pc)
     }
 
-    fn async_host_unreachable(_ctx: &mut ExecuteContext<'_>) -> crate::common::AsyncHostFuture {
+    fn async_host_unreachable(
+        _cx: &mut crate::host::HostContext<'_, '_>,
+    ) -> crate::host::HostFuture {
         Box::pin(async { VMResult::Unreachable })
     }
 
@@ -373,7 +377,7 @@ mod tests {
             "#,
         )
         .await;
-        crate::runtime::instantiate::link_host_function_with_function_idx(
+        crate::runtime::instantiate::link_raw_host_function_with_function_idx(
             &instance,
             0,
             reenter_guest_then_trap,

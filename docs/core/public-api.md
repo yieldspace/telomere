@@ -4,25 +4,27 @@
 
 Current. This document records the source-level public paths of the core
 telomere crate. The default embedding surface is intentionally narrower than
-the interpreter implementation, with one compatibility carve-out: existing
-synchronous and asynchronous host-function linking must continue to work
-without requiring an opt-in feature. The replacement and eventual closure of
-that raw ABI are tracked by #216.
+the interpreter implementation. Host-function linking is part of that
+surface through a designed public boundary (#216): host callbacks receive a
+`HostContext` with decoded arguments and return `WasmValue`s, so no
+interpreter-internal type appears in a default public signature. The former
+raw host-linking ABI remains available only behind the opt-in
+`unstable-internals` feature (tier S3).
 
 ## Surface tiers
 
 | Tier | Path | Purpose and stability |
 | --- | --- | --- |
 | S1 | telomere::* | Curated core embedding API: parsing, stores, instantiation, execution, and supporting values. |
-| H1 | telomere::host_abi::* | Default compatibility carve-out for raw host callbacks and native-module construction. It is retained for existing host linking, not a newly designed stable API; #216 owns its replacement. |
-| H2 | Selected root telomere::* paths | Default compatibility carve-out for replacing host functions and driving asynchronous continuations. #216 owns its replacement. |
+| H1 | Selected root telomere::* paths | Designed host-function boundary (#216): `HostContext`, the `HostFn`/`AsyncHostFn` callback types, native-module construction, and the link/instantiate entry points. |
+| H2 | Selected root telomere::* paths | Execution-driver surface: pending operations, completions, and the opaque `HostCallFuture`/`HostCallOutcome` wrappers (#216). |
 | S2 | telomere::component_support::* | Explicit documented boundary used by component-model crates. It is not a glob of the core implementation. |
 | S3 | telomere::unstable_internals::* behind unstable-internals | Opt-in raw interpreter helpers and representations for in-repository or downstream integrations. No stability promise applies. |
 
 The S1 root also retains `JitCacheStats` behind `jit`. `Store::jit_cache_stats`
 and the minimal-embedder JIT configuration use this documented observability
-surface to verify that an enabled workload compiled; it is not part of the raw
-host-linking ABI and therefore does not belong in `host_abi`.
+surface to verify that an enabled workload compiled; it is not part of the
+host-linking API.
 
 S1 also exposes the cold core-trap diagnostics capability:
 `TrapInfo`, `TrapFrame`, `TrapFrameKind`, `TrapKind`, and
@@ -34,46 +36,49 @@ owns that redesign, while [#146](https://github.com/yieldspace/telomere/issues/1
 owns the corresponding C ABI surface. See [trap reporting](trap-reporting.md)
 for the exact retrieval, formatting, name-retention, and JIT boundaries.
 
-### H1: default host ABI
+### H1: designed host-function API
 
-host_abi has nineteen always-present paths:
+Host callbacks are written against public vocabulary only. A synchronous
+host function has the type
 
-AsyncHostFunction, AsyncHostFunctionDefinition, AsyncHostFuture,
-AsyncNativeModule, CodeSection, ExecuteContext, Func, FunctionBody,
-HostFunction, HostFunctionDefinition, Instr, Memory, NativeModule, ObjectRef,
-ReturnSlot, Stack, LocalReference, StoreInner, and instantiate_native_module.
+```
+HostFn = fn(&mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>>
+```
 
-With threads, it additionally has SharedMemoryObject and
-SharedWaitRegistration. Thus the default configuration exposes 21 H1 paths;
---no-default-features exposes 19, and
---no-default-features --features simd also exposes 19.
+and an asynchronous one returns a `HostFuture` resolving to the same value
+shape. `HostContext` carries the decoded arguments, the owning `Store`
+(including embedder state), the calling instance/function identity, and
+guest-memory access through the public `Memory` type. The runtime adapter
+decodes the arguments from the frame's local area, validates and writes the
+returned values into the frame's return slot, and completes the frame
+return, so embedders never complete a frame through raw stack state.
 
-The 16-to-6 nameability classification is **N6** in the default build: the
-always-present Memory, Stack, LocalReference, and StoreInner, plus
-SharedMemoryObject and SharedWaitRegistration with threads. It is N4 for both
---no-default-features and --no-default-features --features simd. The latter two
-are necessary because a custom ExecutionDriver receives a public
-MemoryWaitPending { shared, wait, .. }. The former stack/frame values remain
-necessary because no new finish API was introduced: a host callback continues
-to complete its frame through ExecuteContext's raw stack and store fields.
+Native modules are built from `HostFnDefinition`/`AsyncHostFnDefinition`
+collected in `HostModule`/`AsyncHostModule`. Six root entry points cover
+linking and instantiation:
 
-The other ten candidates are not default ABI names: LocalsData, AtomicRmwOp,
-AtomicWaitResult, MemoryMappingOperation, MemoryInitError, CallFrameCache,
-IntoCallFrameCache, InstanceData, FunctionInstanceData, and EffectSupplier.
-They are represented by S3 helpers where a supported opt-in consumer needs an
-operation, rather than by a default export of the underlying interpreter type.
-
-### H2: root compatibility carve-out
-
-Five root paths preserve synchronous or asynchronous host-function replacement:
-
+- instantiate_native_module
 - instantiate_native_async_module
 - link_host_function_with_export_name
 - link_host_function_with_function_idx
 - link_async_host_function_with_export_name
 - link_async_host_function_with_function_idx
 
-Eight root paths preserve asynchronous driver and continuation handling:
+The internal calling convention is unchanged: the adapter returns the same
+`VMResult<*const Instr>` to the dispatcher, so the return-type
+classification guarded by the #178 size assertions is unaffected.
+
+The raw ABI that preceded this boundary (raw `ExecuteContext` callbacks,
+`NativeModule`, frame completion through `Stack`/`StoreInner`, the decoded
+`Module::codes` field) is closed in default builds. `Module::codes` is
+crate-private, and the raw types and entry points are nameable only through
+S3: `unstable_internals` re-exports the raw types and provides
+`link_raw_*` / `instantiate_raw_*` counterparts. The public-surface guard
+forbids the raw final segments from ever reappearing ungated.
+
+### H2: execution-driver surface
+
+Eight root paths cover asynchronous driver and continuation handling:
 
 - run_module_function_with_driver
 - Completion
@@ -84,16 +89,19 @@ Eight root paths preserve asynchronous driver and continuation handling:
 - PendingOp
 - TokioDriver
 
-Module::codes is also public for the existing decoded-AST compatibility
-boundary. Its type is host_abi::CodeSection; the other decoded section types
-remain internal. H1 and H2 are intentionally small compatibility boundaries,
-not an endorsement of raw interpreter representation as the general embedding
-API.
+A driver never names an interpreter continuation: `HostCallPending.future`
+is the opaque `HostCallFuture`, whose completion result is the opaque
+`HostCallOutcome` carried by `CompletionPayload::HostCall`. With threads,
+`MemoryWaitPending` additionally carries the root driver types
+`SharedMemoryObject` and `SharedWaitRegistration`, whose wait operations a
+driver is expected to call.
 
 unstable-internals remains an explicit maintenance boundary. It is enabled by
-the CLI, component-model consumers, and the crate's self dev-dependency where
-needed. New consumers should prefer S1/S2/H1/H2 and opt in to S3 only when they
-need the raw integration contract.
+the CLI (whose Preview1 support manipulates raw instruction sequences; #137
+tracks Preview1's fate), component-model consumers, and the crate's self
+dev-dependency where needed. The component-model crate's host trampoline
+itself uses the designed H1 boundary. New consumers should prefer S1/S2/H1/H2
+and opt in to S3 only when they need the raw integration contract.
 
 `special_function_return` and `WasmAsyncPending` are S3 items under
 `unstable-internals`, despite retaining cfg-gated crate-root spellings for
@@ -101,17 +109,18 @@ existing opt-in consumers. The former requires construction of a raw `Instr`
 return sequence, and the default surface exposes no `Instr` construction API.
 The latter has no runtime producer, while `TokioDriver` rejects it as reserved
 future guest-async support. Neither is part of the default host-linking or
-driver carve-out. `CompletionPayload::WasmAsync` remains a type-free reserved
+driver surface. `CompletionPayload::WasmAsync` remains a type-free reserved
 completion marker, not a supported default driver capability.
 
 ## Public-surface snapshot
 
 crates/telomere/tests/public_surface.rs has two source passes. Its ordinary
 public-path pass parses the reviewed source closure with syn: src/lib.rs,
-src/host_abi.rs, src/component_support.rs, src/unstable_internals.rs, and the
-root-re-exported `Module` and `Store` definitions in src/common.rs and
-src/common/store.rs. The latter two sources are parsed solely to record the
-reviewed `Module::codes` field and `Store::take_last_trap` method. The pass
+src/component_support.rs, src/unstable_internals.rs, and the root-re-exported
+`Module` and `Store` definitions in src/common.rs and src/common/store.rs.
+The latter two sources are parsed solely to record the reviewed
+`Store::take_last_trap` method and to assert that `Module::codes` stays
+crate-private. The pass
 expands every explicit public use tree and public item into a telomere::... path,
 carries textual #[cfg(...)] predicates through nested public modules, sorts the
 result, and compares it byte-for-byte with the single committed
@@ -159,17 +168,18 @@ then verify the snapshot without the update environment variable:
 
 ### What this does and does not prove
 
-The snapshot is a path-level guard. It has one deliberately reviewed field
-exception, `Module::codes`, and one deliberately reviewed method exception,
-`Store::take_last_trap`, but does not detect arbitrary new public methods,
-fields, or changed signatures on an already exported type.
+The snapshot is a path-level guard. It has one deliberately reviewed method
+exception, `Store::take_last_trap`, and asserts the formerly public
+`Module::codes` field stays crate-private, but does not detect arbitrary new
+public methods, fields, or changed signatures on an already exported type.
 warn(unnameable_types), private_interfaces, compilation, and the warning-free
 Clippy job provide complementary checks; cargo public-api would be the
 appropriate future signature-level compatibility tool.
 
-The `host_abi` doctests establish the synchronous index-link/frame-return route
-and the async native-module/custom-driver route. They do not by themselves
-replace the snapshot's full path audit.
+The doctests on the root link and instantiate functions establish the
+synchronous link route, the native-module route, and the async
+native-module/custom-driver route against the designed H1 boundary. They do
+not by themselves replace the snapshot's full path audit.
 
 Release lib-only builds establish the public-surface closure for a concrete
 feature set. --all-targets builds establish that workspace consumers still
@@ -185,10 +195,11 @@ iteration 2 = 0 remaining unintended release-lib-only exposures. Those numbers
 are closure-review checkpoints, not a claim about the number of textual type
 matches or the number of consumers.
 
-This change achieves the reviewed path closure and the N6 default host-linking
-compatibility set. It does not replace the raw ABI; that work remains #216.
-An existing export-name host-linking failure is tracked by #220. It is
-unrelated to the surface boundary and remains deliberately unmodified here.
+That review achieved the reviewed path closure and the N6 default
+host-linking compatibility set without replacing the raw ABI. Issue #216 has
+since replaced the raw ABI with the designed H1 boundary described above;
+the raw types and entry points survive only in S3, and the guard now forbids
+their ungated return.
 
 ## Measurement boundary
 

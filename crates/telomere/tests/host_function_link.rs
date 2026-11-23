@@ -5,13 +5,14 @@ use std::sync::{
     Mutex,
 };
 use telomere::{
-    host_abi::{ExecuteContext, Instr},
     link_host_function_with_export_name, link_host_function_with_function_idx, run_module_function,
     unstable_internals::{
         function_address, function_call, function_code_pointer, function_host_code_pointer,
-        function_is_host, function_locals_size, Operand,
+        function_is_host, function_locals_size, link_raw_host_function_with_function_idx,
+        ExecuteContext, Instr, Operand,
     },
-    vm_try, InstanceHandle, Registry, ResultValue, Store, StoreState, VMResult,
+    vm_try, HostContext, InstanceHandle, Registry, ResultValue, Store, StoreState, VMResult,
+    WasmValue,
 };
 const PRINT_HOST_WAT: &str = r#"
     (module
@@ -41,25 +42,17 @@ struct LinkState {
     host: Mutex<Option<InstanceHandle>>,
 }
 
-fn link_state<'a>(ctx: &'a ExecuteContext<'a>) -> &'a LinkState {
-    unsafe { ctx.store.state.get::<LinkState>() }
+fn link_state(store: &Store) -> &LinkState {
+    unsafe { store.state.get::<LinkState>() }
         .expect("host function tests require LinkState in StoreState")
 }
 
-fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
-    &link_state(ctx).counter
+fn print_counter(store: &Store) -> &AtomicUsize {
+    &link_state(store).counter
 }
 
-fn finish_host_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
-}
-
-fn host_instance(ctx: &ExecuteContext) -> InstanceHandle {
-    link_state(ctx)
+fn host_instance(store: &Store) -> InstanceHandle {
+    link_state(store)
         .host
         .lock()
         .unwrap()
@@ -67,21 +60,21 @@ fn host_instance(ctx: &ExecuteContext) -> InstanceHandle {
         .expect("host instance must be recorded before invoking the test host function")
 }
 
-fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    print_counter(ctx).fetch_add(1, Ordering::SeqCst);
-    finish_host_call(ctx)
+fn print(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    print_counter(cx.store()).fetch_add(1, Ordering::SeqCst);
+    VMResult::Success(vec![])
 }
 
-fn relink_by_function_idx(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let host = host_instance(ctx);
-    link_host_function_with_function_idx(&host, 0, print, ctx.store);
-    finish_host_call(ctx)
+fn relink_by_function_idx(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let host = host_instance(cx.store());
+    link_host_function_with_function_idx(&host, 0, print, cx.store());
+    VMResult::Success(vec![])
 }
 
-fn relink_by_export_name(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let host = host_instance(ctx);
-    link_host_function_with_export_name(&host, "print", print, ctx.store);
-    finish_host_call(ctx)
+fn relink_by_export_name(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let host = host_instance(cx.store());
+    link_host_function_with_export_name(&host, "print", print, cx.store());
+    VMResult::Success(vec![])
 }
 
 #[tokio::test]
@@ -276,7 +269,7 @@ async fn test_tail_call_wasm() {
     )
     .await;
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, tail_call, &store);
+    link_raw_host_function_with_function_idx(&host, 0, tail_call, &store);
     let wast = r#"
     (module
       (import "host" "tail_call" (func $tail_call (param i32) (result i32)))
@@ -319,8 +312,8 @@ pub async fn test_tail_call_native() {
     )
     .await;
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, tail_call, &store);
-    link_host_function_with_function_idx(&host, 1, plus60, &store);
+    link_raw_host_function_with_function_idx(&host, 0, tail_call, &store);
+    link_raw_host_function_with_function_idx(&host, 1, plus60, &store);
 
     let wast = r#"
     (module

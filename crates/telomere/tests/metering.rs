@@ -7,12 +7,9 @@ use std::{
 
 use common::instantiate_wat;
 use telomere::{
-    component_support::common::FuncType,
-    host_abi::{
-        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
-    },
-    run_module_function, InterruptReason, MeteringConfig, Registry, ResultValue, RuntimeConfig,
-    Store, StoreState, VMResult, WasmValue,
+    component_support::common::FuncType, instantiate_native_module, run_module_function,
+    HostContext, HostFnDefinition, HostModule, InterruptReason, MeteringConfig, Registry,
+    ResultValue, RuntimeConfig, Store, StoreState, VMResult, WasmValue,
 };
 
 const LOOP_FOREVER_WAT: &str = r#"
@@ -149,9 +146,9 @@ struct PauseState {
     resume: Mutex<mpsc::Receiver<()>>,
 }
 
-fn pause_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+fn pause_host(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
     let state =
-        unsafe { ctx.store.state.get::<PauseState>() }.expect("test Store must retain PauseState");
+        unsafe { cx.store().state.get::<PauseState>() }.expect("test Store must retain PauseState");
     state
         .entered
         .send(())
@@ -162,15 +159,11 @@ fn pause_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
         .expect("test resume mutex must not be poisoned")
         .recv()
         .expect("test controller must release the host call");
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
+    VMResult::Success(vec![])
 }
 
-fn noop_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
+fn noop_host(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    VMResult::Success(vec![])
 }
 
 fn metered_store(initial_fuel: Option<u64>) -> Store {
@@ -296,8 +289,8 @@ async fn ordinary_direct_and_host_calls_do_not_consume_fuel() {
 
     let mut registry = Registry::new();
     let host = match instantiate_native_module(
-        NativeModule {
-            functions: vec![HostFunctionDefinition {
+        HostModule {
+            functions: vec![HostFnDefinition {
                 fp: noop_host,
                 name: Some("noop".to_owned()),
                 signature: FuncType::new(vec![], vec![]),
@@ -937,8 +930,8 @@ async fn concurrent_set_fuel_preserves_an_ordinary_host_call_as_uncharged() {
     let meter = store.metering().expect("metering must be enabled");
     let mut registry = Registry::new();
     let host = match instantiate_native_module(
-        NativeModule {
-            functions: vec![HostFunctionDefinition {
+        HostModule {
+            functions: vec![HostFnDefinition {
                 fp: pause_host,
                 name: Some("pause".to_owned()),
                 signature: FuncType::new(vec![], vec![]),

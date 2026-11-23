@@ -4,9 +4,12 @@ use common::instantiate_wat;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
     component_support::common::{FuncType, ValType},
-    host_abi::{AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext},
-    instantiate_native_async_module, run_module_function, Registry, ResultValue, Store, StoreState,
-    VMResult, WasmValue,
+    run_module_function,
+    unstable_internals::{
+        instantiate_raw_native_async_module, AsyncHostFunctionDefinition, AsyncHostFuture,
+        AsyncNativeModule, ExecuteContext,
+    },
+    Registry, ResultValue, Store, StoreState, VMResult, WasmValue,
 };
 
 fn assert_i32_result(result: VMResult<ResultValue>, expected: i32) {
@@ -167,7 +170,7 @@ async fn return_call_into_async_host_import_resumes_with_result() {
     }));
     let store = Store::new_with_state(StoreState::from_static(state));
     let mut registry = Registry::new();
-    let host = instantiate_native_async_module(
+    let host = instantiate_raw_native_async_module(
         AsyncNativeModule {
             functions: vec![AsyncHostFunctionDefinition {
                 name: Some("add-one".to_owned()),
