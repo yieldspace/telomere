@@ -356,12 +356,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #276: workflow_dispatch runs 45169595430 and
-45169601657 against the PR branch at head
-`276a0e41ff732ad12d66df383ea48dc88b35c692` (branch commit `278de94`,
-release atomic.wait timer threads when the wait resolves (#270); and
-merge commit `276a0e4` bringing in `main` at `92b66b3`), and
-pull-request run 45169582070, which built the same
+against the code of PR #280: workflow_dispatch runs 45176267574 and
+45176273957 against the PR branch at head
+`677c152b36691c48e6db99e9b0bf7d284d616b1d` (branch commit `0ec3b09`,
+fail closed on reachable internal-invariant violations (#128); and
+merge commit `677c152` bringing in `main` at `da5eb1e`), and
+pull-request run 45176240985, which built the same
 tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -372,21 +372,21 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,493,584 | 1,143,303 |
-| `release` | `component` | 2,537,392 | 2,036,775 |
-| `release` | `wasi` | 2,881,392 | 2,296,903 |
-| `release` | `core-nosimd` | 1,300,968 | 1,000,199 |
-| `release` | `core-jit` | 2,038,040 | 1,586,951 |
-| `release` | `core-aot` | 1,520,816 | 1,162,215 |
-| `release` | `wasi-threads` | 3,069,760 | 2,437,351 |
+| `release` | `core` | 1,490,024 | 1,142,583 |
+| `release` | `component` | 2,533,408 | 2,036,071 |
+| `release` | `wasi` | 2,877,408 | 2,296,199 |
+| `release` | `core-nosimd` | 1,297,424 | 999,479 |
+| `release` | `core-jit` | 2,034,528 | 1,586,391 |
+| `release` | `core-aot` | 1,517,464 | 1,161,687 |
+| `release` | `wasi-threads` | 3,065,864 | 2,436,759 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,105,936 | 782,311 |
-| `release-size` | `component` | 1,665,840 | 1,232,247 |
-| `release-size` | `wasi` | 1,861,696 | 1,363,959 |
-| `release-size` | `core-nosimd` | 991,160 | 702,791 |
-| `release-size` | `core-jit` | 1,545,272 | 1,104,343 |
-| `release-size` | `core-aot` | 1,125,368 | 793,879 |
-| `release-size` | `wasi-threads` | 2,004,176 | 1,458,391 |
+| `release-size` | `core` | 1,102,760 | 781,863 |
+| `release-size` | `component` | 1,662,248 | 1,231,735 |
+| `release-size` | `wasi` | 1,858,120 | 1,363,463 |
+| `release-size` | `core-nosimd` | 987,936 | 702,279 |
+| `release-size` | `core-jit` | 1,541,584 | 1,103,655 |
+| `release-size` | `core-aot` | 1,122,224 | 793,463 |
+| `release-size` | `wasi-threads` | 2,000,504 | 1,457,863 |
 
 #### Re-baseline history
 
@@ -975,6 +975,37 @@ largest cumulative growth remains release-size `component` stripped
 that series does not move here. The baseline was re-measured on the
 merged code and updated as recorded above, following the procedure
 below.
+
+PR #280 (#128, internal-invariant violations abort the host: panics
+and unwraps reachable from module, guest and link input in
+instantiation, linking, `call_indirect` and the async scheduler are
+converted to fail-closed error returns, and the 33 `expect` /
+`unreachable!` sites in the fused-op evaluation path ride the
+existing `Option` chain into `InvalidOperand`) merged current `main`
+into its branch first; the merge conflicted in
+`runtime/scheduler.rs` (a test-module union — the branch's WasmAsync
+tests and `main`'s u64 task-id boundary test are both kept) and in
+`tests/public_api_fail_closed.rs`, and one auto-merged asymmetry had
+to be repaired by hand: the public host-linking implementations that
+PR #269 (#216) rewrote in `runtime/instantiate.rs` still indexed and
+unwrapped on embedder input, so the branch's fail-closed conversions
+were ported to the four public link implementations (the raw
+counterparts already carried them); the two regression tests were
+ported to the public API in the process. The first CI run on the
+merged tree passed the gate, because every delta is negative.
+Attribution was isolated by measuring current `main` alone
+(workflow_dispatch run 45176281284, gate success), which reproduces
+the previous baseline exactly on all 32 gated series. Removing
+panic paths and their formatting machinery shrinks all seven library
+configurations in both profiles (release stripped file
+−3,352..−3,984 B and stripped `.text` −528..−720 B; release-size
+stripped file −3,144..−3,688 B and stripped `.text` −416..−688 B);
+the `baseline` configuration, which links no library code, is
+unchanged. Against the original #164 baseline, the largest
+cumulative growth remains release-size `component` stripped `.text`
+at +5.36% (1,169,031 B to 1,231,735 B), down from +5.41%. The
+baseline was re-measured on the merged code and updated as recorded
+above, following the procedure below.
 
 ### Threshold derivation
 

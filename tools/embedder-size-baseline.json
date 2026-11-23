@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #276 (branch fix/270-wait-timer-release at head 276a0e41ff732ad12d66df383ea48dc88b35c692 \u2014 branch commit 278de94 (release atomic.wait timer threads when the wait resolves) plus merge commit 276a0e4 bringing in current main 92b66b3, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45169595430 and 45169601657 against the branch and pull-request run 45169582070, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "276a0e41ff732ad12d66df383ea48dc88b35c692",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #280 (branch fix/128-reachable-panics at head 677c152b36691c48e6db99e9b0bf7d284d616b1d \u2014 branch commit 0ec3b09 (fail closed on reachable internal-invariant violations (#128)) plus merge commit 677c152 bringing in current main da5eb1e, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45176267574 and 45176273957 against the branch and pull-request run 45176240985, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "677c152b36691c48e6db99e9b0bf7d284d616b1d",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45169595430,
-      45169601657
+      45176267574,
+      45176273957
     ],
     "cross_check_run_ids": [
-      45169582070
+      45176240985
     ],
-    "derivation": "Re-baseline for PR #276 (#270, atomic.wait timer threads are released when the wait resolves: SharedWaiter gains a release (Mutex, Condvar) pair signalled by the successful CAS claim in try_mark_notified / try_mark_interrupted; the per-wait timer thread sleeps in the condvar's wait_timeout and exits as soon as the wait is resolved instead of sleeping to the original deadline, and registrations already resolved before wait_result is polled spawn no thread at all). The branch merged current main (92b66b3, containing PRs #269, #273, #278 and #275) before measurement; the merge was conflict-free (main's only change to common/memory.rs was the push_to_stack visibility narrowing from PR #269, disjoint from the wait-timer code). The first CI run on the merged tree tripped the gate on this PR's own change. Attribution was isolated by measuring current main (92b66b3) alone (workflow_dispatch run 45169608064, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. The growth is confined to wasi-threads, the configuration with the threads feature that compiles the shared-wait timer code in crates/telomere/src/common/memory.rs: release stripped file +1,608 B / stripped .text +1,280 B; release-size +1,088 B / +800 B. The other 30 gated series are byte-identical; 2 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.41% (1,169,031 B to 1,232,247 B), unchanged, because that series does not move here. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #280 (#128, internal-invariant violations abort the host: panics and unwraps reachable from module, guest and link input in instantiation, linking, call_indirect and the async scheduler are converted to fail-closed error returns, and the 33 expect/unreachable sites in the fused-op evaluation path in runtime/vm/superinstructions.rs ride the existing Option chain into InvalidOperand). The branch merged current main (da5eb1e, containing PRs #269, #273, #278, #275 and #276) before measurement; the merge conflicted in runtime/scheduler.rs (a test-module union: the branch's WasmAsync tests and main's u64 task-id boundary test are both kept) and in tests/public_api_fail_closed.rs, and one auto-merged asymmetry was repaired by hand \u2014 the public host-linking implementations rewritten by PR #269 (#216) in runtime/instantiate.rs still indexed and unwrapped on embedder input, so the branch's fail-closed conversions were ported to the four public link implementations (the raw counterparts already carried them), and the two regression tests were ported to the public API. The first CI run on the merged tree passed the gate, because every delta is negative. Attribution was isolated by measuring current main (da5eb1e) alone (workflow_dispatch run 45176281284, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR's own. Removing panic paths and their formatting machinery shrinks all seven library configurations in both profiles (release stripped file \u22123,352..\u22123,984 B / stripped .text \u2212528..\u2212720 B; release-size stripped file \u22123,144..\u22123,688 B / stripped .text \u2212416..\u2212688 B), while the baseline configuration, which links no library code, is unchanged; 28 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.36% (1,169,031 B to 1,231,735 B), down from +5.41%. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -30,72 +30,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1493584,
-          "threshold": 1493584
+          "baseline": 1490024,
+          "threshold": 1490024
         },
         "stripped_text_bytes": {
-          "baseline": 1143303,
-          "threshold": 1143303
+          "baseline": 1142583,
+          "threshold": 1142583
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2537392,
-          "threshold": 2537392
+          "baseline": 2533408,
+          "threshold": 2533408
         },
         "stripped_text_bytes": {
-          "baseline": 2036775,
-          "threshold": 2036775
+          "baseline": 2036071,
+          "threshold": 2036071
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2881392,
-          "threshold": 2881392
+          "baseline": 2877408,
+          "threshold": 2877408
         },
         "stripped_text_bytes": {
-          "baseline": 2296903,
-          "threshold": 2296903
+          "baseline": 2296199,
+          "threshold": 2296199
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1300968,
-          "threshold": 1300968
+          "baseline": 1297424,
+          "threshold": 1297424
         },
         "stripped_text_bytes": {
-          "baseline": 1000199,
-          "threshold": 1000199
+          "baseline": 999479,
+          "threshold": 999479
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2038040,
-          "threshold": 2038040
+          "baseline": 2034528,
+          "threshold": 2034528
         },
         "stripped_text_bytes": {
-          "baseline": 1586951,
-          "threshold": 1586951
+          "baseline": 1586391,
+          "threshold": 1586391
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1520816,
-          "threshold": 1520816
+          "baseline": 1517464,
+          "threshold": 1517464
         },
         "stripped_text_bytes": {
-          "baseline": 1162215,
-          "threshold": 1162215
+          "baseline": 1161687,
+          "threshold": 1161687
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3069760,
-          "threshold": 3069760
+          "baseline": 3065864,
+          "threshold": 3065864
         },
         "stripped_text_bytes": {
-          "baseline": 2437351,
-          "threshold": 2437351
+          "baseline": 2436759,
+          "threshold": 2436759
         }
       }
     },
@@ -112,72 +112,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1105936,
-          "threshold": 1105936
+          "baseline": 1102760,
+          "threshold": 1102760
         },
         "stripped_text_bytes": {
-          "baseline": 782311,
-          "threshold": 782311
+          "baseline": 781863,
+          "threshold": 781863
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1665840,
-          "threshold": 1665840
+          "baseline": 1662248,
+          "threshold": 1662248
         },
         "stripped_text_bytes": {
-          "baseline": 1232247,
-          "threshold": 1232247
+          "baseline": 1231735,
+          "threshold": 1231735
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1861696,
-          "threshold": 1861696
+          "baseline": 1858120,
+          "threshold": 1858120
         },
         "stripped_text_bytes": {
-          "baseline": 1363959,
-          "threshold": 1363959
+          "baseline": 1363463,
+          "threshold": 1363463
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 991160,
-          "threshold": 991160
+          "baseline": 987936,
+          "threshold": 987936
         },
         "stripped_text_bytes": {
-          "baseline": 702791,
-          "threshold": 702791
+          "baseline": 702279,
+          "threshold": 702279
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1545272,
-          "threshold": 1545272
+          "baseline": 1541584,
+          "threshold": 1541584
         },
         "stripped_text_bytes": {
-          "baseline": 1104343,
-          "threshold": 1104343
+          "baseline": 1103655,
+          "threshold": 1103655
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1125368,
-          "threshold": 1125368
+          "baseline": 1122224,
+          "threshold": 1122224
         },
         "stripped_text_bytes": {
-          "baseline": 793879,
-          "threshold": 793879
+          "baseline": 793463,
+          "threshold": 793463
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2004176,
-          "threshold": 2004176
+          "baseline": 2000504,
+          "threshold": 2000504
         },
         "stripped_text_bytes": {
-          "baseline": 1458391,
-          "threshold": 1458391
+          "baseline": 1457863,
+          "threshold": 1457863
         }
       }
     }
