@@ -164,11 +164,16 @@ fn shm_open_unique() -> libc::c_int {
         let Ok(c_name) = std::ffi::CString::new(name) else {
             return -1;
         };
+        // With O_CREAT, `shm_open` takes a variadic `mode` argument, and
+        // Rust forbids passing integers narrower than `c_uint` to variadic
+        // functions (E0617): `mode_t` is `u16` on macOS. Go through
+        // `c_uint` — on Linux `mode_t` *is* `c_uint`, so the cast is a
+        // no-op there.
         let fd = unsafe {
             libc::shm_open(
                 c_name.as_ptr(),
                 libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
-                0o600 as libc::mode_t,
+                0o600 as libc::mode_t as libc::c_uint,
             )
         };
         if fd >= 0 {
