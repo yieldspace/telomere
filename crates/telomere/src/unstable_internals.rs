@@ -118,14 +118,16 @@ pub fn function_is_host(
 
 /// Returns the synchronous host callback at `address`, when it has one.
 ///
-/// `address` must be a function reference owned by the context's store.
+/// Only callbacks registered through the raw surface have a raw code
+/// pointer. Callbacks registered through the public host boundary return
+/// `None`, because their signatures cannot be represented by
+/// `HostFunction`. `address` must be a function reference owned by the
+/// context's store.
 pub fn function_host_code_pointer(
     context: &crate::common::ExecuteContext<'_>,
     address: crate::common::ObjectRef,
 ) -> Option<crate::common::HostFunction> {
-    let function = context.func_by_addr(address);
-    (function.is_host_func() && !function.is_async_host_func())
-        .then(|| function.host_code_pointer())
+    context.func_by_addr(address).host_code_pointer()
 }
 
 /// Returns the byte size of the locals required by the function at `address`.

@@ -254,15 +254,16 @@ impl FunctionInstanceData {
         (self.locals(), 0)
     }
 
-    pub(crate) fn host_code_pointer(&self) -> HostFunction {
+    /// Returns the raw host callback of a `FunctionBody::Host`, and `None`
+    /// for every other body. Public-boundary callbacks have no raw code
+    /// pointer: their signatures cannot be represented by `HostFunction`.
+    pub(crate) fn host_code_pointer(&self) -> Option<HostFunction> {
         match self.body {
-            FunctionBody::Host(fp) => fp,
+            FunctionBody::Host(fp) => Some(fp),
             FunctionBody::Wasm { .. }
             | FunctionBody::AsyncHost(_)
             | FunctionBody::PublicHost(_)
-            | FunctionBody::PublicAsyncHost(_) => {
-                unreachable!("host code pointer requested for non-host function")
-            }
+            | FunctionBody::PublicAsyncHost(_) => None,
         }
     }
 

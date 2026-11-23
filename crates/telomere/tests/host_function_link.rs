@@ -324,3 +324,86 @@ pub async fn test_tail_call_native() {
     "#;
     run_wast_with(wast, &store, &mut registry).await;
 }
+
+/// Raw inspection callback: reports how the sibling function at index 1 of
+/// the same instance classifies through the raw accessors. Returns 1 when
+/// the sibling is a host function without a raw code pointer (a callback
+/// registered through the public boundary), 2 when it is a host function
+/// with a raw code pointer, and 3 when it is not a host function.
+fn inspect_sibling(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let func_addr = function_address(ctx, 1).expect("function index must resolve to an address");
+    let is_host = function_is_host(ctx, func_addr);
+    let host_fp = function_host_code_pointer(ctx, func_addr);
+    let verdict: i32 = match (is_host, host_fp) {
+        (true, None) => 1,
+        (true, Some(_)) => 2,
+        (false, _) => 3,
+    };
+    let slot = ctx.return_slot();
+    slot.write(&verdict.to_le_bytes());
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
+}
+
+fn public_target(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let _ = cx;
+    VMResult::Success(vec![WasmValue::I32(0)])
+}
+
+const INSPECT_WAST: &str = r#"
+    (module
+      (import "host" "inspect" (func $inspect (param i32) (result i32)))
+      (func (export "run") (param i32) (result i32) (call $inspect (local.get 0)))
+    )
+    "#;
+
+#[tokio::test]
+async fn test_raw_inspection_of_public_host_function_returns_no_code_pointer() {
+    let store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+    (module
+      (func (export "inspect") (param i32) (result i32) (unreachable))
+      (func (export "target") (param i32) (result i32) (unreachable))
+    )
+    "#,
+        &store,
+        &registry,
+    )
+    .await;
+    registry.register("host", host.clone());
+    link_raw_host_function_with_function_idx(&host, 0, inspect_sibling, &store);
+    link_host_function_with_function_idx(&host, 1, public_target, &store);
+
+    let wast =
+        format!("{INSPECT_WAST}\n(assert_return (invoke \"run\" (i32.const 0)) (i32.const 1))");
+    run_wast_with(&wast, &store, &mut registry).await;
+}
+
+#[tokio::test]
+async fn test_raw_inspection_of_raw_host_function_returns_code_pointer() {
+    let store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+    (module
+      (func (export "inspect") (param i32) (result i32) (unreachable))
+      (func (export "target") (param i32) (result i32) (unreachable))
+    )
+    "#,
+        &store,
+        &registry,
+    )
+    .await;
+    registry.register("host", host.clone());
+    link_raw_host_function_with_function_idx(&host, 0, inspect_sibling, &store);
+    link_raw_host_function_with_function_idx(&host, 1, plus60, &store);
+
+    let wast =
+        format!("{INSPECT_WAST}\n(assert_return (invoke \"run\" (i32.const 0)) (i32.const 2))");
+    run_wast_with(&wast, &store, &mut registry).await;
+}

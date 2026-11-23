@@ -113,6 +113,14 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   an identity, letting a completion retained by a driver name a task of
   a later execution again; 2^64 identities cannot be exhausted in
   practice, so identities are never reused.
+- The raw code-pointer accessor behind `unstable-internals` no longer
+  panics on callbacks registered through the public host boundary (#216
+  re-review). `function_host_code_pointer` gated on "host and not async",
+  which admits public synchronous callbacks, and then reached an
+  `unreachable!` because a public callback's signature cannot be
+  represented by the raw `HostFunction` type. The accessor now matches
+  `FunctionBody::Host` explicitly and returns `None` for public
+  callbacks.
 
 ### Removed
 
