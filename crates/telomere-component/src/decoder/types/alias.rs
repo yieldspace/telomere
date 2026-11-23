@@ -33,6 +33,9 @@ pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
                 (SortType::Core(CoreSortType::Module), InstanceExportType::CoreModule(ty)) => {
                     ctx.validator.scope_mut().core_modules.add(ty);
                 }
+                (SortType::Value, InstanceExportType::Value(ty)) => {
+                    ctx.validator.scope_mut().value_indexes.add(ty);
+                }
                 (expected, found) => {
                     return Err(ComponentParseError::InvalidSignature(format!(
                         "alias type mismatch: expected {expected:?}, found {found:?}"
@@ -103,6 +106,16 @@ pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
                             .clone()
                     };
                     ctx.validator.scope_mut().core_modules.add(ty);
+                }
+                SortType::Value => {
+                    let ty = {
+                        ctx.validator
+                            .outer_scope(count)?
+                            .value_indexes
+                            .get(LocalIdx::new(index))?
+                            .clone()
+                    };
+                    ctx.validator.scope_mut().value_indexes.add(ty);
                 }
                 SortType::Core(kind) => {
                     return Err(ComponentParseError::Unsupported(format!(

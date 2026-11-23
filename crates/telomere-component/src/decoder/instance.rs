@@ -48,6 +48,7 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
                 Sort::Component(idx, _) => (name.clone(), InstanceImport::Component(*idx)).into(),
                 Sort::Instance(idx, _) => (name.clone(), InstanceImport::Instance(*idx)).into(),
                 Sort::Func(idx, _) => (name.clone(), InstanceImport::Func(*idx)).into(),
+                Sort::Value(idx, _) => (name.clone(), InstanceImport::Value(*idx)).into(),
                 Sort::Type(_) => None,
             })
             .collect(),
@@ -85,6 +86,10 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
         match (sort, component_def) {
             (Sort::Module(_, actual), ComponentImportType::CoreModule(expected)) => {
                 actual.assert_subtype_of(expected)?;
+            }
+            (Sort::Value(_, actual), ComponentImportType::Value(expected)) => {
+                let expected = ctx.validator.instantiate_valtype(expected, &mut unified)?;
+                actual.assert_subtype_of(&expected, ctx.validator)?;
             }
             (
                 sort,
@@ -237,6 +242,16 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
                 GenericsReplaceDSL::ExportFunc(name.original.clone(), type_id)
             }
             Sort::Type(type_id) => GenericsReplaceDSL::ExportTypeEq(name.original.clone(), type_id),
+            Sort::Value(global_idx, ty) => {
+                component_exports.insert(
+                    name.original.clone(),
+                    ComponentExport::Value {
+                        idx: global_idx,
+                        ty: ty.clone(),
+                    },
+                );
+                GenericsReplaceDSL::ExportValue(name.original.clone(), ty)
+            }
         };
         program.push(op);
     }

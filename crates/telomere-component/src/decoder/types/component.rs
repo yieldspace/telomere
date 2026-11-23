@@ -64,9 +64,11 @@ pub fn parse_component_type(
                             generic: Generic::new(GenericBound::Eq(id)),
                         }
                     }
-                    ExternDesc::Value(_) => Err(ComponentParseError::Unsupported(
-                        "value imports are not supported".to_owned(),
-                    ))?,
+                    ExternDesc::Value(ty) => {
+                        crate::decoder::value::validate_value_type(ctx.validator, &ty, true)?;
+                        ctx.validator.scope_mut().value_indexes.add(ty.clone());
+                        ComponentImportType::Value(ty)
+                    }
                 };
                 let scope = ctx.validator.scope_mut();
                 if scope.imports.insert(name.original, import_ty).is_some() {

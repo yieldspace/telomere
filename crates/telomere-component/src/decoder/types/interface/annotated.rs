@@ -210,7 +210,8 @@ fn direct_resource_name(
                     ExportInfo::CoreModule(_)
                     | ExportInfo::Component(_)
                     | ExportInfo::Instance(_)
-                    | ExportInfo::Func(_) => None,
+                    | ExportInfo::Func(_)
+                    | ExportInfo::Value(_) => None,
                 };
                 if let Some(type_id) = maybe_type_id {
                     if is_resource_name_type(ctx, type_id)? {

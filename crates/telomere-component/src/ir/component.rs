@@ -1,5 +1,7 @@
+use crate::ir::types::ValType;
 use crate::ir::{
     CoreModule, ExportNameString, Func, GlobalIdx, ImportNameString, Instance, ResourceId, TypeId,
+    Value,
 };
 use std::collections::HashMap;
 
@@ -26,6 +28,7 @@ pub enum ComponentImport {
     // imports.
     #[allow(dead_code)]
     Resource,
+    Value(ValType),
 }
 
 #[derive(Debug, Clone)]
@@ -40,4 +43,8 @@ pub enum ComponentExport {
     // `runtime/env.rs` still matches resource exports during lookup.
     #[allow(dead_code)]
     Resource(ResourceId),
+    Value {
+        idx: GlobalIdx<Value>,
+        ty: ValType,
+    },
 }
