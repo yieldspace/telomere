@@ -8054,7 +8054,7 @@ mod tests {
         pending_effects: &'a mut u32,
         queue: &'a mut VecDeque<PendingOp>,
     ) -> ExecuteContext<'a> {
-        let MemoryHandle::Local(memory_id) =
+        let Some(MemoryHandle::Local(memory_id)) =
             runtime.alloc_local_memory(LocalMemoryObject::new(1, 1).expect("test local memory"))
         else {
             unreachable!("test local memory handle must be local");

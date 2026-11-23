@@ -293,6 +293,24 @@ const LOOP_ALLOWANCES: &[LoopAllowance] = &[
         identifier: "loop",
         reason: "the compare-exchange retry loop repeats only when another memory in the same store grows concurrently; each iteration is one atomic operation and performs no guest-driven work, so there is no guest work to meter (#126).",
     },
+    LoopAllowance {
+        source: "src/common/memory.rs",
+        function: "total_budget_claims_under_contention_stop_exactly_at_the_cap",
+        identifier: "for:threads",
+        reason: "unit-test driver loop over a fixed set of eight spawned claim threads; it runs no guest code and exists only to race budget claims against the cap (#126).",
+    },
+    LoopAllowance {
+        source: "src/common/store.rs",
+        function: "total_budget_never_exceeds_cap_under_concurrent_shared_growth",
+        identifier: "while:shared . grow (1) . unwrap () >= 0",
+        reason: "unit-test grower thread loop; it grows a shared memory until the budget refuses, performing host-side test work only and no guest execution (#126).",
+    },
+    LoopAllowance {
+        source: "src/common/store.rs",
+        function: "total_budget_never_exceeds_cap_under_concurrent_shared_growth",
+        identifier: "while:store . lock () . unwrap () . alloc_local_memory (LocalMemoryObject :: new (1 , 1) . unwrap ()) . is_some ()",
+        reason: "unit-test adoption loop; it adopts one-page memories until the budget refuses, racing the grower thread to prove the charged total never passes the cap (#126).",
+    },
 ];
 
 #[derive(Debug)]

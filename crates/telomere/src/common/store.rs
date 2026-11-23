@@ -356,14 +356,19 @@ pub struct LimitsConfig {
     /// store-wide total. Growth is charged against the ceiling on every
     /// path: guest `memory.grow` instructions and growth performed by
     /// host callbacks through the `HostContext` memory accessors alike.
-    /// Instantiation compares the aggregate minimum of the module's
-    /// defined memories against the ceiling before creating any of
-    /// them, so a refused module leaves the store total unchanged.
+    /// Instantiation claims the aggregate minimum of the module's
+    /// defined memories against the ceiling in a single atomic
+    /// reservation before creating any of them, so a refused module
+    /// leaves the store total unchanged and growth racing the
+    /// instantiation through a shared-memory handle cannot overshoot
+    /// the ceiling.
     pub max_total_memory_pages: Option<u64>,
     /// Ceiling on the element count of any single table in the store.
     /// A table whose declared minimum exceeds the ceiling fails to
     /// instantiate; growth beyond the ceiling returns -1. `None` leaves
-    /// each table bounded only by its declared maximum.
+    /// each table bounded only by its declared maximum. The check runs
+    /// before instantiation creates any memory or table, so a refused
+    /// module leaves the store unchanged.
     pub max_table_elements: Option<u32>,
     /// Size in bytes of the guest value stack allocated for each
     /// execution. Deeper guest recursion needs a larger stack; a smaller
@@ -562,6 +567,11 @@ pub struct StoreInner {
     /// Page budget shared by every memory this store adopts; present
     /// only when `limits.max_total_memory_pages` is configured.
     total_budget: Option<Arc<TotalMemoryBudget>>,
+    /// Pages of `total_budget` claimed by an in-progress instantiation's
+    /// aggregate reservation (`reserve_total_pages`) that adoptions
+    /// have not yet consumed. Only touched while the store's runtime
+    /// lock is held, so no synchronisation of its own is needed.
+    budget_reserved_pages: u64,
 }
 
 macro_rules! define_store_local_shared_const_read {
@@ -711,11 +721,74 @@ impl StoreInner {
     pub(crate) fn set_limits(&mut self, limits: LimitsConfig) {
         self.limits = limits;
         // Limits are fixed at store construction, before any memory
-        // exists, so the budget starts empty; memories register their
-        // initial pages as the store adopts them.
+        // exists, so the budget starts empty; memories are charged
+        // their initial pages as the store adopts them.
         self.total_budget = limits
             .max_total_memory_pages
             .map(|cap| Arc::new(TotalMemoryBudget::new(cap)));
+        self.budget_reserved_pages = 0;
+    }
+
+    /// Claims `pages` from the total budget as a reservation for an
+    /// instantiation that is about to create memories, before any of
+    /// them exists. The claim is atomic — the check and the charge are
+    /// the budget's single compare-exchange — so growth racing the
+    /// instantiation through a lock-free shared handle cannot claim
+    /// the same pages first and leave the instantiation to overshoot
+    /// the ceiling when it registers its memories. Adoptions pay their
+    /// initial pages out of the reservation first
+    /// (`pay_initial_pages`); `release_reserved_pages` returns whatever
+    /// an instantiation did not spend. Returns `false` without
+    /// claiming when the reservation would exceed the ceiling. Without
+    /// a configured budget every reservation trivially succeeds.
+    pub(crate) fn reserve_total_pages(&mut self, pages: u64) -> bool {
+        match &self.total_budget {
+            Some(budget) => {
+                if budget.try_claim(pages) {
+                    self.budget_reserved_pages += pages;
+                    true
+                } else {
+                    false
+                }
+            }
+            None => true,
+        }
+    }
+
+    /// Returns the unspent remainder of the instantiation reservation
+    /// to the budget. Memories an instantiation already adopted keep
+    /// their pages — they stay in the store — so only the pages of
+    /// memories that were never created come back here.
+    pub(crate) fn release_reserved_pages(&mut self) {
+        if self.budget_reserved_pages == 0 {
+            return;
+        }
+        if let Some(budget) = &self.total_budget {
+            budget.release(self.budget_reserved_pages);
+        }
+        self.budget_reserved_pages = 0;
+    }
+
+    /// Pages of the budget currently held by the instantiation
+    /// reservation and not yet consumed by an adoption.
+    pub(crate) fn reserved_total_pages(&self) -> u64 {
+        self.budget_reserved_pages
+    }
+
+    /// Pays a newly adopted memory's initial pages: first out of the
+    /// instantiation reservation, then by claiming the remainder from
+    /// the budget. Returns `false` — charging nothing — when the
+    /// remainder does not fit under the ceiling, in which case the
+    /// memory must not be adopted.
+    fn pay_initial_pages(&mut self, budget: &TotalMemoryBudget, pages: u32) -> bool {
+        let pages = u64::from(pages);
+        let from_reservation = self.budget_reserved_pages.min(pages);
+        let remainder = pages - from_reservation;
+        if remainder > 0 && !budget.try_claim(remainder) {
+            return false;
+        }
+        self.budget_reserved_pages -= from_reservation;
+        true
     }
 
     pub(crate) fn limits(&self) -> LimitsConfig {
@@ -1116,13 +1189,24 @@ impl StoreInner {
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
-    pub(crate) fn alloc_local_memory(&mut self, mut memory: LocalMemoryObject) -> MemoryHandle {
+    /// Adopts a local memory into the store, charging its initial
+    /// pages to the total budget when one is configured. Returns
+    /// `None` — adopting nothing — when the budget has no room, so a
+    /// refused adoption leaves neither the memory nor a charge behind.
+    pub(crate) fn alloc_local_memory(
+        &mut self,
+        mut memory: LocalMemoryObject,
+    ) -> Option<MemoryHandle> {
         if let Some(budget) = &self.total_budget {
-            memory.attach_total_budget(Arc::clone(budget));
+            let budget = Arc::clone(budget);
+            if !self.pay_initial_pages(&budget, memory.page_size()) {
+                return None;
+            }
+            memory.attach_total_budget(budget);
         }
         let id = LocalMemoryId::from_index(self.local_memories.len());
         self.local_memories.push(memory);
-        MemoryHandle::Local(id)
+        Some(MemoryHandle::Local(id))
     }
 
     pub(crate) fn new_memory(
@@ -1130,17 +1214,28 @@ impl StoreInner {
         page_count: u32,
         max_page_size: u32,
     ) -> Result<ObjectRef, MemoryInitError> {
-        let handle = self.alloc_local_memory(LocalMemoryObject::new(page_count, max_page_size)?);
+        let handle = self
+            .alloc_local_memory(LocalMemoryObject::new(page_count, max_page_size)?)
+            .ok_or(MemoryInitError::TotalBudgetExceeded)?;
         Ok(self.object_ref_for_memory_handle(handle))
     }
 
-    pub(crate) fn alloc_shared_memory(&mut self, memory: Arc<SharedMemoryObject>) -> MemoryHandle {
+    /// Adopts a shared memory into the store; the shared counterpart
+    /// of `alloc_local_memory`, with the same budget refusal semantics.
+    pub(crate) fn alloc_shared_memory(
+        &mut self,
+        memory: Arc<SharedMemoryObject>,
+    ) -> Option<MemoryHandle> {
         if let Some(budget) = &self.total_budget {
-            memory.attach_total_budget(Arc::clone(budget));
+            let budget = Arc::clone(budget);
+            if !self.pay_initial_pages(&budget, memory.page_size()) {
+                return None;
+            }
+            memory.attach_total_budget(budget);
         }
         let id = SharedMemoryId::from_index(self.shared_memories.len());
         self.shared_memories.push(memory);
-        MemoryHandle::Shared(id)
+        Some(MemoryHandle::Shared(id))
     }
 
     pub(crate) fn new_shared_memory(
@@ -1148,7 +1243,9 @@ impl StoreInner {
         page_count: u32,
         max_page_size: u32,
     ) -> Result<ObjectRef, MemoryInitError> {
-        let handle = self.alloc_shared_memory(SharedMemoryObject::new(page_count, max_page_size)?);
+        let handle = self
+            .alloc_shared_memory(SharedMemoryObject::new(page_count, max_page_size)?)
+            .ok_or(MemoryInitError::TotalBudgetExceeded)?;
         Ok(self.object_ref_for_memory_handle(handle))
     }
 
@@ -2403,8 +2500,8 @@ impl StoreState {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalMemoryObject, MemoryConfig, MemoryHandle, SharedMemoryId, SharedMemoryObject, Stack,
-        Store, StoreInner, StoreState, VMResult,
+        LimitsConfig, LocalMemoryObject, MemoryConfig, MemoryHandle, SharedMemoryId,
+        SharedMemoryObject, Stack, Store, StoreInner, StoreState, VMResult,
     };
     use crate::common::{
         memory::{
@@ -2463,6 +2560,117 @@ mod tests {
     }
 
     #[test]
+    fn total_budget_adoption_refuses_over_cap_without_residue() {
+        let mut store = StoreInner::new();
+        let limits = LimitsConfig {
+            max_total_memory_pages: Some(1),
+            ..LimitsConfig::default()
+        };
+        store.set_limits(limits);
+
+        // The first one-page memory fits and is charged at adoption.
+        assert!(store
+            .alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap())
+            .is_some());
+        // A second would exceed the store-wide ceiling: adoption is
+        // refused and leaves nothing behind — no memory, no charge.
+        assert!(store
+            .alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap())
+            .is_none());
+        assert_eq!(store.total_memory_pages(), 1);
+        // The same refusal surfaces from `new_memory` as the budget
+        // error, distinct from a mapping failure.
+        assert!(matches!(
+            store.new_memory(1, 1),
+            Err(MemoryInitError::TotalBudgetExceeded)
+        ));
+    }
+
+    #[test]
+    fn total_budget_reservation_is_consumed_by_adoptions_and_released() {
+        let mut store = StoreInner::new();
+        let limits = LimitsConfig {
+            max_total_memory_pages: Some(2),
+            ..LimitsConfig::default()
+        };
+        store.set_limits(limits);
+
+        // Reserving the whole budget leaves no room for another claim.
+        assert!(store.reserve_total_pages(2));
+        assert!(!store.reserve_total_pages(1));
+        // Adoptions pay out of the reservation instead of claiming anew.
+        assert!(store
+            .alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap())
+            .is_some());
+        assert!(store
+            .alloc_shared_memory(SharedMemoryObject::new(1, 1).unwrap())
+            .is_some());
+        assert_eq!(store.reserved_total_pages(), 0);
+        // The budget is fully charged now; nothing else fits.
+        assert!(store
+            .alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap())
+            .is_none());
+
+        // An unspent reservation returns to the budget when released.
+        let mut store = StoreInner::new();
+        let limits = LimitsConfig {
+            max_total_memory_pages: Some(2),
+            ..LimitsConfig::default()
+        };
+        store.set_limits(limits);
+        assert!(store.reserve_total_pages(2));
+        store.release_reserved_pages();
+        assert_eq!(store.reserved_total_pages(), 0);
+        assert!(store.reserve_total_pages(2));
+        store.release_reserved_pages();
+    }
+
+    #[test]
+    fn total_budget_never_exceeds_cap_under_concurrent_shared_growth() {
+        use std::sync::{Arc, Mutex};
+        // Growth through a retained shared handle never takes the store
+        // lock (the `MemoryWaitPending.shared` path), so it races
+        // adoptions head-on. Whatever the interleaving, the charged
+        // total must never pass the cap.
+        let mut inner = StoreInner::new();
+        let limits = LimitsConfig {
+            max_total_memory_pages: Some(33),
+            ..LimitsConfig::default()
+        };
+        inner.set_limits(limits);
+        let shared = SharedMemoryObject::new(1, 4096).unwrap();
+        assert!(inner.alloc_shared_memory(Arc::clone(&shared)).is_some());
+        let store = Arc::new(Mutex::new(inner));
+
+        let grower = {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                let mut grown = 0;
+                while shared.grow(1).unwrap() >= 0 {
+                    grown += 1;
+                }
+                grown
+            })
+        };
+        let mut adopted = 0;
+        while store
+            .lock()
+            .unwrap()
+            .alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap())
+            .is_some()
+        {
+            adopted += 1;
+        }
+        let grown = grower.join().unwrap();
+
+        let store = store.lock().unwrap();
+        // Every page is accounted exactly once: the shared memory's
+        // initial page, its growth, and the adopted one-page locals.
+        assert_eq!(store.total_memory_pages(), 1 + grown + adopted);
+        assert!(store.total_memory_pages() <= 33);
+    }
+
+    #[test]
     fn runtime_guard_rejects_same_thread_reentry() {
         let store = Store::new();
         let _guard = store.lock_runtime("lock_runtime").unwrap();
@@ -2479,11 +2687,26 @@ mod tests {
     #[test]
     fn store_memory_dispatch_matches_handle_kind_and_cross_copy_paths() {
         let mut store = StoreInner::new();
-        let local = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 3).unwrap()));
-        let shared = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 3).unwrap()));
-        let local_dst = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 3).unwrap()));
-        let shared_dst =
-            shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 3).unwrap()));
+        let local = local_id(
+            store
+                .alloc_local_memory(LocalMemoryObject::new(1, 3).unwrap())
+                .expect("test store has no total budget"),
+        );
+        let shared = shared_id(
+            store
+                .alloc_shared_memory(SharedMemoryObject::new(1, 3).unwrap())
+                .expect("test store has no total budget"),
+        );
+        let local_dst = local_id(
+            store
+                .alloc_local_memory(LocalMemoryObject::new(1, 3).unwrap())
+                .expect("test store has no total budget"),
+        );
+        let shared_dst = shared_id(
+            store
+                .alloc_shared_memory(SharedMemoryObject::new(1, 3).unwrap())
+                .expect("test store has no total budget"),
+        );
 
         store
             .write_bytes(MemoryHandle::Local(local), 0, &[1, 2, 3, 4])
@@ -2579,9 +2802,16 @@ mod tests {
     fn cross_memory_copy_checkpoint_interrupts_before_the_later_chunk() {
         const CHUNK_SIZE: usize = 4096;
         let mut store = StoreInner::new();
-        let source = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap()));
-        let destination =
-            shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 1).unwrap()));
+        let source = local_id(
+            store
+                .alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap())
+                .expect("test store has no total budget"),
+        );
+        let destination = shared_id(
+            store
+                .alloc_shared_memory(SharedMemoryObject::new(1, 1).unwrap())
+                .expect("test store has no total budget"),
+        );
         store
             .write_bytes(MemoryHandle::Local(source), 0, &vec![0xa5; CHUNK_SIZE * 2])
             .unwrap();
@@ -2634,8 +2864,16 @@ mod tests {
     #[test]
     fn store_atomic_cmpxchg_dispatch_preserves_old_value_and_alignment_errors() {
         let mut store = StoreInner::new();
-        let local = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap()));
-        let shared = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 1).unwrap()));
+        let local = local_id(
+            store
+                .alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap())
+                .expect("test store has no total budget"),
+        );
+        let shared = shared_id(
+            store
+                .alloc_shared_memory(SharedMemoryObject::new(1, 1).unwrap())
+                .expect("test store has no total budget"),
+        );
 
         store
             .atomic_store_u32(MemoryHandle::Local(local), 4, 0x1122_3344)

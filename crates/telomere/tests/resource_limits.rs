@@ -185,6 +185,32 @@ async fn failed_multi_memory_instantiation_consumes_no_budget() {
 }
 
 #[tokio::test]
+async fn table_cap_rejection_consumes_no_memory_budget() {
+    let store = store_with_limits(|limits| {
+        limits.max_total_memory_pages = Some(1);
+        limits.max_table_elements = Some(1);
+    });
+    let registry = Registry::new();
+
+    // The table minimum exceeds the table cap, so this module is refused.
+    // Its memory fits the memory cap on its own, so the refusal must be
+    // issued before the memory is created: memories are adopted by the
+    // store as they are created and never removed, so creating the memory
+    // first would charge its page to the total budget permanently even
+    // though no instance is ever returned.
+    let rejected =
+        instantiate_wat_result("(module (memory 1) (table 2 funcref))", &store, &registry).await;
+    assert!(
+        matches!(rejected, VMResult::ResourceLimitExceeded),
+        "expected ResourceLimitExceeded, got {rejected}"
+    );
+
+    // The rejected module consumed no memory budget: a module using the
+    // entire memory cap still instantiates afterwards.
+    instantiate_wat_ok("(module (memory 1))", &store, &registry).await;
+}
+
+#[tokio::test]
 async fn total_memory_pages_cap_blocks_growth_with_minus_one() {
     let store = store_with_limits(|limits| limits.max_total_memory_pages = Some(3));
     let registry = Registry::new();
