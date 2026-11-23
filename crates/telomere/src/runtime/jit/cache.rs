@@ -263,12 +263,14 @@ fn trace_compile_reject(reason: &'static str, bytes_len: usize, allocation_len: 
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(64);
         let index = COMPILE_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
-        if index >= max_count {
-            return;
+        // The count cap applies only to this stderr copy. The structured
+        // event below must still fire past the cap: subscribers do their
+        // own filtering (docs/core/diagnostics.md).
+        if index < max_count {
+            eprintln!(
+                "[telomere-jit] compile_reject reason={reason} bytes={bytes_len} allocation={allocation_len} max={max}"
+            );
         }
-        eprintln!(
-            "[telomere-jit] compile_reject reason={reason} bytes={bytes_len} allocation={allocation_len} max={max}"
-        );
     }
     if tracing::level_enabled!(tracing::Level::DEBUG) {
         tracing::debug!(
