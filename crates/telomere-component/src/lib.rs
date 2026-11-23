@@ -93,4 +93,22 @@ pub use value::ComponentValue;
 ///
 /// Component execution currently uses `Rc`-backed state, so callers should poll
 /// this future on the thread that owns the associated [`Store`].
+///
+/// # First-poll contract for host functions
+///
+/// The component runtime executes host functions **synchronously**. When a
+/// guest call reaches a host function registered with one of the `*_async`
+/// linker methods, the returned future is polled exactly once, with a no-op
+/// waker, on the thread running the guest. If that poll returns
+/// `Poll::Pending`, the future is dropped and the call fails: it is never
+/// polled again, and no executor will ever drive it to completion. Awaiting
+/// futures that are already ready (such as `std::future::ready`) is fine;
+/// awaiting anything that can genuinely suspend is not.
+///
+/// This is a deliberate, recorded decision (issue #147), not an oversight:
+/// the synchronous registration forms are the supported way to provide host
+/// functions today, and the `*_async` forms exist for futures that are
+/// ready on their first poll. What genuine asynchronous host execution
+/// would require is recorded in
+/// `docs/component-model/new-component-runtime.md`.
 pub type ComponentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;

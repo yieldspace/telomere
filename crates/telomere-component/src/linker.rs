@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use std::future::ready;
 use std::sync::Arc;
 
+/// The stored form of every `*_async` host registration. The future it
+/// produces is subject to the first-poll contract on [`ComponentFuture`]:
+/// the runtime polls it once, synchronously, and never drives it further.
 pub(crate) type AsyncHostFn = Arc<
     dyn for<'a> Fn(
             &'a Store,
@@ -72,8 +75,17 @@ impl ComponentLinkerInstance {
     /// Registers an asynchronous host function in this instance.
     ///
     /// The closure receives dynamic component values and must return results in
-    /// declaration order. Its future is polled on the component runtime's local
-    /// execution context.
+    /// declaration order.
+    ///
+    /// # First-poll contract
+    ///
+    /// Despite the name, this registration is **not** driven by an executor:
+    /// the component runtime is synchronous, so when the guest calls the
+    /// function, the returned future is polled exactly once with a no-op
+    /// waker. A future that returns `Poll::Pending` on that poll fails the
+    /// call and is never polled again. Prefer the synchronous counterpart
+    /// unless the future is guaranteed ready on its first poll; see
+    /// [`ComponentFuture`] for the full contract.
     pub fn register_func_async(
         &mut self,
         name: impl Into<String>,
@@ -105,6 +117,16 @@ impl ComponentLinkerInstance {
     ///
     /// P and R are converted through the Component Model canonical ABI before
     /// and after invoking the host function.
+    ///
+    /// # First-poll contract
+    ///
+    /// Despite the name, this registration is **not** driven by an executor:
+    /// the component runtime is synchronous, so when the guest calls the
+    /// function, the returned future is polled exactly once with a no-op
+    /// waker. A future that returns `Poll::Pending` on that poll fails the
+    /// call and is never polled again. Prefer the synchronous counterpart
+    /// unless the future is guaranteed ready on its first poll; see
+    /// [`ComponentFuture`] for the full contract.
     pub fn register_func_typed_async<P, R>(
         &mut self,
         name: impl Into<String>,
@@ -173,6 +195,16 @@ impl ComponentLinker {
     ///
     /// Use this for imports declared directly by a component rather than inside
     /// an imported instance.
+    ///
+    /// # First-poll contract
+    ///
+    /// Despite the name, this registration is **not** driven by an executor:
+    /// the component runtime is synchronous, so when the guest calls the
+    /// function, the returned future is polled exactly once with a no-op
+    /// waker. A future that returns `Poll::Pending` on that poll fails the
+    /// call and is never polled again. Prefer the synchronous counterpart
+    /// unless the future is guaranteed ready on its first poll; see
+    /// [`ComponentFuture`] for the full contract.
     pub fn register_import_async(
         &mut self,
         name: impl Into<String>,
@@ -191,6 +223,16 @@ impl ComponentLinker {
     ///
     /// Export registrations are useful when a component re-exports a host
     /// capability as part of a composed instance.
+    ///
+    /// # First-poll contract
+    ///
+    /// Despite the name, this registration is **not** driven by an executor:
+    /// the component runtime is synchronous, so when the guest calls the
+    /// function, the returned future is polled exactly once with a no-op
+    /// waker. A future that returns `Poll::Pending` on that poll fails the
+    /// call and is never polled again. Prefer the synchronous counterpart
+    /// unless the future is guaranteed ready on its first poll; see
+    /// [`ComponentFuture`] for the full contract.
     pub fn register_export_async(
         &mut self,
         name: impl Into<String>,
@@ -233,6 +275,16 @@ impl ComponentLinker {
     ///
     /// P and R describe the Rust representation used by the host function;
     /// incompatible component signatures fail during linking or invocation.
+    ///
+    /// # First-poll contract
+    ///
+    /// Despite the name, this registration is **not** driven by an executor:
+    /// the component runtime is synchronous, so when the guest calls the
+    /// function, the returned future is polled exactly once with a no-op
+    /// waker. A future that returns `Poll::Pending` on that poll fails the
+    /// call and is never polled again. Prefer the synchronous counterpart
+    /// unless the future is guaranteed ready on its first poll; see
+    /// [`ComponentFuture`] for the full contract.
     pub fn register_import_typed_async<P, R>(
         &mut self,
         name: impl Into<String>,
@@ -379,6 +431,16 @@ impl ComponentLinker {
     /// behind it. Dropping a handle that is not live traps in the guest, as
     /// the canonical ABI requires, and never reaches `func`. Without a
     /// registration, dropping a host-provided resource of that type traps.
+    ///
+    /// # First-poll contract
+    ///
+    /// Despite the name, this registration is **not** driven by an executor:
+    /// the component runtime is synchronous, so when the guest calls the
+    /// function, the returned future is polled exactly once with a no-op
+    /// waker. A future that returns `Poll::Pending` on that poll fails the
+    /// call and is never polled again. Prefer the synchronous counterpart
+    /// unless the future is guaranteed ready on its first poll; see
+    /// [`ComponentFuture`] for the full contract.
     pub fn register_import_resource_drop_async(
         &mut self,
         instance: impl Into<String>,

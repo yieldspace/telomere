@@ -14,6 +14,55 @@
 - `ComponentLinker::register_import_core` / `register_export_core`
 - `ComponentLinker::register_import` / `register_export` は `ready` future へ包む同期ラッパーとして維持する
 
+## Host 関数の実行契約（決定記録, #147）
+
+component runtime の host 関数は同期実行であり、`register_import_async` などの
+`*_async` 登録は executor で駆動されない。guest から呼ばれた時点で、返された
+future は no-op waker で **ちょうど1回だけ** poll される。初回 poll で
+`Poll::Pending` を返した future は二度と poll されず、呼び出しは失敗する。
+ready な future の await は初回 poll の中で完結するので問題ない。
+
+失敗の表面化は経路によって異なる。
+
+- component レベルの呼び出し（lift 済み export 経由）: `ComponentError::Runtime`
+  が、契約と対処を記したメッセージ付きで返る。
+- canon lower 経由（core module の中から呼ばれる）: core host 境界は
+  `ComponentError` を運べないため、guest の `unreachable` trap として表面化する。
+- `register_import_resource_drop_async` のデストラクタも同じ first-poll 契約で、
+  失敗は guest trap として表面化する。
+
+### 決定: (b) 契約の明示 — async 登録面の削除・改名はしない
+
+issue #147 の選択肢のうち (b) を採る。(a) async 登録面の削除・改名を採らない理由:
+
+- 削除・改名は bindgen 生成コード（`HostAsync` / `ImportsAsync` trait と
+  `add_to_linker_async` 系）と WASI provider、埋め込み側すべてに及ぶ破壊的変更で、
+  意味上の利益がない。同期形（`register_import` 等）は既に併存している。
+- future を返す形は、本物の非同期実行が将来必要とする形そのものである。
+  core runtime は #216 で `ExecutionDriver` 経由の本物の非同期 host 実行を得ており、
+  今改名すると、そちらへ接続する際に二度目の破壊的変更が要る。
+
+代わりに行ったこと:
+
+- 全ての `*_async` 登録メソッド、`ComponentFuture`、bindgen が生成する
+  async trait / 登録関数の doc に first-poll 契約を明記した
+  （`register_func_async` にあった「runtime のローカル実行コンテキストで
+  poll される」という実在しない説明も修正した）。
+- 失敗時のエラーメッセージ自体に、契約と対処（ready な future を返すか
+  同期形で登録するか）を含めた。
+- 契約は `crates/telomere-component/tests/component_runtime_e2e.rs` の
+  first-poll テスト群で固定している。
+
+### 本物の非同期実行に必要なもの（ロードマップ）
+
+- component host trampoline を core の `ExecutionDriver` 上の async host
+  function として登録し、host future の `Pending` で core 実行自体を
+  suspend / resume できるようにすること。
+- canon lower / lift の途中状態（lift 済みの引数、結果領域）を resume 可能な
+  形に分割すること。現行の実装は1回の同期呼び出しで完結する前提で書かれている。
+- component の `Store` 状態は `Rc` ベースで非 `Send` のため、駆動できる
+  executor とスレッドの制約を API として確定させること。
+
 ## Internal Layout
 - `crates/telomere-component/src/decoder`: 独自 decoder + validator
 - `crates/telomere-component/src/validate`: validator 再公開
