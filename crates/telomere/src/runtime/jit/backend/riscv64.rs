@@ -1,40 +1,15 @@
+use super::EmittedFunction;
 use crate::common::{
     decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
     decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind,
-    memory::MemoryJitLayout,
-    store::{CallDispatchCache, CallDispatchTarget, GlobalValueJitLayout, StoreInner},
-    ExecuteContext, Instr, LocalBinop32Op, LocalBinop64Op, LocalCmp32Op, LocalCmp64Op,
-    LocalFastRhsShape, LocalReference, LocalUnary32Op, LocalUnary64Op, MemArg, ObjectRef, VMResult,
-    PAGE_SIZE,
+    memory::MemoryJitLayout, store::GlobalValueJitLayout, ExecuteContext, Instr, LocalBinop32Op,
+    LocalBinop64Op, LocalCmp32Op, LocalCmp64Op, LocalFastRhsShape, LocalReference, LocalUnary32Op,
+    LocalUnary64Op, MemArg, ObjectRef, VMResult, PAGE_SIZE,
 };
-use crate::runtime::jit::abi::{vm_result_code, JitNativeExit};
+use crate::runtime::jit::abi::{pack_trap_value, vm_result_code, JitNativeExit};
+use crate::runtime::jit::emit_env::{Emission, EmitEnv, FastCallee, Reloc, RelocKind};
 use crate::runtime::jit::profile::{self, Counter};
-use crate::runtime::jit::stubs::{
-    atomic_fence as jit_atomic_fence, call_i32_crc16_update16 as jit_call_i32_crc16_update16,
-    call_i32_list_crc_summary as jit_call_i32_list_crc_summary, direct_call as jit_direct_call,
-    f32_ceil_bits as jit_f32_ceil_bits, f32_floor_bits as jit_f32_floor_bits,
-    f32_max_bits as jit_f32_max_bits, f32_min_bits as jit_f32_min_bits,
-    f32_nearest_bits as jit_f32_nearest_bits, f32_trunc_bits as jit_f32_trunc_bits,
-    f64_ceil_bits as jit_f64_ceil_bits, f64_floor_bits as jit_f64_floor_bits,
-    f64_max_bits as jit_f64_max_bits, f64_min_bits as jit_f64_min_bits,
-    f64_nearest_bits as jit_f64_nearest_bits, f64_trunc_bits as jit_f64_trunc_bits,
-    function_return as jit_function_return,
-    i32_core_state_benchmark as jit_i32_core_state_benchmark,
-    i32_crc16_update16 as jit_i32_crc16_update16,
-    i32_list_crc_pair_loop as jit_i32_list_crc_pair_loop,
-    i32_list_crc_summary as jit_i32_list_crc_summary,
-    i32_numeric_token_state_transition as jit_i32_numeric_token_state_transition,
-    i32_popcnt_value as jit_i32_popcnt_value, i32_select_bit_step4 as jit_i32_select_bit_step4,
-    i32_store_local_base_from_vm_stack as jit_i32_store_local_base_from_vm_stack,
-    i32_trunc_f32 as jit_i32_trunc_f32, i32_trunc_f64 as jit_i32_trunc_f64,
-    i32_trunc_sat_f32 as jit_i32_trunc_sat_f32, i32_trunc_sat_f64 as jit_i32_trunc_sat_f64,
-    i64_popcnt_value as jit_i64_popcnt_value, i64_trunc_f32 as jit_i64_trunc_f32,
-    i64_trunc_f64 as jit_i64_trunc_f64, indirect_call as jit_indirect_call,
-    memory_copy as jit_memory_copy, memory_fill as jit_memory_fill, memory_grow as jit_memory_grow,
-    memory_size as jit_memory_size, ref_func as jit_ref_func,
-    runtime_continuation_op as jit_runtime_continuation_op,
-    runtime_stack_op as jit_runtime_stack_op, wasm_direct_call_fast as jit_wasm_direct_call_fast,
-};
+use crate::runtime::jit::stubs::StubId;
 
 use super::ops::{
     BaselineOp, BaselinePlan, FloatBinaryOp, FloatCompareOp, FloatUnaryOp, FloatWidth, I32BinaryOp,
@@ -45,16 +20,47 @@ use telomere_jit_codegen::arch::riscv64::{
     patch_branch as patch_a64_branch, BranchKind, Cond, Riscv64BaselineMasm as A64BaselineMasm,
 };
 
-pub(crate) fn emit_baseline_function(
+pub(crate) fn emit_baseline_function<E: EmitEnv>(
     funcaddr: ObjectRef,
     code: &[Instr],
     op_lens: &[u16],
-    runtime: &StoreInner,
+    env: E,
     plan: &BaselinePlan,
-) -> Result<Vec<u8>, ()> {
-    let mut emitter = Emitter::new(funcaddr, code, op_lens, runtime, plan);
+) -> Result<Emission, ()> {
+    let mut emitter = Emitter::new(funcaddr, code, op_lens, env, plan);
     emitter.emit()?;
-    emitter.finish()
+    let relocs = emitter.env.take_relocs();
+    let emitted = emitter.finish()?;
+    Ok(Emission {
+        bytes: emitted.code,
+        relocs,
+        trap_sites: emitted.trap_sites,
+    })
+}
+
+#[allow(dead_code)]
+pub(crate) fn patch_relocation_site(bytes: &mut [u8], reloc: Reloc, value: u64) -> Result<(), ()> {
+    let mut scratch = A64BaselineMasm::with_capacity(64);
+    match reloc.kind {
+        RelocKind::Stub(_) => scratch.mov_imm_u64_reloc(16, 0),
+        RelocKind::FuncAddr(_) => scratch.mov_imm_u32_reloc(1, 0),
+    }
+    let placeholder = scratch.into_bytes();
+    let start = reloc.offset as usize;
+    if bytes.get(start..start + placeholder.len()) != Some(placeholder.as_slice()) {
+        return Err(());
+    }
+    let mut scratch = A64BaselineMasm::with_capacity(64);
+    match reloc.kind {
+        RelocKind::Stub(_) => scratch.mov_imm_u64_reloc(16, value),
+        RelocKind::FuncAddr(_) => scratch.mov_imm_u32_reloc(1, value as u32),
+    }
+    let patched = scratch.into_bytes();
+    if patched.len() != placeholder.len() {
+        return Err(());
+    }
+    bytes[start..start + patched.len()].copy_from_slice(&patched);
+    Ok(())
 }
 
 struct Fixup {
@@ -139,18 +145,27 @@ struct UpdateStore16LoopPlan {
     store_memarg: MemArg,
 }
 
-struct Emitter<'a> {
+struct Emitter<'a, E: EmitEnv> {
     funcaddr: ObjectRef,
     wasm: &'a [Instr],
     plan: &'a BaselinePlan,
-    runtime: &'a StoreInner,
+    env: E,
     masm: A64BaselineMasm,
     labels: Vec<Option<usize>>,
     fixups: Vec<Fixup>,
     stack_depth: usize,
+    /// #209: decoded-stream pc index of every native trap site emitted
+    /// so far, in emission order; trap exits carry the 1-based index
+    /// into this table as their site id.
+    trap_sites: Vec<u32>,
+    /// Decoded-stream pc index of the plan op currently being emitted.
+    /// Every `return_trap` reached while emitting it — directly or via a
+    /// per-op helper (bounds check, div check, stack-slots check) —
+    /// belongs to that op.
+    current_pc: usize,
 }
 
-impl std::ops::Deref for Emitter<'_> {
+impl<E: EmitEnv> std::ops::Deref for Emitter<'_, E> {
     type Target = A64BaselineMasm;
 
     fn deref(&self) -> &Self::Target {
@@ -158,29 +173,31 @@ impl std::ops::Deref for Emitter<'_> {
     }
 }
 
-impl std::ops::DerefMut for Emitter<'_> {
+impl<E: EmitEnv> std::ops::DerefMut for Emitter<'_, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.masm
     }
 }
 
-impl<'a> Emitter<'a> {
+impl<'a, E: EmitEnv> Emitter<'a, E> {
     fn new(
         funcaddr: ObjectRef,
         wasm: &'a [Instr],
         _op_lens: &[u16],
-        runtime: &'a StoreInner,
+        env: E,
         plan: &'a BaselinePlan,
     ) -> Self {
         Self {
             funcaddr,
             wasm,
             plan,
-            runtime,
+            env,
             masm: A64BaselineMasm::with_capacity(wasm.len() * 16),
             labels: vec![None; wasm.len().saturating_add(1)],
             fixups: Vec::new(),
             stack_depth: 0,
+            trap_sites: Vec::new(),
+            current_pc: 0,
         }
     }
 
@@ -189,6 +206,7 @@ impl<'a> Emitter<'a> {
         let mut op_index = 0usize;
         while let Some(entry) = self.plan.entries().get(op_index) {
             let cursor = entry.pc_index;
+            self.current_pc = cursor;
             self.labels[cursor] = Some(self.offset());
             let op = entry.op.clone();
             match self.emit_op_or_runtime(cursor, op)? {
@@ -239,7 +257,7 @@ impl<'a> Emitter<'a> {
                 }
             }
         }
-        self.return_trap(VMResult::<()>::InvalidOperand);
+        self.return_trap_without_site(VMResult::<()>::InvalidOperand);
         Ok(())
     }
 
@@ -273,26 +291,26 @@ impl<'a> Emitter<'a> {
     }
 }
 
-struct BaselineOpEmitter<'e, 'a> {
-    emitter: &'e mut Emitter<'a>,
+struct BaselineOpEmitter<'e, 'a, E: EmitEnv> {
+    emitter: &'e mut Emitter<'a, E>,
     cursor: usize,
 }
 
-impl<'e, 'a> std::ops::Deref for BaselineOpEmitter<'e, 'a> {
-    type Target = Emitter<'a>;
+impl<'e, 'a, E: EmitEnv> std::ops::Deref for BaselineOpEmitter<'e, 'a, E> {
+    type Target = Emitter<'a, E>;
 
     fn deref(&self) -> &Self::Target {
         self.emitter
     }
 }
 
-impl std::ops::DerefMut for BaselineOpEmitter<'_, '_> {
+impl<E: EmitEnv> std::ops::DerefMut for BaselineOpEmitter<'_, '_, E> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.emitter
     }
 }
 
-impl BaselineOpEmitter<'_, '_> {
+impl<E: EmitEnv> BaselineOpEmitter<'_, '_, E> {
     fn emit(&mut self, op: BaselineOp) -> Result<EmitControl, ()> {
         let cursor = self.cursor;
         match op {
@@ -355,7 +373,7 @@ impl BaselineOpEmitter<'_, '_> {
                     }
                     I64UnaryOp::Popcnt => {
                         self.mov_x(0, 16);
-                        self.call_ptr(jit_i64_popcnt_value as *const () as usize);
+                        self.call_stub(StubId::I64PopcntValue);
                         self.mov_x(16, 0);
                     }
                 }
@@ -949,7 +967,7 @@ impl BaselineOpEmitter<'_, '_> {
                     }
                     I32UnaryOp::Popcnt => {
                         self.mov_w(0, value);
-                        self.call_ptr(jit_i32_popcnt_value as *const () as usize);
+                        self.call_stub(StubId::I32PopcntValue);
                         self.mov_w(value, 0);
                     }
                     I32UnaryOp::Extend8S => self.sxtb_w(value, value),
@@ -1812,7 +1830,7 @@ impl BaselineOpEmitter<'_, '_> {
             BaselineOp::MemorySize { shared } => {
                 self.mov_x(0, 19);
                 self.mov_imm_u32(1, u32::from(shared));
-                self.call_ptr(jit_memory_size as *const () as usize);
+                self.call_stub(StubId::MemorySize);
                 let result = self.push_reg()?;
                 self.mov_w(result, 0);
             }
@@ -1822,7 +1840,7 @@ impl BaselineOpEmitter<'_, '_> {
                 self.mov_x(0, 19);
                 self.mov_w(1, delta);
                 self.mov_imm_u32(2, u32::from(shared));
-                self.call_ptr(jit_memory_grow as *const () as usize);
+                self.call_stub(StubId::MemoryGrow);
                 let result = self.push_reg()?;
                 self.mov_w(result, 0);
             }
@@ -2173,7 +2191,9 @@ impl BaselineOpEmitter<'_, '_> {
                     self.branch_to_epilogue();
                     return Ok(EmitControl::Continue);
                 }
-                let recipe = self.call_recipe_for_operand(operand_index)?;
+                let recipe =
+                    self.env
+                        .direct_call_recipe(self.wasm, operand_index, self.funcaddr)?;
                 let flushed_size =
                     u32::try_from(self.stack_depth.checked_mul(4).ok_or(())?).map_err(|_| ())?;
                 let reload_size = if flushed_size >= recipe.param_size {
@@ -2199,14 +2219,13 @@ impl BaselineOpEmitter<'_, '_> {
                     }
                     return Ok(EmitControl::Continue);
                 }
-                let expected_layout = pack_call_stack_sizes(recipe);
-                let use_wasm_fast_path =
-                    !is_return_call && matches!(recipe.target, CallDispatchTarget::Wasm { .. });
+                let expected_layout = pack_call_stack_sizes(recipe.param_size, recipe.return_size);
+                let use_wasm_fast_path = !is_return_call && recipe.fast_callee.is_some();
                 self.flush_stack()?;
                 let continued = if use_wasm_fast_path {
                     profile::count(Counter::EmitDirectCallFast);
                     self.call_wasm_direct_fast_helper(
-                        recipe.frame.code_addr,
+                        recipe.fast_callee.expect("fast path checked above"),
                         continuation_index,
                         expected_layout,
                         reload_slots,
@@ -2240,7 +2259,8 @@ impl BaselineOpEmitter<'_, '_> {
                     return Ok(EmitControl::Continue);
                 }
                 let (param_size, return_size) =
-                    self.indirect_call_layout_for_operand(operand_index)?;
+                    self.env
+                        .indirect_call_layout(self.wasm, operand_index, self.funcaddr)?;
                 let flushed_size =
                     u32::try_from(self.stack_depth.checked_mul(4).ok_or(())?).map_err(|_| ())?;
                 let consumed_size = param_size.checked_add(4).ok_or(())?;
@@ -2281,7 +2301,7 @@ impl BaselineOpEmitter<'_, '_> {
             BaselineOp::AtomicFence { shared } => {
                 self.mov_x(0, 19);
                 self.mov_imm_u32(1, u32::from(shared));
-                self.call_ptr(jit_atomic_fence as *const () as usize);
+                self.call_stub(StubId::AtomicFence);
             }
             BaselineOp::RefNull => {
                 let dst = self.push_reg()?;
@@ -2295,7 +2315,7 @@ impl BaselineOpEmitter<'_, '_> {
             BaselineOp::RefFunc { funcidx } => {
                 self.mov_x(0, 19);
                 self.mov_imm_u32(1, funcidx);
-                self.call_ptr(jit_ref_func as *const () as usize);
+                self.call_stub(StubId::RefFunc);
                 let dst = self.push_reg()?;
                 self.mov_w(dst, 0);
             }
@@ -2325,8 +2345,8 @@ impl BaselineOpEmitter<'_, '_> {
     }
 }
 
-impl<'a> Emitter<'a> {
-    fn finish(mut self) -> Result<Vec<u8>, ()> {
+impl<'a, E: EmitEnv> Emitter<'a, E> {
+    fn finish(mut self) -> Result<EmittedFunction, ()> {
         let epilogue = self.offset();
         self.restore_and_ret();
         for fixup in &self.fixups {
@@ -2344,7 +2364,11 @@ impl<'a> Emitter<'a> {
             let target = self.resolve_label(fixup.target_index).unwrap_or(epilogue);
             patch_branch(self.masm.as_mut_bytes(), fixup.at, target, fixup.kind)?;
         }
-        Ok(self.masm.into_bytes())
+        let code = self.masm.into_bytes();
+        Ok(EmittedFunction {
+            code,
+            trap_sites: self.trap_sites,
+        })
     }
 
     fn resolve_label(&self, target_index: usize) -> Option<usize> {
@@ -2728,7 +2752,7 @@ impl<'a> Emitter<'a> {
         self.mov_w(1, ptr);
         self.mov_w(2, data);
         self.mov_w(3, len);
-        self.call_ptr(jit_memory_fill as *const () as usize);
+        self.call_stub(StubId::MemoryFill);
         self.return_if_exit();
     }
 
@@ -2737,7 +2761,7 @@ impl<'a> Emitter<'a> {
         self.mov_w(1, dst);
         self.mov_w(2, src);
         self.mov_w(3, len);
-        self.call_ptr(jit_memory_copy as *const () as usize);
+        self.call_stub(StubId::MemoryCopy);
         self.return_if_exit();
     }
 
@@ -2746,20 +2770,20 @@ impl<'a> Emitter<'a> {
         self.mov_imm_u32(1, data_local);
         self.mov_imm_u32(2, crc_local);
         self.mov_imm_u32(3, u32::from(masked));
-        self.call_ptr(jit_i32_crc16_update16 as *const () as usize);
+        self.call_stub(StubId::I32Crc16Update16);
         self.return_if_exit();
     }
 
     fn call_i32_crc16_update16_call(&mut self, masked: bool) {
         self.mov_x(0, 19);
         self.mov_imm_u32(1, u32::from(masked));
-        self.call_ptr(jit_call_i32_crc16_update16 as *const () as usize);
+        self.call_stub(StubId::CallI32Crc16Update16);
         self.return_if_exit();
     }
 
     fn call_i32_list_crc_summary_call(&mut self) {
         self.mov_x(0, 19);
-        self.call_ptr(jit_call_i32_list_crc_summary as *const () as usize);
+        self.call_stub(StubId::CallI32ListCrcSummary);
         self.return_if_exit();
     }
 
@@ -2767,7 +2791,7 @@ impl<'a> Emitter<'a> {
         self.mov_x(0, 19);
         self.mov_imm_u32(1, res_local);
         self.mov_imm_u32(2, finder_idx_local);
-        self.call_ptr(jit_i32_list_crc_summary as *const () as usize);
+        self.call_stub(StubId::I32ListCrcSummary);
         self.return_if_exit();
     }
 
@@ -2783,7 +2807,7 @@ impl<'a> Emitter<'a> {
         self.mov_imm_u32(2, res_delta);
         self.mov_imm_u32(3, iterations_delta);
         self.mov_imm_u32(4, crc_delta);
-        self.call_ptr(jit_i32_list_crc_pair_loop as *const () as usize);
+        self.call_stub(StubId::I32ListCrcPairLoop);
         self.return_if_exit();
     }
 
@@ -2795,7 +2819,7 @@ impl<'a> Emitter<'a> {
                 local,
             );
         }
-        self.call_ptr(jit_i32_core_state_benchmark as *const () as usize);
+        self.call_stub(StubId::I32CoreStateBenchmark);
         self.return_if_exit();
     }
 
@@ -2803,7 +2827,7 @@ impl<'a> Emitter<'a> {
         self.mov_x(0, 19);
         self.mov_imm_u32(1, instr_ref_local);
         self.mov_imm_u32(2, counts_local);
-        self.call_ptr(jit_i32_numeric_token_state_transition as *const () as usize);
+        self.call_stub(StubId::I32NumericTokenStateTransition);
         self.return_if_exit();
     }
 
@@ -2816,51 +2840,14 @@ impl<'a> Emitter<'a> {
         self.mov_imm_u32(5, step.prev_local);
         self.mov_imm_u32(6, step.flags);
         self.mov_imm_u32(7, step.dst_local);
-        self.call_ptr(jit_i32_select_bit_step4 as *const () as usize);
+        self.call_stub(StubId::I32SelectBitStep4);
         self.return_if_exit();
-    }
-
-    fn call_recipe_for_operand(&self, operand_index: usize) -> Result<CallDispatchCache, ()> {
-        let recipe_ref = unsafe {
-            self.wasm
-                .get(operand_index)
-                .ok_or(())?
-                .operand
-                .call_recipe_ref
-        };
-        if let Some(recipe_slot) = recipe_ref.resolved_recipe_slot() {
-            if let Some(recipe) = self.runtime.call_recipe(recipe_slot) {
-                return Ok(recipe);
-            }
-        }
-        let current_func = self.runtime.get_func(self.funcaddr);
-        let callee = self
-            .runtime
-            .instance(current_func.instance)
-            .funcs
-            .as_slice()
-            .get(recipe_ref.funcidx as usize)
-            .copied()
-            .ok_or(())?;
-        Ok(self.runtime.build_call_recipe(callee))
-    }
-
-    fn indirect_call_layout_for_operand(&self, operand_index: usize) -> Result<(u32, u32), ()> {
-        let expected_typeidx =
-            unsafe { self.wasm.get(operand_index + 1).ok_or(())?.operand.u32 as usize };
-        let current_func = self.runtime.get_func(self.funcaddr);
-        let instance = self.runtime.instance(current_func.instance);
-        let module = self.runtime.get_module(instance.module_addr);
-        let functype = module.function_types.get(expected_typeidx).ok_or(())?;
-        let param_size = functype.0.iter().map(|ty| ty.stack_size().u32()).sum();
-        let return_size = functype.1.iter().map(|ty| ty.stack_size().u32()).sum();
-        Ok((param_size, return_size))
     }
 
     fn call_return_helper(&mut self, return_size: u32) {
         self.mov_x(0, 19);
         self.mov_imm_u32(1, return_size);
-        self.call_ptr(jit_function_return as *const () as usize);
+        self.call_stub(StubId::FunctionReturn);
         self.branch_to_epilogue();
     }
 
@@ -2875,7 +2862,7 @@ impl<'a> Emitter<'a> {
         self.mov_x(0, 19);
         self.load_code_ptr_operand(1, operand_index);
         self.mov_imm_u64(2, u64::from(is_return_call));
-        self.call_ptr(jit_direct_call as *const () as usize);
+        self.call_stub(StubId::DirectCall);
         if is_return_call {
             self.branch_to_epilogue();
             Ok(false)
@@ -2886,15 +2873,17 @@ impl<'a> Emitter<'a> {
 
     fn call_wasm_direct_fast_helper(
         &mut self,
-        funcaddr: ObjectRef,
+        callee: FastCallee,
         continuation_index: usize,
         expected_layout: u64,
         reload_slots: usize,
     ) -> Result<bool, ()> {
         self.mov_x(0, 19);
-        self.mov_imm_u32(1, funcaddr.get());
+        let offset = self.offset();
+        let funcaddr = self.env.funcaddr_immediate(callee, offset);
+        self.mov_imm_u32_reloc(1, funcaddr);
         self.load_code_ptr_operand(2, continuation_index);
-        self.call_ptr(jit_wasm_direct_call_fast as *const () as usize);
+        self.call_stub(StubId::WasmDirectCallFast);
         self.finish_call_helper_result(expected_layout, reload_slots)
     }
 
@@ -2909,7 +2898,7 @@ impl<'a> Emitter<'a> {
         self.mov_x(0, 19);
         self.load_code_ptr_operand(1, operand_index);
         self.mov_imm_u64(2, u64::from(is_return_call));
-        self.call_ptr(jit_indirect_call as *const () as usize);
+        self.call_stub(StubId::IndirectCall);
         if is_return_call {
             self.branch_to_epilogue();
             Ok(false)
@@ -2956,7 +2945,7 @@ impl<'a> Emitter<'a> {
         self.mov_x(0, 19);
         self.load_code_ptr_operand(1, pc_index);
         self.mov_imm_u32(2, width);
-        self.call_ptr(jit_i32_store_local_base_from_vm_stack as *const () as usize);
+        self.call_stub(StubId::I32StoreLocalBaseFromVmStack);
         self.return_if_exit();
         Ok(())
     }
@@ -2971,7 +2960,7 @@ impl<'a> Emitter<'a> {
         self.mov_x(0, 19);
         self.load_code_ptr_operand(1, pc_index);
         self.mov_imm_u32(2, kind);
-        self.call_ptr(jit_runtime_stack_op as *const () as usize);
+        self.call_stub(StubId::RuntimeStackOp);
         self.return_if_exit();
         self.reload_stack_slots(push_slots)
     }
@@ -2982,7 +2971,7 @@ impl<'a> Emitter<'a> {
         self.load_code_ptr_operand(1, pc_index);
         self.load_code_ptr_operand(2, self.next_pc_index(pc_index)?);
         self.mov_imm_u32(3, kind);
-        self.call_ptr(jit_runtime_continuation_op as *const () as usize);
+        self.call_stub(StubId::RuntimeContinuationOp);
         self.return_if_exit();
         Ok(())
     }
@@ -2998,7 +2987,7 @@ impl<'a> Emitter<'a> {
         self.load_code_ptr_operand(1, pc_index);
         self.load_code_ptr_operand(2, self.next_pc_index(pc_index)?);
         self.mov_imm_u32(3, kind);
-        self.call_ptr(jit_runtime_continuation_op as *const () as usize);
+        self.call_stub(StubId::RuntimeContinuationOp);
         self.return_if_exit();
         self.reload_stack_slots(reload_slots)
     }
@@ -3349,26 +3338,41 @@ impl<'a> Emitter<'a> {
     }
 
     fn return_trap<T>(&mut self, result: VMResult<T>) {
+        // #209: tag the exit with the next trap-site id so the trap can
+        // be attributed to the instruction currently being emitted.
+        self.trap_sites.push(self.current_pc as u32);
+        let site = self.trap_sites.len() as u64;
+        self.mov_imm_u64(0, JitNativeExit::TRAP);
+        self.mov_imm_u64(1, pack_trap_value(vm_result_code(result), site));
+        self.branch_to_epilogue();
+    }
+
+    /// Emits a trap exit with no trap site (#209 site 0). Used only for
+    /// the defensive end-of-plan fallthrough, which corresponds to no
+    /// interpreter instruction and must not claim a pc.
+    fn return_trap_without_site<T>(&mut self, result: VMResult<T>) {
         self.mov_imm_u64(0, JitNativeExit::TRAP);
         self.mov_imm_u64(1, vm_result_code(result));
         self.branch_to_epilogue();
     }
 
-    fn call_ptr(&mut self, ptr: usize) {
+    fn call_stub(&mut self, id: StubId) {
         profile::count(Counter::EmitHelperCall);
-        self.mov_imm_u64(16, ptr as u64);
+        let offset = self.offset();
+        let ptr = self.env.stub_immediate(id, offset);
+        self.mov_imm_u64_reloc(16, ptr);
         self.blr_x(16);
     }
 
-    fn emit_f32_rounding_helper(&mut self, value: u8, helper: usize) {
+    fn emit_f32_rounding_helper(&mut self, value: u8, helper: StubId) {
         self.mov_w(0, value);
-        self.call_ptr(helper);
+        self.call_stub(helper);
         self.mov_w(value, 0);
     }
 
-    fn emit_f64_rounding_helper(&mut self, value: u8, helper: usize) {
+    fn emit_f64_rounding_helper(&mut self, value: u8, helper: StubId) {
         self.mov_x(0, value);
-        self.call_ptr(helper);
+        self.call_stub(helper);
         self.mov_x(value, 0);
     }
 
@@ -3751,7 +3755,7 @@ impl<'a> Emitter<'a> {
             }
             LocalUnary32Op::I32Popcnt => {
                 self.mov_w(0, result);
-                self.call_ptr(jit_i32_popcnt_value as *const () as usize);
+                self.call_stub(StubId::I32PopcntValue);
                 self.mov_w(result, 0);
             }
             LocalUnary32Op::F32Abs => {
@@ -3767,17 +3771,11 @@ impl<'a> Emitter<'a> {
                 self.fsqrt_s(0, 0);
                 self.fmov_w_from_s(result, 0);
             }
-            LocalUnary32Op::F32Ceil => {
-                self.emit_f32_rounding_helper(result, jit_f32_ceil_bits as *const () as usize)
-            }
-            LocalUnary32Op::F32Floor => {
-                self.emit_f32_rounding_helper(result, jit_f32_floor_bits as *const () as usize)
-            }
-            LocalUnary32Op::F32Trunc => {
-                self.emit_f32_rounding_helper(result, jit_f32_trunc_bits as *const () as usize)
-            }
+            LocalUnary32Op::F32Ceil => self.emit_f32_rounding_helper(result, StubId::F32CeilBits),
+            LocalUnary32Op::F32Floor => self.emit_f32_rounding_helper(result, StubId::F32FloorBits),
+            LocalUnary32Op::F32Trunc => self.emit_f32_rounding_helper(result, StubId::F32TruncBits),
             LocalUnary32Op::F32Nearest => {
-                self.emit_f32_rounding_helper(result, jit_f32_nearest_bits as *const () as usize)
+                self.emit_f32_rounding_helper(result, StubId::F32NearestBits)
             }
         }
         Ok(())
@@ -3794,7 +3792,7 @@ impl<'a> Emitter<'a> {
             }
             LocalUnary64Op::I64Popcnt => {
                 self.mov_x(0, result);
-                self.call_ptr(jit_i64_popcnt_value as *const () as usize);
+                self.call_stub(StubId::I64PopcntValue);
                 self.mov_x(result, 0);
             }
             LocalUnary64Op::F64Abs => {
@@ -3810,17 +3808,11 @@ impl<'a> Emitter<'a> {
                 self.fsqrt_d(0, 0);
                 self.fmov_x_from_d(result, 0);
             }
-            LocalUnary64Op::F64Ceil => {
-                self.emit_f64_rounding_helper(result, jit_f64_ceil_bits as *const () as usize)
-            }
-            LocalUnary64Op::F64Floor => {
-                self.emit_f64_rounding_helper(result, jit_f64_floor_bits as *const () as usize)
-            }
-            LocalUnary64Op::F64Trunc => {
-                self.emit_f64_rounding_helper(result, jit_f64_trunc_bits as *const () as usize)
-            }
+            LocalUnary64Op::F64Ceil => self.emit_f64_rounding_helper(result, StubId::F64CeilBits),
+            LocalUnary64Op::F64Floor => self.emit_f64_rounding_helper(result, StubId::F64FloorBits),
+            LocalUnary64Op::F64Trunc => self.emit_f64_rounding_helper(result, StubId::F64TruncBits),
             LocalUnary64Op::F64Nearest => {
-                self.emit_f64_rounding_helper(result, jit_f64_nearest_bits as *const () as usize)
+                self.emit_f64_rounding_helper(result, StubId::F64NearestBits)
             }
         }
         Ok(())
@@ -3886,14 +3878,14 @@ impl<'a> Emitter<'a> {
             FloatBinaryOp::Min => {
                 self.mov_x(0, 16);
                 self.mov_x(1, 17);
-                self.call_ptr(jit_f64_min_bits as *const () as usize);
+                self.call_stub(StubId::F64MinBits);
                 self.push_x_as_i64_slots(0)?;
                 return Ok(());
             }
             FloatBinaryOp::Max => {
                 self.mov_x(0, 16);
                 self.mov_x(1, 17);
-                self.call_ptr(jit_f64_max_bits as *const () as usize);
+                self.call_stub(StubId::F64MaxBits);
                 self.push_x_as_i64_slots(0)?;
                 return Ok(());
             }
@@ -3940,7 +3932,7 @@ impl<'a> Emitter<'a> {
             FloatBinaryOp::Min => {
                 self.mov_w(0, lhs);
                 self.mov_w(1, rhs);
-                self.call_ptr(jit_f32_min_bits as *const () as usize);
+                self.call_stub(StubId::F32MinBits);
                 let result = self.push_reg()?;
                 self.mov_w(result, 0);
                 return Ok(());
@@ -3948,7 +3940,7 @@ impl<'a> Emitter<'a> {
             FloatBinaryOp::Max => {
                 self.mov_w(0, lhs);
                 self.mov_w(1, rhs);
-                self.call_ptr(jit_f32_max_bits as *const () as usize);
+                self.call_stub(StubId::F32MaxBits);
                 let result = self.push_reg()?;
                 self.mov_w(result, 0);
                 return Ok(());
@@ -3987,18 +3979,10 @@ impl<'a> Emitter<'a> {
                 self.fsqrt_s(0, 0);
                 self.fmov_w_from_s(value, 0);
             }
-            FloatUnaryOp::Ceil => {
-                self.emit_f32_rounding_helper(value, jit_f32_ceil_bits as *const () as usize)
-            }
-            FloatUnaryOp::Floor => {
-                self.emit_f32_rounding_helper(value, jit_f32_floor_bits as *const () as usize)
-            }
-            FloatUnaryOp::Trunc => {
-                self.emit_f32_rounding_helper(value, jit_f32_trunc_bits as *const () as usize)
-            }
-            FloatUnaryOp::Nearest => {
-                self.emit_f32_rounding_helper(value, jit_f32_nearest_bits as *const () as usize)
-            }
+            FloatUnaryOp::Ceil => self.emit_f32_rounding_helper(value, StubId::F32CeilBits),
+            FloatUnaryOp::Floor => self.emit_f32_rounding_helper(value, StubId::F32FloorBits),
+            FloatUnaryOp::Trunc => self.emit_f32_rounding_helper(value, StubId::F32TruncBits),
+            FloatUnaryOp::Nearest => self.emit_f32_rounding_helper(value, StubId::F32NearestBits),
         }
         Ok(())
     }
@@ -4024,18 +4008,10 @@ impl<'a> Emitter<'a> {
                 self.fsqrt_d(0, 0);
                 self.fmov_x_from_d(16, 0);
             }
-            FloatUnaryOp::Ceil => {
-                self.emit_f64_rounding_helper(16, jit_f64_ceil_bits as *const () as usize)
-            }
-            FloatUnaryOp::Floor => {
-                self.emit_f64_rounding_helper(16, jit_f64_floor_bits as *const () as usize)
-            }
-            FloatUnaryOp::Trunc => {
-                self.emit_f64_rounding_helper(16, jit_f64_trunc_bits as *const () as usize)
-            }
-            FloatUnaryOp::Nearest => {
-                self.emit_f64_rounding_helper(16, jit_f64_nearest_bits as *const () as usize)
-            }
+            FloatUnaryOp::Ceil => self.emit_f64_rounding_helper(16, StubId::F64CeilBits),
+            FloatUnaryOp::Floor => self.emit_f64_rounding_helper(16, StubId::F64FloorBits),
+            FloatUnaryOp::Trunc => self.emit_f64_rounding_helper(16, StubId::F64TruncBits),
+            FloatUnaryOp::Nearest => self.emit_f64_rounding_helper(16, StubId::F64NearestBits),
         }
         self.push_x_as_i64_slots(16)?;
         Ok(())
@@ -4110,14 +4086,14 @@ impl<'a> Emitter<'a> {
                 let value = self.pop_reg()?;
                 self.mov_w(0, value);
                 self.mov_imm_u32(1, u32::from(signed));
-                self.call_ptr(jit_i32_trunc_f32 as *const () as usize);
+                self.call_stub(StubId::I32TruncF32);
             }
             FloatWidth::F64 => {
                 let high = self.pop_reg()?;
                 let low = self.pop_reg()?;
                 self.pack_i64_slots_to_x(0, low, high, 9)?;
                 self.mov_imm_u32(1, u32::from(signed));
-                self.call_ptr(jit_i32_trunc_f64 as *const () as usize);
+                self.call_stub(StubId::I32TruncF64);
             }
         }
         self.return_if_exit();
@@ -4139,7 +4115,7 @@ impl<'a> Emitter<'a> {
                 self.mov_w(0, value);
                 self.mov_imm_u32(1, u32::from(signed));
                 self.mov_imm_u32(2, u32::from(saturating));
-                self.call_ptr(jit_i64_trunc_f32 as *const () as usize);
+                self.call_stub(StubId::I64TruncF32);
             }
             FloatWidth::F64 => {
                 let high = self.pop_reg()?;
@@ -4147,7 +4123,7 @@ impl<'a> Emitter<'a> {
                 self.pack_i64_slots_to_x(0, low, high, 9)?;
                 self.mov_imm_u32(1, u32::from(signed));
                 self.mov_imm_u32(2, u32::from(saturating));
-                self.call_ptr(jit_i64_trunc_f64 as *const () as usize);
+                self.call_stub(StubId::I64TruncF64);
             }
         }
         self.return_if_exit();
@@ -4162,14 +4138,14 @@ impl<'a> Emitter<'a> {
                 let value = self.pop_reg()?;
                 self.mov_w(0, value);
                 self.mov_imm_u32(1, u32::from(signed));
-                self.call_ptr(jit_i32_trunc_sat_f32 as *const () as usize);
+                self.call_stub(StubId::I32TruncSatF32);
             }
             FloatWidth::F64 => {
                 let high = self.pop_reg()?;
                 let low = self.pop_reg()?;
                 self.pack_i64_slots_to_x(0, low, high, 9)?;
                 self.mov_imm_u32(1, u32::from(signed));
-                self.call_ptr(jit_i32_trunc_sat_f64 as *const () as usize);
+                self.call_stub(StubId::I32TruncSatF64);
             }
         }
         self.return_if_exit();
@@ -4445,6 +4421,6 @@ fn trace_direct_call_reject(
     }
 }
 
-fn pack_call_stack_sizes(recipe: CallDispatchCache) -> u64 {
-    (u64::from(recipe.param_size) << 32) | u64::from(recipe.return_size)
+fn pack_call_stack_sizes(param_size: u32, return_size: u32) -> u64 {
+    (u64::from(param_size) << 32) | u64::from(return_size)
 }

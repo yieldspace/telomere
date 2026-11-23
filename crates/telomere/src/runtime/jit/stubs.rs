@@ -2101,3 +2101,295 @@ mod tests {
         );
     }
 }
+
+/// Stable identifier for one JIT runtime stub (#197).
+///
+/// This table is the single source of truth for the stub set: the JIT
+/// emitters refer to stubs by `StubId` instead of importing individual
+/// `jit_*` functions, and the AoT emitter records `StubId`s in its
+/// relocation table. The variant order is the definition order in this
+/// file and must never change: an artifact records these discriminants,
+/// so reordering or inserting variants would silently retarget every
+/// recorded stub relocation. Append new stubs at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u32)]
+#[allow(dead_code)]
+pub(crate) enum StubId {
+    PushI32 = 0,
+    PopI32,
+    I32PopcntValue,
+    I64PopcntValue,
+    F32MinBits,
+    F32MaxBits,
+    F64MinBits,
+    F64MaxBits,
+    F32CeilBits,
+    F32FloorBits,
+    F32TruncBits,
+    F32NearestBits,
+    F64CeilBits,
+    F64FloorBits,
+    F64TruncBits,
+    F64NearestBits,
+    I32TruncF32,
+    I32TruncF64,
+    I32TruncSatF32,
+    I32TruncSatF64,
+    I64TruncF32,
+    I64TruncF64,
+    AtomicFence,
+    RefFunc,
+    MemoryFill,
+    MemoryCopy,
+    MemorySize,
+    MemoryGrow,
+    RuntimeStackOp,
+    RuntimeContinuationOp,
+    I32StoreLocalBaseFromVmStack,
+    FunctionReturn,
+    BlockReturn,
+    DirectCall,
+    WasmDirectCallFast,
+    IndirectCall,
+    I32Crc16Update16,
+    CallI32Crc16Update16,
+    CallI32ListCrcSummary,
+    I32ListCrcSummary,
+    I32ListCrcPairLoop,
+    I32CoreStateBenchmark,
+    I32NumericTokenStateTransition,
+    I32SelectBitStep4,
+}
+
+#[allow(dead_code)]
+impl StubId {
+    /// Every stub, in discriminant order.
+    pub(crate) const ALL: &'static [StubId] = &[
+        StubId::PushI32,
+        StubId::PopI32,
+        StubId::I32PopcntValue,
+        StubId::I64PopcntValue,
+        StubId::F32MinBits,
+        StubId::F32MaxBits,
+        StubId::F64MinBits,
+        StubId::F64MaxBits,
+        StubId::F32CeilBits,
+        StubId::F32FloorBits,
+        StubId::F32TruncBits,
+        StubId::F32NearestBits,
+        StubId::F64CeilBits,
+        StubId::F64FloorBits,
+        StubId::F64TruncBits,
+        StubId::F64NearestBits,
+        StubId::I32TruncF32,
+        StubId::I32TruncF64,
+        StubId::I32TruncSatF32,
+        StubId::I32TruncSatF64,
+        StubId::I64TruncF32,
+        StubId::I64TruncF64,
+        StubId::AtomicFence,
+        StubId::RefFunc,
+        StubId::MemoryFill,
+        StubId::MemoryCopy,
+        StubId::MemorySize,
+        StubId::MemoryGrow,
+        StubId::RuntimeStackOp,
+        StubId::RuntimeContinuationOp,
+        StubId::I32StoreLocalBaseFromVmStack,
+        StubId::FunctionReturn,
+        StubId::BlockReturn,
+        StubId::DirectCall,
+        StubId::WasmDirectCallFast,
+        StubId::IndirectCall,
+        StubId::I32Crc16Update16,
+        StubId::CallI32Crc16Update16,
+        StubId::CallI32ListCrcSummary,
+        StubId::I32ListCrcSummary,
+        StubId::I32ListCrcPairLoop,
+        StubId::I32CoreStateBenchmark,
+        StubId::I32NumericTokenStateTransition,
+        StubId::I32SelectBitStep4,
+    ];
+
+    /// The stub's source-level name, used in diagnostics and in the table
+    /// fingerprint.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            StubId::PushI32 => "push_i32",
+            StubId::PopI32 => "pop_i32",
+            StubId::I32PopcntValue => "i32_popcnt_value",
+            StubId::I64PopcntValue => "i64_popcnt_value",
+            StubId::F32MinBits => "f32_min_bits",
+            StubId::F32MaxBits => "f32_max_bits",
+            StubId::F64MinBits => "f64_min_bits",
+            StubId::F64MaxBits => "f64_max_bits",
+            StubId::F32CeilBits => "f32_ceil_bits",
+            StubId::F32FloorBits => "f32_floor_bits",
+            StubId::F32TruncBits => "f32_trunc_bits",
+            StubId::F32NearestBits => "f32_nearest_bits",
+            StubId::F64CeilBits => "f64_ceil_bits",
+            StubId::F64FloorBits => "f64_floor_bits",
+            StubId::F64TruncBits => "f64_trunc_bits",
+            StubId::F64NearestBits => "f64_nearest_bits",
+            StubId::I32TruncF32 => "i32_trunc_f32",
+            StubId::I32TruncF64 => "i32_trunc_f64",
+            StubId::I32TruncSatF32 => "i32_trunc_sat_f32",
+            StubId::I32TruncSatF64 => "i32_trunc_sat_f64",
+            StubId::I64TruncF32 => "i64_trunc_f32",
+            StubId::I64TruncF64 => "i64_trunc_f64",
+            StubId::AtomicFence => "atomic_fence",
+            StubId::RefFunc => "ref_func",
+            StubId::MemoryFill => "memory_fill",
+            StubId::MemoryCopy => "memory_copy",
+            StubId::MemorySize => "memory_size",
+            StubId::MemoryGrow => "memory_grow",
+            StubId::RuntimeStackOp => "runtime_stack_op",
+            StubId::RuntimeContinuationOp => "runtime_continuation_op",
+            StubId::I32StoreLocalBaseFromVmStack => "i32_store_local_base_from_vm_stack",
+            StubId::FunctionReturn => "function_return",
+            StubId::BlockReturn => "block_return",
+            StubId::DirectCall => "direct_call",
+            StubId::WasmDirectCallFast => "wasm_direct_call_fast",
+            StubId::IndirectCall => "indirect_call",
+            StubId::I32Crc16Update16 => "i32_crc16_update16",
+            StubId::CallI32Crc16Update16 => "call_i32_crc16_update16",
+            StubId::CallI32ListCrcSummary => "call_i32_list_crc_summary",
+            StubId::I32ListCrcSummary => "i32_list_crc_summary",
+            StubId::I32ListCrcPairLoop => "i32_list_crc_pair_loop",
+            StubId::I32CoreStateBenchmark => "i32_core_state_benchmark",
+            StubId::I32NumericTokenStateTransition => "i32_numeric_token_state_transition",
+            StubId::I32SelectBitStep4 => "i32_select_bit_step4",
+        }
+    }
+
+    /// The stub's address in the current process.
+    ///
+    /// Some stubs exist only in some target builds: the float-rounding
+    /// stubs are riscv64-only (the other backends round inline) and the
+    /// i32 trunc_sat pair is compiled out on aarch64 (which saturates
+    /// inline). Those resolve to null where they are compiled out; no
+    /// emitter on such a target ever records them.
+    pub(crate) fn address(self) -> *const () {
+        match self {
+            StubId::PushI32 => push_i32 as *const (),
+            StubId::PopI32 => pop_i32 as *const (),
+            StubId::I32PopcntValue => i32_popcnt_value as *const (),
+            StubId::I64PopcntValue => i64_popcnt_value as *const (),
+            StubId::F32MinBits => f32_min_bits as *const (),
+            StubId::F32MaxBits => f32_max_bits as *const (),
+            StubId::F64MinBits => f64_min_bits as *const (),
+            StubId::F64MaxBits => f64_max_bits as *const (),
+            #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+            StubId::F32CeilBits => f32_ceil_bits as *const (),
+            #[cfg(not(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")))]
+            StubId::F32CeilBits => std::ptr::null(),
+            #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+            StubId::F32FloorBits => f32_floor_bits as *const (),
+            #[cfg(not(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")))]
+            StubId::F32FloorBits => std::ptr::null(),
+            #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+            StubId::F32TruncBits => f32_trunc_bits as *const (),
+            #[cfg(not(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")))]
+            StubId::F32TruncBits => std::ptr::null(),
+            #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+            StubId::F32NearestBits => f32_nearest_bits as *const (),
+            #[cfg(not(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")))]
+            StubId::F32NearestBits => std::ptr::null(),
+            #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+            StubId::F64CeilBits => f64_ceil_bits as *const (),
+            #[cfg(not(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")))]
+            StubId::F64CeilBits => std::ptr::null(),
+            #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+            StubId::F64FloorBits => f64_floor_bits as *const (),
+            #[cfg(not(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")))]
+            StubId::F64FloorBits => std::ptr::null(),
+            #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+            StubId::F64TruncBits => f64_trunc_bits as *const (),
+            #[cfg(not(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")))]
+            StubId::F64TruncBits => std::ptr::null(),
+            #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+            StubId::F64NearestBits => f64_nearest_bits as *const (),
+            #[cfg(not(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")))]
+            StubId::F64NearestBits => std::ptr::null(),
+            StubId::I32TruncF32 => i32_trunc_f32 as *const (),
+            StubId::I32TruncF64 => i32_trunc_f64 as *const (),
+            #[cfg(any(
+                all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+                all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+            ))]
+            StubId::I32TruncSatF32 => i32_trunc_sat_f32 as *const (),
+            #[cfg(not(any(
+                all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+                all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+            )))]
+            StubId::I32TruncSatF32 => std::ptr::null(),
+            #[cfg(any(
+                all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+                all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+            ))]
+            StubId::I32TruncSatF64 => i32_trunc_sat_f64 as *const (),
+            #[cfg(not(any(
+                all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+                all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+            )))]
+            StubId::I32TruncSatF64 => std::ptr::null(),
+            StubId::I64TruncF32 => i64_trunc_f32 as *const (),
+            StubId::I64TruncF64 => i64_trunc_f64 as *const (),
+            StubId::AtomicFence => atomic_fence as *const (),
+            StubId::RefFunc => ref_func as *const (),
+            StubId::MemoryFill => memory_fill as *const (),
+            StubId::MemoryCopy => memory_copy as *const (),
+            StubId::MemorySize => memory_size as *const (),
+            StubId::MemoryGrow => memory_grow as *const (),
+            StubId::RuntimeStackOp => runtime_stack_op as *const (),
+            StubId::RuntimeContinuationOp => runtime_continuation_op as *const (),
+            StubId::I32StoreLocalBaseFromVmStack => i32_store_local_base_from_vm_stack as *const (),
+            StubId::FunctionReturn => function_return as *const (),
+            StubId::BlockReturn => block_return as *const (),
+            StubId::DirectCall => direct_call as *const (),
+            StubId::WasmDirectCallFast => wasm_direct_call_fast as *const (),
+            StubId::IndirectCall => indirect_call as *const (),
+            StubId::I32Crc16Update16 => i32_crc16_update16 as *const (),
+            StubId::CallI32Crc16Update16 => call_i32_crc16_update16 as *const (),
+            StubId::CallI32ListCrcSummary => call_i32_list_crc_summary as *const (),
+            StubId::I32ListCrcSummary => i32_list_crc_summary as *const (),
+            StubId::I32ListCrcPairLoop => i32_list_crc_pair_loop as *const (),
+            StubId::I32CoreStateBenchmark => i32_core_state_benchmark as *const (),
+            StubId::I32NumericTokenStateTransition => {
+                i32_numeric_token_state_transition as *const ()
+            }
+            StubId::I32SelectBitStep4 => i32_select_bit_step4 as *const (),
+        }
+    }
+
+    /// Looks up a stub by discriminant, as recorded in a relocation.
+    pub(crate) const fn from_discriminant(value: u32) -> Option<StubId> {
+        if (value as usize) < Self::ALL.len() {
+            Some(Self::ALL[value as usize])
+        } else {
+            None
+        }
+    }
+}
+
+/// Fingerprint of the stub table (#197): an FNV-1a 64 hash over each
+/// stub's discriminant and name, in table order. The AoT artifact
+/// fingerprint mixes this value in so that an artifact compiled against
+/// one stub table is never loaded against another.
+#[allow(dead_code)]
+pub(crate) fn stub_table_fingerprint() -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (index, id) in StubId::ALL.iter().enumerate() {
+        for byte in (index as u32).to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        for byte in id.name().bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}

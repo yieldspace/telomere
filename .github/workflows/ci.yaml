@@ -253,6 +253,11 @@ jobs:
       - name: OP_SPECS fn-identity tests
         run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --lib op_specs_
 
+      # #197: the patched-AoT == JIT differential over the relocation
+      # corpus, plus the stub-table and patch-verification tests.
+      - name: JIT relocation tests
+        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --lib reloc_
+
       - name: JIT-gated tests outside the jit and wast targets
         env:
           TELOMERE_TRAP_FIXTURES_REQUIRE_JIT: "1"

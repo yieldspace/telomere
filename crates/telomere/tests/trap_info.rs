@@ -38,6 +38,22 @@ async fn run_trap(wat: &str, export: &str, store: &Store) -> TrapInfo {
         .expect("trapping guest call must leave public trap information")
 }
 
+/// Like `run_trap`, but for traps whose public `VMResult` is not
+/// `Unreachable` (div-by-zero, call_indirect mismatch, ...).
+#[cfg(feature = "jit")]
+async fn run_any_trap(wat: &str, export: &str, store: &Store) -> TrapInfo {
+    let registry = Registry::new();
+    let instance = instantiate_wat(wat, store, &registry).await;
+    let result = run_module_function(&instance, store, export, &ResultValue::new(vec![])).await;
+    assert!(
+        !matches!(result, VMResult::Success(_)),
+        "export {export} must trap, got {result:?}"
+    );
+    store
+        .take_last_trap()
+        .expect("trapping guest call must leave public trap information")
+}
+
 #[tokio::test]
 async fn deep_symbolized_trap_is_consumed_and_success_clears_it() {
     let store = Store::new();
@@ -365,7 +381,9 @@ async fn jit_trap_keeps_caller_pcs_and_golden_frame_sequence() {
             (Some(0), Some("run"))
         ]
     );
-    assert_eq!(info.frames[0].pc_index, None);
+    // #209: the trapping frame now reports the `unreachable` site's pc
+    // (index 0 in f2's decoded stream), matching the interpreter.
+    assert_eq!(info.frames[0].pc_index, Some(0));
     assert!(
         info.frames[1..]
             .iter()
@@ -374,7 +392,172 @@ async fn jit_trap_keeps_caller_pcs_and_golden_frame_sequence() {
     );
     assert_eq!(
         info.to_string(),
-        "trap: unreachable\n  0: jit::f2 (func 2)\n  1: jit::f1 (func 1) @ pc 2\n  2: jit::run (func 0) @ pc 2"
+        "trap: unreachable\n  0: jit::f2 (func 2) @ pc 0\n  1: jit::f1 (func 1) @ pc 2\n  2: jit::run (func 0) @ pc 2"
+    );
+}
+
+/// #209 differential: one compiled function with a div-by-zero, an
+/// out-of-bounds load, and an `unreachable` at three distinct sites. For
+/// each selector the JIT's innermost pc and trap kind must equal the
+/// interpreter's exactly, and the three sites must yield three distinct
+/// pcs.
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn jit_trap_sites_match_interpreter_at_distinct_sites_in_one_function() {
+    if !telomere::jit_supported() {
+        return;
+    }
+    const WAT: &str = r#"
+        (module $sites
+          (memory 1)
+          (func $run (export "run") (param i32) (result i32)
+            local.get 0
+            i32.eqz
+            if (result i32)
+              i32.const 1
+              i32.const 0
+              i32.div_s
+            else
+              local.get 0
+              i32.const 1
+              i32.eq
+              if (result i32)
+                i32.const 65536
+                i32.load
+              else
+                unreachable
+              end
+            end))
+        "#;
+
+    async fn run_with(store: &Store, selector: i32) -> TrapInfo {
+        let registry = Registry::new();
+        let instance = instantiate_wat(WAT, store, &registry).await;
+        let args = ResultValue::new(vec![telomere::WasmValue::I32(selector)]);
+        let result = run_module_function(&instance, store, "run", &args).await;
+        assert!(
+            !matches!(result, VMResult::Success(_)),
+            "selector {selector} must trap, got {result:?}"
+        );
+        store
+            .take_last_trap()
+            .expect("trapping guest call must leave public trap information")
+    }
+
+    let interpreter_store = Store::new();
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig {
+        enabled: true,
+        ..JitConfig::default()
+    };
+    let jit_store = Store::new_with_runtime_config(runtime_config);
+
+    let mut pcs = Vec::new();
+    for selector in [0, 1, 2] {
+        let interp = run_with(&interpreter_store, selector).await;
+        let jit = run_with(&jit_store, selector).await;
+        assert_eq!(jit.kind, interp.kind, "selector {selector}: trap kind");
+        assert_eq!(jit.frames.len(), 1, "selector {selector}: single frame");
+        let interp_pc = interp.frames[0]
+            .pc_index
+            .expect("interpreter must attribute the trapping instruction");
+        assert_eq!(
+            jit.frames[0].pc_index,
+            Some(interp_pc),
+            "selector {selector}: JIT innermost pc must match the interpreter"
+        );
+        pcs.push(interp_pc);
+    }
+    assert!(
+        pcs[0] != pcs[1] && pcs[1] != pcs[2] && pcs[0] != pcs[2],
+        "the three trap sites must resolve to distinct pcs, got {pcs:?}"
+    );
+}
+
+/// #209 differential: a trap in a nested JIT-compiled callee attributes
+/// every frame — the innermost frame through its trap-site table, the
+/// callers through their return pcs — exactly as the interpreter does.
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn jit_nested_trap_attributes_every_frame_like_the_interpreter() {
+    if !telomere::jit_supported() {
+        return;
+    }
+    const WAT: &str = r#"
+        (module $nested
+          (func $run (export "run") call $mid)
+          (func $mid call $leaf)
+          (func $leaf i32.const 1 i32.const 0 i32.div_s drop))
+        "#;
+
+    let interpreter_store = Store::new();
+    let interp = run_any_trap(WAT, "run", &interpreter_store).await;
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig {
+        enabled: true,
+        ..JitConfig::default()
+    };
+    let jit_store = Store::new_with_runtime_config(runtime_config);
+    let jit = run_any_trap(WAT, "run", &jit_store).await;
+
+    assert_eq!(jit.kind, interp.kind);
+    assert_eq!(jit.frames.len(), interp.frames.len());
+    for (jit_frame, interp_frame) in jit.frames.iter().zip(&interp.frames) {
+        assert_eq!(jit_frame.funcidx, interp_frame.funcidx);
+        assert_eq!(
+            jit_frame.pc_index, interp_frame.pc_index,
+            "frame {} must carry the same pc on both engines",
+            jit_frame.depth
+        );
+        assert!(
+            jit_frame.pc_index.is_some(),
+            "frame {} must be attributed",
+            jit_frame.depth
+        );
+    }
+}
+
+/// #209 fallback contract: a trap raised by a Rust stub (call_indirect
+/// type mismatch) inside JIT-compiled code carries no trap site, so the
+/// trapping frame reports no pc — never a wrong one — while the caller
+/// frame keeps its return pc.
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn jit_stub_trap_in_jit_caller_keeps_no_pc_but_caller_pc() {
+    if !telomere::jit_supported() {
+        return;
+    }
+    const WAT: &str = r#"
+        (module $stub_trap
+          (type $sig (func (result i32)))
+          (type $other (func (result i64)))
+          (table 1 funcref)
+          (elem (i32.const 0) $callee)
+          (func $callee (type $other) (result i64) i64.const 7)
+          (func $run (export "run") (result i32)
+            i32.const 0
+            call_indirect (type $sig)))
+        "#;
+
+    let interpreter_store = Store::new();
+    let interp = run_any_trap(WAT, "run", &interpreter_store).await;
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig {
+        enabled: true,
+        ..JitConfig::default()
+    };
+    let jit_store = Store::new_with_runtime_config(runtime_config);
+    let jit = run_any_trap(WAT, "run", &jit_store).await;
+
+    assert_eq!(jit.kind, interp.kind);
+    assert_eq!(jit.frames.len(), interp.frames.len());
+    assert_eq!(
+        jit.frames[0].pc_index, None,
+        "a stub-raised trap has no native site and must claim no pc"
+    );
+    assert!(
+        interp.frames[0].pc_index.is_some(),
+        "the interpreter attributes its own call_indirect"
     );
 }
 

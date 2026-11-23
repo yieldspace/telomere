@@ -33,6 +33,10 @@ pub struct JitCacheStats {
     pub compiled_functions: usize,
     pub rejected_functions: usize,
     pub used_bytes: usize,
+    /// Total bytes held by the cached functions' #209 trap-site tables.
+    /// Included in `used_bytes`; reported separately so the table cost
+    /// of trap pc attribution stays visible.
+    pub trap_table_bytes: usize,
 }
 
 #[derive(Default)]
@@ -66,6 +70,10 @@ pub(crate) struct CompiledFunction {
     entry: JitEntry,
     code_size: usize,
     _code: ExecutableCode,
+    /// #209 trap-site table: `trap_sites[site - 1]` is the
+    /// decoded-stream pc index of the instruction that emitted trap
+    /// site `site`.
+    trap_sites: Box<[u32]>,
 }
 
 impl StoreJitCache {
@@ -117,8 +125,8 @@ impl StoreJitCache {
         let FunctionBody::Wasm { code, op_lens, .. } = body else {
             return VMResult::Unimplemented;
         };
-        let bytes = match backend::emit_baseline_function(funcaddr, code, op_lens, runtime) {
-            Ok(bytes) => bytes,
+        let emitted = match backend::emit_baseline_function(funcaddr, code, op_lens, runtime) {
+            Ok(emitted) => emitted,
             Err(backend::EmitBaselineError::Verify) => {
                 profile::count(Counter::CompileRejectVerify);
                 trace_compile_reject("verify", 0, 0, max_bytes);
@@ -137,19 +145,23 @@ impl StoreJitCache {
         // The cap is charged in emitted code bytes (16-byte aligned), not
         // in page-rounded mapping sizes: functions are packed into code
         // slabs, so residency is bounded by code size, not page count.
-        let allocation_len = match CodeArena::accounted_len(bytes.len()) {
+        let allocation_len = match CodeArena::accounted_len(emitted.code.len()) {
             Ok(len) => len,
             Err(_) => {
                 profile::count(Counter::CompileRejectAllocationLen);
-                trace_compile_reject("allocation_len", bytes.len(), 0, max_bytes);
+                trace_compile_reject("allocation_len", emitted.code.len(), 0, max_bytes);
                 runtime.mark_jit_rejected_func(funcaddr);
                 self.mark_rejected(funcaddr);
                 return VMResult::Unimplemented;
             }
         };
-        if allocation_len > max_bytes {
+        // #209: the trap-site table is resident per compiled function,
+        // so it is charged against the same cap as the code itself.
+        let table_bytes = emitted.trap_sites.len() * std::mem::size_of::<u32>();
+        let resident_len = allocation_len + table_bytes;
+        if resident_len > max_bytes {
             profile::count(Counter::CompileRejectTooLarge);
-            trace_compile_reject("too_large", bytes.len(), allocation_len, max_bytes);
+            trace_compile_reject("too_large", emitted.code.len(), resident_len, max_bytes);
             runtime.mark_jit_rejected_func(funcaddr);
             self.mark_rejected(funcaddr);
             return VMResult::Unimplemented;
@@ -162,8 +174,8 @@ impl StoreJitCache {
             profile::count(Counter::CompileRejectDisabledAfterEmit);
             trace_compile_reject(
                 "disabled_after_emit",
-                bytes.len(),
-                allocation_len,
+                emitted.code.len(),
+                resident_len,
                 max_bytes,
             );
             return VMResult::Unimplemented;
@@ -173,20 +185,21 @@ impl StoreJitCache {
             cached.last_used = clock;
             return VMResult::Success(cached.tiers.active().clone());
         }
-        inner.evict_until(max_bytes.saturating_sub(allocation_len));
-        let compiled = match CompiledFunction::from_bytes(&bytes, &inner.arena) {
-            Ok(compiled) => Arc::new(compiled),
-            Err(()) => {
-                profile::count(Counter::CompileRejectFromBytes);
-                trace_compile_reject("from_bytes", bytes.len(), allocation_len, max_bytes);
-                runtime.mark_jit_rejected_func(funcaddr);
-                inner.disabled.insert(funcaddr);
-                return VMResult::Unimplemented;
-            }
-        };
+        inner.evict_until(max_bytes.saturating_sub(resident_len));
+        let compiled =
+            match CompiledFunction::from_bytes(&emitted.code, emitted.trap_sites, &inner.arena) {
+                Ok(compiled) => Arc::new(compiled),
+                Err(()) => {
+                    profile::count(Counter::CompileRejectFromBytes);
+                    trace_compile_reject("from_bytes", emitted.code.len(), resident_len, max_bytes);
+                    runtime.mark_jit_rejected_func(funcaddr);
+                    inner.disabled.insert(funcaddr);
+                    return VMResult::Unimplemented;
+                }
+            };
         profile::count(Counter::CompileAccepted);
-        profile::add(Counter::CompileBytes, bytes.len() as u64);
-        inner.used_bytes = inner.used_bytes.saturating_add(compiled.code_size());
+        profile::add(Counter::CompileBytes, emitted.code.len() as u64);
+        inner.used_bytes = inner.used_bytes.saturating_add(compiled.resident_bytes());
         inner.compiled.insert(
             funcaddr,
             CachedFunction {
@@ -218,7 +231,9 @@ impl StoreJitCache {
     fn mark_rejected(&self, funcaddr: ObjectRef) {
         let mut inner = self.inner.lock();
         if let Some(cached) = inner.compiled.remove(&funcaddr) {
-            inner.used_bytes = inner.used_bytes.saturating_sub(cached.tiers.code_size());
+            inner.used_bytes = inner
+                .used_bytes
+                .saturating_sub(cached.tiers.resident_bytes());
         }
         inner.disabled.insert(funcaddr);
     }
@@ -229,6 +244,11 @@ impl StoreJitCache {
             compiled_functions: inner.compiled.len(),
             rejected_functions: inner.disabled.len(),
             used_bytes: inner.used_bytes,
+            trap_table_bytes: inner
+                .compiled
+                .values()
+                .map(|cached| cached.tiers.trap_table_bytes())
+                .sum(),
         }
     }
 }
@@ -263,7 +283,9 @@ impl StoreJitCacheInner {
             let Some(cached) = self.compiled.remove(&funcaddr) else {
                 break;
             };
-            self.used_bytes = self.used_bytes.saturating_sub(cached.tiers.code_size());
+            self.used_bytes = self
+                .used_bytes
+                .saturating_sub(cached.tiers.resident_bytes());
         }
     }
 }
@@ -284,6 +306,7 @@ impl CompiledTiers {
         }
     }
 
+    #[cfg(test)]
     fn code_size(&self) -> usize {
         self.baseline.code_size()
             + self
@@ -292,16 +315,35 @@ impl CompiledTiers {
                 .map(|compiled| compiled.code_size())
                 .unwrap_or(0)
     }
+
+    fn resident_bytes(&self) -> usize {
+        self.baseline.resident_bytes()
+            + self
+                .optimized
+                .as_ref()
+                .map(|compiled| compiled.resident_bytes())
+                .unwrap_or(0)
+    }
+
+    fn trap_table_bytes(&self) -> usize {
+        self.baseline.trap_table_bytes()
+            + self
+                .optimized
+                .as_ref()
+                .map(|compiled| compiled.trap_table_bytes())
+                .unwrap_or(0)
+    }
 }
 
 impl CompiledFunction {
-    fn from_bytes(bytes: &[u8], arena: &CodeArena) -> Result<Self, ()> {
+    fn from_bytes(bytes: &[u8], trap_sites: Vec<u32>, arena: &CodeArena) -> Result<Self, ()> {
         let code = arena.allocate(bytes).map_err(|_| ())?;
         let entry = unsafe { std::mem::transmute::<usize, JitEntry>(code.ptr() as usize) };
         Ok(Self {
             entry,
             code_size: code.len(),
             _code: code,
+            trap_sites: trap_sites.into_boxed_slice(),
         })
     }
 
@@ -311,6 +353,26 @@ impl CompiledFunction {
 
     fn code_size(&self) -> usize {
         self.code_size
+    }
+
+    /// Bytes charged to the code-cache budget for this function: the
+    /// emitted code plus its #209 trap-site table.
+    fn resident_bytes(&self) -> usize {
+        self.code_size() + self.trap_table_bytes()
+    }
+
+    /// Bytes held by this function's #209 trap-site table.
+    pub(crate) fn trap_table_bytes(&self) -> usize {
+        self.trap_sites.len() * std::mem::size_of::<u32>()
+    }
+
+    /// #209: resolves a 1-based trap-site id to the decoded-stream pc
+    /// index recorded for it. Site 0 is the no-site encoding and never
+    /// resolves; out-of-range ids return `None` so a trap degrades to
+    /// an unattributed pc instead of a wrong one.
+    pub(crate) fn trap_pc(&self, site: u64) -> Option<u32> {
+        let index = usize::try_from(site.checked_sub(1)?).ok()?;
+        self.trap_sites.get(index).copied()
     }
 }
 
@@ -431,6 +493,7 @@ mod tests {
             entry: noop_entry,
             code_size: code.len(),
             _code: code,
+            trap_sites: Box::default(),
         })
     }
 
