@@ -356,13 +356,14 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #284: workflow_dispatch runs 45218637130 and
-45218665766 against the PR branch at head
-`d49017889bc96fc71fb2d2c164f5a8d4ac8f1719` (branch commit `e9c8e52`,
-state the component host-function first-poll contract on the
-async registration surface (#147); and merge commit
-`d490178` bringing in `main` at
-`8c748aa`), and pull-request run 45217434943, which built the same
+against the code of PR #288: workflow_dispatch runs 45250727398 and
+45250749786 against the PR branch at head
+`9d9e82540ffbff386889f1c98d2052383409ce48` (branch commits
+`cf6848e`, stop erasing release tracing and publish a diagnostics
+event contract (#144), and `39cdc18`, keep the JIT compile-trace
+stderr cap from suppressing structured events; and merge commit
+`9d9e825` bringing in `main` at
+`1253c75`), and pull-request run 45250703545, which built the same
 tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -373,21 +374,21 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,494,040 | 1,144,311 |
-| `release` | `component` | 2,537,648 | 2,037,815 |
-| `release` | `wasi` | 2,881,648 | 2,297,943 |
-| `release` | `core-nosimd` | 1,301,408 | 1,001,207 |
-| `release` | `core-jit` | 2,034,656 | 1,584,023 |
-| `release` | `core-aot` | 1,521,480 | 1,163,415 |
-| `release` | `wasi-threads` | 3,071,032 | 2,438,887 |
+| `release` | `core` | 1,584,376 | 1,198,759 |
+| `release` | `component` | 2,664,760 | 2,113,687 |
+| `release` | `wasi` | 3,008,760 | 2,373,815 |
+| `release` | `core-nosimd` | 1,393,672 | 1,053,959 |
+| `release` | `core-jit` | 2,133,576 | 1,643,431 |
+| `release` | `core-aot` | 1,614,328 | 1,218,935 |
+| `release` | `wasi-threads` | 3,223,400 | 2,540,087 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,110,824 | 783,127 |
-| `release-size` | `component` | 1,670,504 | 1,232,983 |
-| `release-size` | `wasi` | 1,866,392 | 1,364,711 |
-| `release-size` | `core-nosimd` | 996,000 | 703,543 |
-| `release-size` | `core-jit` | 1,551,472 | 1,105,671 |
-| `release-size` | `core-aot` | 1,130,272 | 794,711 |
-| `release-size` | `wasi-threads` | 2,008,776 | 1,459,111 |
+| `release-size` | `core` | 1,108,968 | 782,103 |
+| `release-size` | `component` | 1,670,776 | 1,233,047 |
+| `release-size` | `wasi` | 1,866,664 | 1,364,791 |
+| `release-size` | `core-nosimd` | 994,256 | 702,631 |
+| `release-size` | `core-jit` | 1,550,368 | 1,105,367 |
+| `release-size` | `core-aot` | 1,128,992 | 794,231 |
+| `release-size` | `wasi-threads` | 2,008,968 | 1,459,111 |
 
 #### Re-baseline history
 
@@ -1150,6 +1151,43 @@ growth remains release-size `component` stripped `.text` at
 +5.47% (1,169,031 B to 1,232,983 B), unchanged from +5.47%.
 The baseline was re-measured on the merged code and updated
 as recorded above, following the procedure below.
+
+PR #288 (#144, `release_max_level_off` in `crates/telomere`'s
+tracing dependency statically disabled release tracing for
+the embedder's whole dependency graph; the feature is
+removed and the runtime diagnostics are published as
+structured tracing events on the documented `telomere::trap`
+/ `telomere::jit` / `telomere::stack` targets) merged
+current `main` into its branch first, with no conflicts.
+The branch also carries the Codex P2 fix (`39cdc18`) keeping
+the JIT compile-trace stderr cap from suppressing the new
+structured events. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45250773315,
+gate success), which reproduces the previous baseline
+exactly on all 32 gated series, so every delta below is
+this PR's own. The deltas are the disclosed cost of the
+fix: with the max-level feature gone, the tracing callsites
+that were statically erased from release builds exist
+again. In `release`, every configuration that links the
+telomere library grows: stripped file +90,336 B in `core`
+to +152,368 B in `wasi-threads`, stripped `.text`
++52,752 B in `core-nosimd` to +101,200 B in
+`wasi-threads`. The `baseline` configuration, which links
+no telomere code, is byte-identical in both profiles. In
+`release-size` the size optimizer still eliminates most of
+the unused callsite machinery: the core configurations
+shrink slightly (stripped file −1,856 B to −1,104 B),
+`component` and `wasi` grow by +272 B stripped file
+(+64 B and +80 B stripped `.text`), and `wasi-threads`
+grows by +192 B stripped file with stripped `.text`
+unchanged. Against the original #164 baseline, the largest
+cumulative growth is now the `release` `component`
+stripped file series at +9.50% (2,433,656 B to
+2,664,760 B), up from +5.47%; the `release-size`
+`component` stripped `.text` series moves from +5.47% to
++5.48% (1,169,031 B to 1,233,047 B). The baseline was
+re-measured on the merged code and updated as recorded
+above, following the procedure below.
 
 ### Threshold derivation
 
