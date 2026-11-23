@@ -26,7 +26,7 @@ the body for the details.
 | [core/trap-reporting.md](core/trap-reporting.md) | Current | Owned core trap diagnostics, consuming retrieval, names, output format, and JIT program-counter limits. |
 | [support-matrix.md](support-matrix.md) | Current | Core proposal, Component Model canonical ABI, and WASI 0.2.6 support boundaries with source-backed coverage counts. |
 | [core/optimizer.md](core/optimizer.md) | Current | The canonical optimizer pipeline and runtime boundary. |
-| [core/metering.md](core/metering.md) | Current | Store-scoped interpreter fuel, accounting, cancellation, and its JIT boundary. |
+| [core/metering.md](core/metering.md) | Current | Store-scoped fuel, accounting, and cancellation across the interpreter and the JIT. |
 | [core/current-optimizer.md](core/current-optimizer.md) | Current snapshot | As-built optimizer behavior, research basis, and remaining fallback families. |
 | [core/jit.md](core/jit.md) | Current | Experimental function-local lazy baseline JIT status, supported targets, diagnostics, and gaps. |
 | [core/interpreter-baseline.md](core/interpreter-baseline.md) | Current methodology | Interpreter measurement layers, matrix, noise-floor contract, witnesses, and raw-record lifecycle. |
@@ -56,6 +56,7 @@ resolution in `ComponentProgram`.
 | Document | Status | Use it for |
 | --- | --- | --- |
 | [benchmarks/footprint.md](benchmarks/footprint.md) | Local measurement | Measured `telomere-cli` binary size, peak RSS, and cold start, plus the reproduction script and the list of unmeasured targets. |
+| [benchmarks/performance.md](benchmarks/performance.md) | CI gate | The performance-regression gate (#212): gated workloads and cells, observed CI variance, ceilings, and the deliberate re-baseline procedure. |
 | [core/interpreter-baseline.md](core/interpreter-baseline.md) | Current methodology | Reproducible interpreter-baseline procedure and raw-record update rules. |
 | [core/coremark-benchmark.md](core/coremark-benchmark.md) | Historical (superseded) | Retained CoreMark provenance; not a current baseline. |
 

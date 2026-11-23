@@ -7,7 +7,9 @@ use telomere::{
         common::{memory_export, read_memory},
         runtime::run_core_export_sync_reentrant,
     },
-    get_global, link_host_function_with_function_idx, run_module_function, HostContext,
+    get_global, link_async_host_function_with_export_name,
+    link_async_host_function_with_function_idx, link_host_function_with_export_name,
+    link_host_function_with_function_idx, run_module_function, HostContext, HostFuture,
     InstanceHandle, IoReadBinaryReader, Registry, ResultValue, Store, StoreState, VMResult,
     WasmParser, WasmParserError, WasmValue,
 };
@@ -364,4 +366,61 @@ fn declarative_const_expr_without_ref_func_does_not_declare_function() {
         "#,
     );
     assert!(matches!(err, WasmParserError::UndeclaredFunctionReference));
+}
+
+fn dummy_async_host(_cx: &mut HostContext<'_, '_>) -> HostFuture {
+    Box::pin(async { VMResult::Unreachable })
+}
+
+// #128: linking a host function onto a missing export, a non-function
+// export, or an out-of-range function index must fail closed (a logged
+// no-op), never abort the host, and leave the instance usable.
+#[tokio::test]
+async fn link_host_function_with_bad_target_fails_closed() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory (export "m") 1)
+          (func (export "run") (result i32) i32.const 42))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    link_host_function_with_export_name(&instance, "missing", return_from_host, &store);
+    link_host_function_with_export_name(&instance, "m", return_from_host, &store);
+    link_host_function_with_function_idx(&instance, 999, return_from_host, &store);
+
+    let values = run_module_function(&instance, &store, "run", &ResultValue::new(vec![]))
+        .await
+        .unwrap();
+    assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+}
+
+#[tokio::test]
+async fn link_async_host_function_with_bad_target_fails_closed() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory (export "m") 1)
+          (func (export "run") (result i32) i32.const 42))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    link_async_host_function_with_export_name(&instance, "missing", dummy_async_host, &store);
+    link_async_host_function_with_export_name(&instance, "m", dummy_async_host, &store);
+    link_async_host_function_with_function_idx(&instance, 999, dummy_async_host, &store);
+
+    let values = run_module_function(&instance, &store, "run", &ResultValue::new(vec![]))
+        .await
+        .unwrap();
+    assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
 }

@@ -224,7 +224,7 @@ async fn metering_is_disabled_by_default() {
 }
 
 #[test]
-fn metering_normalizes_a_requested_jit_off_without_the_jit_feature() {
+fn metering_keeps_a_requested_jit_configuration() {
     let mut runtime_config = RuntimeConfig::default();
     runtime_config.metering.enabled = true;
     runtime_config.jit.enabled = true;
@@ -232,8 +232,8 @@ fn metering_normalizes_a_requested_jit_off_without_the_jit_feature() {
     let store = Store::new_with_runtime_config(runtime_config);
     assert!(store.metering().is_some());
     assert!(
-        !store.runtime_config().jit.enabled,
-        "a metered Store must never retain a JIT-enabled effective configuration"
+        store.runtime_config().jit.enabled,
+        "metering must no longer normalize a requested JIT off (#171)"
     );
 }
 
@@ -1001,26 +1001,334 @@ async fn fuel_exhaustion_wins_when_the_cancel_flag_is_already_set() {
     assert_interrupted(result, InterruptReason::FuelExhausted);
 }
 
+/// #171: a Store with metering and the JIT both enabled. Metering is
+/// fixed at Store construction and the JIT cache is private to the
+/// Store, so this is the configuration whose compiled code is
+/// instrumented.
 #[cfg(feature = "jit")]
-#[tokio::test]
-async fn metered_store_normalizes_jit_off_and_does_not_use_its_cache() {
+fn metered_jit_store(initial_fuel: Option<u64>) -> Store {
     use telomere::JitConfig;
 
     let mut runtime_config = RuntimeConfig::default();
     runtime_config.metering.enabled = true;
-    runtime_config.metering.initial_fuel = Some(10_000);
+    runtime_config.metering.initial_fuel = initial_fuel;
     runtime_config.jit = JitConfig {
         enabled: true,
         ..JitConfig::default()
     };
-    let store = Store::new_with_runtime_config(runtime_config);
+    Store::new_with_runtime_config(runtime_config)
+}
+
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn metered_store_keeps_jit_enabled_and_uses_its_cache() {
+    let store = metered_jit_store(Some(10_000));
     let meter = store.metering().expect("metering must remain enabled");
-    assert!(!store.runtime_config().jit.enabled);
+    assert!(
+        store.runtime_config().jit.enabled,
+        "metering must no longer normalize a requested JIT off (#171)"
+    );
 
     let before = store.jit_cache_stats();
     assert_counter_result(run_counter(&store, 32).await, 32);
     let after = store.jit_cache_stats();
-    assert_eq!(after.compiled_functions, before.compiled_functions);
-    assert_eq!(after.rejected_functions, before.rejected_functions);
+    assert!(
+        after.compiled_functions > before.compiled_functions,
+        "a metered Store must populate its JIT cache (#171)"
+    );
     assert!(meter.fuel_consumed() > 0);
+}
+
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn metered_jit_infinite_loop_exhausts_fuel_in_compiled_code() {
+    let store = metered_jit_store(Some(64));
+    let before = store.jit_cache_stats();
+    let result = run_noarg_wat(&store, LOOP_FOREVER_WAT, "spin").await;
+    assert_interrupted(result, InterruptReason::FuelExhausted);
+    assert!(
+        store.jit_cache_stats().compiled_functions > before.compiled_functions,
+        "the loop must have been JIT-compiled for this test to cover #171"
+    );
+}
+
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn metered_jit_return_call_recursion_exhausts_fuel() {
+    let store = metered_jit_store(Some(64));
+    let result = run_noarg_wat(&store, RETURN_CALL_FOREVER_WAT, "spin").await;
+    assert_interrupted(result, InterruptReason::FuelExhausted);
+}
+
+/// #171 differential: the same module under the interpreter and under
+/// the JIT, with the same fuel, must produce the same outcome and charge
+/// exactly the same fuel. The cases cross the 4,096-checkpoint grant
+/// boundary inside compiled code (the native refill path) and stop just
+/// short of, on, and just past it.
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn metered_jit_and_interpreter_charge_identical_fuel() {
+    for (count, fuel) in [
+        (32, 10_000),
+        (10_000, 20_000),
+        (10_000, 5_000),
+        (10_000, 4_096),
+        (10_000, 4_097),
+        (10_000, 4_095),
+    ] {
+        let interpreter = metered_store(Some(fuel));
+        let interpreted = run_counter(&interpreter, count).await;
+        let interpreted_consumed = interpreter
+            .metering()
+            .expect("metering must be enabled")
+            .fuel_consumed();
+
+        let jit = metered_jit_store(Some(fuel));
+        let compiled = run_counter(&jit, count).await;
+        let compiled_consumed = jit
+            .metering()
+            .expect("metering must be enabled")
+            .fuel_consumed();
+        assert!(
+            jit.jit_cache_stats().compiled_functions > 0,
+            "count={count} fuel={fuel}: the JIT run must actually compile"
+        );
+
+        assert_eq!(
+            interpreted.interrupt_reason(),
+            compiled.interrupt_reason(),
+            "count={count} fuel={fuel}: engines disagree on the outcome"
+        );
+        if interpreted.interrupt_reason().is_none() {
+            assert_counter_result(compiled, count);
+        }
+        assert_eq!(
+            interpreted_consumed, compiled_consumed,
+            "count={count} fuel={fuel}: engines charged different fuel"
+        );
+    }
+}
+
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn metered_jit_cancellation_from_a_watchdog_thread_stops_compiled_loop() {
+    let store = metered_jit_store(None);
+    let meter = store.metering().expect("metering must be enabled");
+    let registry = Registry::new();
+    let instance = instantiate_wat(LOOP_FOREVER_WAT, &store, &registry).await;
+    let watchdog_meter = meter.clone();
+    let start_barrier = Arc::new(Barrier::new(3));
+    let worker_barrier = Arc::clone(&start_barrier);
+    let watchdog_barrier = Arc::clone(&start_barrier);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+
+    let watchdog = std::thread::spawn(move || {
+        watchdog_barrier.wait();
+        watchdog_meter.interrupt();
+    });
+    let worker = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            worker_barrier.wait();
+            let result = futures::executor::block_on(run_module_function(
+                &instance,
+                &store,
+                "spin",
+                &ResultValue::new(vec![]),
+            ));
+            // Report the cache state back with the result: the Store is
+            // owned by this thread, and the compiled-function count is
+            // the evidence the loop really ran as compiled code.
+            let compiled = store.jit_cache_stats().compiled_functions;
+            result_tx
+                .send((result, compiled))
+                .expect("test receiver must remain alive until guest completion");
+        })
+        .expect("guest worker must start");
+
+    start_barrier.wait();
+    let (result, compiled_functions) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match result_rx.try_recv() {
+                Ok(result) => return result,
+                Err(mpsc::TryRecvError::Empty) => {
+                    tokio::time::sleep(Duration::from_millis(1)).await
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("guest worker exited without sending a result")
+                }
+            }
+        }
+    })
+    .await
+    .expect("watchdog cancellation must stop compiled code in bounded time");
+
+    watchdog.join().expect("watchdog must not panic");
+    worker.join().expect("guest worker must not panic");
+
+    assert!(
+        compiled_functions > 0,
+        "the loop must have been JIT-compiled for this test to cover #171"
+    );
+    assert_interrupted(result, InterruptReason::Cancelled);
+}
+
+/// #171: bulk admission charges and the grow precharge apply in
+/// JIT-compiled code exactly as in the interpreter: an unaffordable
+/// operation performs no work and raises `FuelExhausted`.
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn metered_jit_bulk_charges_match_the_interpreter() {
+    // memory.fill of 8,192 bytes costs 1 + (8192 >> 12) = 3 fuel.
+    for make_store in [metered_store, metered_jit_store] {
+        let store = make_store(Some(2));
+        let registry = Registry::new();
+        let instance = instantiate_wat(NATIVE_MEMORY_BULK_WAT, &store, &registry).await;
+        let result =
+            run_module_function(&instance, &store, "fill", &ResultValue::new(vec![])).await;
+        assert_interrupted(result, InterruptReason::FuelExhausted);
+        // The fill must not have happened on this instance: byte 0
+        // still holds the data segment's 0xa5, not the fill's 0xaa.
+        // (The readback itself is uncharged straight-line code, so it
+        // runs on the remaining fuel.)
+        let byte =
+            run_module_function(&instance, &store, "fill_dst", &ResultValue::new(vec![])).await;
+        match byte {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(0xa5)]))
+            }
+            other => panic!("expected fill_dst readback, got {other:?}"),
+        }
+    }
+
+    // memory.grow of one page costs 1 + (1 << 4) = 17 fuel.
+    for make_store in [metered_store, metered_jit_store] {
+        let store = make_store(Some(16));
+        let registry = Registry::new();
+        let instance = instantiate_wat(MEMORY_GROW_WAT, &store, &registry).await;
+        let result =
+            run_module_function(&instance, &store, "grow", &ResultValue::new(vec![])).await;
+        assert_interrupted(result, InterruptReason::FuelExhausted);
+        let size = run_module_function(&instance, &store, "size", &ResultValue::new(vec![])).await;
+        match size {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(1)]))
+            }
+            other => panic!("expected size readback, got {other:?}"),
+        }
+
+        let store = make_store(Some(17));
+        let grown = run_noarg_wat(&store, MEMORY_GROW_WAT, "grow").await;
+        match grown {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(1)]))
+            }
+            other => panic!("expected a successful grow at exactly 17 fuel, got {other:?}"),
+        }
+    }
+}
+
+/// #171 differential over a fully-native fused loop: a linked-list
+/// relink traversal long enough to cross the 4,096-checkpoint grant
+/// boundary inside the native loop (where compiled code falls back to
+/// the fused op's interpreter handler) must charge exactly the same fuel
+/// and produce exactly the same result as the interpreter.
+#[cfg(feature = "jit")]
+#[tokio::test]
+async fn metered_jit_fused_relink_loop_charges_like_the_interpreter() {
+    const NODES: u32 = 5_000;
+    // Node i (1-based) sits at byte offset 8*i and points at 8*(i+1);
+    // the last node points at 0.
+    let mut bytes = String::new();
+    for i in 1..=NODES {
+        let next = if i < NODES { 8 * (i + 1) } else { 0 };
+        for byte in next.to_le_bytes() {
+            bytes.push_str(&format!("\\{byte:02x}"));
+        }
+        bytes.push_str("\\00\\00\\00\\00");
+    }
+    let wat = format!(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 8) "{bytes}")
+          (func (export "relink") (param $cursor i32) (param $prev i32)
+            (result i32 i32 i32 i32 i32 i32)
+            (local $current i32)
+            loop $again
+              local.get $cursor
+              local.tee $current
+              i32.load
+              local.set $cursor
+              local.get $current
+              local.get $prev
+              i32.store
+              local.get $current
+              local.set $prev
+              local.get $cursor
+              br_if $again
+            end
+            local.get $cursor
+            local.get $current
+            local.get $prev
+            i32.const 8
+            i32.load
+            i32.const 16
+            i32.load
+            i32.const 24
+            i32.load))
+        "#
+    );
+    let expected = ResultValue::new(vec![
+        WasmValue::I32(0),
+        WasmValue::I32(8 * NODES as i32),
+        WasmValue::I32(8 * NODES as i32),
+        WasmValue::I32(0),
+        WasmValue::I32(8),
+        WasmValue::I32(16),
+    ]);
+
+    for fuel in [Some(100_000), Some(4_500)] {
+        let mut outcomes = Vec::new();
+        for make_store in [metered_store, metered_jit_store] {
+            let store = make_store(fuel);
+            let registry = Registry::new();
+            let instance = instantiate_wat(&wat, &store, &registry).await;
+            let result = run_module_function(
+                &instance,
+                &store,
+                "relink",
+                &ResultValue::new(vec![WasmValue::I32(8), WasmValue::I32(0)]),
+            )
+            .await;
+            let consumed = store
+                .metering()
+                .expect("metering must be enabled")
+                .fuel_consumed();
+            outcomes.push((result, consumed, store.jit_cache_stats().compiled_functions));
+        }
+        let (interpreted, interpreted_consumed, _) = &outcomes[0];
+        let (compiled, compiled_consumed, compiled_functions) = &outcomes[1];
+        assert!(
+            *compiled_functions > 0,
+            "fuel={fuel:?}: the relink function must have been JIT-compiled"
+        );
+        assert_eq!(
+            interpreted.interrupt_reason(),
+            compiled.interrupt_reason(),
+            "fuel={fuel:?}: engines disagree on the relink outcome"
+        );
+        assert_eq!(
+            interpreted_consumed, compiled_consumed,
+            "fuel={fuel:?}: engines charged different fuel for the relink loop"
+        );
+        if fuel == Some(100_000) {
+            match compiled {
+                VMResult::Success(values) => assert_eq!(*values, expected),
+                other => panic!("expected a successful relink, got {other:?}"),
+            }
+        } else {
+            assert_interrupted(compiled.clone(), InterruptReason::FuelExhausted);
+        }
+    }
 }

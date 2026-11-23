@@ -77,6 +77,17 @@ enum FixupKind {
     CbnzW(u8),
 }
 
+/// #171: what a native metering checkpoint does when the current grant
+/// is exhausted (`ExecuteContext.budget == 0`). Either way the slow path
+/// consumes exactly one unit or raises, via `vm::checkpoint`.
+#[derive(Clone, Copy)]
+enum MeteringZeroPath {
+    /// Call the `MeteringCheckpoint` stub and continue natively.
+    RefillViaStub,
+    /// Exit to the interpreter at the checkpointing instruction.
+    FallbackToInterpreter,
+}
+
 fn cond_for_i32_compare(op: I32CompareOp) -> Cond {
     match op {
         I32CompareOp::Eq => Cond::Eq,
@@ -1839,8 +1850,12 @@ impl<E: EmitEnv> BaselineOpEmitter<'_, '_, E> {
                 self.mov_w(1, delta);
                 self.mov_imm_u32(2, u32::from(shared));
                 self.call_stub(StubId::MemoryGrow);
+                // #171: the grow stub returns a `JitNativeExit` so its
+                // metering precharge can raise; the grow result rides
+                // in the exit's value register.
+                self.return_if_exit();
                 let result = self.push_reg()?;
-                self.mov_w(result, 0);
+                self.mov_w(result, 1);
             }
             BaselineOp::Branch { target } => {
                 self.flush_stack()?;
@@ -2062,6 +2077,10 @@ impl<E: EmitEnv> BaselineOpEmitter<'_, '_, E> {
                 self.branch_to(target, FixupKind::B);
             }
             BaselineOp::Loop { param } => {
+                // #171: the interpreter's `op_loop` charges its
+                // checkpoint before the block return, so the native
+                // checkpoint comes first too.
+                self.emit_loop_metering_checkpoint()?;
                 if param.param_size != 0 {
                     self.emit_block_return_native(param.stack_top, param.param_size)?;
                 } else if self.stack_depth > 0 {
@@ -3004,6 +3023,7 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
         self.load_local4_to_reg(12, plan.node_local)?;
 
         let loop_start = self.offset();
+        self.emit_fused_loop_metering_checkpoint()?;
 
         self.mov_w(14, 12);
         self.add_imm_u32(14, 14, plan.data_delta)?;
@@ -3059,6 +3079,7 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
         self.load_local4_to_reg(12, prev_local)?;
         self.load_local4_to_reg(13, cursor_local)?;
         let loop_start = self.offset();
+        self.emit_fused_loop_metering_checkpoint()?;
 
         self.store_local4_from_reg(saved_local, 12)?;
         self.store_local4_from_reg(prev_local, 13)?;
@@ -3091,6 +3112,7 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
     ) -> Result<(), ()> {
         self.load_local4_to_reg(12, cursor_local)?;
         let loop_start = self.offset();
+        self.emit_fused_loop_metering_checkpoint()?;
 
         self.store_local4_from_reg(current_local, 12)?;
         self.mov_w(13, 12);
@@ -3118,6 +3140,7 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
         self.load_local4_to_reg(13, plan.scalar_local)?;
         self.load_local4_to_reg(14, plan.counter_local)?;
         let loop_start = self.offset();
+        self.emit_fused_loop_metering_checkpoint()?;
 
         self.mov_w(15, 12);
         self.add_imm_u32(15, 15, plan.load_delta)?;
@@ -3279,6 +3302,95 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
             target_index: usize::MAX,
             kind: FixupKind::CbnzX(0),
         });
+    }
+
+    /// #171: emits one metering checkpoint, mirroring the interpreter's
+    /// `vm::checkpoint` accounting exactly. Only called when the owning
+    /// store is metered (`EmitEnv::metering_enabled`); unmetered code is
+    /// byte-identical to before.
+    ///
+    /// Fast path (current grant has budget left): decrement
+    /// `ExecuteContext.budget` in place and continue natively — the same
+    /// single unit the interpreter charges at this point. The interrupt
+    /// flag is not polled here; it lives behind the metering ledger's
+    /// mutex and cannot be read from native code.
+    ///
+    /// Slow path (`budget == 0`): the checkpoint itself is handed to
+    /// `on_zero`, which must consume exactly one unit or exit. The grant
+    /// refill / exhaustion logic stays in one place (`vm::checkpoint`),
+    /// so compiled and interpreted execution charge identical fuel and
+    /// raise `FuelExhausted` / `Cancelled` at identical points.
+    fn emit_metering_checkpoint(
+        &mut self,
+        on_zero: MeteringZeroPath,
+        pc_index: usize,
+    ) -> Result<(), ()> {
+        let budget_offset = std::mem::offset_of!(ExecuteContext<'_>, budget);
+        self.ldr_x_imm(17, 19, budget_offset)?;
+        let nonzero = self.branch_placeholder(FixupKind::CbnzX(17));
+        let skip_slow = match on_zero {
+            MeteringZeroPath::RefillViaStub => {
+                // The stub runs `vm::checkpoint` with budget == 0, which
+                // takes the next grant (consuming this checkpoint's unit)
+                // or raises. A trap exit propagates via `return_if_exit`.
+                self.mov_x(0, 19);
+                self.call_stub(StubId::MeteringCheckpoint);
+                self.return_if_exit();
+                Some(self.branch_placeholder(FixupKind::B))
+            }
+            MeteringZeroPath::FallbackToInterpreter => {
+                // Resume the interpreter at the checkpointing
+                // instruction; its handler performs the refill-or-raise
+                // checkpoint and runs from a local state that is in sync
+                // at this point (see the fused-loop emitters).
+                self.mov_imm_u64(0, JitNativeExit::FALLBACK_PTR);
+                self.load_code_ptr_operand(1, pc_index);
+                self.branch_to_epilogue();
+                None
+            }
+        };
+        let decrement = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            nonzero,
+            decrement,
+            FixupKind::CbnzX(17),
+        )?;
+        self.mov_imm_u64(16, 1);
+        self.sub_x(17, 17, 16);
+        self.str_x_imm(17, 19, budget_offset)?;
+        if let Some(skip_slow) = skip_slow {
+            let after = self.offset();
+            patch_branch(self.masm.as_mut_bytes(), skip_slow, after, FixupKind::B)?;
+        }
+        Ok(())
+    }
+
+    /// #171: metering checkpoint for a guest `loop` header. Refills via
+    /// the stub so execution stays in native code across grant
+    /// boundaries; only the operand-stack registers are live here and
+    /// they survive stub calls.
+    fn emit_loop_metering_checkpoint(&mut self) -> Result<(), ()> {
+        if self.env.metering_enabled() {
+            self.emit_metering_checkpoint(MeteringZeroPath::RefillViaStub, self.current_pc)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// #171: metering checkpoint for a fully-native fused loop. Falls
+    /// back to the fused op's interpreter handler on grant exhaustion:
+    /// the handler is the same loop in Rust, and at `loop_start` every
+    /// local it reads is in sync with the native registers (verified
+    /// against each handler in `runtime/vm/memory.rs`), so the fallback
+    /// is exact. A stub call would be wrong here — the loop carries its
+    /// state in caller-saved registers 12–14.
+    fn emit_fused_loop_metering_checkpoint(&mut self) -> Result<(), ()> {
+        if self.env.metering_enabled() {
+            self.emit_metering_checkpoint(MeteringZeroPath::FallbackToInterpreter, self.current_pc)
+        } else {
+            Ok(())
+        }
     }
 
     fn branch_to_epilogue(&mut self) {

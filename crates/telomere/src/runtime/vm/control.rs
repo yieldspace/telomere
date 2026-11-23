@@ -23,6 +23,11 @@ pub unsafe fn op_return(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     // keeps this body distinct from `op_br`, whose body is otherwise
     // byte-identical, so identical-code folding cannot merge the two fn
     // items into one address.
+    //
+    // This site deliberately keeps the `black_box` form: `op_return`'s
+    // dispatch target is the terminal return continuation, so the frame
+    // a non-tail dispatch leaves behind is released when the call
+    // returns instead of accumulating across loop iterations (#285).
     {
         static FN_IDENTITY: u8 = 0;
         std::hint::black_box(&raw const FN_IDENTITY);

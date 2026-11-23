@@ -340,6 +340,117 @@ async fn component_runtime_sync_wrapper_registration_still_works() {
     assert_eq!(result, vec![ComponentValue::I32(3)]);
 }
 
+fn reexport_component(version: &str) -> Vec<u8> {
+    compile_component(&format!(
+        r#"
+(component
+  (type (func (param "lhs" s32) (param "rhs" s32) (result s32)))
+  (import "test:pkg/add@{version}" (func (type 0)))
+  (export "test:pkg/add@{version}" (func 0))
+)
+"#
+    ))
+}
+
+fn add_impl(
+    _store: &telomere::Store,
+    args: &[ComponentValue],
+) -> Result<Vec<ComponentValue>, ComponentError> {
+    let lhs = args[0]
+        .as_i32()
+        .ok_or_else(|| ComponentError::InvalidArgument("arg[0] must be i32".to_owned()))?;
+    let rhs = args[1]
+        .as_i32()
+        .ok_or_else(|| ComponentError::InvalidArgument("arg[1] must be i32".to_owned()))?;
+    Ok(vec![ComponentValue::I32(lhs + rhs)])
+}
+
+#[tokio::test]
+async fn component_runtime_host_export_resolves_through_compatible_version_name() {
+    // The component re-exports its import as `test:pkg/add@0.2.0` and the
+    // embedder supplies that export through `register_export` under the
+    // same name. Calling through the semver-compatible name
+    // `test:pkg/add@0.2.6` must reach the registered host-export binding
+    // (#271); before the fix the lookup passed the requested name to the
+    // linker, missed the registration, and fell through to import
+    // resolution, which reported an unresolved import.
+    let engine = ComponentEngine::new();
+    let store = telomere::Store::new();
+
+    let bytes = reexport_component("0.2.0");
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut linker = ComponentLinker::new();
+    linker.register_export("test:pkg/add@0.2.0", add_impl);
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(
+            &store,
+            "test:pkg/add@0.2.6",
+            &[ComponentValue::I32(20), ComponentValue::I32(22)],
+        )
+        .await
+        .expect("compatible-name call should reach the host-export binding");
+    assert_eq!(result, vec![ComponentValue::I32(42)]);
+
+    // The reverse direction resolves too: export and registration at
+    // 0.2.6, call at 0.2.0.
+    let bytes = reexport_component("0.2.6");
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut linker = ComponentLinker::new();
+    linker.register_export("test:pkg/add@0.2.6", add_impl);
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(
+            &store,
+            "test:pkg/add@0.2.0",
+            &[ComponentValue::I32(20), ComponentValue::I32(22)],
+        )
+        .await
+        .expect("compatible-name call should reach the host-export binding");
+    assert_eq!(result, vec![ComponentValue::I32(42)]);
+}
+
+#[tokio::test]
+async fn component_runtime_host_export_wins_over_import_binding_for_compatible_name() {
+    // When a separate import binding also exists, a compatible-name call
+    // to a re-exported import must still invoke the host-export binding
+    // registered for the export, not the import binding (#271).
+    let bytes = reexport_component("0.2.0");
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let mut linker = ComponentLinker::new();
+    linker.register_export("test:pkg/add@0.2.0", add_impl);
+    linker.register_import("test:pkg/add@0.2.0", |_store, _args| {
+        Ok(vec![ComponentValue::I32(-1)])
+    });
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(
+            &store,
+            "test:pkg/add@0.2.6",
+            &[ComponentValue::I32(20), ComponentValue::I32(22)],
+        )
+        .await
+        .expect("compatible-name call should succeed");
+    assert_eq!(
+        result,
+        vec![ComponentValue::I32(42)],
+        "the host-export binding must win over the import binding"
+    );
+}
+
 #[tokio::test]
 async fn component_runtime_canon_lower_writes_indirect_results_into_caller_area() {
     let bytes = compile_component(
