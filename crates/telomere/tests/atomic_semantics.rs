@@ -51,6 +51,7 @@ async fn call_i32(
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
         VMResult::Cancelled => VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
     }
 }
 
@@ -81,6 +82,7 @@ async fn call_i64(
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
         VMResult::Cancelled => VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
     }
 }
 

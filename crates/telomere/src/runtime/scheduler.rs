@@ -33,6 +33,7 @@ fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
         VMResult::Cancelled => VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
     }
 }
 

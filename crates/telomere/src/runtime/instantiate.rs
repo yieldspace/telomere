@@ -1,6 +1,7 @@
 use crate::{
     common::{
         execute_elem_init_const_expr,
+        memory::MemoryInitError,
         store::{FunctionBody as RuntimeFunctionBody, StoreExecutionError},
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
@@ -729,6 +730,46 @@ pub async fn instantiate(
         let inst_addr = runtime.object_ref_for_instance(inst_id);
 
         let memory_ceiling = store.runtime_config().memory.max_memory_pages;
+        // Every limit check instantiation performs completes here,
+        // before any memory or table is created. Memories and tables
+        // are adopted by the store as they are created and never
+        // removed, so a refusal issued after creation would leave the
+        // earlier objects - and, for memories, their pages charged to
+        // the total budget - behind permanently even though no instance
+        // is ever returned.
+        if let Some(cap) = store.runtime_config().limits.max_table_elements {
+            for table_type in &m_tables {
+                if table_type.limits.min > cap {
+                    return VMResult::ResourceLimitExceeded;
+                }
+            }
+        }
+        let total_memory_cap = store.runtime_config().limits.max_total_memory_pages;
+        if total_memory_cap.is_some() {
+            // Claim the aggregate minimum of the module's defined
+            // memories from the total budget in a single atomic
+            // reservation, before creating any of them. Imported
+            // memories are not summed here: they already live in the
+            // store and their pages are already charged, so charging
+            // them again would double-count. The reservation replaces a
+            // read-and-compare preflight on purpose: a shared memory
+            // can grow through a handle that never takes the store's
+            // runtime lock, so a total read here could be overtaken by
+            // a racing growth claim before the memories below register
+            // their pages, overshooting the ceiling. Claiming first
+            // makes the check and the charge one operation; the
+            // creation loop then pays each memory out of the
+            // reservation, and the loop's failure exit releases any
+            // unspent remainder.
+            let defined_minimum_total: u64 = mems
+                .iter()
+                .skip(memories.len())
+                .map(|mem| u64::from(mem.limits.min))
+                .sum();
+            if !runtime.reserve_total_pages(defined_minimum_total) {
+                return VMResult::ResourceLimitExceeded;
+            }
+        }
         for mem in mems.iter().skip(memories.len()) {
             let limits = mem.limits;
             let effective_max = limits.max.unwrap_or(memory_ceiling).min(memory_ceiling);
@@ -737,11 +778,24 @@ pub async fn instantiate(
             } else {
                 runtime.new_memory(limits.min, effective_max)
             };
-            memories.push(vm_try!(match memory {
-                Ok(memory) => VMResult::Success(memory),
-                Err(_) => VMResult::MemoryAllocationFailed,
-            }));
+            match memory {
+                Ok(memory) => memories.push(memory),
+                Err(error) => {
+                    // Memories already adopted keep their pages - they
+                    // stay in the store - but the unspent reservation
+                    // for the memories that will now never be created
+                    // must not leak.
+                    runtime.release_reserved_pages();
+                    return match error {
+                        MemoryInitError::TotalBudgetExceeded => VMResult::ResourceLimitExceeded,
+                        _ => VMResult::MemoryAllocationFailed,
+                    };
+                }
+            }
         }
+        // The reservation covered exactly the defined memories' minima
+        // and each adoption paid its own minimum out of it.
+        debug_assert_eq!(runtime.reserved_total_pages(), 0);
 
         for (idx, d) in (0..).zip(data.0) {
             match &d.mode {
@@ -851,8 +905,21 @@ pub async fn instantiate(
         for init in &global_init {
             globals.push(vm_try!(init_global(&mut runtime, init, &globals, &funcs)));
         }
-        let mut table_instances: Vec<ObjectRef> =
-            m_tables.iter().map(|v| runtime.new_table(*v)).collect();
+        let table_cap = store.runtime_config().limits.max_table_elements;
+        let mut table_instances: Vec<ObjectRef> = Vec::with_capacity(m_tables.len());
+        for table_type in m_tables.iter() {
+            let mut table_type = *table_type;
+            if let Some(cap) = table_cap {
+                // The preflight above has already refused every table
+                // whose minimum exceeds the cap, so only the clamp
+                // remains: clamping the stored maximum makes
+                // `table.grow` enforce the ceiling through the existing
+                // declared-max path.
+                debug_assert!(table_type.limits.min <= cap);
+                table_type.limits.max = Some(table_type.limits.max.unwrap_or(cap).min(cap));
+            }
+            table_instances.push(runtime.new_table(table_type));
+        }
         tables.append(&mut table_instances);
 
         let res = (|| {
@@ -944,7 +1011,7 @@ pub async fn instantiate(
         let addr = InstanceHandle::new(store, inst_id, instance_id);
 
         let has_start = if let Some(start) = start {
-            let mut stack = Stack::new(128 * 1024);
+            let mut stack = Stack::new(store.runtime_config().limits.value_stack_bytes as usize);
             let funcaddr = vm_try!(VMResult::from_option(
                 instance.funcs.get(start.0 as usize),
                 || {

@@ -134,6 +134,8 @@ pub use common::InstanceHandle;
 pub use common::InterruptReason;
 /// Configures the optional lazy baseline JIT for a [`Store`].
 pub use common::JitConfig;
+/// Embedder-configured resource limits for a [`Store`].
+pub use common::LimitsConfig;
 /// Guest memory accessible to host functions and embedders.
 pub use common::Memory;
 /// Sets resource limits for memories created by a [`Store`].

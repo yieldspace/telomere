@@ -79,7 +79,7 @@ impl JitNativeExit {
 }
 
 /// Bit layout of a TRAP exit's `value` (#209): the low 8 bits carry the
-/// `vm_result_code` (codes fit easily; the largest is 16) and the
+/// `vm_result_code` (codes fit easily; the largest is 17) and the
 /// remaining high bits carry a 1-based trap-site id into the trapping
 /// function's trap-site table. Site 0 means "no site": exits raised by
 /// Rust stubs keep the historic bare-code encoding, so a site-less trap
@@ -118,6 +118,7 @@ pub(crate) fn vm_result_code<T>(result: VMResult<T>) -> u64 {
         VMResult::DivideByZero => 14,
         VMResult::IntegerOverflow => 15,
         VMResult::InvalidConversion => 16,
+        VMResult::ResourceLimitExceeded => 17,
     }
 }
 
@@ -143,6 +144,7 @@ pub(crate) fn vm_result_from_code(code: u64) -> VMResult<()> {
         14 => VMResult::DivideByZero,
         15 => VMResult::IntegerOverflow,
         16 => VMResult::InvalidConversion,
+        17 => VMResult::ResourceLimitExceeded,
         _ => VMResult::InvalidOperand,
     }
 }
@@ -191,6 +193,15 @@ mod tests {
         assert!(matches!(
             vm_result_from_code(16),
             VMResult::InvalidConversion
+        ));
+    }
+
+    #[test]
+    fn resource_limit_exceeded_round_trips_through_jit_trap_code() {
+        assert_eq!(vm_result_code(VMResult::<()>::ResourceLimitExceeded), 17);
+        assert!(matches!(
+            vm_result_from_code(17),
+            VMResult::ResourceLimitExceeded
         ));
     }
 }

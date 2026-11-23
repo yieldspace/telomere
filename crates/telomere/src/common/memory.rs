@@ -1,4 +1,12 @@
-use std::{fmt, ptr::NonNull, slice::SliceIndex, sync::Arc};
+use std::{
+    fmt,
+    ptr::NonNull,
+    slice::SliceIndex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -6,7 +14,7 @@ use std::cell::Cell;
 #[cfg(feature = "threads")]
 use std::{
     collections::{HashMap, VecDeque},
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::AtomicU8,
     time::{Duration, Instant},
 };
 
@@ -473,6 +481,12 @@ pub(crate) enum MemoryInitError {
         committed_bytes: usize,
         reserved_bytes: usize,
     },
+    /// The store-wide total page budget (`LimitsConfig::
+    /// max_total_memory_pages`) has no room for this memory's initial
+    /// pages. Kept distinct from the mapping failures so instantiation
+    /// can surface it as `VMResult::ResourceLimitExceeded` rather than
+    /// `VMResult::MemoryAllocationFailed`.
+    TotalBudgetExceeded,
 }
 
 impl fmt::Display for MemoryInitError {
@@ -507,6 +521,10 @@ impl fmt::Display for MemoryInitError {
             } => write!(
                 f,
                 "invalid memory commit length {requested_bytes}; committed={committed_bytes}, reserved={reserved_bytes}"
+            ),
+            Self::TotalBudgetExceeded => write!(
+                f,
+                "the store-wide total memory page budget has no room for this memory"
             ),
         }
     }
@@ -708,10 +726,78 @@ fn ensure_atomic_alignment(offset: usize, alignment: usize) -> VMResult<()> {
     }
 }
 
+/// Store-wide page budget shared by every linear memory one store
+/// creates when `LimitsConfig::max_total_memory_pages` is configured.
+///
+/// The budget is enforced in the growth path itself (`Memory::grow`)
+/// rather than in the store's grow dispatch, so growth driven by host
+/// callbacks through a public `Memory` handle — which never passes
+/// through the store dispatch — is charged against the same ceiling as
+/// guest `memory.grow` instructions. The running total is exact, and
+/// every charge is an atomic claim in which the check and the charge
+/// are a single compare-exchange: a growth claims its delta before
+/// committing and releases the claim when the commit fails, and the
+/// store claims a memory's initial pages when it adopts the memory.
+/// Instantiation goes further and claims the aggregate minimum of the
+/// module's defined memories in one claim before creating any of them
+/// (the store's reservation, see `StoreInner::reserve_total_pages`), so
+/// growth racing instantiation through a lock-free shared handle —
+/// which never takes the store's runtime lock — cannot slip between a
+/// separate check and the charge and push the total past the ceiling.
+/// Memories are never removed from a store or shrunk, so the total
+/// otherwise never decreases.
+#[derive(Debug)]
+pub(crate) struct TotalMemoryBudget {
+    cap_pages: u64,
+    total_pages: AtomicU64,
+}
+
+impl TotalMemoryBudget {
+    pub(crate) fn new(cap_pages: u64) -> Self {
+        Self {
+            cap_pages,
+            total_pages: AtomicU64::new(0),
+        }
+    }
+
+    /// Claims `delta` pages against the ceiling: a growth about to
+    /// commit, a memory's initial pages at adoption, or an
+    /// instantiation's aggregate reservation. Returns `false` without
+    /// claiming when the claim would exceed the ceiling.
+    pub(crate) fn try_claim(&self, delta: u64) -> bool {
+        let mut current = self.total_pages.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = current.checked_add(delta) else {
+                return false;
+            };
+            if next > self.cap_pages {
+                return false;
+            }
+            match self.total_pages.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Releases a claim whose charge did not take effect: a growth
+    /// whose commit failed, or the unspent remainder of an
+    /// instantiation reservation.
+    pub(crate) fn release(&self, delta: u64) {
+        self.total_pages.fetch_sub(delta, Ordering::Relaxed);
+    }
+}
+
 pub struct Memory {
     region: MmapRegion,
     current_pages: u32,
     max_pages: u32,
+    total_budget: Option<Arc<TotalMemoryBudget>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -757,6 +843,17 @@ impl Memory {
         Self::new_with_mapping(page_count, max_page_size, true)
     }
 
+    /// Links this memory to the store-wide page budget so its growth
+    /// is charged against the store ceiling. The store claims the
+    /// memory's initial pages itself when it adopts the memory (see
+    /// `StoreInner::alloc_local_memory`); this only records the budget
+    /// for the growth path. A memory belongs to one store for its whole
+    /// life, so this runs exactly once per memory.
+    pub(crate) fn attach_total_budget(&mut self, budget: Arc<TotalMemoryBudget>) {
+        debug_assert!(self.total_budget.is_none());
+        self.total_budget = Some(budget);
+    }
+
     fn new_with_mapping(
         page_count: u32,
         max_page_size: u32,
@@ -778,6 +875,7 @@ impl Memory {
             region,
             current_pages: page_count,
             max_pages: max_page_size,
+            total_budget: None,
         })
     }
 
@@ -1247,7 +1345,19 @@ impl Memory {
         if new_committed_bytes > self.region.reserved_bytes() {
             return VMResult::Success(-1);
         }
+        // Charge the store-wide total (when one is configured) before
+        // committing, so growth through any handle — a guest instruction
+        // dispatched by the store, or a host callback holding a public
+        // `Memory` handle — honours the same ceiling.
+        if let Some(budget) = &self.total_budget {
+            if !budget.try_claim(u64::from(page_size_delta)) {
+                return VMResult::Success(-1);
+            }
+        }
         if self.region.commit(new_committed_bytes).is_err() {
+            if let Some(budget) = &self.total_budget {
+                budget.release(u64::from(page_size_delta));
+            }
             return VMResult::Success(-1);
         }
         self.current_pages = new_page_size;
@@ -1295,6 +1405,10 @@ impl LocalMemoryObject {
         Ok(Self {
             memory: Memory::new(page_count, max_page_size)?,
         })
+    }
+
+    pub(crate) fn attach_total_budget(&mut self, budget: Arc<TotalMemoryBudget>) {
+        self.memory.attach_total_budget(budget);
     }
 
     pub fn memory(&self) -> &Memory {
@@ -1539,6 +1653,10 @@ impl SharedMemoryObject {
                 next_waiter_id: 1,
             }),
         }))
+    }
+
+    pub(crate) fn attach_total_budget(&self, budget: Arc<TotalMemoryBudget>) {
+        self.state.lock().memory.attach_total_budget(budget);
     }
 
     pub fn page_size(&self) -> u32 {
@@ -1874,6 +1992,53 @@ mod tests {
         assert!(memory.slice()[PAGE_SIZE..PAGE_SIZE + 16]
             .iter()
             .all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn total_budget_claims_never_exceed_the_cap() {
+        // The interleaving behind the #126 review finding on PR #289:
+        // instantiation claims the aggregate minimum, a shared memory
+        // grows through a handle that never takes the store lock, and
+        // another claim arrives for the same last page. Because the
+        // check and the charge are a single compare-exchange, exactly
+        // one of them wins and the total never passes the cap. (Before
+        // the fix, initial pages were registered with an unconditional
+        // fetch_add after a separate preflight, and this sequence drove
+        // the total to 3 against a cap of 2.)
+        let budget = TotalMemoryBudget::new(2);
+        assert!(budget.try_claim(1)); // the existing one-page shared memory registers
+        assert!(budget.try_claim(1)); // concurrent shared growth claims the last page
+        assert!(!budget.try_claim(1)); // no room for another initial page
+        assert_eq!(budget.total_pages.load(Ordering::Relaxed), 2);
+        budget.release(1); // the growth's commit fails and releases
+        assert!(budget.try_claim(1)); // now the claim fits again
+        assert_eq!(budget.total_pages.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn total_budget_claims_under_contention_stop_exactly_at_the_cap() {
+        // 8 threads x 16 single-page claims race against a 64-page cap:
+        // exactly 64 claims may succeed, never more.
+        let budget = Arc::new(TotalMemoryBudget::new(64));
+        let claimed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let budget = Arc::clone(&budget);
+                let claimed = Arc::clone(&claimed);
+                std::thread::spawn(move || {
+                    for _ in 0..16 {
+                        if budget.try_claim(1) {
+                            claimed.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(claimed.load(Ordering::Relaxed), 64);
+        assert_eq!(budget.total_pages.load(Ordering::Relaxed), 64);
     }
 
     #[test]

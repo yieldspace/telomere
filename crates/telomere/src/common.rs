@@ -43,8 +43,8 @@ mod object_ref;
 pub(crate) mod store;
 pub use object_ref::ObjectRef;
 pub use store::{
-    DiagnosticsConfig, InstanceHandle, JitConfig, MemoryConfig, MemoryHandle, RuntimeConfig, Store,
-    StoreState,
+    DiagnosticsConfig, InstanceHandle, JitConfig, LimitsConfig, MemoryConfig, MemoryHandle,
+    RuntimeConfig, Store, StoreState,
 };
 pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
 use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};

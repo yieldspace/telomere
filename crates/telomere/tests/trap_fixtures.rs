@@ -569,10 +569,7 @@ fn jit_store() -> Store {
     #[cfg(feature = "jit")]
     {
         let mut config = RuntimeConfig::default();
-        config.jit = JitConfig {
-            enabled: true,
-            ..JitConfig::default()
-        };
+        config.jit = JitConfig { enabled: true };
         Store::new_with_runtime_config(config)
     }
     #[cfg(not(feature = "jit"))]
@@ -619,10 +616,7 @@ async fn run_host_reentry(wat: &str, jit: bool) -> Option<TrapInfo> {
         #[cfg(feature = "jit")]
         {
             let mut config = RuntimeConfig::default();
-            config.jit = JitConfig {
-                enabled: true,
-                ..JitConfig::default()
-            };
+            config.jit = JitConfig { enabled: true };
             Store::new_with_state_and_runtime_config(StoreState::from_static(state), config)
         }
         #[cfg(not(feature = "jit"))]

@@ -95,6 +95,7 @@ pub(crate) unsafe fn enter_current_frame(ctx: &mut ExecuteContext<'_>) -> VMResu
         VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
         VMResult::FuelExhausted => return VMResult::FuelExhausted,
         VMResult::Cancelled => return VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => return VMResult::ResourceLimitExceeded,
     };
     unsafe { handle_exit(exit, code_base, ctx) }
 }
@@ -138,6 +139,7 @@ pub(crate) unsafe fn enter_current_frame_from_lazy_call(
         VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
         VMResult::FuelExhausted => return VMResult::FuelExhausted,
         VMResult::Cancelled => return VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => return VMResult::ResourceLimitExceeded,
     };
     if exit.kind == JitNativeExit::CONTINUE_PTR && exit.value == continuation as u64 {
         return unsafe { vm::call_code(continuation, ctx) };
@@ -307,7 +309,7 @@ fn load_or_compile(
     funcaddr: crate::common::ObjectRef,
     body: &FunctionBody,
 ) -> VMResult<std::sync::Arc<CompiledFunction>> {
-    let max_bytes = store.runtime_config().jit.code_cache_max_bytes;
+    let max_bytes = store.runtime_config().limits.max_code_cache_bytes;
     // #171: metering is fixed at store creation and this cache is
     // private to the store, so whether the store is metered can be
     // baked into the emitted code.

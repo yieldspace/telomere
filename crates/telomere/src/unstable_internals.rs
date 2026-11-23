@@ -332,5 +332,6 @@ fn map_vm_result<T, U>(result: crate::VMResult<T>, map: impl FnOnce(T) -> U) -> 
         crate::VMResult::Unimplemented => crate::VMResult::Unimplemented,
         crate::VMResult::FuelExhausted => crate::VMResult::FuelExhausted,
         crate::VMResult::Cancelled => crate::VMResult::Cancelled,
+        crate::VMResult::ResourceLimitExceeded => crate::VMResult::ResourceLimitExceeded,
     }
 }

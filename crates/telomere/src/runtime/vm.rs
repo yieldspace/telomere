@@ -2157,7 +2157,7 @@ async fn run_module_function_with_driver_named<D: ExecutionDriver>(
                     .copied()
                     .and_then(|slot| slot.handle()),
             );
-            let mut stack = Stack::new(128 * 1024);
+            let mut stack = Stack::new(store.runtime_config().limits.value_stack_bytes as usize);
             let tidx = match module_inst.functions.get(idx.0 as usize) {
                 Some(tidx) => *tidx,
                 None => return Ok(VMResult::Unlinkable),
@@ -2260,7 +2260,7 @@ pub(crate) fn run_module_function_sync_with_runtime(
                     .copied()
                     .and_then(|slot| slot.handle()),
             );
-            let mut stack = Stack::new(128 * 1024);
+            let mut stack = Stack::new(store.runtime_config().limits.value_stack_bytes as usize);
             let tidx = match module_inst.functions.get(idx.0 as usize) {
                 Some(tidx) => *tidx,
                 None => return Ok(VMResult::Unlinkable),
@@ -2338,6 +2338,7 @@ pub(crate) fn run_module_function_sync_with_runtime(
         VMResult::Unimplemented => Ok(VMResult::Unimplemented),
         VMResult::FuelExhausted => Ok(VMResult::FuelExhausted),
         VMResult::Cancelled => Ok(VMResult::Cancelled),
+        VMResult::ResourceLimitExceeded => Ok(VMResult::ResourceLimitExceeded),
     }
 }
 
@@ -2360,6 +2361,7 @@ fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultVal
         VMResult::Unimplemented => VMResult::Unimplemented,
         VMResult::FuelExhausted => VMResult::FuelExhausted,
         VMResult::Cancelled => VMResult::Cancelled,
+        VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
     }
 }
 

@@ -110,10 +110,7 @@ fn make_store() -> Result<Store, String> {
             );
         }
         let mut runtime_config = RuntimeConfig::default();
-        runtime_config.jit = JitConfig {
-            enabled: true,
-            ..JitConfig::default()
-        };
+        runtime_config.jit = JitConfig { enabled: true };
         Ok(Store::new_with_runtime_config(runtime_config))
     }
 

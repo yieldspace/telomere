@@ -44,10 +44,7 @@ fn parse_module(wat: &str) -> telomere::Module {
 ))]
 fn jit_store() -> Store {
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     Store::new_with_runtime_config(runtime_config)
 }
 
@@ -367,10 +364,8 @@ mod compile_reject_events {
                 // A zero-byte code-cache cap rejects every compilation
                 // attempt with reason "max_zero".
                 let mut runtime_config = RuntimeConfig::default();
-                runtime_config.jit = JitConfig {
-                    enabled: true,
-                    code_cache_max_bytes: 0,
-                };
+                runtime_config.jit = JitConfig { enabled: true };
+                runtime_config.limits.max_code_cache_bytes = 0;
                 let store = Store::new_with_runtime_config(runtime_config);
                 let registry = Registry::new();
                 let instance = instantiate_jit_wat(

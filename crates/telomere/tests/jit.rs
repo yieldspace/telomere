@@ -32,14 +32,11 @@ fn runtime_config_defaults_to_jit_off() {
     assert!(!Store::new().runtime_config().jit.enabled);
 
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     let store = Store::new_with_runtime_config(runtime_config);
     assert!(store.runtime_config().jit.enabled);
     assert_eq!(
-        store.runtime_config().jit.code_cache_max_bytes,
+        store.runtime_config().limits.max_code_cache_bytes,
         4 * 1024 * 1024
     );
 }
@@ -74,10 +71,7 @@ fn jit_supported_matches_target_matrix() {
 ))]
 fn jit_store() -> Store {
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        ..JitConfig::default()
-    };
+    runtime_config.jit = JitConfig { enabled: true };
     Store::new_with_runtime_config(runtime_config)
 }
 
@@ -274,6 +268,7 @@ impl<T> VmResultMap<T> for VMResult<T> {
             VMResult::Unimplemented => VMResult::Unimplemented,
             VMResult::FuelExhausted => VMResult::FuelExhausted,
             VMResult::Cancelled => VMResult::Cancelled,
+            VMResult::ResourceLimitExceeded => VMResult::ResourceLimitExceeded,
         }
     }
 }
@@ -2758,10 +2753,8 @@ async fn jit_falls_back_when_function_exceeds_code_cache_limit() {
         "#,
     );
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig {
-        enabled: true,
-        code_cache_max_bytes: 1,
-    };
+    runtime_config.jit = JitConfig { enabled: true };
+    runtime_config.limits.max_code_cache_bytes = 1;
     let store = Store::new_with_runtime_config(runtime_config);
     let registry = Registry::new();
     let instance = match telomere::instantiate(module, &store, &registry).await {

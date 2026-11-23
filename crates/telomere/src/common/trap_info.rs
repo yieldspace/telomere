@@ -167,6 +167,8 @@ pub enum TrapKind {
     FuelExhausted,
     /// A watchdog requested Store execution cancellation at a metering checkpoint.
     Cancelled,
+    /// Instantiation would have exceeded an embedder-configured resource limit.
+    ResourceLimitExceeded,
 }
 
 impl TrapKind {
@@ -189,6 +191,7 @@ impl TrapKind {
             Self::Unimplemented => "unimplemented",
             Self::FuelExhausted => "fuel exhausted",
             Self::Cancelled => "cancelled",
+            Self::ResourceLimitExceeded => "resource limit exceeded",
         }
     }
 
@@ -211,6 +214,7 @@ impl TrapKind {
             VMResult::Unimplemented => Some(Self::Unimplemented),
             VMResult::FuelExhausted => Some(Self::FuelExhausted),
             VMResult::Cancelled => Some(Self::Cancelled),
+            VMResult::ResourceLimitExceeded => Some(Self::ResourceLimitExceeded),
         }
     }
 }

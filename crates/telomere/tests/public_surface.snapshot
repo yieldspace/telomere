@@ -18,6 +18,7 @@ telomere::InterruptReason | always
 telomere::IoReadBinaryReader | always
 telomere::JitCacheStats | cfg(feature = "aot-load")
 telomere::JitConfig | always
+telomere::LimitsConfig | always
 telomere::MAX_CONTROL_NESTING_DEPTH | always
 telomere::Memory | always
 telomere::MemoryConfig | always
