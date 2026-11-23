@@ -597,6 +597,7 @@ unsafe fn store_internal_indexed_local_base(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this fused memory handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_store_local_base_local_get4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -633,6 +634,7 @@ pub unsafe fn op_i32_store_local_base_local_get4(
 /// - `tail_code` must point to operands decoded for this fused memory handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next`.
+#[inline(never)]
 pub unsafe fn op_i32_load_store_local_base_local_get4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -683,6 +685,7 @@ pub unsafe fn op_i32_load_store_local_base_local_get4(
 /// - `tail_code` must point to operands decoded for this copy-run fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The handler preserves per-lane load-before-store order and must not keep memory guards across `call_next`.
+#[inline(never)]
 pub unsafe fn op_scalar_copy_local_base_run(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -730,6 +733,7 @@ pub unsafe fn op_scalar_copy_local_base_run(
 /// - `tail_code` must point to operands decoded for this fused memory/compare/branch handler.
 /// - `ctx` must hold a valid frame, local base, default memory, and branch target for the active module.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next`.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_local_get4_i32_load_tee4_cmp_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -788,6 +792,7 @@ pub unsafe fn op_i32_load_local_base_local_get4_i32_load_tee4_cmp_br_if(
 /// - `tail_code` must point to operands decoded for this pointer-relink loop fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The handler preserves local writes and load/store trap order for each iteration.
+#[inline(never)]
 pub unsafe fn op_i32_load_store_local_base_relink_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -827,6 +832,7 @@ pub unsafe fn op_i32_load_store_local_base_relink_loop(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this loop fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_store_local_base_reverse_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -872,6 +878,7 @@ pub unsafe fn op_i32_load_store_local_base_reverse_loop(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this bounded dot-product loop fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load16_s_dot4_local_base_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -979,6 +986,7 @@ pub unsafe fn op_i32_load16_s_dot4_local_base_loop(
 /// - `tail_code` must point to operands decoded for this counted dot-product loop fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The fused instruction may branch only to a validated continuation in the current function body.
+#[inline(never)]
 pub unsafe fn op_i32_load16_s_mul_add_local_base_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1031,6 +1039,7 @@ pub unsafe fn op_i32_load16_s_mul_add_local_base_loop(
 /// - `tail_code` must point to operands decoded for this mixed-delta counted loop fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The fused instruction may branch only to a validated continuation in the current function body.
+#[inline(never)]
 pub unsafe fn op_i32_load16_s_mul_add_local_base_delta_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1121,6 +1130,7 @@ pub unsafe fn op_i32_load16_s_mul_add_local_base_delta_loop(
 /// - `tail_code` must point to operands decoded for this unsigned bitmix loop fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The original loop must branch back to itself with the same validated stack shape.
+#[inline(never)]
 pub unsafe fn op_i32_load16_u_bitmix_acc_local_base_delta_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1218,6 +1228,7 @@ pub unsafe fn op_i32_load16_u_bitmix_acc_local_base_delta_loop(
 /// - `tail_code` must point to operands decoded for this counted local-base scan loop fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The handler preserves per-iteration load trap order and local write order.
+#[inline(never)]
 pub unsafe fn op_i32_sum_clip_local_base_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1291,6 +1302,7 @@ pub unsafe fn op_i32_sum_clip_local_base_loop(
 /// - `tail_code` must point to operands decoded for this counted narrow update loop.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The original loop must branch back to itself with the same validated stack shape.
+#[inline(never)]
 pub unsafe fn op_i32_load16_u_update_store16_local_base_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1352,6 +1364,7 @@ pub unsafe fn op_i32_load16_u_update_store16_local_base_loop(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this local-base increment handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_inc_local_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1406,6 +1419,7 @@ unsafe fn i32_inc_local_base_at(
 /// - `tail_code` must point to operands decoded for this local-get plus local-base increment handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The handler preserves the `local.get` push before the increment load/store trap order.
+#[inline(never)]
 pub unsafe fn op_local_get4_i32_inc_local_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1441,6 +1455,7 @@ pub unsafe fn op_local_get4_i32_inc_local_base(
 /// - `tail_code` must point to operands decoded for this local-get, increment, and load-set handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The handler preserves the original local push, increment load/store, then load8/set order.
+#[inline(never)]
 pub unsafe fn op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1489,6 +1504,7 @@ pub unsafe fn op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4(
 /// - `tail_code` must point to operands decoded for this fused local-get and load/set handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The handler preserves the local push before the memory load trap point.
+#[inline(never)]
 pub unsafe fn op_local_get4_i32_load8_u_local_base_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1522,6 +1538,7 @@ pub unsafe fn op_local_get4_i32_load8_u_local_base_set4(
 /// - `tail_code` must point to operands decoded for this fused load/set and local-get handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The handler preserves the memory load and local write before the following local read.
+#[inline(never)]
 pub unsafe fn op_i32_load8_u_local_base_set4_local_get4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1612,6 +1629,7 @@ unsafe fn i32_load8_u_update_br_if_ptr_at(
 /// # Safety
 /// - `tail_code` must point to `instr_ref` local, counter-base local, and function-return target.
 /// - The active frame must match the validated lowered shape selected by the optimizer.
+#[inline(never)]
 pub unsafe fn op_i32_numeric_token_state_transition(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1969,6 +1987,7 @@ pub(crate) unsafe fn core_state_benchmark_crc(
 /// # Safety
 /// - `tail_code` must point to six i32 local operands and a function-return target.
 /// - The instantiator must only select this for the validated state-token benchmark shape.
+#[inline(never)]
 pub unsafe fn op_i32_core_state_benchmark(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2661,6 +2680,7 @@ pub(crate) unsafe fn list_crc_summary_value(
 /// # Safety
 /// - `tail_code` must point to a frame-base local, result/iteration/CRC offsets, and a jump target.
 /// - The active frame and memory offsets must match the validated loop shape.
+#[inline(never)]
 pub unsafe fn op_i32_list_crc_pair_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2707,6 +2727,7 @@ pub unsafe fn op_i32_list_crc_pair_loop(
 /// # Safety
 /// - `tail_code` must point to two i32 local operands and a function-return target.
 /// - The active frame must match the validated linked-list benchmark shape.
+#[inline(never)]
 pub unsafe fn op_i32_list_crc_summary(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2734,6 +2755,7 @@ pub unsafe fn op_i32_list_crc_summary(
 /// # Safety
 /// - `tail_code` must point to five i32 local operands and a function-return target.
 /// - The active frame must match the validated lowered loop-nest shape.
+#[inline(never)]
 pub unsafe fn op_i32_matrix_i16_crc_summary(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2858,6 +2880,7 @@ unsafe fn guarded_load8_u_update_branch_cond(
 /// - `tail_code` must point to operands decoded for this load/set/update/branch handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The branch target operand must be a valid target in the active function body.
+#[inline(never)]
 pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2894,6 +2917,7 @@ pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
 /// - `tail_code` must point to operands decoded for this guarded cursor handler.
 /// - The guard comparison must be an integer i32 local/constant comparison.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2918,6 +2942,7 @@ pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_
 /// - `tail_code` must point to operands decoded for the guarded cursor handler followed by
 ///   a materialized `local.get4; br_table` operand group for the taken target.
 /// - The branch targets must be valid for the current active function body.
+#[inline(never)]
 pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4_br_table(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2946,6 +2971,7 @@ pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_
 /// - `tail_code` must point to operands decoded for the guarded cursor handler followed by
 ///   a materialized `local.get4; br_table` operand group for the guard-false target.
 /// - The branch targets must be valid for the current active function body.
+#[inline(never)]
 pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_false_local_get4_br_table(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -2978,6 +3004,7 @@ pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_
 ///   a materialized `local.get4; i32.const; compare; br_if`, an unconditional `br` target,
 ///   and a materialized `local.get4; br_table` operand group for the untaken compare path.
 /// - All encoded branch targets must be valid for the current active function body.
+#[inline(never)]
 pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_const_compare_br_table(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3017,6 +3044,7 @@ pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_
 /// - `tail_code` must point to operands decoded for this load/set/update/branch/taken-local handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The encoded branch target must begin with the encoded `local.get4`, so the taken path may skip that target instruction after pushing its value.
+#[inline(never)]
 pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3065,6 +3093,7 @@ pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_ta
 /// - `tail_code` must point to operands decoded for this load/set/update/branch/fallthrough-local handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The encoded fallthrough instruction must be the encoded `local.get4`, so the false path may skip it after pushing its value.
+#[inline(never)]
 pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_fallthrough_local_get4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3114,6 +3143,7 @@ pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_fa
 /// - `tail_code` must point to operands decoded for this increment plus load/set/update/branch handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
 /// - The handler preserves increment load/store before the byte load and branch.
+#[inline(never)]
 pub unsafe fn op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3163,6 +3193,7 @@ pub unsafe fn op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_
 /// # Safety
 /// - `tail_code` must point to operands decoded for this encoded tail fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_local_get4_i32_const_add_set4_i32_load8_u_local_base_tee4_i32_eqz_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3211,6 +3242,7 @@ pub unsafe fn op_local_get4_i32_const_add_set4_i32_load8_u_local_base_tee4_i32_e
 /// # Safety
 /// - `tail_code` must point to operands decoded for this encoded tail fusion.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_tee4_i32_load8_u_tee4_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3245,6 +3277,7 @@ pub unsafe fn op_i32_load_local_base_tee4_i32_load8_u_tee4_br_if(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this narrow local-base store handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_store8_local_base_local_get4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3272,6 +3305,7 @@ pub unsafe fn op_i32_store8_local_base_local_get4(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this narrow local-base store handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_store16_local_base_local_get4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3445,7 +3479,17 @@ macro_rules! define_indexed_push_load {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
+        #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
                 ctx.local_memory_id_at_unchecked(memidx),
@@ -3470,7 +3514,17 @@ macro_rules! define_indexed_push_load {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
+        #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
                 ctx.shared_memory_id_at_unchecked(memidx),
@@ -3499,7 +3553,17 @@ macro_rules! define_indexed_scalar_load {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
+        #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -3523,7 +3587,17 @@ macro_rules! define_indexed_scalar_load {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
+        #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -3551,7 +3625,17 @@ macro_rules! define_indexed_store_alias {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
+        #[inline(never)]
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             store_internal_local_indexed(tail_code, ctx, stringify!($local), $make_operation)
         }
 
@@ -3570,7 +3654,17 @@ macro_rules! define_indexed_store_alias {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
+        #[inline(never)]
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             store_internal_shared_indexed(tail_code, ctx, stringify!($shared), $make_operation)
         }
     };
@@ -3580,7 +3674,17 @@ macro_rules! define_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
             vm_try!(default_local_push_to_stack::<$bytes>(ctx, start));
@@ -3593,7 +3697,17 @@ macro_rules! define_indexed_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
             vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
@@ -3610,7 +3724,17 @@ macro_rules! define_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
             let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.$reader(start));
@@ -3624,7 +3748,17 @@ macro_rules! define_indexed_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
             let value = vm_try!(ctx.gc.$reader(ctx.local_memory_id_at_unchecked(memidx), start));
@@ -3637,7 +3771,17 @@ macro_rules! define_indexed_local_base_scalar_load {
 macro_rules! define_local_base_store_alias {
     ($name:ident, $make_operation:expr) => {
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             store_internal_local_base(tail_code, ctx, stringify!($name), $make_operation)
         }
@@ -3647,7 +3791,17 @@ macro_rules! define_local_base_store_alias {
 macro_rules! define_indexed_local_base_store_alias {
     ($name:ident, $make_operation:expr) => {
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             store_internal_indexed_local_base(tail_code, ctx, stringify!($name), $make_operation)
         }
@@ -3658,6 +3812,7 @@ macro_rules! define_local_get4_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `local.get; ", $mnemonic, "` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let preserved_local = (*tail_code).operand.local_addr as usize;
@@ -3684,6 +3839,7 @@ macro_rules! define_local_base_i32_load_set4 {
     ($set_name:ident, $tee_name:ident, $mnemonic:literal, $reader:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.set` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $set_name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($set_name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
@@ -3696,6 +3852,7 @@ macro_rules! define_local_base_i32_load_set4 {
 
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.tee` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $tee_name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($tee_name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
@@ -3713,6 +3870,7 @@ macro_rules! define_local_base_i32_load_local_get4 {
     ($root_name:ident, $tee_name:ident, $mnemonic:literal, $reader:ident, $convert:path, $push:ident) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.get` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $root_name(
             tail_code: *const Instr,
             ctx: &mut ExecuteContext,
@@ -3731,6 +3889,7 @@ macro_rules! define_local_base_i32_load_local_get4 {
 
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.tee; local.get` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $tee_name(
             tail_code: *const Instr,
             ctx: &mut ExecuteContext,
@@ -3756,6 +3915,7 @@ macro_rules! define_i32_load_local_base_set4_i32_load_local_base_local_get4 {
     ($name:ident, $mnemonic:literal, $reader:ident, $convert:path, $push:ident) => {
         #[doc = concat!("WebAssembly `i32.load; local.set; ", $mnemonic, "; local.get` with local-base addresses on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let first_base_local = (*tail_code).operand.local_addr as usize;
@@ -3792,6 +3952,7 @@ macro_rules! define_i32_load_local_base_set4_i32_load_local_base_local_eq_br_if 
     ($name:ident, $mnemonic:literal, $reader:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `i32.load; local.set; ", $mnemonic, "; local.get; i32.eq; br_if` with local-base addresses on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let first_base_local = (*tail_code).operand.local_addr as usize;
@@ -3829,6 +3990,7 @@ macro_rules! define_i32_load_local_base_set4_i32_load_local_base_local_eq_br_if 
 /// # Safety
 /// - `tail_code` must point to operands decoded for this masked compare branch handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_compare_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3874,6 +4036,7 @@ pub unsafe fn op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_co
 /// # Safety
 /// - `tail_code` must point to operands decoded for this bounded search-loop handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_search_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3933,6 +4096,7 @@ pub unsafe fn op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_searc
 /// # Safety
 /// - `tail_code` must point to operands decoded for this bounded search-loop handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_search_loop_fallthrough(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -3990,6 +4154,7 @@ pub unsafe fn op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_searc
 /// # Safety
 /// - `tail_code` must point to operands decoded for this masked search-loop handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_search_loop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4055,6 +4220,7 @@ pub unsafe fn op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_se
 /// # Safety
 /// - `tail_code` must point to operands decoded for this masked search-loop handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_search_loop_fallthrough(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4116,6 +4282,7 @@ macro_rules! define_i32_load_local_base_set4_i32_load_local_base {
     ($name:ident, $mnemonic:literal, $reader:ident, $convert:path, $push:ident) => {
         #[doc = concat!("WebAssembly `i32.load; local.set; ", $mnemonic, "` with local-base addresses on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let first_base_local = (*tail_code).operand.local_addr as usize;
@@ -4159,6 +4326,7 @@ macro_rules! define_local_base_i32_load_local_get4_i32_load {
     ) => {
         #[doc = concat!("WebAssembly `", $first_mnemonic, "; local.get; ", $second_mnemonic, "` on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let first_base_local = (*tail_code).operand.local_addr as usize;
@@ -4206,6 +4374,7 @@ macro_rules! define_local_base_i32_load_local_get4_i32_load_local_get4 {
         /// - `ctx` must reference a live frame with validated local and memory operands.
         /// - This handler must not keep borrows across `call_next`.
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let first_base_local = (*tail_code).operand.local_addr as usize;
@@ -4257,6 +4426,7 @@ macro_rules! define_local_get4_local_base_i32_load_local_get4_i32_load {
         /// - `ctx` must reference a live frame with validated local and memory operands.
         /// - This handler must not keep borrows across `call_next`.
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let preserved_local = (*tail_code).operand.local_addr as usize;
@@ -4293,6 +4463,7 @@ macro_rules! define_i32_load_local_get4 {
     ($name:ident, $mnemonic:literal, $reader:ident, $convert:path, $push:ident) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.get` on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start(tail_code, ctx));
@@ -4314,7 +4485,17 @@ macro_rules! define_shared_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on shared default memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_base(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
@@ -4331,7 +4512,17 @@ macro_rules! define_indexed_shared_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed shared memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_shared_local_base(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
@@ -4348,7 +4539,17 @@ macro_rules! define_shared_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on shared default memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_base(tail_code, ctx));
             let value = vm_try!(ctx
@@ -4364,7 +4565,17 @@ macro_rules! define_indexed_shared_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed shared memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_shared_local_base(tail_code, ctx));
             let value = vm_try!(ctx.gc.$reader(ctx.shared_memory_id_at_unchecked(memidx), start));
@@ -4377,7 +4588,17 @@ macro_rules! define_indexed_shared_local_base_scalar_load {
 macro_rules! define_shared_local_base_store_alias {
     ($name:ident, $make_operation:expr) => {
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             store_internal_shared_local_base(tail_code, ctx, stringify!($name), $make_operation)
         }
@@ -4387,7 +4608,17 @@ macro_rules! define_shared_local_base_store_alias {
 macro_rules! define_indexed_shared_local_base_store_alias {
     ($name:ident, $make_operation:expr) => {
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             store_internal_indexed_shared_local_base(
                 tail_code,
@@ -4403,7 +4634,17 @@ macro_rules! define_local_scaled_index_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
             vm_try!(default_local_push_to_stack::<$bytes>(ctx, start));
@@ -4416,7 +4657,17 @@ macro_rules! define_indexed_local_scaled_index_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
             vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
@@ -4433,7 +4684,17 @@ macro_rules! define_shared_local_scaled_index_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on shared default memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
@@ -4450,7 +4711,17 @@ macro_rules! define_indexed_shared_local_scaled_index_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed shared memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let (start, memidx) =
                 vm_try!(load_start_indexed_shared_local_scaled_index(tail_code, ctx));
@@ -4468,7 +4739,17 @@ macro_rules! define_local_scaled_index_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
             let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.$reader(start));
@@ -4482,7 +4763,17 @@ macro_rules! define_indexed_local_scaled_index_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
             let value = vm_try!(ctx.gc.$reader(ctx.local_memory_id_at_unchecked(memidx), start));
@@ -4496,7 +4787,17 @@ macro_rules! define_shared_local_scaled_index_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on shared default memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
             let value = vm_try!(ctx
@@ -4512,7 +4813,17 @@ macro_rules! define_indexed_shared_local_scaled_index_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed shared memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let (start, memidx) =
                 vm_try!(load_start_indexed_shared_local_scaled_index(tail_code, ctx));
@@ -4526,7 +4837,17 @@ macro_rules! define_indexed_shared_local_scaled_index_scalar_load {
 macro_rules! define_local_scaled_index_store_alias {
     ($name:ident, $make_operation:expr) => {
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             store_internal_local_scaled_index(tail_code, ctx, stringify!($name), $make_operation)
         }
@@ -4536,7 +4857,17 @@ macro_rules! define_local_scaled_index_store_alias {
 macro_rules! define_indexed_local_scaled_index_store_alias {
     ($name:ident, $make_operation:expr) => {
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             store_internal_indexed_local_scaled_index(
                 tail_code,
@@ -4551,7 +4882,17 @@ macro_rules! define_indexed_local_scaled_index_store_alias {
 macro_rules! define_shared_local_scaled_index_store_alias {
     ($name:ident, $make_operation:expr) => {
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             store_internal_shared_local_scaled_index(
                 tail_code,
@@ -4566,7 +4907,17 @@ macro_rules! define_shared_local_scaled_index_store_alias {
 macro_rules! define_indexed_shared_local_scaled_index_store_alias {
     ($name:ident, $make_operation:expr) => {
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             store_internal_indexed_shared_local_scaled_index(
                 tail_code,
@@ -4593,6 +4944,7 @@ macro_rules! define_indexed_shared_local_scaled_index_store_alias {
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i32_load");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -4614,6 +4966,7 @@ pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to a decoded instruction whose folded `memarg` came from a validated const-base `i32.load`.
 /// - `ctx` must reference a live execution context with a valid default local memory.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_load_const_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4640,6 +4993,7 @@ pub unsafe fn op_i32_load_const_base(
 /// - `tail_code` must point to a decoded instruction whose folded `memarg` came from a validated const-base `i64.load`.
 /// - `ctx` must reference a live execution context with a valid default local memory.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_load_const_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4665,6 +5019,7 @@ pub unsafe fn op_i64_load_const_base(
 /// - `tail_code` must point to a decoded instruction whose folded `memarg` came from a validated const-base `f32.load`.
 /// - `ctx` must reference a live execution context with a valid default local memory.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_load_const_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4690,10 +5045,20 @@ pub unsafe fn op_f32_load_const_base(
 /// - `tail_code` must point to a decoded instruction whose folded `memarg` came from a validated const-base `f64.load`.
 /// - `ctx` must reference a live execution context with a valid default local memory.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_load_const_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_i64_load_const_base`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     profile_memory_family("op_f64_load_const_base");
     let memarg = (*tail_code).operand.memarg;
     let start = vm_try!(compute_memory_offset(memarg, 0));
@@ -4715,6 +5080,7 @@ pub unsafe fn op_f64_load_const_base(
 /// - `tail_code` must point to a decoded instruction whose operands came from a validated const-base `i32.store` pattern.
 /// - `ctx` must reference a live execution context with a valid default local memory and local area.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_store_const_base_local4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4745,6 +5111,7 @@ pub unsafe fn op_i32_store_const_base_local4(
 /// - `tail_code` must point to a decoded instruction whose operands came from a validated const-base `i64.store` pattern.
 /// - `ctx` must reference a live execution context with a valid default local memory and local area.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_store_const_base_local8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4773,6 +5140,7 @@ pub unsafe fn op_i64_store_const_base_local8(
 /// - `tail_code` must point to a decoded instruction whose operands came from a validated const-base `f32.store` pattern.
 /// - `ctx` must reference a live execution context with a valid default local memory and local area.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_store_const_base_local4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4803,6 +5171,7 @@ pub unsafe fn op_f32_store_const_base_local4(
 /// - `tail_code` must point to a decoded instruction whose operands came from a validated const-base `f64.store` pattern.
 /// - `ctx` must reference a live execution context with a valid default local memory and local area.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_store_const_base_local8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4831,6 +5200,7 @@ pub unsafe fn op_f64_store_const_base_local8(
 /// - `tail_code` must point to a decoded instruction whose operands came from a validated fused const-base pattern.
 /// - `ctx` must reference a live execution context with a valid default local memory and local area.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_load_const_base_local_get4_i32_add_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4856,6 +5226,7 @@ pub unsafe fn op_i32_load_const_base_local_get4_i32_add_set4(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this CRC lookup handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_local_get4_local_get4_i32_xor_tee4_u8_shl1_i32_load16_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4884,6 +5255,7 @@ pub unsafe fn op_local_get4_local_get4_i32_xor_tee4_u8_shl1_i32_load16_u(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this local-base load-add-set handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_local_get4_i32_load_local_base_i32_add_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4913,6 +5285,7 @@ pub unsafe fn op_local_get4_i32_load_local_base_i32_add_set4(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this local-base load-add-tee handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_local_get4_i32_load_local_base_i32_add_tee4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4943,6 +5316,7 @@ pub unsafe fn op_local_get4_i32_load_local_base_i32_add_tee4(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this local-base load branch handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_tee4_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4962,6 +5336,7 @@ pub unsafe fn op_i32_load_local_base_tee4_br_if(
 /// # Safety
 /// - `tail_code` must point to operands decoded for this local-base load eqz branch handler.
 /// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+#[inline(never)]
 pub unsafe fn op_i32_load_local_base_tee4_i32_eqz_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -4980,6 +5355,7 @@ macro_rules! define_local_base_i32_load_tee4_branch {
     ($br_name:ident, $eqz_name:ident, $mnemonic:literal, $reader:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.tee; br_if` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $br_name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($br_name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
@@ -4995,6 +5371,7 @@ macro_rules! define_local_base_i32_load_tee4_branch {
 
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.tee; i32.eqz; br_if` with local-base address on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $eqz_name(
             tail_code: *const Instr,
             ctx: &mut ExecuteContext,
@@ -5017,6 +5394,7 @@ macro_rules! define_i32_load_tee4_branch {
     ($br_name:ident, $eqz_name:ident, $mnemonic:literal, $reader:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.tee; br_if` on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $br_name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($br_name));
             let start = vm_try!(load_start(tail_code, ctx));
@@ -5032,6 +5410,7 @@ macro_rules! define_i32_load_tee4_branch {
 
         #[doc = concat!("WebAssembly `", $mnemonic, "; local.tee; i32.eqz; br_if` on default local memory.")]
         #[allow(dead_code)]
+        #[inline(never)]
         pub unsafe fn $eqz_name(
             tail_code: *const Instr,
             ctx: &mut ExecuteContext,
@@ -5065,6 +5444,7 @@ macro_rules! define_i32_load_tee4_branch {
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i64_load");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5087,7 +5467,17 @@ pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_i32_load`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     profile_memory_family("op_f32_load");
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(default_local_push_to_stack::<4>(ctx, start));
@@ -5109,7 +5499,17 @@ pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_i64_load`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     profile_memory_family("op_f64_load");
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(default_local_push_to_stack::<8>(ctx, start));
@@ -5131,6 +5531,7 @@ pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i32_load8_u");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5154,6 +5555,7 @@ pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i32_load8_s");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5177,6 +5579,7 @@ pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i32_load16_s");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5200,6 +5603,7 @@ pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i32_load16_u");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5223,6 +5627,7 @@ pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i64_load8_s");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5246,6 +5651,7 @@ pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i64_load8_u");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5269,6 +5675,7 @@ pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i64_load16_s");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5292,6 +5699,7 @@ pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i64_load16_u");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5315,6 +5723,7 @@ pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i64_load32_s");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5338,6 +5747,7 @@ pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     profile_memory_family("op_i64_load32_u");
     let start = vm_try!(load_start(tail_code, ctx));
@@ -5361,6 +5771,7 @@ pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal_local(tail_code, ctx, "op_i32_store", |ctx| {
         StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
@@ -5382,6 +5793,7 @@ pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal_local(tail_code, ctx, "op_i64_store", |ctx| {
         StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
@@ -5403,7 +5815,17 @@ pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_i32_store`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     store_internal_local(tail_code, ctx, "op_f32_store", |ctx| {
         StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
     })
@@ -5424,7 +5846,17 @@ pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_i64_store`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     store_internal_local(tail_code, ctx, "op_f64_store", |ctx| {
         StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
     })
@@ -5445,6 +5877,7 @@ pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal_local(tail_code, ctx, "op_i32_store8", |ctx| {
         StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
@@ -5466,6 +5899,7 @@ pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal_local(tail_code, ctx, "op_i32_store16", |ctx| {
         StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
@@ -5487,6 +5921,7 @@ pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal_local(tail_code, ctx, "op_i64_store8", |ctx| {
         StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
@@ -5508,6 +5943,7 @@ pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal_local(tail_code, ctx, "op_i64_store16", |ctx| {
         StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
@@ -5529,6 +5965,7 @@ pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal_local(tail_code, ctx, "op_i64_store32", |ctx| {
         StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
@@ -5550,6 +5987,7 @@ pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let page_size = unsafe { ctx.default_local_memory_unchecked() }.page_size();
     vm_try!(ctx.stack.push_u32(page_size));
@@ -5571,6 +6009,7 @@ pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let page_size_delta = ctx.stack.pop_u32();
     vm_checkpoint_n!(ctx, 1 + (u64::from(page_size_delta) << 4));
@@ -5598,7 +6037,17 @@ macro_rules! define_shared_push_load {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
@@ -5628,7 +6077,17 @@ macro_rules! define_shared_scalar_load {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start(tail_code, ctx));
             let value = vm_try!(ctx
@@ -5657,7 +6116,17 @@ macro_rules! define_shared_store_alias {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        #[inline(never)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            // #240: fn-pointer identity is load-bearing for handlers (see
+            // the `Op` contract in `common.rs`). The address of a
+            // function-local static keeps every expansion of this template
+            // distinct, so identical-code folding cannot merge two products
+            // whose bodies are otherwise byte-identical into one address.
+            {
+                static FN_IDENTITY: u8 = 0;
+                std::hint::black_box(&raw const FN_IDENTITY);
+            }
             store_internal_shared(tail_code, ctx, stringify!($name), $make_operation)
         }
     };
@@ -7164,6 +7633,7 @@ define_indexed_shared_local_scaled_index_store_alias!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose default memory is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_mem_size_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -7191,6 +7661,7 @@ pub unsafe fn op_mem_size_shared(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose default memory is shared.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_mem_grow_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -7218,6 +7689,7 @@ pub unsafe fn op_mem_grow_shared(
 /// # Safety
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
+#[inline(never)]
 pub unsafe fn op_mem_size_indexed_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -7245,6 +7717,7 @@ pub unsafe fn op_mem_size_indexed_local(
 /// # Safety
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
+#[inline(never)]
 pub unsafe fn op_mem_size_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -7272,6 +7745,7 @@ pub unsafe fn op_mem_size_indexed_shared(
 /// # Safety
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
+#[inline(never)]
 pub unsafe fn op_mem_grow_indexed_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -7300,6 +7774,7 @@ pub unsafe fn op_mem_grow_indexed_local(
 /// # Safety
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
+#[inline(never)]
 pub unsafe fn op_mem_grow_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

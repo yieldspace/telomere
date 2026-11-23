@@ -81,6 +81,7 @@ fn generate_vm_unary_op(
             #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
             #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
             #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+            #[inline(never)]
             pub unsafe fn #mangled(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
                 #handler::<#target>(tail_code, ctx, #closure)
             }

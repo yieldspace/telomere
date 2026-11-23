@@ -16,7 +16,17 @@ use crate::common::Op;
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_return(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    // #240: fn-pointer identity is load-bearing for this handler (see the
+    // `Op` contract in `common.rs`). The address of a function-local static
+    // keeps this body distinct from `op_br`, whose body is otherwise
+    // byte-identical, so identical-code folding cannot merge the two fn
+    // items into one address.
+    {
+        static FN_IDENTITY: u8 = 0;
+        std::hint::black_box(&raw const FN_IDENTITY);
+    }
     let addr = (*tail_code).operand.jump_addr;
     trace!("op_return: {addr}");
     let code = ctx.code();
@@ -39,6 +49,7 @@ pub unsafe fn op_return(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_end(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_end");
     call_next(tail_code, 0, ctx)
@@ -59,6 +70,7 @@ pub unsafe fn op_end(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRes
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_br(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.jump_addr;
     trace!("op_br: {addr}");
@@ -82,6 +94,7 @@ pub unsafe fn op_br(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_else");
 
@@ -105,6 +118,7 @@ pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let cond = ctx.stack.pop_u32_fast();
     trace!("op_br_if: {cond}");
@@ -133,6 +147,7 @@ pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_br_table(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let index = ctx.stack.pop_u32();
     let table_size = (*tail_code).operand.u32;
@@ -186,6 +201,7 @@ unsafe fn skip_end_ops(mut ptr: *const Instr) -> *const Instr {
 /// # Safety
 /// - `tail_code` must point to a local address followed by a materialized br_table operand group.
 /// - The branch targets must be valid for the current active function body.
+#[inline(never)]
 pub unsafe fn op_local_get4_br_table(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -205,6 +221,7 @@ pub unsafe fn op_local_get4_br_table(
 /// # Safety
 /// - `tail_code` must point to local/constant operands followed by a materialized br_table operand group.
 /// - The branch targets must be valid for the current active function body.
+#[inline(never)]
 pub unsafe fn op_local_get4_i32_const_add_br_table(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -235,6 +252,7 @@ pub unsafe fn op_local_get4_i32_const_add_br_table(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_loop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     vm_checkpoint!(ctx);
     trace!("op_loop: {}", (*tail_code).operand.jump_addr);
@@ -264,6 +282,7 @@ pub unsafe fn op_loop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let else_addr = (*tail_code).operand.jump_addr;
     let value = ctx.stack.pop_u32();
@@ -313,6 +332,7 @@ unsafe fn prepare_function_return(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn special_function_return(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -354,6 +374,7 @@ pub unsafe fn special_function_return(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn special_block_return(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -390,6 +411,7 @@ pub unsafe fn special_block_return(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn special_function_vm_end(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,

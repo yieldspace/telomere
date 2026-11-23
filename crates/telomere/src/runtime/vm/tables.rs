@@ -20,6 +20,7 @@ fn table_bulk_charge(len: u32) -> u64 {
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
     let addr = ctx.instance().tables.as_slice()[idx];
@@ -50,6 +51,7 @@ pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_table_set(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
     let addr = ctx.instance().tables.as_slice()[idx];
@@ -180,6 +182,7 @@ unsafe fn table_init_impl(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32() as usize;
     let src = ctx.stack.pop_u32() as usize;
@@ -221,6 +224,7 @@ fn elem_drop_impl(ctx: &mut ExecuteContext, instance_id: u32, elem_idx: u32) {
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_elem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let elem_idx = (*tail_code).operand.u32;
     let instance_id = ctx.instance_id();
@@ -243,6 +247,7 @@ pub unsafe fn op_elem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32() as usize;
@@ -284,6 +289,7 @@ pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_table_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let table_idx = (*tail_code).operand.u32 as usize;
     let n = ctx.stack.pop_i32();
@@ -328,6 +334,7 @@ pub unsafe fn op_table_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_table_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let table_idx = (*tail_code).operand.u32 as usize;
     let table_addr = ctx.instance().tables.as_slice()[table_idx];
@@ -353,6 +360,7 @@ pub unsafe fn op_table_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
 pub unsafe fn op_table_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let n = ctx.stack.pop_u32();
     let val = ctx.stack.pop_u32();
