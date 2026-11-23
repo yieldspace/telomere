@@ -484,6 +484,12 @@ jobs:
       - name: Check telomere feature coverage
         run: cargo check -p telomere --all-features --all-targets
 
+      - name: Check telomere vm-profile feature alone
+        run: cargo check -p telomere --features vm-profile --all-targets
+
+      - name: Check telomere vm-diagnostics feature alone
+        run: cargo check -p telomere --features vm-diagnostics --all-targets
+
       - name: Check CLI feature coverage
         run: cargo check --all-features --all-targets
 

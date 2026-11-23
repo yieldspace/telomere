@@ -176,19 +176,24 @@ fn report() {
         .collect::<Vec<_>>();
     entries.sort_unstable_by(|lhs, rhs| rhs.1.cmp(&lhs.1).then_with(|| lhs.0.cmp(rhs.0)));
 
+    let mut lines = Vec::new();
     if let Some(elapsed) = elapsed {
-        eprintln!(
-            "[telomere-jit-profile] elapsed_ms={:.3} nonzero_counters={}",
+        lines.push(format!(
+            "elapsed_ms={:.3} nonzero_counters={}",
             elapsed.as_secs_f64() * 1000.0,
             entries.len()
-        );
+        ));
     } else {
-        eprintln!(
-            "[telomere-jit-profile] elapsed_ms=unknown nonzero_counters={}",
+        lines.push(format!(
+            "elapsed_ms=unknown nonzero_counters={}",
             entries.len()
-        );
+        ));
     }
     for (label, count) in entries.into_iter().take(top_n) {
-        eprintln!("[telomere-jit-profile] {label}={count}");
+        lines.push(format!("{label}={count}"));
+    }
+    for line in &lines {
+        eprintln!("[telomere-jit-profile] {line}");
+        tracing::info!(target: crate::diagnostics::TARGET_JIT, "{line}");
     }
 }

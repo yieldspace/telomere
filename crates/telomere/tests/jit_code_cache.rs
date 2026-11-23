@@ -224,3 +224,186 @@ async fn jit_code_cache_accounts_small_module_in_code_bytes() {
         "used_bytes should be proportional to emitted code, stats={stats:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #144 regression: the stderr compile-trace count cap must not suppress the
+// structured `telomere::jit` events. The diagnostics contract
+// (docs/core/diagnostics.md) says the historical filters and count caps
+// apply only to the stderr copies; the events are left for the subscriber
+// to filter.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+mod compile_reject_events {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing::level_filters::LevelFilter;
+    use tracing::{
+        field::{Field, Visit},
+        span::{Attributes, Id, Record},
+        Event, Metadata, Subscriber,
+    };
+
+    #[derive(Debug)]
+    struct CapturedEvent {
+        target: String,
+        reason: Option<String>,
+    }
+
+    #[derive(Default)]
+    struct Capture {
+        events: Mutex<Vec<CapturedEvent>>,
+    }
+
+    struct CaptureSubscriber(Arc<Capture>);
+
+    #[derive(Default)]
+    struct FieldVisitor {
+        reason: Option<String>,
+    }
+
+    impl Visit for FieldVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "reason" {
+                self.reason = Some(value.to_owned());
+            }
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "reason" {
+                self.reason = Some(format!("{value:?}"));
+            }
+        }
+    }
+
+    impl Subscriber for CaptureSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn max_level_hint(&self) -> Option<LevelFilter> {
+            Some(LevelFilter::TRACE)
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut visitor = FieldVisitor::default();
+            event.record(&mut visitor);
+            self.0.events.lock().unwrap().push(CapturedEvent {
+                target: event.metadata().target().to_owned(),
+                reason: visitor.reason,
+            });
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    /// Sets the compile-trace env vars for the duration of the test and
+    /// restores their previous values on drop. The vars are process-global,
+    /// but with `_MAX=0` the stderr branch is deterministically silent and
+    /// the shared trace counter cannot change the outcome; the other tests
+    /// in this binary do not read these variables.
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn set(vars: &[(&'static str, &str)]) -> Self {
+            let saved = vars
+                .iter()
+                .map(|(name, value)| {
+                    let previous = std::env::var(name).ok();
+                    std::env::set_var(name, value);
+                    (*name, previous)
+                })
+                .collect();
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, previous) in &self.saved {
+                match previous {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compile_reject_events_survive_the_stderr_count_cap() {
+        // `_MAX=0` puts every rejection past the stderr cap: the stderr
+        // trace prints nothing at all. The structured events must still
+        // reach subscribers.
+        let _env = EnvGuard::set(&[
+            ("TELOMERE_JIT_TRACE_COMPILE", "1"),
+            ("TELOMERE_JIT_TRACE_COMPILE_MAX", "0"),
+        ]);
+        let capture = Arc::new(Capture::default());
+        let subscriber = CaptureSubscriber(Arc::clone(&capture));
+        tracing::subscriber::with_default(subscriber, || {
+            futures::executor::block_on(async {
+                // A zero-byte code-cache cap rejects every compilation
+                // attempt with reason "max_zero".
+                let mut runtime_config = RuntimeConfig::default();
+                runtime_config.jit = JitConfig {
+                    enabled: true,
+                    code_cache_max_bytes: 0,
+                };
+                let store = Store::new_with_runtime_config(runtime_config);
+                let registry = Registry::new();
+                let instance = instantiate_jit_wat(
+                    r#"
+                    (module
+                      (func $answer (result i32) (i32.const 42))
+                      (func (export "run") (result i32) (call $answer)))
+                    "#,
+                    &store,
+                    &registry,
+                )
+                .await;
+                // The compile is rejected; execution falls back to the
+                // interpreter and still succeeds.
+                let result = telomere::run_module_function(
+                    &instance,
+                    &store,
+                    "run",
+                    &ResultValue::new(vec![]),
+                )
+                .await;
+                assert_success_i32(result, 42);
+            });
+        });
+        let events = capture.events.lock().unwrap();
+        let rejects: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event.target == telomere::diagnostics::TARGET_JIT
+                    && event.reason.as_deref() == Some("max_zero")
+            })
+            .collect();
+        assert!(
+            !rejects.is_empty(),
+            "expected a telomere::jit compile-reject event despite \
+             TELOMERE_JIT_TRACE_COMPILE_MAX=0, got {events:?}"
+        );
+    }
+}

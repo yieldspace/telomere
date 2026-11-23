@@ -732,6 +732,9 @@ impl StoreInner {
     }
 
     pub(crate) fn set_last_trap(&mut self, trap: Option<Box<TrapContext>>) {
+        if let Some(context) = &trap {
+            crate::diagnostics::emit_trap_event(context);
+        }
         self.last_trap = trap.map(|context| TrapSlot {
             owner: std::thread::current().id(),
             context,
