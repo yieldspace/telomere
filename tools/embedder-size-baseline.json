@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #267 (branch fix/200-aot-load-split at head f988123a67220089cba96f5e8b960c15498ddcb5 \u2014 branch commit f3746033c8bec2629df9865cf6f71dd1f235d85b with current main 2505d8c merged in at merge commit d5acd0b43042e7d655199f2690f5090f27273ecc, plus two merge follow-up fixes, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45120276581 and 45120284790 against the branch and pull-request run 45120209665, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "f988123a67220089cba96f5e8b960c15498ddcb5",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #273 (branch fix/171-metering-jit at head ba31ed1bd15d823b43f51e2051b0146a72c94b6e \u2014 branch commit 4c9646d (execution metering covers JIT-compiled execution) plus merge commit ba31ed1 bringing in current main 6373f8c, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45160924686 and 45160938599 against the branch and pull-request run 45160922321, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "ba31ed1bd15d823b43f51e2051b0146a72c94b6e",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45120276581,
-      45120284790
+      45160924686,
+      45160938599
     ],
     "cross_check_run_ids": [
-      45120209665
+      45160922321
     ],
-    "derivation": "Re-baseline for PR #267 (#200, split the AoT load path from the JIT emitters). The PR adds a non-default \u2018aot-load\u2019 feature to the telomere crate (store code cache, runtime stubs, native-call ABI and executable code memory, but no compiler) and makes \u2018jit\u2019 imply it plus the codegen crate\u2019s new \u2018emit\u2019 feature for the assembler/emitter layer; in an aot-load-only build a compile request consults the cache only and otherwise reports the typed VMResult::Unimplemented so the interpreter takes over. It also adds the core-aot configuration to the footprint ladder and to this gate, and a symbol checker (tools/check-aot-load-symbols.py) asserting emitter symbols are absent from an aot-load-only embedder. Landing it required merging current main (PR #265, #197\u2019s EmitEnv generalisation, and PR #266, #209\u2019s trap-site tables) into the branch: the module declarations in runtime/jit.rs conflicted and were resolved on the PR\u2019s classification (stubs and profile are load side, aot-load; emit_env and the reloc tests are emitter side, jit), and two follow-up fixes were needed \u2014 #209\u2019s resolve_trap_site, whose only caller is the aot-load entry bridge, is gated aot-load instead of jit (body unchanged), and the PR\u2019s corpus measurement harness reads EmittedFunction.code now that #209 returns the code plus the trap-site table. Attribution was isolated by measuring current main (2505d8c) alone (workflow_dispatch run 45120292330, gate success): it reproduces the previous baseline exactly on all 14 gated series main measures (main has no core-aot configuration), so every delta is this PR\u2019s own. The deltas are confined to the two configurations that link the native-code machinery and are pure code-layout shift from the cfg refactor: core-jit (release stripped file +336 B / stripped .text +304 B; release-size stripped file +32 B / stripped .text +16 B) and core-aot (release stripped file +88 B / stripped .text +80 B; release-size stripped file +56 B / stripped .text +80 B, against the first values this PR recorded for the new series from a fleur measurement; the CI-measured values recorded here supersede those). The other 12 of the 16 gated series are byte-identical. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
+    "derivation": "Re-baseline for PR #273 (#171, execution metering covers JIT-compiled execution: the store normalisation that disabled the JIT under metering is removed, a metered flag is threaded through the compile path into the JIT emitters, native metering checkpoints are emitted at guest loop headers and at the four fused loops\u2019 back-edges in all three backends, a new MeteringCheckpoint stub refills or raises through vm::checkpoint, and the bulk-memory, table and shared-notify stubs charge with exactly the interpreter\u2019s formulas and ordering). The branch merged current main (6373f8c, the PR #269 squash merge) before measurement, so the first CI run on the merged tree tripped the gate on the PR\u2019s own change. Attribution was isolated by measuring current main (6373f8c) alone (workflow_dispatch run 45160951447, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta is this PR\u2019s own. The growth is confined to core-jit, the only configuration that links the JIT emitters and stubs (release stripped file +6,280 B / stripped .text +5,248 B; release-size stripped file +4,744 B / stripped .text +3,840 B): the per-backend checkpoint emitters, the MeteringCheckpoint stub and the stub charge calls. Instrumentation is emitted only for metered stores, so code compiled for unmetered stores is byte-identical; what grows is the runtime\u2019s own code. In the release profile the other library configurations shrink slightly (stripped file and stripped .text \u2212144 B in core, component, wasi, core-nosimd and wasi-threads; \u2212176 B in core-aot), the code-layout effect of removing the metering/JIT normalisation block from the store constructor. In release-size every configuration except core-jit is byte-identical, and the baseline configuration is unchanged in both profiles; 16 of the 32 gated series change. Against the original #164 baseline, the largest cumulative growth remains the release-size component stripped .text series at +5.41% (1,169,031 B to 1,232,263 B), unchanged from after PR #269, because that series does not move in this PR. Run-to-run spread was again 0 B for every gated series (16 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -30,72 +30,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1478832,
-          "threshold": 1478832
+          "baseline": 1493584,
+          "threshold": 1493584
         },
         "stripped_text_bytes": {
-          "baseline": 1131399,
-          "threshold": 1131399
+          "baseline": 1143303,
+          "threshold": 1143303
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2475368,
-          "threshold": 2475368
+          "baseline": 2537440,
+          "threshold": 2537440
         },
         "stripped_text_bytes": {
-          "baseline": 1983191,
-          "threshold": 1983191
+          "baseline": 2036823,
+          "threshold": 2036823
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2821912,
-          "threshold": 2821912
+          "baseline": 2881440,
+          "threshold": 2881440
         },
         "stripped_text_bytes": {
-          "baseline": 2245399,
-          "threshold": 2245399
+          "baseline": 2296951,
+          "threshold": 2296951
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1286200,
-          "threshold": 1286200
+          "baseline": 1300968,
+          "threshold": 1300968
         },
         "stripped_text_bytes": {
-          "baseline": 988295,
-          "threshold": 988295
+          "baseline": 1000199,
+          "threshold": 1000199
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2016976,
-          "threshold": 2016976
+          "baseline": 2038040,
+          "threshold": 2038040
         },
         "stripped_text_bytes": {
-          "baseline": 1569751,
-          "threshold": 1569751
+          "baseline": 1586951,
+          "threshold": 1586951
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1506352,
-          "threshold": 1506352
+          "baseline": 1520816,
+          "threshold": 1520816
         },
         "stripped_text_bytes": {
-          "baseline": 1150583,
-          "threshold": 1150583
+          "baseline": 1162215,
+          "threshold": 1162215
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3008240,
-          "threshold": 3008240
+          "baseline": 3068200,
+          "threshold": 3068200
         },
         "stripped_text_bytes": {
-          "baseline": 2384167,
-          "threshold": 2384167
+          "baseline": 2436119,
+          "threshold": 2436119
         }
       }
     },
@@ -112,72 +112,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1097848,
-          "threshold": 1097848
+          "baseline": 1105936,
+          "threshold": 1105936
         },
         "stripped_text_bytes": {
-          "baseline": 776999,
-          "threshold": 776999
+          "baseline": 782311,
+          "threshold": 782311
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1630352,
-          "threshold": 1630352
+          "baseline": 1665856,
+          "threshold": 1665856
         },
         "stripped_text_bytes": {
-          "baseline": 1202999,
-          "threshold": 1202999
+          "baseline": 1232263,
+          "threshold": 1232263
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1826016,
-          "threshold": 1826016
+          "baseline": 1861712,
+          "threshold": 1861712
         },
         "stripped_text_bytes": {
-          "baseline": 1334535,
-          "threshold": 1334535
+          "baseline": 1363975,
+          "threshold": 1363975
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 983008,
-          "threshold": 983008
+          "baseline": 991160,
+          "threshold": 991160
         },
         "stripped_text_bytes": {
-          "baseline": 697415,
-          "threshold": 697415
+          "baseline": 702791,
+          "threshold": 702791
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1532440,
-          "threshold": 1532440
+          "baseline": 1545272,
+          "threshold": 1545272
         },
         "stripped_text_bytes": {
-          "baseline": 1095175,
-          "threshold": 1095175
+          "baseline": 1104343,
+          "threshold": 1104343
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1117216,
-          "threshold": 1117216
+          "baseline": 1125368,
+          "threshold": 1125368
         },
         "stripped_text_bytes": {
-          "baseline": 788503,
-          "threshold": 788503
+          "baseline": 793879,
+          "threshold": 793879
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1967360,
-          "threshold": 1967360
+          "baseline": 2003120,
+          "threshold": 2003120
         },
         "stripped_text_bytes": {
-          "baseline": 1428023,
-          "threshold": 1428023
+          "baseline": 1457623,
+          "threshold": 1457623
         }
       }
     }

@@ -45,6 +45,15 @@ impl ComponentExports {
     ) -> Result<Vec<ComponentValue>, ComponentError> {
         self.runtime.call_path(store, &self.path, name, args).await
     }
+
+    /// Resolves a value export at this view's component-instance path.
+    ///
+    /// Defined values return their statically encoded literal; imported
+    /// values return the value the host registered with the linker (or the
+    /// value an enclosing component passed in).
+    pub fn get_value(&self, store: &Store, name: &str) -> Result<ComponentValue, ComponentError> {
+        self.runtime.value_path(store, &self.path, name)
+    }
 }
 
 /// An instantiated component and the program metadata that describes it.
@@ -87,5 +96,10 @@ impl ComponentInstance {
     /// Returns a view of a named nested component instance.
     pub fn get_instance(&self, name: impl Into<String>) -> ComponentExports {
         self.exports().get_instance(name)
+    }
+
+    /// Resolves a root value export; see [`ComponentExports::get_value`].
+    pub fn get_value(&self, store: &Store, name: &str) -> Result<ComponentValue, ComponentError> {
+        self.runtime.value_path(store, &[], name)
     }
 }

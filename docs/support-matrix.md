@@ -112,6 +112,21 @@ unknown second byte after `0x01` is `unsupported canonical function 0x01
 
 The option behavior is defined by the [canonical-options decoder][canon-options].
 
+### Value imports and exports
+
+The value index space is implemented unconditionally (it was previously
+declared behind the `component-gated-feature-value-imports-exports` cargo
+feature, which no longer exists). The decoder accepts sort byte `0x02`,
+value section `0x0c` (each entry a valtype, a byte length, and the statically
+encoded `val(t)` literal), and value imports/exports in components, component
+types, and instance types, including aliases and instantiate arguments.
+Defined values decode to the canonical ABI value representation; value types
+containing a `borrow` are rejected, and defined values reject resource
+handles entirely because `val(t)` has no encoding for them. At runtime,
+hosts supply value imports with `ComponentLinker::register_import_value`
+(checked against the declared type at instantiation) and read value exports
+with `ComponentInstance::get_value` / `ComponentExports::get_value`.
+
 ### Cargo-gated Component Model proposals
 
 The feature declarations and gated-source inventory in this section were
@@ -121,7 +136,6 @@ using the [component crate's Cargo features][gated-proposal-features].
 
 | Feature | Current effect |
 | --- | --- |
-| `component-gated-feature-value-imports-exports` | Changes component section byte `0x0c` from `InvalidSectionType` to `Unsupported("unsupported component section: Value")`. There is no value index space or value sort, and the section has no decoded value-definition IR. |
 | `component-gated-feature-async` | The decoder recognizes the `error-context` type opcode `0x64`. `[async]`, `[async method]`, and `[async static]` names are rejected by the decoder with named `Unsupported` before IR construction; their corresponding gated `PlainName` variants are defined in the IR but do not occur in decoded components. `stream` (`0x66`) and `future` (`0x65`) are declared but are not decoded. Every canonical ABI path that would move an `error-context` value returns `Unsupported` with the exact message ``canonical ABI for `error-context` is not supported``. |
 | `component-gated-feature-nested-namespaces-and-packages` | Declared only; no source use. |
 | `component-gated-feature-threading-builtins` | Declared only; no source use. |

@@ -17,9 +17,8 @@ mod common;
 
 use common::instantiate_wat;
 use telomere::{
-    host_abi::{ExecuteContext, Instr},
-    link_host_function_with_function_idx, run_module_function, Registry, ResultValue, Store,
-    TrapFrameKind, TrapKind, VMResult,
+    link_host_function_with_function_idx, run_module_function, HostContext, Registry, ResultValue,
+    Store, TrapFrameKind, TrapKind, VMResult, WasmValue,
 };
 
 const CAUSES_WAT: &str = r#"
@@ -157,7 +156,7 @@ async fn error_surface_supports_std_error_flows() {
     assert_eq!(boxed.to_string(), rendered);
 }
 
-fn divide_by_zero_host(_ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+fn divide_by_zero_host(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
     VMResult::DivideByZero
 }
 

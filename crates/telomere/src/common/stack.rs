@@ -1114,7 +1114,10 @@ impl Stack {
         let max_operand_bytes = match runtime.try_get_func(frame.code_addr) {
             Some(func) => match &func.body {
                 FunctionBody::Wasm { lowered, .. } => lowered.max_operand_bytes as usize,
-                FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => 0,
+                FunctionBody::Host(_)
+                | FunctionBody::AsyncHost(_)
+                | FunctionBody::PublicHost(_)
+                | FunctionBody::PublicAsyncHost(_) => 0,
             },
             None => 0,
         };

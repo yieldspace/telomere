@@ -11,14 +11,12 @@ use super::backend;
 use super::emit_env::{Emission, ModuleFacts, RelocKind};
 use super::stubs::{stub_table_fingerprint, StubId};
 use crate::common::store::FunctionBody;
-use crate::common::{
-    ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, VMResult, ValType,
-};
+use crate::common::{FuncType, VMResult, ValType};
+use crate::host::{HostContext, HostFnDefinition, HostModule};
 use crate::runtime::instantiate::instantiate_native_module;
 use crate::{instantiate, InstanceHandle, IoReadBinaryReader, Registry, Store, WasmParser};
 
-fn host_inc(ctx: &mut ExecuteContext<'_>) -> VMResult<*const Instr> {
-    let _ = ctx;
+fn host_inc(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<crate::WasmValue>> {
     VMResult::Unimplemented
 }
 
@@ -239,8 +237,8 @@ async fn setup_corpus() -> (Store, Vec<CorpusInstance>) {
     let store = Store::new();
     let mut registry = Registry::new();
     let host = match instantiate_native_module(
-        NativeModule {
-            functions: vec![HostFunctionDefinition {
+        HostModule {
+            functions: vec![HostFnDefinition {
                 name: Some("inc".to_owned()),
                 signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
                 fp: host_inc,
@@ -293,7 +291,7 @@ fn emit_all_jit(store: &Store, instance: &CorpusInstance) -> Vec<(u32, Result<Ve
     for funcaddr in &instance_data.funcs {
         let func = runtime.get_func(*funcaddr);
         if let FunctionBody::Wasm { code, op_lens, .. } = &func.body {
-            let result = backend::emit_baseline_function(*funcaddr, code, op_lens, &runtime)
+            let result = backend::emit_baseline_function(*funcaddr, code, op_lens, &runtime, false)
                 .map(|emitted| emitted.code)
                 .map_err(|err| format!("{err:?}"));
             out.push((func.funcidx, result));
@@ -562,12 +560,12 @@ async fn reloc_aot_imported_callees_take_generic_path() {
     assert_eq!(funcaddr_relocs(5), vec![2]);
 }
 
-/// The stub table is the artifact-facing source of truth: 44 entries in
+/// The stub table is the artifact-facing source of truth: 45 entries in
 /// stable discriminant order, unique names, and a deterministic
 /// fingerprint.
 #[test]
 fn reloc_stub_table_is_complete_and_stable() {
-    assert_eq!(StubId::ALL.len(), 44);
+    assert_eq!(StubId::ALL.len(), 45);
     for (index, id) in StubId::ALL.iter().enumerate() {
         assert_eq!(
             *id as u32, index as u32,
@@ -575,11 +573,11 @@ fn reloc_stub_table_is_complete_and_stable() {
         );
         assert_eq!(StubId::from_discriminant(index as u32), Some(*id));
     }
-    assert_eq!(StubId::from_discriminant(44), None);
+    assert_eq!(StubId::from_discriminant(45), None);
     let mut names: Vec<&str> = StubId::ALL.iter().map(|id| id.name()).collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), 44, "stub names must be unique");
+    assert_eq!(names.len(), 45, "stub names must be unique");
     // Every stub compiled into this target must resolve to a real
     // address. The rounding stubs are riscv64-only and the i32 trunc_sat
     // pair is compiled out on aarch64; both are null here by design.

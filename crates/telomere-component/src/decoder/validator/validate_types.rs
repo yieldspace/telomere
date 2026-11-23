@@ -115,6 +115,7 @@ impl<'a> Validator<'a> {
             ComponentImportType::Type { type_id, .. } => {
                 self.validate_type_root(*type_id, visible, SurfaceRole::Import, seen)
             }
+            ComponentImportType::Value(ty) => self.validate_valtype_ref(ty, visible, seen),
         }
     }
 
@@ -138,6 +139,7 @@ impl<'a> Validator<'a> {
             ComponentExportType::Func(type_id) => {
                 self.validate_func_root(*type_id, visible, SurfaceRole::Export, seen)
             }
+            ComponentExportType::Value(ty) => self.validate_valtype_ref(ty, visible, seen),
         }
     }
 
@@ -161,6 +163,7 @@ impl<'a> Validator<'a> {
             InstanceExportType::Func(type_id) => {
                 self.validate_func_root(*type_id, visible, SurfaceRole::Export, seen)
             }
+            InstanceExportType::Value(ty) => self.validate_valtype_ref(ty, visible, seen),
         }
     }
 
@@ -720,6 +723,11 @@ impl<'a> Validator<'a> {
             | InstanceExportType::Component(type_id)
             | InstanceExportType::Instance(type_id)
             | InstanceExportType::Type(type_id) => merge_type_ids(visible, &[*type_id]),
+            InstanceExportType::Value(ty) => {
+                if let ValType::Type(type_id) = ty {
+                    merge_type_ids(visible, &[*type_id]);
+                }
+            }
         }
     }
 
@@ -737,6 +745,12 @@ impl<'a> Validator<'a> {
             | ComponentExportType::Func(type_id) => {
                 self.extend_visible_closure_into(*type_id, visible, visiting)
             }
+            ComponentExportType::Value(ty) => match ty {
+                ValType::Type(type_id) => {
+                    self.extend_visible_closure_into(*type_id, visible, visiting)
+                }
+                ValType::Primitive(_) => Ok(()),
+            },
         }
     }
 
@@ -754,6 +768,12 @@ impl<'a> Validator<'a> {
             | InstanceExportType::Type(type_id) => {
                 self.extend_visible_closure_into(*type_id, visible, visiting)
             }
+            InstanceExportType::Value(ty) => match ty {
+                ValType::Type(type_id) => {
+                    self.extend_visible_closure_into(*type_id, visible, visiting)
+                }
+                ValType::Primitive(_) => Ok(()),
+            },
         }
     }
 

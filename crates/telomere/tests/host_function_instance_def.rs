@@ -3,14 +3,14 @@ use common::run_wast_with;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
     component_support::common::{FuncType, ValType},
-    host_abi::{
-        instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
-        ObjectRef,
-    },
-    link_host_function_with_function_idx, run_module_function,
+    run_module_function,
     unstable_internals::{
         function_call, function_code_pointer, function_host_code_pointer, function_is_host,
         function_locals_size, Operand,
+    },
+    unstable_internals::{
+        instantiate_raw_native_module, link_raw_host_function_with_function_idx, ExecuteContext,
+        HostFunctionDefinition, Instr, NativeModule, ObjectRef,
     },
     vm_try, Registry, ResultValue, Store, StoreState, VMResult, WasmValue,
 };
@@ -54,7 +54,7 @@ fn return_i64_pair(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 async fn host_without_params_can_return_i32() {
     let store = Store::new();
     let mut registry = Registry::new();
-    let host = instantiate_native_module(
+    let host = instantiate_raw_native_module(
         NativeModule {
             functions: vec![HostFunctionDefinition {
                 fp: return_42,
@@ -68,7 +68,7 @@ async fn host_without_params_can_return_i32() {
     .await
     .unwrap();
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, return_42, &store);
+    link_raw_host_function_with_function_idx(&host, 0, return_42, &store);
 
     let wast = r#"
     (module
@@ -84,7 +84,7 @@ async fn host_without_params_can_return_i32() {
 async fn host_without_params_can_return_two_i64_values() {
     let store = Store::new();
     let mut registry = Registry::new();
-    let host = instantiate_native_module(
+    let host = instantiate_raw_native_module(
         NativeModule {
             functions: vec![HostFunctionDefinition {
                 fp: return_i64_pair,
@@ -98,7 +98,7 @@ async fn host_without_params_can_return_two_i64_values() {
     .await
     .unwrap();
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, return_i64_pair, &store);
+    link_raw_host_function_with_function_idx(&host, 0, return_i64_pair, &store);
 
     let wast = r#"
     (module
@@ -114,7 +114,7 @@ async fn host_without_params_can_return_two_i64_values() {
 async fn top_level_host_without_params_can_return_i32() {
     let store = Store::new();
     let registry = Registry::new();
-    let host = instantiate_native_module(
+    let host = instantiate_raw_native_module(
         NativeModule {
             functions: vec![HostFunctionDefinition {
                 fp: return_42,
@@ -127,7 +127,7 @@ async fn top_level_host_without_params_can_return_i32() {
     )
     .await
     .unwrap();
-    link_host_function_with_function_idx(&host, 0, return_42, &store);
+    link_raw_host_function_with_function_idx(&host, 0, return_42, &store);
 
     let result = run_module_function(&host, &store, "answer", &ResultValue::new(vec![])).await;
     match result {
@@ -187,7 +187,7 @@ async fn test_print() {
         StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
     });
     let mut registry = Registry::new();
-    let host = instantiate_native_module(
+    let host = instantiate_raw_native_module(
         NativeModule {
             functions: vec![HostFunctionDefinition {
                 fp: print,
@@ -201,7 +201,7 @@ async fn test_print() {
     .await
     .unwrap();
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, print, &store);
+    link_raw_host_function_with_function_idx(&host, 0, print, &store);
     let wast = r#"
     (module
       (import "host" "print" (func $print))
@@ -258,7 +258,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 async fn test_tail_call_wasm() {
     let store = Store::new();
     let mut registry = Registry::new();
-    let host = instantiate_native_module(
+    let host = instantiate_raw_native_module(
         NativeModule {
             functions: vec![HostFunctionDefinition {
                 fp: tail_call,
@@ -272,7 +272,7 @@ async fn test_tail_call_wasm() {
     .await
     .unwrap();
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, tail_call, &store);
+    link_raw_host_function_with_function_idx(&host, 0, tail_call, &store);
     let wast = r#"
     (module
       (import "host" "tail_call" (func $tail_call (param funcref i32) (result i32)))
@@ -305,7 +305,7 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 pub async fn test_tail_call_native() {
     let store = Store::new();
     let mut registry = Registry::new();
-    let host = instantiate_native_module(
+    let host = instantiate_raw_native_module(
         NativeModule {
             functions: vec![
                 HostFunctionDefinition {
@@ -329,8 +329,8 @@ pub async fn test_tail_call_native() {
     .await
     .unwrap();
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, tail_call, &store);
-    link_host_function_with_function_idx(&host, 1, plus60, &store);
+    link_raw_host_function_with_function_idx(&host, 0, tail_call, &store);
+    link_raw_host_function_with_function_idx(&host, 1, plus60, &store);
 
     let wast = r#"
     (module

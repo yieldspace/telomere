@@ -5,6 +5,7 @@ pub enum SortType {
     Func,
     Type,
     Instance,
+    Value,
 }
 
 #[repr(u8)]

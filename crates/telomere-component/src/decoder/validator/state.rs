@@ -5,7 +5,7 @@ use crate::ir::{
 };
 use crate::ir::{
     ComponentExport, ComponentImport, ExportName, Func, GlobalIdx, ImportName, Instance, LocalIdx,
-    Relation,
+    Relation, Value,
 };
 use std::collections::HashMap;
 use typed_arena::Arena;
@@ -32,6 +32,7 @@ pub struct Scope {
     pub core_globals: ValueLocalStore<CoreGlobal>,
     pub core_tables: ValueLocalStore<CoreTable>,
     pub core_types: ValueLocalStore<CoreType>,
+    pub values: ValueLocalStore<Value>,
     pub imports: HashMap<String, ComponentImport>,
     pub exports: HashMap<String, ComponentExport>,
 }
@@ -50,6 +51,7 @@ pub struct ParseState<'a> {
     pub(crate) core_memory_store: ValueStore<CoreMemory, CoreRelation<CoreMemory>>,
     pub(crate) core_global_store: ValueStore<CoreGlobal, CoreRelation<CoreGlobal>>,
     pub(crate) core_table_store: ValueStore<CoreTable, CoreRelation<CoreTable>>,
+    pub(crate) value_store: ValueStore<Value>,
 }
 
 impl<T> Default for ValueLocalStore<T> {
@@ -117,6 +119,7 @@ impl<'a> ParseState<'a> {
             core_memory_store: Default::default(),
             core_global_store: Default::default(),
             core_table_store: Default::default(),
+            value_store: Default::default(),
         }
     }
 

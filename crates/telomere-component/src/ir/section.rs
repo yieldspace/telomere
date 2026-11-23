@@ -29,6 +29,5 @@ pub enum ComponentSection {
     /// Export section type.
     Export = 0x0b,
     /// Value section type.
-    #[cfg(feature = "component-gated-feature-value-imports-exports")]
     Value = 0x0c,
 }

@@ -90,6 +90,29 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
             }
             invoke_sync_host_function_with(return_addr, ctx, fp)
         }
+        CallDispatchTarget::PublicHost(fp) => {
+            if IS_RETURN_CALL {
+                let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                    &ctx.local_reference,
+                    param_size,
+                    return_slot_slack,
+                    recipe.max_operand_bytes as usize,
+                    recipe.frame,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            } else {
+                let local_reference = vm_try!(ctx.stack.function_call_cached(
+                    param_size,
+                    return_slot_slack,
+                    recipe.max_operand_bytes as usize,
+                    recipe.frame,
+                    ctx.local_reference,
+                    return_pc,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            }
+            invoke_public_host_function_with(return_addr, ctx, fp)
+        }
         CallDispatchTarget::AsyncHost(fp) => {
             if IS_RETURN_CALL {
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
@@ -112,6 +135,29 @@ unsafe fn internal_op_call<const IS_RETURN_CALL: bool>(
                 ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             }
             start_async_host_call_with(return_addr, ctx, fp)
+        }
+        CallDispatchTarget::PublicAsyncHost(fp) => {
+            if IS_RETURN_CALL {
+                let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                    &ctx.local_reference,
+                    param_size,
+                    return_slot_slack,
+                    recipe.max_operand_bytes as usize,
+                    recipe.frame,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            } else {
+                let local_reference = vm_try!(ctx.stack.function_call_cached(
+                    param_size,
+                    return_slot_slack,
+                    recipe.max_operand_bytes as usize,
+                    recipe.frame,
+                    ctx.local_reference,
+                    return_pc,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            }
+            start_public_async_host_call_with(return_addr, ctx, fp)
         }
         CallDispatchTarget::Wasm { local_size } => {
             let local_size = local_size as usize;
