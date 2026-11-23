@@ -44,7 +44,7 @@ pub(crate) enum ReadyFlag {
 
 #[derive(Debug)]
 pub(crate) struct Task {
-    pub task_id: u32,
+    pub task_id: u64,
     pub stack: Stack,
     pub local_reference: LocalReference,
     pub pending_effects: u32,
@@ -79,15 +79,31 @@ pub(crate) enum SyncRunError {
 /// constant, so a retained completion can never name a task of a
 /// later execution and [`Scheduler::apply_completion`] discards it
 /// before any stack write or resume.
-static NEXT_TASK_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+///
+/// The counter is 64 bits wide, so identities are never reissued: a
+/// 32-bit counter would wrap after 2^32 allocations in a long-lived
+/// process and hand a retained stale completion the identity of a new
+/// task, while exhausting 2^64 identities is unreachable in practice
+/// (at a sustained 10^9 allocations per second it would take roughly
+/// 585 years). There is therefore no wrap or exhaustion path to fail
+/// closed on.
+static NEXT_TASK_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Allocates a task identity unique across executions in this process.
-pub(crate) fn fresh_task_id() -> u32 {
+pub(crate) fn fresh_task_id() -> u64 {
     NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Test hook: advances the identity counter to at least `floor`, so
+/// boundary behaviour can be exercised without allocating billions of
+/// identities. Never moves the counter backwards.
+#[cfg(test)]
+pub(crate) fn seed_task_id_floor(floor: u64) {
+    NEXT_TASK_ID.fetch_max(floor, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) struct EffectSupplier<'a> {
-    task_id: u32,
+    task_id: u64,
     pending_effects: &'a mut u32,
     queue: &'a mut VecDeque<PendingOp>,
 }
@@ -99,7 +115,7 @@ impl EffectSupplier<'_> {
 
     #[cfg(test)]
     pub(crate) fn from_parts<'a>(
-        task_id: u32,
+        task_id: u64,
         pending_effects: &'a mut u32,
         queue: &'a mut VecDeque<PendingOp>,
     ) -> EffectSupplier<'a> {
@@ -218,7 +234,7 @@ pub(crate) struct Scheduler<'a> {
     /// Host frames of in-flight host calls, by task, retained so an
     /// asynchronously completing trap is attributed to the host frame
     /// (#211) rather than to the already-resumed caller frame.
-    host_call_frames: std::collections::HashMap<u32, LocalReference>,
+    host_call_frames: std::collections::HashMap<u64, LocalReference>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -700,8 +716,8 @@ impl<'a> Scheduler<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Completion, CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, ReadyFlag,
-        Scheduler, Task, TokioDriver,
+        fresh_task_id, seed_task_id_floor, Completion, CompletionPayload, ExecutionDriver,
+        HostCallPending, PendingOp, ReadyFlag, Scheduler, Task, TokioDriver,
     };
     use crate::runtime::memory_effect::{HostCallFuture, HostCallResult};
     use crate::{
@@ -780,5 +796,21 @@ mod tests {
         assert!(matches!(&context.result, VMResult::StackOverflow));
         assert_eq!(context.task_id, 7);
         assert_eq!(context.frames[0].pc_index, None);
+    }
+
+    #[test]
+    fn task_ids_do_not_wrap_at_the_u32_boundary() {
+        // Seed the process-wide counter just below the former 32-bit
+        // boundary: allocations must cross it without wrapping or
+        // reissuing an identity a retained completion could still name.
+        // Successive allocations in one thread are strictly increasing
+        // even if other tests allocate concurrently, and the seed only
+        // ever moves the shared counter forward.
+        seed_task_id_floor(u64::from(u32::MAX) - 1);
+        let first = fresh_task_id();
+        let second = fresh_task_id();
+        let third = fresh_task_id();
+        assert!(first < second && second < third);
+        assert!(third > u64::from(u32::MAX));
     }
 }

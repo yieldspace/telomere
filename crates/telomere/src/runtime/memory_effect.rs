@@ -108,7 +108,7 @@ impl fmt::Debug for HostCallFuture {
 }
 
 pub struct HostCallPending {
-    pub task_id: u32,
+    pub task_id: u64,
     pub future: HostCallFuture,
     /// The frame of the host call itself, retained by the runtime so that a
     /// trap completing asynchronously is attributed to the host frame
@@ -118,7 +118,7 @@ pub struct HostCallPending {
 
 #[cfg(feature = "threads")]
 pub struct MemoryWaitPending {
-    pub task_id: u32,
+    pub task_id: u64,
     pub shared: Arc<SharedMemoryObject>,
     pub wait: SharedWaitRegistration,
     pub timeout_ns: i64,
@@ -136,7 +136,7 @@ pub struct MemoryWaitPending {
 #[cfg(feature = "unstable-internals")]
 #[derive(Debug)]
 pub struct WasmAsyncPending {
-    pub task_id: u32,
+    pub task_id: u64,
 }
 
 pub enum PendingOp {
@@ -149,7 +149,7 @@ pub enum PendingOp {
 }
 
 impl PendingOp {
-    pub fn task_id(&self) -> u32 {
+    pub fn task_id(&self) -> u64 {
         match self {
             Self::HostCall(op) => op.task_id,
             #[cfg(feature = "threads")]
@@ -182,7 +182,7 @@ impl fmt::Debug for PendingOp {
 
 #[derive(Debug)]
 pub struct Completion {
-    pub task_id: u32,
+    pub task_id: u64,
     pub payload: CompletionPayload,
 }
 

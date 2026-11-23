@@ -106,6 +106,13 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   scheduler discards the stale outcome before any return-slot write or
   resume — including when the two runs' host calls have different
   signatures.
+- Task identities are now 64-bit throughout the driver surface
+  (`PendingOp::task_id`, the pending structs, and `Completion::task_id`),
+  widened from `u32` (#216 re-review). A 32-bit process-wide counter
+  would wrap after 2^32 executions in a long-lived process and reissue
+  an identity, letting a completion retained by a driver name a task of
+  a later execution again; 2^64 identities cannot be exhausted in
+  practice, so identities are never reused.
 
 ### Removed
 

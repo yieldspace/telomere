@@ -37,7 +37,7 @@ pub(crate) struct CapturedFrame {
 #[derive(Debug)]
 pub(crate) struct TrapContext {
     pub(crate) result: VMResult<()>,
-    pub(crate) task_id: u32,
+    pub(crate) task_id: u64,
     /// Innermost first. When truncated, this contains the innermost 48 then
     /// the outermost 16 frames. Frames elided by tail calls are not present.
     pub(crate) frames: Vec<CapturedFrame>,
@@ -63,7 +63,7 @@ pub(crate) fn capture_trap_context(
     local_reference: LocalReference,
     innermost_pc: Option<*const Instr>,
     result: &VMResult<()>,
-    task_id: u32,
+    task_id: u64,
 ) -> Box<TrapContext> {
     let mut head = Vec::with_capacity(HEAD_FRAMES);
     let mut tail = [None; TAIL_FRAMES];

@@ -380,7 +380,7 @@ pub async fn instantiate_raw_native_module(
 ///
 /// #[derive(Default)]
 /// struct InlineDriver {
-///     inflight: VecDeque<(u32, HostCallFuture)>,
+///     inflight: VecDeque<(u64, HostCallFuture)>,
 /// }
 ///
 /// impl ExecutionDriver for InlineDriver {

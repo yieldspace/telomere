@@ -1339,7 +1339,7 @@ pub struct ExecuteContext<'a> {
     pub gc: &'a mut StoreInner,
     pub(crate) effect: EffectSupplier<'a>,
     pub cont: *const Instr,
-    pub task_id: u32,
+    pub task_id: u64,
     /// Checkpoints available before the next cold-path metering grant.
     pub(crate) budget: u64,
     /// Full size of the currently reserved grant.
@@ -1495,7 +1495,7 @@ pub(crate) struct ExecuteContextSnapshot {
     pub(crate) default_memory: SnapshotMemoryKind,
     pub(crate) caller_memory: SnapshotMemoryKind,
     pub(crate) cont_addr: usize,
-    pub(crate) task_id: u32,
+    pub(crate) task_id: u64,
 }
 
 impl ExecuteContextSnapshot {
