@@ -101,6 +101,7 @@ impl StoreJitCache {
         body: &FunctionBody,
         runtime: &StoreInner,
         max_bytes: u32,
+        metered: bool,
     ) -> VMResult<Arc<CompiledFunction>> {
         profile::count(Counter::CompileAttempt);
         let max_bytes = max_bytes as usize;
@@ -125,23 +126,24 @@ impl StoreJitCache {
         let FunctionBody::Wasm { code, op_lens, .. } = body else {
             return VMResult::Unimplemented;
         };
-        let emitted = match backend::emit_baseline_function(funcaddr, code, op_lens, runtime) {
-            Ok(emitted) => emitted,
-            Err(backend::EmitBaselineError::Verify) => {
-                profile::count(Counter::CompileRejectVerify);
-                trace_compile_reject("verify", 0, 0, max_bytes);
-                runtime.mark_jit_rejected_func(funcaddr);
-                self.mark_rejected(funcaddr);
-                return VMResult::Unimplemented;
-            }
-            Err(backend::EmitBaselineError::Emit) => {
-                profile::count(Counter::CompileRejectEmit);
-                trace_compile_reject("emit", 0, 0, max_bytes);
-                runtime.mark_jit_rejected_func(funcaddr);
-                self.mark_rejected(funcaddr);
-                return VMResult::Unimplemented;
-            }
-        };
+        let emitted =
+            match backend::emit_baseline_function(funcaddr, code, op_lens, runtime, metered) {
+                Ok(emitted) => emitted,
+                Err(backend::EmitBaselineError::Verify) => {
+                    profile::count(Counter::CompileRejectVerify);
+                    trace_compile_reject("verify", 0, 0, max_bytes);
+                    runtime.mark_jit_rejected_func(funcaddr);
+                    self.mark_rejected(funcaddr);
+                    return VMResult::Unimplemented;
+                }
+                Err(backend::EmitBaselineError::Emit) => {
+                    profile::count(Counter::CompileRejectEmit);
+                    trace_compile_reject("emit", 0, 0, max_bytes);
+                    runtime.mark_jit_rejected_func(funcaddr);
+                    self.mark_rejected(funcaddr);
+                    return VMResult::Unimplemented;
+                }
+            };
         // The cap is charged in emitted code bytes (16-byte aligned), not
         // in page-rounded mapping sizes: functions are packed into code
         // slabs, so residency is bounded by code size, not page count.

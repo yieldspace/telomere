@@ -451,6 +451,19 @@ pub(crate) extern "C" fn ref_func(ctx: *mut ExecuteContext<'_>, funcidx: u32) ->
     ctx.instance().funcs.as_slice()[funcidx as usize].get()
 }
 
+/// #171: slow path of the native metering checkpoint the backends emit
+/// at guest loop headers in metered stores. Called only when
+/// `ExecuteContext.budget == 0`; runs the interpreter's checkpoint,
+/// which takes the next grant — consuming this checkpoint's unit — or
+/// raises `FuelExhausted` / `Cancelled`.
+pub(crate) extern "C" fn metering_checkpoint(ctx: *mut ExecuteContext<'_>) -> JitNativeExit {
+    let ctx = unsafe { &mut *ctx };
+    match vm::checkpoint(ctx) {
+        VMResult::Success(()) => JitNativeExit::keep_going(),
+        other => JitNativeExit::trap(other),
+    }
+}
+
 pub(crate) extern "C" fn memory_fill(
     ctx: *mut ExecuteContext<'_>,
     ptr: u32,
@@ -459,6 +472,12 @@ pub(crate) extern "C" fn memory_fill(
 ) -> JitNativeExit {
     profile::count(Counter::RuntimeMemoryFill);
     let ctx = unsafe { &mut *ctx };
+    // #171: the interpreter's admission charge for bulk memory ops
+    // (`1 + (len >> 12)`), charged before the fill and never refunded.
+    match vm::charge_n(ctx, 1 + (u64::from(len) >> 12)) {
+        VMResult::Success(()) => {}
+        other => return JitNativeExit::trap(other),
+    }
     match ctx.gc.local_fill_memory(
         unsafe { ctx.default_local_memory_id_unchecked() },
         ptr,
@@ -478,6 +497,12 @@ pub(crate) extern "C" fn memory_copy(
 ) -> JitNativeExit {
     profile::count(Counter::RuntimeMemoryCopy);
     let ctx = unsafe { &mut *ctx };
+    // #171: the interpreter's admission charge for bulk memory ops
+    // (`1 + (len >> 12)`), charged before the copy and never refunded.
+    match vm::charge_n(ctx, 1 + (u64::from(len) >> 12)) {
+        VMResult::Success(()) => {}
+        other => return JitNativeExit::trap(other),
+    }
     match ctx.gc.local_copy_memory(
         unsafe { ctx.default_local_memory_id_unchecked() },
         dst,
@@ -501,9 +526,22 @@ pub(crate) extern "C" fn memory_size(ctx: *mut ExecuteContext<'_>, shared: u32) 
     }
 }
 
-pub(crate) extern "C" fn memory_grow(ctx: *mut ExecuteContext<'_>, delta: u32, shared: u32) -> u32 {
+pub(crate) extern "C" fn memory_grow(
+    ctx: *mut ExecuteContext<'_>,
+    delta: u32,
+    shared: u32,
+) -> JitNativeExit {
     profile::count(Counter::RuntimeMemoryGrow);
     let ctx = unsafe { &mut *ctx };
+    // #171: the interpreter charges the grow admission
+    // (`1 + (delta_pages << 4)`) before growing and never refunds it.
+    // The charge can raise, which is why this stub returns a
+    // `JitNativeExit`: the grow result (previous page count, or
+    // `u32::MAX` on failure) rides in the exit value on KEEP_GOING.
+    match vm::charge_n(ctx, 1 + (u64::from(delta) << 4)) {
+        VMResult::Success(()) => {}
+        other => return JitNativeExit::trap(other),
+    }
     let result = if shared != 0 {
         ctx.gc
             .shared_grow_memory(unsafe { ctx.default_shared_memory_id_unchecked() }, delta)
@@ -511,9 +549,13 @@ pub(crate) extern "C" fn memory_grow(ctx: *mut ExecuteContext<'_>, delta: u32, s
         ctx.gc
             .local_grow_memory(unsafe { ctx.default_local_memory_id_unchecked() }, delta)
     };
-    match result {
-        VMResult::Success(value) => value as u32,
-        _ => u32::MAX,
+    let value = match result {
+        VMResult::Success(value) => value as u64,
+        _ => u64::from(u32::MAX),
+    };
+    JitNativeExit {
+        kind: JitNativeExit::KEEP_GOING,
+        value,
     }
 }
 
@@ -1079,6 +1121,17 @@ fn runtime_atomic_notify(
             other => return unit_result(other),
         },
     };
+    // #171: the interpreter postcharges shared-memory notifies
+    // (`1 + woken`); unshared notifies wake nobody and are uncharged.
+    if matches!(
+        kind,
+        MemoryStubKind::DefaultShared | MemoryStubKind::IndexedShared
+    ) {
+        match vm::charge_n(ctx, 1 + u64::from(woken)) {
+            VMResult::Success(()) => {}
+            other => return unit_result(other),
+        }
+    }
     ctx.stack.push_u32(woken)
 }
 
@@ -1360,6 +1413,13 @@ fn runtime_mem_init(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    // #171: the interpreter's admission charge for bulk memory ops
+    // (`1 + (len >> 12)`), charged before the segment is read and never
+    // refunded.
+    match vm::charge_n(ctx, 1 + (u64::from(len) >> 12)) {
+        VMResult::Success(()) => {}
+        other => return unit_result(other),
+    }
     let copied = match mem_init_bytes(ctx, idx, src, len) {
         VMResult::Success(copied) => copied,
         other => return unit_result(other),
@@ -1396,48 +1456,96 @@ fn runtime_mem_copy(
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
-    // Metered Stores do not enter JIT. Keep the cross-memory helper's callback explicit so this
-    // native path retains its existing unmetered behavior.
-    let mut no_checkpoint = || VMResult::Success(());
+    // #171: mirror the interpreter's metering for memory.copy. Copies
+    // within one memory and copies the chunked helpers cannot service
+    // pay the admission charge (`1 + (len >> 12)`) up front; cross-memory
+    // copies instead checkpoint once per copied chunk through the
+    // helper's callback, exactly like `vm::op_mem_copy`'s handlers.
     match kind {
-        CopyStubKind::DefaultShared => ctx.gc.shared_copy_memory(
-            unsafe { ctx.default_shared_memory_id_unchecked() },
-            dst,
-            src,
-            len,
-        ),
-        CopyStubKind::IndexedLocalLocal => ctx.gc.copy_memory_local_to_local(
-            unsafe { ctx.local_memory_id_at_unchecked((*pc.add(1)).operand.u32) },
-            unsafe { ctx.local_memory_id_at_unchecked((*pc.add(2)).operand.u32) },
-            dst,
-            src,
-            len,
-            &mut no_checkpoint,
-        ),
-        CopyStubKind::IndexedLocalShared => ctx.gc.copy_memory_shared_to_local(
-            unsafe { ctx.local_memory_id_at_unchecked((*pc.add(1)).operand.u32) },
-            unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(2)).operand.u32) },
-            dst,
-            src,
-            len,
-            &mut no_checkpoint,
-        ),
-        CopyStubKind::IndexedSharedLocal => ctx.gc.copy_memory_local_to_shared(
-            unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(1)).operand.u32) },
-            unsafe { ctx.local_memory_id_at_unchecked((*pc.add(2)).operand.u32) },
-            dst,
-            src,
-            len,
-            &mut no_checkpoint,
-        ),
-        CopyStubKind::IndexedSharedShared => ctx.gc.copy_memory_shared_to_shared(
-            unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(1)).operand.u32) },
-            unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(2)).operand.u32) },
-            dst,
-            src,
-            len,
-            &mut no_checkpoint,
-        ),
+        CopyStubKind::DefaultShared => {
+            match vm::charge_n(ctx, 1 + (u64::from(len) >> 12)) {
+                VMResult::Success(()) => {}
+                other => return unit_result(other),
+            }
+            ctx.gc.shared_copy_memory(
+                unsafe { ctx.default_shared_memory_id_unchecked() },
+                dst,
+                src,
+                len,
+            )
+        }
+        CopyStubKind::IndexedLocalLocal => {
+            let dst_id = unsafe { ctx.local_memory_id_at_unchecked((*pc.add(1)).operand.u32) };
+            let src_id = unsafe { ctx.local_memory_id_at_unchecked((*pc.add(2)).operand.u32) };
+            if dst_id == src_id {
+                match vm::charge_n(ctx, 1 + (u64::from(len) >> 12)) {
+                    VMResult::Success(()) => {}
+                    other => return unit_result(other),
+                }
+            }
+            let metering = ctx.store.metering_ref();
+            let ExecuteContext {
+                gc,
+                budget,
+                reserved,
+                budget_epoch,
+                ..
+            } = ctx;
+            gc.copy_memory_local_to_local(dst_id, src_id, dst, src, len, || {
+                vm::checkpoint_fields(metering, &mut *budget, &mut *reserved, &mut *budget_epoch)
+            })
+        }
+        CopyStubKind::IndexedLocalShared => {
+            let dst_id = unsafe { ctx.local_memory_id_at_unchecked((*pc.add(1)).operand.u32) };
+            let src_id = unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(2)).operand.u32) };
+            let metering = ctx.store.metering_ref();
+            let ExecuteContext {
+                gc,
+                budget,
+                reserved,
+                budget_epoch,
+                ..
+            } = ctx;
+            gc.copy_memory_shared_to_local(dst_id, src_id, dst, src, len, || {
+                vm::checkpoint_fields(metering, &mut *budget, &mut *reserved, &mut *budget_epoch)
+            })
+        }
+        CopyStubKind::IndexedSharedLocal => {
+            let dst_id = unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(1)).operand.u32) };
+            let src_id = unsafe { ctx.local_memory_id_at_unchecked((*pc.add(2)).operand.u32) };
+            let metering = ctx.store.metering_ref();
+            let ExecuteContext {
+                gc,
+                budget,
+                reserved,
+                budget_epoch,
+                ..
+            } = ctx;
+            gc.copy_memory_local_to_shared(dst_id, src_id, dst, src, len, || {
+                vm::checkpoint_fields(metering, &mut *budget, &mut *reserved, &mut *budget_epoch)
+            })
+        }
+        CopyStubKind::IndexedSharedShared => {
+            let dst_id = unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(1)).operand.u32) };
+            let src_id = unsafe { ctx.shared_memory_id_at_unchecked((*pc.add(2)).operand.u32) };
+            if dst_id == src_id {
+                match vm::charge_n(ctx, 1 + (u64::from(len) >> 12)) {
+                    VMResult::Success(()) => {}
+                    other => return unit_result(other),
+                }
+            }
+            let metering = ctx.store.metering_ref();
+            let ExecuteContext {
+                gc,
+                budget,
+                reserved,
+                budget_epoch,
+                ..
+            } = ctx;
+            gc.copy_memory_shared_to_shared(dst_id, src_id, dst, src, len, || {
+                vm::checkpoint_fields(metering, &mut *budget, &mut *reserved, &mut *budget_epoch)
+            })
+        }
     }
 }
 
@@ -1449,6 +1557,16 @@ fn runtime_mem_fill(
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();
     let ptr = ctx.stack.pop_u32();
+    // #171: the interpreter's admission charge for bulk memory ops
+    // (`1 + (len >> 12)`), charged before the fill and never refunded.
+    // (DefaultLocal fills never reach this stub; compiled code uses
+    // the `MemoryFill` stub for the default local memory.)
+    if !matches!(kind, MemoryStubKind::DefaultLocal) {
+        match vm::charge_n(ctx, 1 + (u64::from(len) >> 12)) {
+            VMResult::Success(()) => {}
+            other => return unit_result(other),
+        }
+    }
     match kind {
         MemoryStubKind::DefaultShared => ctx.gc.shared_fill_memory(
             unsafe { ctx.default_shared_memory_id_unchecked() },
@@ -1501,6 +1619,17 @@ fn runtime_mem_grow(
 ) -> VMResult<()> {
     let memidx = unsafe { (*pc.add(1)).operand.u32 };
     let delta = ctx.stack.pop_u32();
+    // #171: the interpreter charges the grow admission
+    // (`1 + (delta_pages << 4)`) before growing and never refunds it.
+    if matches!(
+        kind,
+        MemoryStubKind::IndexedLocal | MemoryStubKind::IndexedShared
+    ) {
+        match vm::charge_n(ctx, 1 + (u64::from(delta) << 4)) {
+            VMResult::Success(()) => {}
+            other => return unit_result(other),
+        }
+    }
     let result = match kind {
         MemoryStubKind::IndexedLocal => ctx
             .gc
@@ -1564,6 +1693,12 @@ fn runtime_table_init(ctx: &mut ExecuteContext<'_>, pc: *const Instr) -> VMResul
         };
     };
     let reftype = ctx.gc.get_table(dst_table_addr).0.reftype;
+    // #171: the interpreter charges one checkpoint per copied element.
+    // The loops below hold `ctx.gc` borrows (the destination table), so
+    // the checkpoints go through a raw context pointer; `vm::checkpoint`
+    // touches only the budget fields and the store's metering handle,
+    // never `ctx.gc`.
+    let ctx_ptr: *mut ExecuteContext<'_> = ctx;
     match &elem.init {
         ElemInit::FuncIdx(idxs) => {
             let Some(slice) = idxs.get(src..src + len) else {
@@ -1579,6 +1714,10 @@ fn runtime_table_init(ctx: &mut ExecuteContext<'_>, pc: *const Instr) -> VMResul
             // This loop is O(len).
             let funcs = instance.funcs.as_slice();
             for (i, funcidx) in slice.iter().enumerate() {
+                match vm::checkpoint(unsafe { &mut *ctx_ptr }) {
+                    VMResult::Success(()) => {}
+                    other => return unit_result(other),
+                }
                 dst[i] = funcs[*funcidx as usize].get();
             }
         }
@@ -1587,6 +1726,10 @@ fn runtime_table_init(ctx: &mut ExecuteContext<'_>, pc: *const Instr) -> VMResul
                 return VMResult::TableIndexOutOfRange;
             };
             for (i, expr) in slice.iter().enumerate() {
+                match vm::checkpoint(unsafe { &mut *ctx_ptr }) {
+                    VMResult::Success(()) => {}
+                    other => return unit_result(other),
+                }
                 let value = match execute_elem_init_const_expr(
                     ctx.gc,
                     instance.globals.as_slice(),
@@ -1612,6 +1755,12 @@ fn runtime_table_copy(ctx: &mut ExecuteContext<'_>, pc: *const Instr) -> VMResul
     let len = ctx.stack.pop_u32() as usize;
     let src = ctx.stack.pop_u32() as usize;
     let dst = ctx.stack.pop_u32() as usize;
+    // #171: the interpreter's admission charge for bulk table ops
+    // (`1 + (len >> 10)`), charged before the copy and never refunded.
+    match vm::charge_n(ctx, 1 + ((len as u64) >> 10)) {
+        VMResult::Success(()) => {}
+        other => return unit_result(other),
+    }
     let dst_table_idx = unsafe { (*pc.add(1)).operand.u32 as usize };
     let src_table_idx = unsafe { (*pc.add(2)).operand.u32 as usize };
     let src_table_addr = ctx.instance().tables.as_slice()[src_table_idx];
@@ -1638,11 +1787,18 @@ fn runtime_table_grow(ctx: &mut ExecuteContext<'_>, pc: *const Instr) -> VMResul
     let table_addr = ctx.instance().tables.as_slice()[table_idx];
     let n = ctx.stack.pop_i32();
     let value = ctx.stack.pop_u32();
-    let table = ctx.gc.get_table(table_addr);
-    let size = table.1.len();
     if n < 0 {
         return ctx.stack.push_i32(-1);
     }
+    // #171: the interpreter's admission charge for bulk table ops
+    // (`1 + (n >> 10)`), charged before the grow and never refunded —
+    // including when the grow then fails its limit check.
+    match vm::charge_n(ctx, 1 + ((n as u64) >> 10)) {
+        VMResult::Success(()) => {}
+        other => return unit_result(other),
+    }
+    let table = ctx.gc.get_table(table_addr);
+    let size = table.1.len();
     let new_len = size + n as usize;
     match table.0.limits.max {
         Some(max) if max as usize >= new_len => {
@@ -1668,6 +1824,12 @@ fn runtime_table_fill(ctx: &mut ExecuteContext<'_>, pc: *const Instr) -> VMResul
     let len = ctx.stack.pop_u32() as usize;
     let value = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32() as usize;
+    // #171: the interpreter's admission charge for bulk table ops
+    // (`1 + (len >> 10)`), charged before the fill and never refunded.
+    match vm::charge_n(ctx, 1 + ((len as u64) >> 10)) {
+        VMResult::Success(()) => {}
+        other => return unit_result(other),
+    }
     let table_idx = unsafe { (*pc.add(1)).operand.u32 as usize };
     let table_addr = ctx.instance().tables.as_slice()[table_idx];
     let table = &mut ctx.gc.get_table(table_addr).1;
@@ -1857,6 +2019,12 @@ pub(crate) extern "C" fn i32_list_crc_pair_loop(
 
     let mut i = 0u32;
     while i != iterations {
+        // #171: the interpreter handler charges one checkpoint per
+        // iteration of this internally-looping fused op.
+        match vm::checkpoint(ctx) {
+            VMResult::Success(()) => {}
+            other => return JitNativeExit::trap(other),
+        }
         let positive = match unsafe { vm::list_crc_summary_value(ctx, res, 1) } {
             VMResult::Success(value) => value,
             other => return JitNativeExit::trap(other),
@@ -2159,6 +2327,7 @@ pub(crate) enum StubId {
     I32CoreStateBenchmark,
     I32NumericTokenStateTransition,
     I32SelectBitStep4,
+    MeteringCheckpoint,
 }
 
 #[allow(dead_code)]
@@ -2209,6 +2378,7 @@ impl StubId {
         StubId::I32CoreStateBenchmark,
         StubId::I32NumericTokenStateTransition,
         StubId::I32SelectBitStep4,
+        StubId::MeteringCheckpoint,
     ];
 
     /// The stub's source-level name, used in diagnostics and in the table
@@ -2259,6 +2429,7 @@ impl StubId {
             StubId::I32CoreStateBenchmark => "i32_core_state_benchmark",
             StubId::I32NumericTokenStateTransition => "i32_numeric_token_state_transition",
             StubId::I32SelectBitStep4 => "i32_select_bit_step4",
+            StubId::MeteringCheckpoint => "metering_checkpoint",
         }
     }
 
@@ -2359,6 +2530,7 @@ impl StubId {
                 i32_numeric_token_state_transition as *const ()
             }
             StubId::I32SelectBitStep4 => i32_select_bit_step4 as *const (),
+            StubId::MeteringCheckpoint => metering_checkpoint as *const (),
         }
     }
 
