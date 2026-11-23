@@ -2,9 +2,13 @@
 //!
 //! Compiled functions are packed into code slabs instead of receiving one
 //! page-rounded mapping each. A slab is a single shared backing object
-//! (a memfd on Linux, POSIX shared memory on macOS) mapped twice: a
-//! writable view used to stage code while the slab is open, and an
-//! executable view that is never writable at any point in its lifetime.
+//! mapped twice: a writable view used to stage code while the slab is
+//! open, and an executable view that is never writable at any point in
+//! its lifetime. On Linux the backing is a memfd mapped read/write and
+//! read/execute; on macOS the writable view is an anonymous mapping and
+//! the executable view is an alias of the same pages made with
+//! `mach_vm_remap` (an executable `mmap` of a POSIX shared-memory object
+//! faults with SIGBUS when executed on Apple Silicon).
 //! Functions are bump-allocated into the open slab at 16-byte alignment;
 //! once written and cache-flushed, a function is executable through the
 //! executable view immediately. When a slab fills up or is sealed, its
@@ -77,23 +81,7 @@ unsafe impl Sync for Slab {}
 impl Slab {
     fn new(size: usize) -> Result<Self, CodeMemoryError> {
         debug_assert!(size > 0 && size % MmapOptions::page_size() == 0);
-        let fd = create_shared_backing(size)?;
-        let rw = map_view(fd, libc::PROT_READ | libc::PROT_WRITE, size);
-        let rx = match rw {
-            Ok(_) => map_view(fd, libc::PROT_READ | libc::PROT_EXEC, size),
-            Err(err) => Err(err),
-        };
-        // The mappings keep the backing alive; the descriptor is no
-        // longer needed either way.
-        unsafe { libc::close(fd) };
-        let rw = rw?;
-        let rx = match rx {
-            Ok(ptr) => ptr,
-            Err(err) => {
-                unsafe { libc::munmap(rw as *mut libc::c_void, size) };
-                return Err(err);
-            }
-        };
+        let (rw, rx) = create_slab_views(size)?;
         Ok(Self {
             rx,
             rw: std::sync::atomic::AtomicUsize::new(rw as usize),
@@ -122,20 +110,19 @@ impl Slab {
 impl Drop for Slab {
     fn drop(&mut self) {
         self.retire();
-        unsafe { libc::munmap(self.rx as *mut libc::c_void, self.size) };
+        unmap_rx_view(self.rx, self.size);
     }
 }
 
 /// Creates an anonymous shared backing object of `size` bytes and returns
-/// its file descriptor: a memfd on Linux, an immediately-unlinked POSIX
-/// shared memory object on macOS.
-#[cfg(unix)]
+/// its file descriptor: a memfd on Linux. Other Unix targets have no
+/// backing here and fall back to per-function mappings; macOS does not
+/// use a backing object at all (see `create_slab_views` below).
+#[cfg(all(unix, not(target_os = "macos")))]
 fn create_shared_backing(size: usize) -> Result<libc::c_int, CodeMemoryError> {
     #[cfg(target_os = "linux")]
     let fd = unsafe { libc::memfd_create(c"telomere-jit-code".as_ptr(), libc::MFD_CLOEXEC) };
-    #[cfg(target_os = "macos")]
-    let fd = shm_open_unique();
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(target_os = "linux"))]
     let fd = -1;
     if fd < 0 {
         return Err(CodeMemoryError);
@@ -147,53 +134,203 @@ fn create_shared_backing(size: usize) -> Result<libc::c_int, CodeMemoryError> {
     Ok(fd)
 }
 
-#[cfg(target_os = "macos")]
-fn shm_open_unique() -> libc::c_int {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    // POSIX shm names are capped at PSHMNAMLEN (31) characters; the pid
-    // plus a counter keeps the name short and collision-free in practice.
-    // The object is unlinked as soon as it is opened, so names never
-    // persist beyond this call.
-    for _ in 0..8 {
-        let name = format!(
-            "/tj{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        let Ok(c_name) = std::ffi::CString::new(name) else {
-            return -1;
-        };
-        // With O_CREAT, `shm_open` takes a variadic `mode` argument, and
-        // Rust forbids passing integers narrower than `c_uint` to variadic
-        // functions (E0617): `mode_t` is `u16` on macOS. Go through
-        // `c_uint` — on Linux `mode_t` *is* `c_uint`, so the cast is a
-        // no-op there.
-        let fd = unsafe {
-            libc::shm_open(
-                c_name.as_ptr(),
-                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
-                0o600 as libc::mode_t as libc::c_uint,
-            )
-        };
-        if fd >= 0 {
-            unsafe { libc::shm_unlink(c_name.as_ptr()) };
-            return fd;
-        }
-        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
-            return -1;
-        }
-    }
-    -1
-}
-
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn map_view(fd: libc::c_int, prot: libc::c_int, size: usize) -> Result<*mut u8, CodeMemoryError> {
     let ptr = unsafe { libc::mmap(std::ptr::null_mut(), size, prot, libc::MAP_SHARED, fd, 0) };
     if ptr == libc::MAP_FAILED {
         return Err(CodeMemoryError);
     }
     Ok(ptr as *mut u8)
+}
+
+/// Creates the two views of one slab over a shared backing object (see
+/// [`create_shared_backing`]): a writable view and an executable view of
+/// the same pages.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn create_slab_views(size: usize) -> Result<(*mut u8, *mut u8), CodeMemoryError> {
+    let fd = create_shared_backing(size)?;
+    let rw = map_view(fd, libc::PROT_READ | libc::PROT_WRITE, size);
+    let rx = match rw {
+        Ok(_) => map_view(fd, libc::PROT_READ | libc::PROT_EXEC, size),
+        Err(err) => Err(err),
+    };
+    // The mappings keep the backing alive; the descriptor is no longer
+    // needed either way.
+    unsafe { libc::close(fd) };
+    let rw = rw?;
+    let rx = match rx {
+        Ok(ptr) => ptr,
+        Err(err) => {
+            unsafe { libc::munmap(rw as *mut libc::c_void, size) };
+            return Err(err);
+        }
+    };
+    Ok((rw, rx))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn unmap_rx_view(ptr: *mut u8, size: usize) {
+    unsafe { libc::munmap(ptr as *mut libc::c_void, size) };
+}
+
+/// Creates the two views of one slab on macOS. A dual `mmap` of a POSIX
+/// shared-memory object does not work here: the writable view maps and
+/// stores fine, but executing through the executable view faults with
+/// SIGBUS on Apple Silicon (reproduced with a minimal shm_open/mmap
+/// program and by the aarch64-apple-darwin CI cell). Instead the
+/// writable view is a plain anonymous mapping and the executable view
+/// is an alias of the same pages created with `mach_vm_remap` and
+/// protected read/execute; the alias is never writable, so the W^X
+/// contract is unchanged.
+#[cfg(target_os = "macos")]
+fn create_slab_views(size: usize) -> Result<(*mut u8, *mut u8), CodeMemoryError> {
+    let rw = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANON | libc::MAP_PRIVATE,
+            -1,
+            0,
+        )
+    };
+    if rw == libc::MAP_FAILED {
+        return Err(CodeMemoryError);
+    }
+    let rw = rw as *mut u8;
+    let task = mach::task_self();
+    let mut rx_addr: mach::MachVmAddress = 0;
+    let kr = unsafe {
+        mach::mach_vm_allocate(
+            task,
+            &mut rx_addr,
+            size as mach::MachVmSize,
+            mach::VM_FLAGS_ANYWHERE,
+        )
+    };
+    if kr != mach::KERN_SUCCESS {
+        unsafe { libc::munmap(rw as *mut libc::c_void, size) };
+        return Err(CodeMemoryError);
+    }
+    let mut cur_prot: mach::VmProt = 0;
+    let mut max_prot: mach::VmProt = 0;
+    let kr = unsafe {
+        mach::mach_vm_remap(
+            task,
+            &mut rx_addr,
+            size as mach::MachVmSize,
+            0,
+            mach::VM_FLAGS_FIXED | mach::VM_FLAGS_OVERWRITE,
+            task,
+            rw as mach::MachVmAddress,
+            0,
+            &mut cur_prot,
+            &mut max_prot,
+            mach::VM_INHERIT_NONE,
+        )
+    };
+    if kr != mach::KERN_SUCCESS {
+        unsafe {
+            mach::mach_vm_deallocate(task, rx_addr, size as mach::MachVmSize);
+            libc::munmap(rw as *mut libc::c_void, size);
+        }
+        return Err(CodeMemoryError);
+    }
+    let kr = unsafe {
+        mach::mach_vm_protect(
+            task,
+            rx_addr,
+            size as mach::MachVmSize,
+            0,
+            mach::VM_PROT_READ | mach::VM_PROT_EXECUTE,
+        )
+    };
+    if kr != mach::KERN_SUCCESS {
+        unsafe {
+            mach::mach_vm_deallocate(task, rx_addr, size as mach::MachVmSize);
+            libc::munmap(rw as *mut libc::c_void, size);
+        }
+        return Err(CodeMemoryError);
+    }
+    Ok((rw, rx_addr as *mut u8))
+}
+
+#[cfg(target_os = "macos")]
+fn unmap_rx_view(ptr: *mut u8, size: usize) {
+    unsafe {
+        mach::mach_vm_deallocate(
+            mach::task_self(),
+            ptr as mach::MachVmAddress,
+            size as mach::MachVmSize,
+        );
+    }
+}
+
+/// The Mach VM calls the macOS slab alias needs. libSystem exports
+/// them; they are declared here directly (the style the
+/// `sys_icache_invalidate` declaration below already uses) so the
+/// workspace takes no Mach-specific dependency for four calls.
+#[cfg(target_os = "macos")]
+mod mach {
+    pub type KernReturn = libc::c_int;
+    pub type MachPort = libc::c_uint;
+    pub type MachVmAddress = u64;
+    pub type MachVmSize = u64;
+    pub type VmProt = libc::c_int;
+    pub type VmInherit = libc::c_uint;
+    pub type Boolean = libc::c_uint;
+
+    pub const KERN_SUCCESS: KernReturn = 0;
+    pub const VM_FLAGS_ANYWHERE: libc::c_int = 0x0001;
+    pub const VM_FLAGS_FIXED: libc::c_int = 0x0000;
+    pub const VM_FLAGS_OVERWRITE: libc::c_int = 0x4000;
+    pub const VM_INHERIT_NONE: VmInherit = 1;
+    pub const VM_PROT_READ: VmProt = 0x01;
+    pub const VM_PROT_EXECUTE: VmProt = 0x04;
+
+    extern "C" {
+        #[link_name = "mach_task_self_"]
+        static MACH_TASK_SELF: MachPort;
+
+        pub fn mach_vm_allocate(
+            target: MachPort,
+            address: *mut MachVmAddress,
+            size: MachVmSize,
+            flags: libc::c_int,
+        ) -> KernReturn;
+
+        pub fn mach_vm_remap(
+            target: MachPort,
+            target_address: *mut MachVmAddress,
+            size: MachVmSize,
+            mask: MachVmAddress,
+            flags: libc::c_int,
+            src_task: MachPort,
+            src_address: MachVmAddress,
+            copy: Boolean,
+            cur_protection: *mut VmProt,
+            max_protection: *mut VmProt,
+            inheritance: VmInherit,
+        ) -> KernReturn;
+
+        pub fn mach_vm_protect(
+            target: MachPort,
+            address: MachVmAddress,
+            size: MachVmSize,
+            set_maximum: Boolean,
+            new_protection: VmProt,
+        ) -> KernReturn;
+
+        pub fn mach_vm_deallocate(
+            target: MachPort,
+            address: MachVmAddress,
+            size: MachVmSize,
+        ) -> KernReturn;
+    }
+
+    pub fn task_self() -> MachPort {
+        unsafe { MACH_TASK_SELF }
+    }
 }
 
 pub struct ExecutableCode {
