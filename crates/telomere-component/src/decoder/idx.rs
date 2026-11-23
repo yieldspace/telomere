@@ -1,6 +1,6 @@
 use crate::decoder::{ParseContext, ParseResult};
 use crate::ir::types::Type;
-use crate::ir::{Component, Func, Instance, LocalIdx};
+use crate::ir::{Component, Func, Instance, LocalIdx, Value};
 use crate::support::binary::BinaryReader;
 use crate::support::parser::core::parse_u32;
 
@@ -28,6 +28,13 @@ pub fn parse_instance_local_idx(
 pub fn parse_type_local_idx(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<LocalIdx<Type>> {
+    let (_, idx) = parse_u32(ctx.reader)?;
+    Ok(LocalIdx::new(idx))
+}
+
+pub fn parse_value_local_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> ParseResult<LocalIdx<Value>> {
     let (_, idx) = parse_u32(ctx.reader)?;
     Ok(LocalIdx::new(idx))
 }

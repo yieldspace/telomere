@@ -58,7 +58,14 @@ jobs:
           set -euo pipefail
           python3 tools/check-aot-load-symbols.py
 
+      # Run even when the size gate (or another check above) fails: the
+      # failing runs are exactly the ones whose measurements are needed
+      # for investigation and re-baselining (#272). `!cancelled()` keeps
+      # the step skipped when the job itself is cancelled. The gate step
+      # above still fails the job on a violation; this only preserves
+      # the measurement artifact.
       - name: Upload footprint measurements
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: embedder-footprint

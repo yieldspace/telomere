@@ -859,7 +859,11 @@ impl Memory {
     }
 
     #[inline(always)]
-    pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
+    pub(crate) fn push_to_stack<const N: usize>(
+        &self,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
         let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
             VMResult::MemoryIndexOutOfRange
         }));
@@ -1311,7 +1315,11 @@ impl LocalMemoryObject {
     }
 
     #[inline(always)]
-    pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
+    pub(crate) fn push_to_stack<const N: usize>(
+        &self,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
         self.memory.push_to_stack::<N>(stack, offset)
     }
 
@@ -1543,7 +1551,11 @@ impl SharedMemoryObject {
     }
 
     #[inline(always)]
-    pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
+    pub(crate) fn push_to_stack<const N: usize>(
+        &self,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
         self.state.lock().memory.push_to_stack::<N>(stack, offset)
     }
 

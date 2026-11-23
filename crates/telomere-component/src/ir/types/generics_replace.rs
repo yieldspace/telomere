@@ -1,5 +1,5 @@
 use crate::decoder::{ParseResult, TransformContext, Validator};
-use crate::ir::types::CoreModuleType;
+use crate::ir::types::{CoreModuleType, ValType};
 use crate::ir::TypeId;
 use std::collections::HashMap;
 
@@ -16,6 +16,7 @@ pub enum GenericsReplaceDSL {
     ExportFunc(String, TypeId),
     ExportTypeEq(String, TypeId),
     ExportTypeSub(String, TypeId),
+    ExportValue(String, ValType),
 }
 pub struct GenericsReplaceDSLEnvironment {
     result: HashMap<String, InstanceExportType>,
@@ -71,6 +72,10 @@ impl GenericsReplaceDSL {
             GenericsReplaceDSL::ExportTypeSub(name, type_id) => {
                 let new_type_id = validator.instantiate_sub_resource_type(*type_id, unified)?;
                 result.insert(name.clone(), InstanceExportType::Type(new_type_id));
+            }
+            GenericsReplaceDSL::ExportValue(name, ty) => {
+                let ty = validator.instantiate_valtype(ty, unified)?;
+                result.insert(name.clone(), InstanceExportType::Value(ty));
             }
         }
         Ok(())

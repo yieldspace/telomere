@@ -33,6 +33,22 @@ fn instantiate_sync(
         env,
     ));
 
+    // Host-provided values bypass the decoder, so check them against the
+    // declared import types here: this is the canonical-ABI-side soundness
+    // gate for the value index space. Imports the linker does not provide
+    // stay lazy and fail at first use, like function imports.
+    for (name, import) in &program.root.imports {
+        if let crate::ir::ComponentImport::Value(ty) = import {
+            if let Some(value) = linker.resolve_import_value(name) {
+                value_matches_type(&program, &value, ty).map_err(|_| {
+                    ComponentError::Link(format!(
+                        "value import '{name}' does not match its declared type"
+                    ))
+                })?;
+            }
+        }
+    }
+
     materialize_defined_core_instances(root.env.as_ref(), store)?;
 
     for name in &program.callable_exports {
@@ -141,6 +157,19 @@ impl RuntimeInstance {
         }
     }
 
+    pub(crate) fn value_path(
+        &self,
+        store: &Store,
+        path: &[String],
+        name: &str,
+    ) -> Result<ComponentValue, ComponentError> {
+        let namespace = self.resolve_namespace(store, path)?;
+        match namespace.resolve_export(name, store)? {
+            RuntimeExport::Value(value) => Ok(value),
+            _ => Err(ComponentError::ExportNotFound(name.to_owned())),
+        }
+    }
+
     fn resolve_namespace(
         &self,
         store: &Store,
@@ -243,6 +272,9 @@ impl RuntimeEnv {
                         InstanceImport::Instance(idx) => {
                             RuntimeImport::Instance(self.resolve_instance(*idx, store)?)
                         }
+                        InstanceImport::Value(idx) => {
+                            RuntimeImport::Value(self.resolve_value(*idx, store)?)
+                        }
                     };
                     imports.insert(name.clone(), value);
                 }
@@ -321,6 +353,35 @@ impl RuntimeEnv {
         };
         self.caches.funcs.borrow_mut().insert(idx, func.clone());
         Ok(func)
+    }
+
+    fn resolve_value(
+        &self,
+        idx: GlobalIdx<Value>,
+        store: &Store,
+    ) -> Result<ComponentValue, ComponentError> {
+        if let Some(value) = self.caches.values.borrow().get(&idx).cloned() {
+            return Ok(value);
+        }
+        let value = match self.program.value_store.get(&idx) {
+            Some(Relation::Defined(def)) => def.value.clone(),
+            Some(Relation::Import(name)) => self.lookup_import_value(name)?,
+            Some(Relation::FromExport(instance_idx, name)) => match self
+                .resolve_instance(*instance_idx, store)?
+                .resolve_export(name, store)?
+            {
+                RuntimeExport::Value(value) => value,
+                _ => {
+                    return Err(ComponentError::Link(format!(
+                        "value export '{}' is not a value",
+                        name
+                    )))
+                }
+            },
+            None => return Err(ComponentError::Link("value relation missing".to_owned())),
+        };
+        self.caches.values.borrow_mut().insert(idx, value.clone());
+        Ok(value)
     }
 
     fn resolve_core_module(
@@ -610,6 +671,7 @@ impl RuntimeEnv {
             core_funcs: RefCell::new(caches.core_funcs.borrow().clone()),
             core_memories: RefCell::new(caches.core_memories.borrow().clone()),
             core_tables: RefCell::new(caches.core_tables.borrow().clone()),
+            values: RefCell::new(caches.values.borrow().clone()),
         }
     }
 
@@ -697,6 +759,35 @@ impl RuntimeEnv {
         }
     }
 
+    fn lookup_import_value(&self, name: &str) -> Result<ComponentValue, ComponentError> {
+        match self.imports.get(name) {
+            Some(RuntimeImport::Value(value)) => Ok(value.clone()),
+            Some(_) => Err(ComponentError::Link(format!(
+                "import '{}' is not a value",
+                name
+            ))),
+            None => {
+                if let Some(value) = self.linker.resolve_import_value(name) {
+                    return Ok(value);
+                }
+                if let Some(parent) = &self.parent {
+                    if let Ok(value) = parent.lookup_import_value(name) {
+                        return Ok(value);
+                    }
+                }
+                if let Some(found) = self.linker.incompatible_import_value(name) {
+                    return Err(ComponentError::Link(format!(
+                        "value import '{name}' is unresolved (found incompatible version {found})"
+                    )));
+                }
+                Err(ComponentError::Link(format!(
+                    "value import '{}' is unresolved",
+                    name
+                )))
+            }
+        }
+    }
+
     fn lookup_import_core_module(&self, name: &str) -> Result<Module, ComponentError> {
         match self.imports.get(name) {
             Some(RuntimeImport::CoreModule(module)) => Ok((**module).clone()),
@@ -767,39 +858,47 @@ impl RuntimeComponentInstance {
             return Ok(export);
         }
         let export = match &self.source {
-            RuntimeComponentSource::Component(component) => match component
-                .exports
-                .get(&resolve_component_export_key(component, name)?)
-            {
-                Some(ComponentExport::Component(idx)) => {
-                    RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
-                }
-                Some(ComponentExport::Instance(idx)) => {
-                    RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
-                }
-                Some(ComponentExport::Func { idx, .. }) => {
-                    if self.env.parent.is_none() {
-                        if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx) {
-                            if let Some(binding) = self.env.linker.resolve_export(name) {
-                                let export = RuntimeExport::Func(Rc::new(
-                                    linker_binding_to_callable(binding),
-                                ));
-                                self.exports
-                                    .borrow_mut()
-                                    .insert(name.to_owned(), export.clone());
-                                return Ok(export);
+            RuntimeComponentSource::Component(component) => {
+                // Retain the resolved (version-matched) export key: a
+                // re-exported import is registered with the linker under
+                // the export's own name, so the host-export lookup below
+                // must use this key rather than the requested name (#271).
+                let key = resolve_component_export_key(component, name)?;
+                match component.exports.get(&key) {
+                    Some(ComponentExport::Component(idx)) => {
+                        RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
+                    }
+                    Some(ComponentExport::Instance(idx)) => {
+                        RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
+                    }
+                    Some(ComponentExport::Func { idx, .. }) => {
+                        if self.env.parent.is_none() {
+                            if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx)
+                            {
+                                if let Some(binding) = self.env.linker.resolve_export(&key) {
+                                    let export = RuntimeExport::Func(Rc::new(
+                                        linker_binding_to_callable(binding),
+                                    ));
+                                    self.exports
+                                        .borrow_mut()
+                                        .insert(name.to_owned(), export.clone());
+                                    return Ok(export);
+                                }
                             }
                         }
+                        RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
                     }
-                    RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
+                    Some(ComponentExport::Module(idx)) => RuntimeExport::CoreModule(Box::new(
+                        self.env.resolve_core_module(*idx, store)?,
+                    )),
+                    Some(ComponentExport::Value { idx, .. }) => {
+                        RuntimeExport::Value(self.env.resolve_value(*idx, store)?)
+                    }
+                    Some(ComponentExport::Resource(_)) | None => {
+                        return Err(ComponentError::ExportNotFound(name.to_owned()))
+                    }
                 }
-                Some(ComponentExport::Module(idx)) => {
-                    RuntimeExport::CoreModule(Box::new(self.env.resolve_core_module(*idx, store)?))
-                }
-                Some(ComponentExport::Resource(_)) | None => {
-                    return Err(ComponentError::ExportNotFound(name.to_owned()))
-                }
-            },
+            }
             RuntimeComponentSource::LinkerInstance(instance) => {
                 let Some(binding) = instance.resolve_export(name) else {
                     return Err(ComponentError::ExportNotFound(name.to_owned()));
@@ -811,6 +910,211 @@ impl RuntimeComponentInstance {
             .borrow_mut()
             .insert(name.to_owned(), export.clone());
         Ok(export)
+    }
+}
+
+/// Structural check that a host-provided value conforms to a declared value
+/// type. Defined values are produced by the decoder and need no check; this
+/// guards the one place unvalidated values enter the runtime (linker-supplied
+/// value imports). Recursion follows the value's own structure, so it
+/// terminates on any finite value even for recursive types.
+///
+/// Alongside the canonical forms, the dedicated `Enum` / `Option` / `Result`
+/// representations are accepted for the variant shapes they desugar to, since
+/// those are what canonical-ABI lifting produces for such types.
+fn value_matches_type(
+    program: &ComponentProgram,
+    value: &ComponentValue,
+    ty: &ValType,
+) -> Result<(), ComponentError> {
+    fn mismatch() -> ComponentError {
+        ComponentError::Link("value does not match the declared type".to_owned())
+    }
+    match ty {
+        ValType::Primitive(prim) => value_matches_prim(value, prim),
+        ValType::Type(id) => match program.get_type(*id) {
+            Some(Type::DefVal(def)) => {
+                let def = def.clone();
+                value_matches_defval(program, value, &def)
+            }
+            Some(Type::Resource(_)) => match value {
+                ComponentValue::Own(_) | ComponentValue::Borrow(_) => Ok(()),
+                _ => Err(mismatch()),
+            },
+            _ => Err(mismatch()),
+        },
+    }
+}
+
+fn value_matches_prim(value: &ComponentValue, prim: &PrimValType) -> Result<(), ComponentError> {
+    let ok = matches!(
+        (value, prim),
+        (ComponentValue::Bool(_), PrimValType::Bool)
+            | (ComponentValue::U8(_), PrimValType::U8)
+            | (ComponentValue::S8(_), PrimValType::S8)
+            | (ComponentValue::U16(_), PrimValType::U16)
+            | (ComponentValue::S16(_), PrimValType::S16)
+            | (ComponentValue::U32(_), PrimValType::U32)
+            | (ComponentValue::S32(_), PrimValType::S32)
+            | (ComponentValue::U64(_), PrimValType::U64)
+            | (ComponentValue::S64(_), PrimValType::S64)
+            | (ComponentValue::F32(_), PrimValType::F32)
+            | (ComponentValue::F64(_), PrimValType::F64)
+            | (ComponentValue::Char(_), PrimValType::Char)
+            | (ComponentValue::String(_), PrimValType::String)
+    );
+    if ok {
+        Ok(())
+    } else {
+        Err(ComponentError::Link(
+            "value does not match the declared type".to_owned(),
+        ))
+    }
+}
+
+fn value_matches_defval(
+    program: &ComponentProgram,
+    value: &ComponentValue,
+    def: &DefValType,
+) -> Result<(), ComponentError> {
+    fn mismatch() -> ComponentError {
+        ComponentError::Link("value does not match the declared type".to_owned())
+    }
+    match def {
+        DefValType::Primitive(prim) => value_matches_prim(value, prim),
+        DefValType::Record(fields) => match value {
+            ComponentValue::Record(entries) => {
+                if entries.len() != fields.len() {
+                    return Err(mismatch());
+                }
+                for (field, (label, entry)) in fields.iter().zip(entries.iter()) {
+                    if field.label.flat() != *label {
+                        return Err(mismatch());
+                    }
+                    value_matches_type(program, entry, &field.ty)?;
+                }
+                Ok(())
+            }
+            // A tuple is a record with numeric labels "0", "1", ... in order.
+            ComponentValue::Tuple(entries) => {
+                if entries.len() != fields.len() {
+                    return Err(mismatch());
+                }
+                for (index, (field, entry)) in fields.iter().zip(entries.iter()).enumerate() {
+                    if field.label.flat() != index.to_string() {
+                        return Err(mismatch());
+                    }
+                    value_matches_type(program, entry, &field.ty)?;
+                }
+                Ok(())
+            }
+            _ => Err(mismatch()),
+        },
+        DefValType::Variant(cases) => match value {
+            ComponentValue::Variant {
+                case,
+                value: payload,
+            } => {
+                let case = cases
+                    .iter()
+                    .find(|c| c.label.flat() == *case)
+                    .ok_or_else(mismatch)?;
+                match (&case.ty, payload) {
+                    (Some(ty), Some(payload)) => value_matches_type(program, payload, ty),
+                    (None, None) => Ok(()),
+                    _ => Err(mismatch()),
+                }
+            }
+            ComponentValue::Enum(case) => {
+                let case = cases
+                    .iter()
+                    .find(|c| c.label.flat() == *case)
+                    .ok_or_else(mismatch)?;
+                if case.ty.is_none() {
+                    Ok(())
+                } else {
+                    Err(mismatch())
+                }
+            }
+            ComponentValue::Option(payload) => {
+                // `option t` desugars to the variant `none | some(t)`.
+                let is_option_shape = cases.len() == 2
+                    && cases[0].label.flat() == "none"
+                    && cases[0].ty.is_none()
+                    && cases[1].label.flat() == "some";
+                if !is_option_shape {
+                    return Err(mismatch());
+                }
+                match (payload, &cases[1].ty) {
+                    (None, _) => Ok(()),
+                    (Some(payload), Some(ty)) => value_matches_type(program, payload, ty),
+                    _ => Err(mismatch()),
+                }
+            }
+            ComponentValue::Result { ok, err } => {
+                // `result t e` desugars to the variant `ok(t) | err(e)`.
+                let is_result_shape = cases.len() == 2
+                    && cases[0].label.flat() == "ok"
+                    && cases[1].label.flat() == "err";
+                if !is_result_shape {
+                    return Err(mismatch());
+                }
+                match (ok, err) {
+                    (Some(payload), None) => match &cases[0].ty {
+                        Some(ty) => value_matches_type(program, payload, ty),
+                        None => Err(mismatch()),
+                    },
+                    (None, Some(payload)) => match &cases[1].ty {
+                        Some(ty) => value_matches_type(program, payload, ty),
+                        None => Err(mismatch()),
+                    },
+                    (None, None) => {
+                        if cases[0].ty.is_none() && cases[1].ty.is_none() {
+                            Ok(())
+                        } else {
+                            Err(mismatch())
+                        }
+                    }
+                    _ => Err(mismatch()),
+                }
+            }
+            _ => Err(mismatch()),
+        },
+        DefValType::Flags(labels) => match value {
+            ComponentValue::Flags(selected) => {
+                if selected
+                    .iter()
+                    .all(|label| labels.iter().any(|l| l.flat() == *label))
+                {
+                    Ok(())
+                } else {
+                    Err(mismatch())
+                }
+            }
+            _ => Err(mismatch()),
+        },
+        DefValType::List(elem, len) => match value {
+            ComponentValue::List(items) => {
+                if let Some(len) = len {
+                    if items.len() != *len {
+                        return Err(mismatch());
+                    }
+                }
+                for item in items {
+                    value_matches_type(program, item, elem)?;
+                }
+                Ok(())
+            }
+            _ => Err(mismatch()),
+        },
+        DefValType::Own(_) => match value {
+            ComponentValue::Own(_) => Ok(()),
+            _ => Err(mismatch()),
+        },
+        DefValType::Borrow(_) => match value {
+            ComponentValue::Borrow(_) => Ok(()),
+            _ => Err(mismatch()),
+        },
     }
 }
 
@@ -846,6 +1150,7 @@ mod tests {
             core_memory_store: HashMap::new(),
             core_global_store: HashMap::new(),
             core_table_store: HashMap::new(),
+            value_store: HashMap::new(),
         }
     }
 

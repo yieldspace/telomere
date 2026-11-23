@@ -308,9 +308,13 @@ fn load_or_compile(
     body: &FunctionBody,
 ) -> VMResult<std::sync::Arc<CompiledFunction>> {
     let max_bytes = store.runtime_config().jit.code_cache_max_bytes;
+    // #171: metering is fixed at store creation and this cache is
+    // private to the store, so whether the store is metered can be
+    // baked into the emitted code.
+    let metered = store.metering_ref().is_some();
     store
         .jit_cache()
-        .get_or_compile(funcaddr, body, runtime, max_bytes)
+        .get_or_compile(funcaddr, body, runtime, max_bytes, metered)
 }
 
 #[cfg(all(feature = "aot-load", not(feature = "jit")))]

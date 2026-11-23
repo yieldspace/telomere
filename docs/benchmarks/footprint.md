@@ -356,39 +356,37 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #267: workflow_dispatch runs 45120276581 and
-45120284790 against the PR branch at head
-`f988123a67220089cba96f5e8b960c15498ddcb5` (branch commit
-`f3746033c8bec2629df9865cf6f71dd1f235d85b` with `main` at
-`2505d8c` merged in at merge commit
-`d5acd0b43042e7d655199f2690f5090f27273ecc`, plus two merge
-follow-up fixes), and
-pull-request run 45120209665, which built the same tree
-(`ubuntu-24.04`, Rust 1.96.0). Every
-run produced byte-identical sizes: for all sixteen
-profile/configuration rows, the raw file size, the `.text` size, the
-stripped file size, and the stripped `.text` size each have a run-to-run
-spread of **0 B** across the three samples. The observed values are the
-baselines in the table below (stripped file / stripped `.text`, in bytes).
+against the code of PR #275: workflow_dispatch runs 45165908240 and
+45165914168 against the PR branch at head
+`da35d049ee8bbabc43102fe3eed958f656af07a2` (branch commit `34cf8f5`,
+retain the resolved (version-matched) export key for the host-export
+binding lookup (#271); and merge commit `da35d04` bringing in `main`
+at `296f712`), and pull-request run 45165419636, which built the same
+tree (`ubuntu-24.04`, Rust 1.96.0). Every run
+produced byte-identical sizes: for all sixteen profile/configuration
+rows, the raw file size, the `.text` size, the stripped file size, and
+the stripped `.text` size each have a run-to-run spread of **0 B**
+across the three samples. The observed values are the baselines in the
+table below (stripped file / stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,478,832 | 1,131,399 |
-| `release` | `component` | 2,475,368 | 1,983,191 |
-| `release` | `wasi` | 2,821,912 | 2,245,399 |
-| `release` | `core-nosimd` | 1,286,200 | 988,295 |
-| `release` | `core-jit` | 2,016,976 | 1,569,751 |
-| `release` | `core-aot` | 1,506,352 | 1,150,583 |
-| `release` | `wasi-threads` | 3,008,240 | 2,384,167 |
+| `release` | `core` | 1,493,584 | 1,143,303 |
+| `release` | `component` | 2,537,392 | 2,036,775 |
+| `release` | `wasi` | 2,881,392 | 2,296,903 |
+| `release` | `core-nosimd` | 1,300,968 | 1,000,199 |
+| `release` | `core-jit` | 2,038,040 | 1,586,951 |
+| `release` | `core-aot` | 1,520,816 | 1,162,215 |
+| `release` | `wasi-threads` | 3,068,152 | 2,436,071 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,097,848 | 776,999 |
-| `release-size` | `component` | 1,630,352 | 1,202,999 |
-| `release-size` | `wasi` | 1,826,016 | 1,334,535 |
-| `release-size` | `core-nosimd` | 983,008 | 697,415 |
-| `release-size` | `core-jit` | 1,532,440 | 1,095,175 |
-| `release-size` | `core-aot` | 1,117,216 | 788,503 |
-| `release-size` | `wasi-threads` | 1,967,360 | 1,428,023 |
+| `release-size` | `core` | 1,105,936 | 782,311 |
+| `release-size` | `component` | 1,665,840 | 1,232,247 |
+| `release-size` | `wasi` | 1,861,696 | 1,363,959 |
+| `release-size` | `core-nosimd` | 991,160 | 702,791 |
+| `release-size` | `core-jit` | 1,545,272 | 1,104,343 |
+| `release-size` | `core-aot` | 1,125,368 | 793,879 |
+| `release-size` | `wasi-threads` | 2,003,088 | 1,457,591 |
 
 #### Re-baseline history
 
@@ -834,6 +832,123 @@ values recorded here supersede those). The other 12 of the
 re-measured on the merged code and updated as recorded
 above, following the procedure below.
 
+PR #268 (#241, component model value index space: `Sort::Value`, sort
+0x02, value imports/exports) was branched on current `main`, so its
+first CI run tripped the gate on the PR's own change. The PR implements
+the value index space end to end in `telomere-component` (decode,
+validation, instantiation and link-time resolution of value
+imports/exports, static literal decoding of the value section, and the
+linker's `register_import_value`). A follow-up commit answers a Codex P1
+review finding: a list whose element type has an empty encoding decoded
+its element count without consuming any input bytes, so a 26-byte
+component could materialise billions of values and abort the embedding
+process on allocation; the value decoder now charges every node
+materialised without consuming input bytes against a zero-width budget
+(`ValueBudget`) and checks list element counts against the remaining
+encoding bytes plus that budget before any element is materialised.
+Attribution was isolated by measuring current `main` alone
+(workflow_dispatch run 45138848073, gate success), which reproduces the
+previous baseline exactly on all 32 gated series. The growth is confined
+to the three configurations that link the component runtime: `component`
+(release stripped file +50,568 B / stripped `.text` +44,720 B;
+release-size stripped file +28,664 B / stripped `.text` +25,024 B),
+`wasi` (release +48,056 B / +42,640 B; release-size +28,856 B / +25,216
+B) and `wasi-threads` (release +48,040 B / +42,640 B; release-size
++28,824 B / +25,200 B). The other 20 gated series are byte-identical.
+Against the original #164 baseline, the largest cumulative growth is now
+release-size `component` stripped `.text` at +5.05% (1,169,031 B to
+1,228,023 B), up from +3.54%. The baseline was re-measured on the branch
+code and updated as recorded above, following the procedure below.
+
+PR #269 (#216, replacing the raw host-linking ABI with a designed
+public host API: `telomere::host_abi` removed in favour of
+`HostContext` / `HostFn` / `HostModule` in
+`crates/telomere/src/host.rs`, the raw surface retained only behind
+`unstable-internals`) merged current `main` into its branch first; its
+first CI run on the merged tree then tripped the gate on the PR's own
+change. Four follow-up commits answer Codex review findings on the new
+boundary: the adapter future no longer touches the execution stack
+(completions resolve to values carried in an opaque outcome, and the
+scheduler validates and writes the return slot against the
+submission-time frame reference); completions are bound to the
+execution that submitted them by a process-wide monotonic task
+identity, widened to u64 so the counter cannot wrap and recycle an
+identity a retained completion could match; and the raw code-pointer
+accessor matches `FunctionBody::Host` explicitly and returns `None`
+for public callbacks instead of reaching `unreachable!`. Attribution
+was isolated by measuring current `main` alone (workflow_dispatch run
+45155688403, gate success), which reproduces the previous baseline
+exactly on all 32 gated series. Because the telomere library is linked
+into every embedder configuration except `baseline`, the growth covers
+the seven library configurations and `baseline` is unchanged: `core`
+(release stripped file +14,896 B / stripped `.text` +12,048 B;
+release-size stripped file +8,088 B / stripped `.text` +5,312 B),
+`core-nosimd` (+14,912 B / +12,048 B; +8,152 B / +5,376 B), `core-jit`
+(+14,784 B / +11,952 B; +8,088 B / +5,328 B), `core-aot` (+14,640 B /
++11,808 B; +8,152 B / +5,376 B), `component` (+11,648 B / +9,056 B;
++6,840 B / +4,240 B), `wasi` (+11,616 B / +9,056 B; +6,840 B / +4,224
+B) and `wasi-threads` (+12,064 B / +9,456 B; +6,936 B / +4,400 B).
+Against the original #164 baseline, the largest cumulative growth is
+now release-size `component` stripped `.text` at +5.41% (1,169,031 B
+to 1,232,263 B), up from +5.05%. The baseline was re-measured on the
+merged code and updated as recorded above, following the procedure
+below.
+
+PR #273 (#171, execution metering covers JIT-compiled execution: the
+#127 normalisation that warned and disabled the JIT for metered stores
+is removed, native checkpoints are emitted at guest loop headers and
+fused-loop back-edges in all three JIT backends, a
+`MeteringCheckpoint` stub refills or raises through `vm::checkpoint`,
+and the bulk-memory, table and shared-notify stubs charge with the
+interpreter’s formulas) merged current `main` into its branch
+first; its first CI run on the merged tree then tripped the gate on
+the PR’s own change. Attribution was isolated by measuring current
+`main` alone (workflow_dispatch run 45160951447, gate success), which
+reproduces the previous baseline exactly on all 32 gated series. The
+growth is confined to `core-jit`, the only configuration linking the
+JIT (release stripped file +6,280 B / stripped `.text` +5,248 B;
+release-size +4,744 B / +3,840 B): the per-backend checkpoint
+emitters, the new stub and the stub charge calls; code emitted for
+unmetered stores is byte-identical by construction. In `release` the
+other library configurations shrink slightly (−144 B stripped file
+and `.text` in `core`, `component`, `wasi`, `core-nosimd` and
+`wasi-threads`; −176 B in `core-aot`), the code-layout effect of
+removing the normalisation block from the store constructor, while in
+`release-size` every configuration except `core-jit` is
+byte-identical and `baseline` is unchanged in both profiles. Against
+the original #164 baseline, the largest cumulative growth remains
+release-size `component` stripped `.text` at +5.41% (1,169,031 B to
+1,232,263 B), unchanged, because that series does not move here. The
+baseline was re-measured on the merged code and updated as recorded
+above, following the procedure below.
+
+PR #275 (#271, host-export binding lookup retains the resolved
+(version-matched) export name: `RuntimeComponentInstance::resolve_export`
+keeps the key returned by `resolve_component_export_key` in scope and
+passes it to `ComponentLinker::resolve_export`, instead of discarding
+it and looking the binding up under the requested name) merged current
+`main` into its branch first; the merge conflicted in
+`crates/telomere-component/src/runtime/env.rs`, where `main` (PR #268)
+had added a `Value` arm to the same match, and the resolution keeps
+the branch’s block structure and keyed lookup with the `Value` arm
+added inside it. The first CI run on the merged tree passed the gate,
+because every delta is negative. Attribution was isolated by measuring
+current `main` alone (workflow_dispatch run 45165921937, gate
+success), which reproduces the previous baseline exactly on all 32
+gated series. The shrinkage is confined to the three configurations
+that link the component runtime (`component`, `wasi`, `wasi-threads`):
+−48 B stripped file and stripped `.text` in `release`, and in
+`release-size` −16 B in `component` and `wasi` and −32 B in
+`wasi-threads`, the code-layout effect of restructuring the
+`Component` arm of `resolve_export` from a match expression into a
+block with an early return. The other 20 gated series are
+byte-identical. Against the original #164 baseline, the largest
+cumulative growth remains release-size `component` stripped `.text`
+at +5.41% (1,169,031 B to 1,232,247 B), unchanged at two decimal
+places, because that series moves by only −16 B here. The baseline
+was re-measured on the merged code and updated as recorded above,
+following the procedure below.
+
 ### Threshold derivation
 
 With an observed spread of 0 B, the derived headroom over the baseline is
@@ -866,6 +981,10 @@ runners, so they cannot carry a threshold. The checker's unit tests are
 2. Take a fresh measurement of the exact code in the pull request: run the
    `Embedder footprint` workflow on the pull request (or dispatch it
    against the branch) and download the `embedder-footprint` artifact.
+   The upload step runs even when the size gate step fails, so the
+   artifact of the failing run — the run that prompted the re-baseline —
+   is available; there is no need to recover values from the measure
+   step's log output.
 3. Update `tools/embedder-size-baseline.json` in the same pull request: set
    each changed row's `baseline` and `threshold` to the newly measured
    stripped sizes, and rewrite the `source` block to name the new commit,

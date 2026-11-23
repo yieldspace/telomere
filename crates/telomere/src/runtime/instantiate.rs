@@ -10,8 +10,9 @@ use crate::{
         MemIdx, ModuleInstance, ModuleNames, NativeModule, ObjectRef, StablePc, Stack, StoreInner,
         TableIdx, TypeIdx, TypeSection,
     },
+    host::{AsyncHostFn, AsyncHostModule, HostFn, HostModule},
     runtime::{
-        scheduler::{ReadyFlag, Scheduler, Task},
+        scheduler::{fresh_task_id, ReadyFlag, Scheduler, Task},
         vm,
     },
     Module, Registry, Store, VMResult,
@@ -103,6 +104,7 @@ fn execute_offset_const_expr(
     }
 }
 
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 fn convert_native_module_to_module(m: NativeModule) -> Module {
     let mut codes = vec![];
     let mut functions = vec![];
@@ -143,6 +145,7 @@ fn async_host_placeholder(_ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     VMResult::Unreachable
 }
 
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 fn convert_async_native_module_to_module(m: AsyncNativeModule) -> (Module, Vec<AsyncHostFunction>) {
     let mut codes = vec![];
     let mut functions = vec![];
@@ -183,11 +186,165 @@ fn convert_async_native_module_to_module(m: AsyncNativeModule) -> (Module, Vec<A
         async_functions,
     )
 }
+fn convert_public_native_module_to_module(m: HostModule) -> (Module, Vec<HostFn>) {
+    let mut codes = vec![];
+    let mut functions = vec![];
+    let mut fts = vec![];
+    let mut exs = vec![];
+    let mut host_functions = Vec::with_capacity(m.functions.len());
+    for crate::host::HostFnDefinition {
+        fp,
+        name,
+        signature,
+    } in m.functions.into_iter()
+    {
+        let funcidx = functions.len();
+        functions.push(TypeIdx(fts.len() as u32));
+        fts.push(signature);
+        codes.push(FunctionBody::Host(async_host_placeholder));
+        host_functions.push(fp);
+        if let Some(name) = name {
+            exs.push(Export(name, ExportDesc::Func(FuncIdx(funcidx as u32))));
+        }
+    }
+    (
+        Module {
+            codes: CodeSection(codes),
+            functions,
+            fts: TypeSection(fts),
+            data: DataSection(vec![]),
+            elems: ElementSection(vec![]),
+            imports: ImportSection(vec![]),
+            mems: vec![],
+            globals: vec![],
+            global_init: vec![],
+            exs: ExportSection(exs),
+            tables: vec![],
+            start: None,
+            name: None,
+        },
+        host_functions,
+    )
+}
+
+fn convert_public_async_native_module_to_module(m: AsyncHostModule) -> (Module, Vec<AsyncHostFn>) {
+    let mut codes = vec![];
+    let mut functions = vec![];
+    let mut fts = vec![];
+    let mut exs = vec![];
+    let mut host_functions = Vec::with_capacity(m.functions.len());
+    for crate::host::AsyncHostFnDefinition {
+        fp,
+        name,
+        signature,
+    } in m.functions.into_iter()
+    {
+        let funcidx = functions.len();
+        functions.push(TypeIdx(fts.len() as u32));
+        fts.push(signature);
+        codes.push(FunctionBody::Host(async_host_placeholder));
+        host_functions.push(fp);
+        if let Some(name) = name {
+            exs.push(Export(name, ExportDesc::Func(FuncIdx(funcidx as u32))));
+        }
+    }
+    (
+        Module {
+            codes: CodeSection(codes),
+            functions,
+            fts: TypeSection(fts),
+            data: DataSection(vec![]),
+            elems: ElementSection(vec![]),
+            imports: ImportSection(vec![]),
+            mems: vec![],
+            globals: vec![],
+            global_init: vec![],
+            exs: ExportSection(exs),
+            tables: vec![],
+            start: None,
+            name: None,
+        },
+        host_functions,
+    )
+}
+
 /// Instantiates a synthetic module made entirely of synchronous host functions.
 ///
 /// This is useful when an embedder wants to register a Rust-provided module in
 /// a [`Registry`] before instantiating a guest that imports it.
+///
+/// # Examples
+///
+/// ```
+/// use futures::executor::block_on;
+/// use telomere::{
+///     component_support::common::{FuncType, ValType},
+///     instantiate, instantiate_native_module, run_module_function, HostContext, HostFnDefinition,
+///     HostModule, IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser,
+///     WasmValue,
+/// };
+///
+/// fn answer(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+///     VMResult::Success(vec![WasmValue::I32(42)])
+/// }
+///
+/// let store = Store::new();
+/// let mut registry = Registry::new();
+/// let host = block_on(instantiate_native_module(
+///     HostModule {
+///         functions: vec![HostFnDefinition {
+///             name: Some("answer".to_owned()),
+///             signature: FuncType::new(vec![], vec![ValType::I32]),
+///             fp: answer,
+///         }],
+///     },
+///     &store,
+///     &registry,
+/// ))
+/// .unwrap();
+/// registry.register("host", host);
+/// let bytes = wat::parse_str(
+///     r#"(module
+///         (import "host" "answer" (func $answer (result i32)))
+///         (func (export "run") (result i32) call $answer))"#,
+/// )
+/// .expect("the inline module is valid WebAssembly");
+/// let mut reader = IoReadBinaryReader::from(&bytes[..]);
+/// let module = WasmParser::new(&mut reader)
+///     .parse_module()
+///     .expect("the module parses");
+/// let instance = block_on(instantiate(module, &store, &registry)).unwrap();
+/// let result = block_on(run_module_function(
+///     &instance,
+///     &store,
+///     "run",
+///     &ResultValue::new(vec![]),
+/// ));
+/// assert_eq!(
+///     result.unwrap(),
+///     ResultValue::new(vec![WasmValue::I32(42)])
+/// );
+/// ```
 pub async fn instantiate_native_module(
+    m: HostModule,
+    store: &Store,
+    registry: &Registry,
+) -> VMResult<InstanceHandle> {
+    let (module, host_functions) = convert_public_native_module_to_module(m);
+    let instance = vm_try!(instantiate(module, store, registry).await);
+    for (funcidx, fp) in host_functions.into_iter().enumerate() {
+        link_host_function_with_function_idx(&instance, funcidx as u32, fp, store);
+    }
+    VMResult::Success(instance)
+}
+
+/// Instantiates a synthetic module made entirely of synchronous raw host
+/// callbacks.
+///
+/// This is the raw-ABI counterpart of [`instantiate_native_module`], kept
+/// for the opt-in raw integration surface (`unstable_internals`).
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
+pub async fn instantiate_raw_native_module(
     m: NativeModule,
     store: &Store,
     registry: &Registry,
@@ -199,8 +356,124 @@ pub async fn instantiate_native_module(
 ///
 /// Each host callback is linked before the returned handle is exposed, so guest
 /// calls suspend through the runtime's [`crate::ExecutionDriver`] integration.
-#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
+///
+/// # Examples
+///
+/// An embedder can define an asynchronous host callback, create a native
+/// module, link it by index and export name, and drive the returned host
+/// future through a custom [`crate::ExecutionDriver`]. The driver only
+/// forwards the opaque [`crate::HostCallFuture`] and its
+/// [`crate::HostCallOutcome`]; it never names an interpreter-internal type.
+///
+/// ```
+/// use std::{collections::VecDeque, future::Future, pin::Pin};
+///
+/// use futures::executor::block_on;
+/// use telomere::{
+///     component_support::common::{FuncType, ValType},
+///     instantiate, instantiate_native_async_module, link_async_host_function_with_export_name,
+///     link_async_host_function_with_function_idx, run_module_function_with_driver,
+///     AsyncHostFnDefinition, AsyncHostModule, Completion, CompletionPayload, ExecutionDriver,
+///     HostCallFuture, HostCallPending, HostContext, HostFuture, IoReadBinaryReader, PendingOp,
+///     Registry, ResultValue, Store, TokioDriver, VMResult, WasmParser, WasmValue,
+/// };
+///
+/// #[derive(Default)]
+/// struct InlineDriver {
+///     inflight: VecDeque<(u64, HostCallFuture)>,
+/// }
+///
+/// impl ExecutionDriver for InlineDriver {
+///     fn submit(&mut self, op: PendingOp) {
+///         match op {
+///             PendingOp::HostCall(HostCallPending { task_id, future, .. }) => {
+///                 self.inflight.push_back((task_id, future));
+///             }
+///             _ => panic!("this example only drives asynchronous host calls"),
+///         }
+///     }
+///
+///     fn next_completion<'a>(
+///         &'a mut self,
+///     ) -> Pin<Box<dyn Future<Output = Option<Completion>> + 'a>> {
+///         Box::pin(async move {
+///             let (task_id, future) = self.inflight.pop_front()?;
+///             Some(Completion {
+///                 task_id,
+///                 payload: CompletionPayload::HostCall {
+///                     result: future.await,
+///                 },
+///             })
+///         })
+///     }
+/// }
+///
+/// fn return_42(_cx: &mut HostContext<'_, '_>) -> HostFuture {
+///     Box::pin(async { VMResult::Success(vec![WasmValue::I32(42)]) })
+/// }
+///
+/// let _built_in_driver = TokioDriver::new();
+/// let bytes = wat::parse_str(
+///     r#"(module
+///         (import "host" "answer" (func $answer (result i32)))
+///         (func (export "run") (result i32) call $answer))"#,
+/// )
+/// .expect("the inline module is valid WebAssembly");
+/// let mut reader = IoReadBinaryReader::from(&bytes[..]);
+/// let module = WasmParser::new(&mut reader)
+///     .parse_module()
+///     .expect("the module parses");
+/// let store = Store::new();
+/// let mut registry = Registry::new();
+/// let host = block_on(instantiate_native_async_module(
+///     AsyncHostModule {
+///         functions: vec![AsyncHostFnDefinition {
+///             name: Some("answer".to_owned()),
+///             signature: FuncType::new(vec![], vec![ValType::I32]),
+///             fp: return_42,
+///         }],
+///     },
+///     &store,
+///     &registry,
+/// ))
+/// .unwrap();
+/// link_async_host_function_with_function_idx(&host, 0, return_42, &store);
+/// link_async_host_function_with_export_name(&host, "answer", return_42, &store);
+/// registry.register("host", host);
+/// let instance = block_on(instantiate(module, &store, &registry)).unwrap();
+/// let mut driver = InlineDriver::default();
+/// let result = block_on(run_module_function_with_driver(
+///     &instance,
+///     &store,
+///     "run",
+///     &ResultValue::new(vec![]),
+///     &mut driver,
+/// ));
+/// assert_eq!(
+///     result.unwrap(),
+///     ResultValue::new(vec![WasmValue::I32(42)])
+/// );
+/// ```
 pub async fn instantiate_native_async_module(
+    m: AsyncHostModule,
+    store: &Store,
+    registry: &Registry,
+) -> VMResult<InstanceHandle> {
+    let (module, host_functions) = convert_public_async_native_module_to_module(m);
+    let instance = vm_try!(instantiate(module, store, registry).await);
+    for (funcidx, fp) in host_functions.into_iter().enumerate() {
+        link_async_host_function_with_function_idx(&instance, funcidx as u32, fp, store);
+    }
+    VMResult::Success(instance)
+}
+
+/// Instantiates a synthetic module made entirely of asynchronous raw host
+/// callbacks.
+///
+/// This is the raw-ABI counterpart of [`instantiate_native_async_module`],
+/// kept for the opt-in raw integration surface (`unstable_internals`).
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
+pub async fn instantiate_raw_native_async_module(
     m: AsyncNativeModule,
     store: &Store,
     registry: &Registry,
@@ -208,7 +481,7 @@ pub async fn instantiate_native_async_module(
     let (module, async_functions) = convert_async_native_module_to_module(m);
     let instance = vm_try!(instantiate(module, store, registry).await);
     for (funcidx, fp) in async_functions.into_iter().enumerate() {
-        link_async_host_function_with_function_idx(&instance, funcidx as u32, fp, store);
+        link_raw_async_host_function_with_function_idx(&instance, funcidx as u32, fp, store);
     }
     VMResult::Success(instance)
 }
@@ -483,7 +756,10 @@ pub async fn instantiate(
                 RuntimeFunctionBody::Wasm { lowered, .. } => {
                     lowered.materialize_with_recipe_slots(&recipe_slots)
                 }
-                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
+                RuntimeFunctionBody::Host(_)
+                | RuntimeFunctionBody::AsyncHost(_)
+                | RuntimeFunctionBody::PublicHost(_)
+                | RuntimeFunctionBody::PublicAsyncHost(_) => continue,
             };
             #[cfg(feature = "aot-load")]
             let mut materialized = materialized;
@@ -622,7 +898,7 @@ pub async fn instantiate(
                 ));
 
                 scheduler.push(Task {
-                    task_id: 0,
+                    task_id: fresh_task_id(),
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
@@ -655,7 +931,7 @@ pub async fn instantiate(
 
                 scheduler.push(Task {
                     fp: vm::wasm_entry_pc(store),
-                    task_id: 0,
+                    task_id: fresh_task_id(),
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
@@ -805,6 +1081,42 @@ pub fn aliasing(
 pub fn link_host_function_with_function_idx(
     addr: &InstanceHandle,
     funcidx: u32,
+    f: HostFn,
+    store: &Store,
+) {
+    if let Err(err) = link_public_host_function_with_function_idx_impl(addr, funcidx, f, store) {
+        err.report();
+    }
+}
+
+pub(crate) fn link_public_host_function_with_function_idx_impl(
+    addr: &InstanceHandle,
+    funcidx: u32,
+    f: HostFn,
+    store: &Store,
+) -> Result<(), StoreExecutionError> {
+    let mut runtime = store.lock_runtime("link_host_function_with_function_idx")?;
+    let Some(object_ref) = addr.object_ref_for_store(store) else {
+        tracing::error!("instance handle belongs to another store");
+        return Ok(());
+    };
+    let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
+    let funcaddr = instance.funcs.as_slice()[funcidx as usize];
+    {
+        let func = runtime.get_func_mut(funcaddr);
+        func.replace_public_host_code_pointer(f);
+    }
+    let recipe = runtime.build_call_recipe(funcaddr);
+    runtime.set_call_recipe_for_func(funcaddr, recipe);
+    Ok(())
+}
+
+/// Raw-ABI counterpart of [`link_host_function_with_function_idx`], kept for
+/// the opt-in raw integration surface (`unstable_internals`).
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
+pub fn link_raw_host_function_with_function_idx(
+    addr: &InstanceHandle,
+    funcidx: u32,
     f: HostFunction,
     store: &Store,
 ) {
@@ -813,6 +1125,7 @@ pub fn link_host_function_with_function_idx(
     }
 }
 
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub(crate) fn link_host_function_with_function_idx_impl(
     addr: &InstanceHandle,
     funcidx: u32,
@@ -838,7 +1151,86 @@ pub(crate) fn link_host_function_with_function_idx_impl(
 ///
 /// `name` must resolve to a function export of `addr`; use the index variant
 /// when the embedder already has the function index.
+///
+/// # Examples
+///
+/// A host callback written against the public boundary receives its
+/// arguments decoded as [`WasmValue`]s and returns the guest-visible
+/// results; it never names an interpreter-internal type.
+///
+/// ```
+/// use futures::executor::block_on;
+/// use telomere::{
+///     instantiate, link_host_function_with_export_name, run_module_function, HostContext,
+///     IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
+/// };
+///
+/// fn return_42(_cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+///     VMResult::Success(vec![WasmValue::I32(42)])
+/// }
+///
+/// let bytes = wat::parse_str(r#"(module (func (export "answer") (result i32) i32.const 0))"#)
+///     .expect("valid module");
+/// let mut reader = IoReadBinaryReader::from(&bytes[..]);
+/// let module = WasmParser::new(&mut reader)
+///     .parse_module()
+///     .expect("the module parses");
+/// let store = Store::new();
+/// let registry = Registry::new();
+/// let instance = match block_on(instantiate(module, &store, &registry)) {
+///     VMResult::Success(instance) => instance,
+///     failure => panic!("instantiation failed: {failure:?}"),
+/// };
+/// link_host_function_with_export_name(&instance, "answer", return_42, &store);
+/// let result = block_on(run_module_function(
+///     &instance,
+///     &store,
+///     "answer",
+///     &ResultValue::new(vec![]),
+/// ));
+/// assert_eq!(
+///     result.unwrap(),
+///     ResultValue::new(vec![WasmValue::I32(42)])
+/// );
+/// ```
 pub fn link_host_function_with_export_name(
+    addr: &InstanceHandle,
+    name: &str,
+    f: HostFn,
+    store: &Store,
+) {
+    if let Err(err) = link_public_host_function_with_export_name_impl(addr, name, f, store) {
+        err.report();
+    }
+}
+
+pub(crate) fn link_public_host_function_with_export_name_impl(
+    addr: &InstanceHandle,
+    name: &str,
+    f: HostFn,
+    store: &Store,
+) -> Result<(), StoreExecutionError> {
+    let runtime = store.lock_runtime("link_host_function_with_export_name")?;
+    let Some(object_ref) = addr.object_ref_for_store(store) else {
+        tracing::error!("instance handle belongs to another store");
+        return Ok(());
+    };
+    let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
+    let module = runtime.get_module(instance.module_addr);
+    let export = &module.exports.find(name).unwrap();
+    let func_idx = if let ExportDesc::Func(v) = export {
+        v.0
+    } else {
+        unreachable!()
+    };
+    drop(runtime);
+    link_public_host_function_with_function_idx_impl(addr, func_idx, f, store)
+}
+
+/// Raw-ABI counterpart of [`link_host_function_with_export_name`], kept for
+/// the opt-in raw integration surface (`unstable_internals`).
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
+pub fn link_raw_host_function_with_export_name(
     addr: &InstanceHandle,
     name: &str,
     f: HostFunction,
@@ -849,6 +1241,7 @@ pub fn link_host_function_with_export_name(
     }
 }
 
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub(crate) fn link_host_function_with_export_name_impl(
     addr: &InstanceHandle,
     name: &str,
@@ -879,6 +1272,44 @@ pub(crate) fn link_host_function_with_export_name_impl(
 pub fn link_async_host_function_with_function_idx(
     addr: &InstanceHandle,
     funcidx: u32,
+    f: AsyncHostFn,
+    store: &Store,
+) {
+    if let Err(err) =
+        link_public_async_host_function_with_function_idx_impl(addr, funcidx, f, store)
+    {
+        err.report();
+    }
+}
+
+pub(crate) fn link_public_async_host_function_with_function_idx_impl(
+    addr: &InstanceHandle,
+    funcidx: u32,
+    f: AsyncHostFn,
+    store: &Store,
+) -> Result<(), StoreExecutionError> {
+    let mut runtime = store.lock_runtime("link_async_host_function_with_function_idx")?;
+    let Some(object_ref) = addr.object_ref_for_store(store) else {
+        tracing::error!("instance handle belongs to another store");
+        return Ok(());
+    };
+    let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
+    let funcaddr = instance.funcs.as_slice()[funcidx as usize];
+    {
+        let func = runtime.get_func_mut(funcaddr);
+        func.replace_public_async_host_code_pointer(f);
+    }
+    let recipe = runtime.build_call_recipe(funcaddr);
+    runtime.set_call_recipe_for_func(funcaddr, recipe);
+    Ok(())
+}
+
+/// Raw-ABI counterpart of [`link_async_host_function_with_function_idx`],
+/// kept for the opt-in raw integration surface (`unstable_internals`).
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
+pub fn link_raw_async_host_function_with_function_idx(
+    addr: &InstanceHandle,
+    funcidx: u32,
     f: AsyncHostFunction,
     store: &Store,
 ) {
@@ -887,6 +1318,7 @@ pub fn link_async_host_function_with_function_idx(
     }
 }
 
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub(crate) fn link_async_host_function_with_function_idx_impl(
     addr: &InstanceHandle,
     funcidx: u32,
@@ -916,6 +1348,43 @@ pub(crate) fn link_async_host_function_with_function_idx_impl(
 pub fn link_async_host_function_with_export_name(
     addr: &InstanceHandle,
     name: &str,
+    f: AsyncHostFn,
+    store: &Store,
+) {
+    if let Err(err) = link_public_async_host_function_with_export_name_impl(addr, name, f, store) {
+        err.report();
+    }
+}
+
+pub(crate) fn link_public_async_host_function_with_export_name_impl(
+    addr: &InstanceHandle,
+    name: &str,
+    f: AsyncHostFn,
+    store: &Store,
+) -> Result<(), StoreExecutionError> {
+    let runtime = store.lock_runtime("link_async_host_function_with_export_name")?;
+    let Some(object_ref) = addr.object_ref_for_store(store) else {
+        tracing::error!("instance handle belongs to another store");
+        return Ok(());
+    };
+    let instance = unsafe { &*runtime.get_instance_unchecked(object_ref) };
+    let module = runtime.get_module(instance.module_addr);
+    let export = &module.exports.find(name).unwrap();
+    let func_idx = if let ExportDesc::Func(v) = export {
+        v.0
+    } else {
+        unreachable!()
+    };
+    drop(runtime);
+    link_public_async_host_function_with_function_idx_impl(addr, func_idx, f, store)
+}
+
+/// Raw-ABI counterpart of [`link_async_host_function_with_export_name`],
+/// kept for the opt-in raw integration surface (`unstable_internals`).
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
+pub fn link_raw_async_host_function_with_export_name(
+    addr: &InstanceHandle,
+    name: &str,
     f: AsyncHostFunction,
     store: &Store,
 ) {
@@ -924,6 +1393,7 @@ pub fn link_async_host_function_with_export_name(
     }
 }
 
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub(crate) fn link_async_host_function_with_export_name_impl(
     addr: &InstanceHandle,
     name: &str,
@@ -1620,7 +2090,7 @@ mod tests {
         let store = Store::new();
         let registry = Registry::new();
         let instance = match instantiate_native_module(
-            NativeModule {
+            HostModule {
                 functions: Vec::new(),
             },
             &store,

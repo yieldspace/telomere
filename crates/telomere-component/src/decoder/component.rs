@@ -5,6 +5,7 @@ use crate::decoder::import::parse_import;
 use crate::decoder::instance::parse_instance;
 use crate::decoder::types::parse_type;
 use crate::decoder::validator::ParseState;
+use crate::decoder::value::parse_value_def;
 use crate::decoder::{
     parse_core_instance, parse_core_type, parse_layer, parse_magic, parse_section_type,
     parse_vec_range, parse_version, ComponentParseError, ParseContext, ParseResult, Validator,
@@ -141,6 +142,11 @@ fn _parse_component(
             ComponentSection::Canon => {
                 for _ in parse_vec_range(ctx)? {
                     parse_canon(ctx)?;
+                }
+            }
+            ComponentSection::Value => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_value_def(ctx)?;
                 }
             }
             v => {

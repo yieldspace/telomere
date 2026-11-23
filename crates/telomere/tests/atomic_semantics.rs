@@ -5,13 +5,12 @@ mod common;
 use common::instantiate_wat;
 use std::sync::Arc;
 use telomere::{
-    host_abi::SharedMemoryObject,
     run_module_function,
     unstable_internals::{
         new_shared_memory, shared_atomic_rmw_u32, shared_register_wait32, AtomicRmwOperation,
         SharedWaitState,
     },
-    InstanceHandle, Registry, ResultValue, Store, VMResult, WasmValue,
+    InstanceHandle, Registry, ResultValue, SharedMemoryObject, Store, VMResult, WasmValue,
 };
 
 fn unwrap_success<T: std::fmt::Debug>(result: VMResult<T>) -> T {
