@@ -1,4 +1,4 @@
-use crate::ir::{Component, CoreModule, Func, GlobalIdx, ImportNameString};
+use crate::ir::{Component, CoreModule, Func, GlobalIdx, ImportNameString, Value};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -13,4 +13,5 @@ pub enum InstanceImport {
     Func(GlobalIdx<Func>),
     Component(GlobalIdx<Component>),
     Instance(GlobalIdx<Instance>),
+    Value(GlobalIdx<Value>),
 }

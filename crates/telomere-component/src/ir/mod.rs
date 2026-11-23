@@ -10,6 +10,7 @@ mod relation;
 mod section;
 mod sort;
 pub mod types;
+mod value;
 
 pub use component::*;
 pub use core::*;
@@ -22,3 +23,4 @@ pub use name::*;
 pub use relation::*;
 pub use section::ComponentSection;
 pub use sort::*;
+pub use value::*;

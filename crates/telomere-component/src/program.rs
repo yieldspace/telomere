@@ -1,7 +1,7 @@
-use crate::ir::types::{CoreType, Type};
+use crate::ir::types::{CoreType, Type, ValType};
 use crate::ir::{
     Component, ComponentExport, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule,
-    CoreRelation, CoreTable, Func, GlobalIdx, Instance, Relation, TypeId,
+    CoreRelation, CoreTable, Func, GlobalIdx, Instance, Relation, TypeId, Value,
 };
 use std::collections::HashMap;
 
@@ -107,6 +107,8 @@ pub struct ComponentProgram {
     pub core_global_store: HashMap<GlobalIdx<CoreGlobal>, CoreRelation<CoreGlobal>>,
     /// Decoded core-table declarations and relations.
     pub core_table_store: HashMap<GlobalIdx<CoreTable>, CoreRelation<CoreTable>>,
+    /// Decoded value declarations and relations (the value index space).
+    pub value_store: HashMap<GlobalIdx<Value>, Relation<Value>>,
 }
 
 impl ComponentProgram {
@@ -136,6 +138,16 @@ impl ComponentProgram {
     pub fn get_root_func(&self, name: &str) -> Option<(GlobalIdx<Func>, TypeId)> {
         match self.root.exports.get(name) {
             Some(ComponentExport::Func { idx, type_id }) => Some((*idx, *type_id)),
+            _ => None,
+        }
+    }
+
+    /// Returns the declared type of a root value export by name.
+    ///
+    /// Non-value exports and unknown names return None.
+    pub fn get_root_value_type(&self, name: &str) -> Option<&ValType> {
+        match self.root.exports.get(name) {
+            Some(ComponentExport::Value { ty, .. }) => Some(ty),
             _ => None,
         }
     }
@@ -188,6 +200,7 @@ mod tests {
             core_memory_store: HashMap::new(),
             core_global_store: HashMap::new(),
             core_table_store: HashMap::new(),
+            value_store: HashMap::new(),
         };
 
         assert!(matches!(

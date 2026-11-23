@@ -3,7 +3,7 @@ use crate::ir::AnyGlobalIdx;
 use crate::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
     CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
-    InstanceImport, Relation, ResourceId, TypeId,
+    InstanceImport, Relation, ResourceId, TypeId, Value,
 };
 use crate::linker::{ComponentLinkerInstance, LinkerBinding, ResourceDropFn};
 use crate::support::common::InstanceHandle;
@@ -75,6 +75,7 @@ enum RuntimeImport {
     Instance(Rc<RuntimeComponentInstance>),
     Func(Rc<ResolvedCallable>),
     CoreModule(Box<Module>),
+    Value(ComponentValue),
 }
 
 #[derive(Clone)]
@@ -83,6 +84,7 @@ enum RuntimeExport {
     Instance(Rc<RuntimeComponentInstance>),
     Func(Rc<ResolvedCallable>),
     CoreModule(Box<Module>),
+    Value(ComponentValue),
 }
 
 #[derive(Clone)]
@@ -122,6 +124,7 @@ struct RuntimeCaches {
     core_funcs: RefCell<HashMap<GlobalIdx<CoreFunc>, RuntimeCoreFunc>>,
     core_memories: RefCell<HashMap<GlobalIdx<CoreMemory>, CoreExportRef>>,
     core_tables: RefCell<HashMap<GlobalIdx<CoreTable>, CoreExportRef>>,
+    values: RefCell<HashMap<GlobalIdx<Value>, ComponentValue>>,
 }
 
 #[derive(Default)]

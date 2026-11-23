@@ -142,6 +142,7 @@ pub enum GenericBound {
 pub enum ComponentImportType {
     Type { type_id: TypeId, generic: Generic },
     CoreModule(CoreModuleType),
+    Value(ValType),
 }
 impl GenericBound {
     pub fn assert_subtype_of(
@@ -208,6 +209,9 @@ impl ComponentType {
                     ComponentImportType::CoreModule(child),
                     ComponentImportType::CoreModule(parent),
                 ) if child == parent => {}
+                (ComponentImportType::Value(child), ComponentImportType::Value(parent)) => {
+                    child.assert_subtype_of(parent, validator)?
+                }
                 _ => Err(ComponentParseError::TypeMismatch(
                     "import kind mismatch".to_owned(),
                 ))?,
@@ -234,6 +238,7 @@ pub enum ComponentExportType {
     Instance(TypeId),
     Type(TypeId),
     Func(TypeId),
+    Value(ValType),
     //Resource(ResourceId),
     //NewResource(TypeId),
 }
@@ -265,6 +270,7 @@ impl ComponentExportType {
             (Func(a), Func(b)) => validator
                 .get_func_type(*a)?
                 .assert_subtype_of(validator.get_func_type(*b)?, validator)?,
+            (Value(a), Value(b)) => a.assert_subtype_of(b, validator)?,
             _ => Err(ComponentParseError::TypeMismatch(
                 "export kind mismatch".to_owned(),
             ))?,
@@ -305,6 +311,7 @@ pub enum InstanceExportType {
     //Resource(ResourceId),
     Type(TypeId),
     //SubResource(TypeId),
+    Value(ValType),
 }
 impl InstanceExportType {
     pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
@@ -324,6 +331,7 @@ impl InstanceExportType {
             (Component(a), Component(b)) => validator.assert_component_type_ids_subtype_of(*a, *b),
             (Instance(a), Instance(b)) => validator.assert_instance_type_ids_subtype_of(*a, *b),
             (Type(a), Type(b)) => validator.assert_type_ids_subtype_of(*a, *b),
+            (Value(a), Value(b)) => a.assert_subtype_of(b, validator),
             _ => Err(ComponentParseError::TypeMismatch(
                 "export kind mismatch".to_owned(),
             ))?,
