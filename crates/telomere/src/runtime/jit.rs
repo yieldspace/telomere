@@ -430,7 +430,9 @@ unsafe fn trace_fallback_exit(
     pc: *const crate::common::Instr,
 ) {
     static FALLBACK_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
-    if std::env::var_os("TELOMERE_JIT_TRACE_FALLBACK").is_none() {
+    let env_traced = std::env::var_os("TELOMERE_JIT_TRACE_FALLBACK").is_some();
+    let event_traced = tracing::level_enabled!(tracing::Level::DEBUG);
+    if !env_traced && !event_traced {
         return;
     }
     let pc_index = unsafe { pc.offset_from(ctx.current_frame.code_base) };
@@ -441,6 +443,18 @@ unsafe fn trace_fallback_exit(
         .position(|addr| *addr == ctx.current_frame.code_addr)
         .map(|index| index.to_string())
         .unwrap_or_else(|| "unknown".to_owned());
+    if event_traced {
+        tracing::debug!(
+            target: crate::diagnostics::TARGET_JIT,
+            kind,
+            funcidx = funcidx.as_str(),
+            pc = pc_index,
+            "jit execution fell back to the interpreter"
+        );
+    }
+    if !env_traced {
+        return;
+    }
     if let Ok(requested_funcidx) = std::env::var("TELOMERE_JIT_TRACE_FALLBACK_FUNC") {
         if funcidx != requested_funcidx {
             return;

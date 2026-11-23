@@ -276,17 +276,31 @@ impl<'a, E: EmitEnv> Emitter<'a, E> {
         match self.emit_op(cursor, op) {
             Ok(control) => Ok(control),
             Err(()) => {
-                if std::env::var_os("TELOMERE_JIT_TRACE_COMPILE").is_some() {
+                let env_traced = std::env::var_os("TELOMERE_JIT_TRACE_COMPILE").is_some();
+                let event_traced = tracing::level_enabled!(tracing::Level::DEBUG);
+                if env_traced || event_traced {
                     let op = unsafe { self.wasm[cursor].op };
                     #[cfg(feature = "vm-diagnostics")]
                     let op_label = crate::runtime::vm::diagnostic_op_label(op);
                     #[cfg(not(feature = "vm-diagnostics"))]
                     let op_label = "unknown";
-                    eprintln!(
-                        "[telomere-jit] compile_reject_emit pc={cursor} op={op_label} stack_depth={} op_addr=0x{:x}",
-                        self.stack_depth,
-                        op as usize
-                    );
+                    if env_traced {
+                        eprintln!(
+                            "[telomere-jit] compile_reject_emit pc={cursor} op={op_label} stack_depth={} op_addr=0x{:x}",
+                            self.stack_depth,
+                            op as usize
+                        );
+                    }
+                    if event_traced {
+                        tracing::debug!(
+                            target: crate::diagnostics::TARGET_JIT,
+                            pc = cursor,
+                            op = op_label,
+                            stack_depth = self.stack_depth,
+                            op_addr = op as usize,
+                            "jit compilation rejected during emission"
+                        );
+                    }
                 }
                 Err(())
             }

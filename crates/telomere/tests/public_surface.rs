@@ -36,6 +36,7 @@ use syn::{
 
 const ALLOWED_PUBLIC_MODULES: &[&str] = &[
     "component_support",
+    "diagnostics",
     "unstable_internals",
     "measure_switches",
 ];

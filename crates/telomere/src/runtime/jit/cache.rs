@@ -270,6 +270,16 @@ fn trace_compile_reject(reason: &'static str, bytes_len: usize, allocation_len: 
             "[telomere-jit] compile_reject reason={reason} bytes={bytes_len} allocation={allocation_len} max={max}"
         );
     }
+    if tracing::level_enabled!(tracing::Level::DEBUG) {
+        tracing::debug!(
+            target: crate::diagnostics::TARGET_JIT,
+            reason,
+            bytes = bytes_len,
+            allocation = allocation_len,
+            max,
+            "jit compilation rejected"
+        );
+    }
 }
 
 impl StoreJitCacheInner {

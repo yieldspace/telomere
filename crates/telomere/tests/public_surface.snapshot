@@ -106,6 +106,7 @@ telomere::component_support::runtime::aliasing | always
 telomere::component_support::runtime::instantiate | always
 telomere::component_support::runtime::run_core_export_sync_reentrant | always
 telomere::component_support::runtime::run_module_function | always
+telomere::diagnostics | always
 telomere::get_global | always
 telomere::instantiate | always
 telomere::instantiate_native_async_module | always
