@@ -240,6 +240,7 @@ pub type AsyncHostFunction = fn(&mut ExecuteContext<'_>) -> AsyncHostFuture;
 pub struct ReturnSlot(*mut u8);
 unsafe impl Send for ReturnSlot {}
 impl ReturnSlot {
+    #[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
     pub fn write(&self, data: &[u8]) {
         unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.0, data.len()) };
     }
@@ -347,10 +348,11 @@ pub struct Module {
     pub(crate) elems: ElementSection,
     /// Function bodies in definition order.
     ///
-    /// This exposes [`crate::host_abi::CodeSection`] so default sync/async host
-    /// linking remains compatible with the documented embedding surface. Issue
-    /// #216 tracks the replacement for this raw AST carve-out.
-    pub codes: CodeSection,
+    /// Crate-private since issue #216 closed the raw AST carve-out: the
+    /// decoded bodies are interpreter representation, and embedders consume
+    /// modules through [`crate::instantiate`] and the component-support
+    /// accessors instead.
+    pub(crate) codes: CodeSection,
     /// Data segments for memory initialization.
     pub(crate) data: DataSection,
     /// Optional function invoked automatically after instantiation.
@@ -361,6 +363,7 @@ pub struct Module {
     pub(crate) name: Option<NameSubSection>,
 }
 /// A native synchronous host function and its core WebAssembly signature.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub struct HostFunctionDefinition {
     /// Optional export name assigned to the generated native module.
     pub name: Option<String>,
@@ -370,6 +373,7 @@ pub struct HostFunctionDefinition {
     pub fp: HostFunction,
 }
 /// A native asynchronous host function and its core WebAssembly signature.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub struct AsyncHostFunctionDefinition {
     /// Optional export name assigned to the generated native module.
     pub name: Option<String>,
@@ -379,11 +383,13 @@ pub struct AsyncHostFunctionDefinition {
     pub fp: AsyncHostFunction,
 }
 /// A collection of synchronous host functions that can be instantiated as a module.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub struct NativeModule {
     /// Host functions exposed by the native module.
     pub functions: Vec<HostFunctionDefinition>,
 }
 /// A collection of asynchronous host functions that can be instantiated as a module.
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 pub struct AsyncNativeModule {
     /// Host functions exposed by the native module.
     pub functions: Vec<AsyncHostFunctionDefinition>,
@@ -1345,7 +1351,7 @@ pub struct ExecuteContext<'a> {
     pub gc: &'a mut StoreInner,
     pub(crate) effect: EffectSupplier<'a>,
     pub cont: *const Instr,
-    pub task_id: u32,
+    pub task_id: u64,
     /// Checkpoints available before the next cold-path metering grant.
     pub(crate) budget: u64,
     /// Full size of the currently reserved grant.
@@ -1501,7 +1507,7 @@ pub(crate) struct ExecuteContextSnapshot {
     pub(crate) default_memory: SnapshotMemoryKind,
     pub(crate) caller_memory: SnapshotMemoryKind,
     pub(crate) cont_addr: usize,
-    pub(crate) task_id: u32,
+    pub(crate) task_id: u64,
 }
 
 impl ExecuteContextSnapshot {
@@ -1518,6 +1524,7 @@ fn snapshot_memory_kind(kind: CachedMemoryKind) -> SnapshotMemoryKind {
     }
 }
 
+#[cfg_attr(not(feature = "unstable-internals"), allow(dead_code))]
 impl ExecuteContext<'_> {
     fn refresh_default_local_memory_ptr(&mut self) {
         let (memory_ptr, memory_base, memory_len) = match self.current_frame.memory0_kind {

@@ -71,7 +71,7 @@ async fn measure_module(source: &[u8], totals: &mut Totals) {
         let FunctionBody::Wasm { code, op_lens, .. } = &func.body else {
             continue;
         };
-        match backend::emit_baseline_function(funcaddr, code, op_lens, &runtime) {
+        match backend::emit_baseline_function(funcaddr, code, op_lens, &runtime, false) {
             Ok(emitted) => {
                 module_emitted += emitted.code.len();
                 module_funcs += 1;

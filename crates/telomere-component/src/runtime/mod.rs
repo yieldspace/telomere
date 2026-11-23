@@ -10,10 +10,8 @@ use crate::support::common::InstanceHandle;
 use crate::support::common::{
     FuncType as CoreFuncType, VMResult, ValType as CoreValType, WasmValue,
 };
-use crate::support::host_abi::{
-    instantiate_native_module, ExecuteContext, HostFunctionDefinition, Instr, NativeModule,
-};
 use crate::support::{aliasing, Module, Registry, ResultValue, Store, VMResult as CoreVMResult};
+use crate::support::{instantiate_native_module, HostContext, HostFnDefinition, HostModule};
 use crate::{ComponentError, ComponentInstance, ComponentLinker, ComponentProgram, ComponentValue};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;

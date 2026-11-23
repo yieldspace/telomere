@@ -7,9 +7,8 @@
     )
 ))]
 use telomere::{
-    host_abi::{ExecuteContext, Instr},
-    link_host_function_with_function_idx, InstanceHandle, Registry, ResultValue, VMResult,
-    WasmValue,
+    link_host_function_with_function_idx, HostContext, InstanceHandle, Registry, ResultValue,
+    VMResult, WasmValue,
 };
 use telomere::{JitConfig, RuntimeConfig, Store};
 
@@ -144,19 +143,11 @@ async fn instantiate_jit_wat(wat: &str, store: &Store, registry: &Registry) -> I
         all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
     )
 ))]
-fn host_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    ctx.return_slot().write(&(value + 1).to_le_bytes());
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
+fn host_add_one(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let WasmValue::I32(value) = cx.args()[0] else {
+        return VMResult::Unreachable;
+    };
+    VMResult::Success(vec![WasmValue::I32(value + 1)])
 }
 
 #[cfg(all(
@@ -167,19 +158,11 @@ fn host_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
         all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
     )
 ))]
-fn host_add_ten(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    ctx.return_slot().write(&(value + 10).to_le_bytes());
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
+fn host_add_ten(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let WasmValue::I32(value) = cx.args()[0] else {
+        return VMResult::Unreachable;
+    };
+    VMResult::Success(vec![WasmValue::I32(value + 10)])
 }
 
 #[cfg(all(

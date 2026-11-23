@@ -30,9 +30,9 @@ use common::instantiate_wat;
 use std::{collections::BTreeSet, fs, path::PathBuf, sync::Mutex};
 use telomere::{
     component_support::runtime::run_core_export_sync_reentrant,
-    host_abi::{ExecuteContext, Instr},
-    link_host_function_with_function_idx, run_module_function, InstanceHandle, Registry,
-    ResultValue, RuntimeConfig, Store, StoreState, TrapFrameKind, TrapInfo, VMResult,
+    link_host_function_with_function_idx, run_module_function, HostContext, InstanceHandle,
+    Registry, ResultValue, RuntimeConfig, Store, StoreState, TrapFrameKind, TrapInfo, VMResult,
+    WasmValue,
 };
 
 #[cfg(feature = "jit")]
@@ -592,8 +592,8 @@ struct HostFixtureState {
     instance: Mutex<Option<InstanceHandle>>,
 }
 
-fn propagating_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let state = unsafe { ctx.store.state.get::<HostFixtureState>() }
+fn propagating_host(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let state = unsafe { cx.store().state.get::<HostFixtureState>() }
         .expect("host fixture requires HostFixtureState in StoreState");
     let instance = state
         .instance
@@ -602,7 +602,7 @@ fn propagating_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
         .clone()
         .expect("host fixture instance must be installed before guest execution");
     let inner =
-        run_core_export_sync_reentrant(&instance, ctx.store, "inner", &ResultValue::new(vec![]))
+        run_core_export_sync_reentrant(&instance, cx.store(), "inner", &ResultValue::new(vec![]))
             .expect("synchronous reentry itself must be supported");
     assert!(
         matches!(inner, VMResult::Unreachable),

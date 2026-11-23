@@ -3,9 +3,10 @@
 //! The guard intentionally parses source instead of inspecting the active build:
 //! every feature combination therefore produces the same list, including paths
 //! behind `#[cfg(...)]`. The ordinary public-path pass parses the reviewed
-//! root, `host_abi`, component-support, unstable-internal, and dedicated
+//! root, component-support, unstable-internal, and dedicated
 //! `common.rs`/`common/store.rs` sources. The latter two record only the
-//! reviewed `Module::codes` field and `Store::take_last_trap` method. `lib.rs`
+//! reviewed `Store::take_last_trap` method and assert that the formerly
+//! public `Module::codes` field stays crate-private (#216). `lib.rs`
 //! is also checked so that a new public module cannot make that source set grow
 //! without being reviewed here; the measurement-only `measure_switches` root
 //! is the explicit, non-recursive exception. A separate macro-only pass walks
@@ -35,7 +36,6 @@ use syn::{
 
 const ALLOWED_PUBLIC_MODULES: &[&str] = &[
     "component_support",
-    "host_abi",
     "unstable_internals",
     "measure_switches",
 ];
@@ -53,15 +53,51 @@ const FORBIDDEN_UNGATED_FINAL_SEGMENTS: &[&str] = &[
     "InstanceData",
     "FunctionInstanceData",
     "EffectSupplier",
+    // The raw host-linking ABI closed by #216: these interpreter-internal
+    // types may only ever return through `unstable_internals`.
+    "ExecuteContext",
+    "Instr",
+    "HostFunction",
+    "AsyncHostFunction",
+    "HostFunctionDefinition",
+    "AsyncHostFunctionDefinition",
+    "AsyncHostFuture",
+    "NativeModule",
+    "AsyncNativeModule",
+    "FunctionBody",
+    "Func",
+    "CodeSection",
+    "ReturnSlot",
+    "Stack",
+    "LocalReference",
+    "StoreInner",
+    "ObjectRef",
 ];
 
-const ROOT_HOST_LINKING_CARVE_OUT: &[&str] = &[
+const ROOT_HOST_LINKING_API: &[&str] = &[
+    "instantiate_native_module",
     "instantiate_native_async_module",
     "link_host_function_with_export_name",
     "link_host_function_with_function_idx",
     "link_async_host_function_with_export_name",
     "link_async_host_function_with_function_idx",
 ];
+
+const ROOT_HOST_TYPES: &[&str] = &[
+    "HostContext",
+    "HostFn",
+    "AsyncHostFn",
+    "HostFuture",
+    "HostFnDefinition",
+    "AsyncHostFnDefinition",
+    "HostModule",
+    "AsyncHostModule",
+    "Memory",
+    "HostCallFuture",
+    "HostCallOutcome",
+];
+
+const ROOT_DRIVER_THREADS_TYPES: &[&str] = &["SharedMemoryObject", "SharedWaitRegistration"];
 
 const ROOT_DRIVER_CARVE_OUT: &[&str] = &[
     "run_module_function_with_driver",
@@ -73,30 +109,6 @@ const ROOT_DRIVER_CARVE_OUT: &[&str] = &[
     "PendingOp",
     "TokioDriver",
 ];
-
-const HOST_ABI_ALWAYS: &[&str] = &[
-    "AsyncHostFunction",
-    "AsyncHostFunctionDefinition",
-    "AsyncHostFuture",
-    "AsyncNativeModule",
-    "CodeSection",
-    "ExecuteContext",
-    "Func",
-    "FunctionBody",
-    "HostFunction",
-    "HostFunctionDefinition",
-    "Instr",
-    "Memory",
-    "NativeModule",
-    "ObjectRef",
-    "ReturnSlot",
-    "Stack",
-    "LocalReference",
-    "StoreInner",
-    "instantiate_native_module",
-];
-
-const HOST_ABI_THREADS: &[&str] = &["SharedMemoryObject", "SharedWaitRegistration"];
 
 const UPDATE_SNAPSHOT_ENV: &str = "TELOMERE_UPDATE_PUBLIC_SURFACE_SNAPSHOT";
 
@@ -199,23 +211,45 @@ fn snapshot_partitions_match_committed_surface() {
 }
 
 #[test]
-fn required_default_host_carve_outs_are_explicit() {
+fn required_default_host_linking_surface_is_explicit() {
     let records = collect_public_surface();
 
-    let expected_host_abi = expected_paths("telomere::host_abi", HOST_ABI_ALWAYS, HOST_ABI_THREADS);
-    let actual_host_abi = records
+    // The #216 closure: the raw host-linking module must not exist, and the
+    // designed public host API must be present at the crate root instead.
+    assert!(
+        records
+            .iter()
+            .all(|record| !record.path.starts_with("telomere::host_abi")),
+        "the raw host_abi carve-out module must stay closed (#216)"
+    );
+
+    let expected_root_api = ROOT_HOST_LINKING_API
         .iter()
-        .filter(|record| record.path.starts_with("telomere::host_abi::"))
+        .chain(ROOT_HOST_TYPES)
+        .map(|name| expected_path(&format!("telomere::{name}"), &[]))
+        .chain(ROOT_DRIVER_THREADS_TYPES.iter().map(|name| {
+            expected_path(
+                &format!("telomere::{name}"),
+                &["cfg(feature = \"threads\")"],
+            )
+        }))
+        .collect::<BTreeSet<_>>();
+    let actual_root_api = records
+        .iter()
+        .filter(|record| {
+            expected_root_api
+                .iter()
+                .any(|expected| expected.path == record.path)
+        })
         .cloned()
         .collect::<BTreeSet<_>>();
     assert_eq!(
-        actual_host_abi, expected_host_abi,
-        "host_abi must contain exactly the reviewed nineteen always-present and two threads-only paths"
+        actual_root_api, expected_root_api,
+        "the designed host-linking API paths must retain their reviewed cfg predicates"
     );
 
-    let expected_root_carve_out = ROOT_HOST_LINKING_CARVE_OUT
+    let expected_root_carve_out = ROOT_DRIVER_CARVE_OUT
         .iter()
-        .chain(ROOT_DRIVER_CARVE_OUT)
         .map(|name| {
             let predicates = if *name == "MemoryWaitPending" {
                 &["cfg(feature = \"threads\")"][..]
@@ -236,19 +270,16 @@ fn required_default_host_carve_outs_are_explicit() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         actual_root_carve_out, expected_root_carve_out,
-        "the five host-linking and eight driver root carve-out paths must retain their reviewed cfg predicates"
+        "the eight driver root paths must retain their reviewed cfg predicates"
     );
 
-    let expected_module_codes = expected_path("telomere::Module::codes", &[]);
-    let actual_module_codes = records
+    let module_codes = records
         .iter()
-        .filter(|record| record.path == expected_module_codes.path)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        actual_module_codes,
-        BTreeSet::from([expected_module_codes]),
-        "Module::codes is a reviewed default host-linking compatibility field"
+        .filter(|record| record.path == "telomere::Module::codes")
+        .collect::<Vec<_>>();
+    assert!(
+        module_codes.is_empty(),
+        "Module::codes must stay crate-private since #216 closed the raw AST carve-out"
     );
 
     let expected_store_take_last_trap = expected_path("telomere::Store::take_last_trap", &[]);
@@ -314,7 +345,7 @@ fn ungated_surface_excludes_non_abi_interpreter_representation_paths() {
         let final_segment = record.final_segment();
         assert!(
             !(FORBIDDEN_UNGATED_FINAL_SEGMENTS.contains(&final_segment)
-                || final_segment.ends_with("Section") && final_segment != "CodeSection"),
+                || final_segment.ends_with("Section")),
             "ungated public path {} exposes a non-ABI interpreter representation; \
              retain it only through `unstable_internals`",
             record.path
@@ -510,20 +541,16 @@ fn collect_public_surface_at(crate_dir: &Path) -> BTreeSet<PublicPath> {
     let common = parse_source(crate_dir, "src/common.rs");
     let store = parse_source(crate_dir, "src/common/store.rs");
     let component_support = parse_source(crate_dir, "src/component_support.rs");
-    let host_abi = parse_source(crate_dir, "src/host_abi.rs");
     let unstable_internals = parse_source(crate_dir, "src/unstable_internals.rs");
 
     assert_public_module_closure(&lib);
     assert_public_module_sources_closed(&lib, "src/lib.rs", ALLOWED_PUBLIC_MODULES);
     assert_public_module_sources_closed(&component_support, "src/component_support.rs", &[]);
-    assert_public_module_sources_closed(&host_abi, "src/host_abi.rs", &[]);
     assert_public_module_sources_closed(&unstable_internals, "src/unstable_internals.rs", &[]);
 
     let lib_cfg = CfgContext::default().with_attributes(&lib.attrs);
     let component_support_cfg = public_module_cfg(&lib, &lib_cfg, "component_support")
         .with_attributes(&component_support.attrs);
-    let host_abi_cfg =
-        public_module_cfg(&lib, &lib_cfg, "host_abi").with_attributes(&host_abi.attrs);
     let unstable_internals_cfg = public_module_cfg(&lib, &lib_cfg, "unstable_internals")
         .with_attributes(&unstable_internals.attrs);
 
@@ -545,12 +572,6 @@ fn collect_public_surface_at(crate_dir: &Path) -> BTreeSet<PublicPath> {
         &component_support.items,
         &["telomere".to_owned(), "component_support".to_owned()],
         &component_support_cfg,
-        &mut records,
-    );
-    collect_items(
-        &host_abi.items,
-        &["telomere".to_owned(), "host_abi".to_owned()],
-        &host_abi_cfg,
         &mut records,
     );
     collect_items(
@@ -1010,17 +1031,11 @@ fn collect_module_codes_field(
         })
         .expect("Module must retain its reviewed codes field");
     assert!(
-        is_public(&codes.vis),
-        "Module::codes must remain public for the host-linking compatibility carve-out"
+        !is_public(&codes.vis),
+        "Module::codes must remain crate-private since #216 closed the raw AST carve-out"
     );
-    let module_cfg = module_cfg.with_attributes(&module.attrs);
-    record_named(
-        records,
-        &["telomere".to_owned(), "Module".to_owned()],
-        "codes",
-        &module_cfg,
-        &codes.attrs,
-    );
+    let _ = module_cfg;
+    let _ = records;
 }
 
 fn collect_store_take_last_trap_method(
@@ -1061,18 +1076,6 @@ fn collect_store_take_last_trap_method(
         &store_cfg,
         &method.attrs,
     );
-}
-
-fn expected_paths(base: &str, always: &[&str], threads_only: &[&str]) -> BTreeSet<PublicPath> {
-    always
-        .iter()
-        .map(|name| expected_path(&format!("{base}::{name}"), &[]))
-        .chain(
-            threads_only.iter().map(|name| {
-                expected_path(&format!("{base}::{name}"), &["cfg(feature = \"threads\")"])
-            }),
-        )
-        .collect()
 }
 
 fn expected_path(path: &str, predicates: &[&str]) -> PublicPath {
@@ -1130,7 +1133,6 @@ fn fixture_crate(name: &str, lib_extra: &str) -> PathBuf {
         "src/lib.rs",
         &format!(
             "pub mod component_support;\n\
-             pub mod host_abi;\n\
              pub mod unstable_internals;\n\
              pub(crate) mod common;\n\
              pub use common::{{Module, Store}};\n\
@@ -1138,14 +1140,13 @@ fn fixture_crate(name: &str, lib_extra: &str) -> PathBuf {
         ),
     );
     write_fixture_source(&root, "src/component_support.rs", "");
-    write_fixture_source(&root, "src/host_abi.rs", "");
     write_fixture_source(&root, "src/unstable_internals.rs", "");
     write_fixture_source(
         &root,
         "src/common.rs",
         "pub mod store;\n\
          pub use store::Store;\n\
-         pub struct Module { pub codes: u8 }\n",
+         pub struct Module { pub(crate) codes: u8 }\n",
     );
     write_fixture_source(
         &root,

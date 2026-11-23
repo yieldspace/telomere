@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::{
     collections::{HashMap, VecDeque},
     sync::atomic::{AtomicU8, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use parking_lot::Mutex;
@@ -155,7 +155,8 @@ impl SharedWaitRegistration {
     /// A negative `timeout_ns` waits indefinitely. A non-negative timeout
     /// is armed on a detached timer thread rather than an executor timer,
     /// so this future can be driven by any executor — with or without a
-    /// Tokio runtime — and never panics for lack of a reactor (#151).
+    /// Tokio runtime — and never panics for lack of a reactor (#151). The
+    /// timer thread is released as soon as the wait resolves (#270).
     pub async fn wait_result(self, shared: Arc<SharedMemoryObject>, timeout_ns: i64) -> i32 {
         match self
             .wait_result_interruptible(shared, timeout_ns, None)
@@ -191,20 +192,23 @@ impl SharedWaitRegistration {
         timeout_ns: i64,
         interrupt: Option<MeteringHandle>,
     ) -> VMResult<i32> {
-        if timeout_ns >= 0 {
+        if timeout_ns >= 0 && self.waiter.is_waiting() {
             // #151: tokio::time::sleep panics ("no reactor running") when
             // the embedder drives execution outside a Tokio runtime, and
             // nothing in the driver contract requires one. Mark the waiter
             // as timed out from a detached timer thread and wake it through
             // the same Notify a real notify uses; if a notify wins the
             // race, the mark attempt fails and the thread leaves the wait
-            // untouched.
+            // untouched. The thread's sleep is interruptible, so a notify
+            // or interrupt that resolves the wait also releases the
+            // thread (#270).
+            //
+            // #270: a registration that was already resolved before this
+            // poll (e.g. notified while queued) gets no timer thread at
+            // all; the wait below returns its result immediately.
             let timer_waiter = Arc::clone(&self.waiter);
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_nanos(timeout_ns as u64));
-                if timer_waiter.try_mark_timed_out() {
-                    timer_waiter.notify.notify_one();
-                }
+                run_wait_timer(timer_waiter, Duration::from_nanos(timeout_ns as u64));
             });
         }
 
@@ -245,6 +249,67 @@ impl SharedWaitRegistration {
     }
 }
 
+/// Number of wait-timer threads currently alive. Test-only
+/// instrumentation for #270: the regression test uses it to show that
+/// timer threads are released when their wait resolves instead of
+/// sleeping on until the original deadline.
+#[cfg(all(test, feature = "threads"))]
+static LIVE_WAIT_TIMER_THREADS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(all(test, feature = "threads"))]
+fn live_wait_timer_threads() -> usize {
+    LIVE_WAIT_TIMER_THREADS.load(Ordering::SeqCst)
+}
+
+/// Body of the detached timer thread armed by
+/// [`SharedWaitRegistration::wait_result_interruptible`] for a finite
+/// timeout (#151). Sleeps until the deadline, then tries to claim the
+/// waiter as timed out and wakes it through the same `Notify` a real
+/// notify uses; if a notify won the race, the claim fails and the wait
+/// is left untouched.
+///
+/// The sleep is interruptible (#270): the thread waits on the waiter's
+/// release condvar, which every resolution of the wait (notify,
+/// interrupt) signals, and re-checks the waiter state on each wake. A
+/// wait that resolves early therefore releases its timer thread at
+/// once instead of leaving it asleep until the original deadline.
+#[cfg(feature = "threads")]
+fn run_wait_timer(waiter: Arc<SharedWaiter>, timeout: Duration) {
+    #[cfg(test)]
+    LIVE_WAIT_TIMER_THREADS.fetch_add(1, Ordering::SeqCst);
+    // A timeout near i64::MAX nanoseconds (~292 years) can overflow
+    // Instant arithmetic; in that case there is no representable
+    // deadline and the thread simply re-checks the state in bounded
+    // slices until the wait resolves.
+    let deadline = Instant::now().checked_add(timeout);
+    {
+        let (lock, cvar) = &waiter.timer_release;
+        let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        while waiter.is_waiting() {
+            let remaining = match deadline {
+                Some(deadline) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    deadline - now
+                }
+                None => Duration::from_secs(3600),
+            };
+            let (next_guard, _timeout_result) = cvar
+                .wait_timeout(guard, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard = next_guard;
+        }
+    }
+    if waiter.try_mark_timed_out() {
+        waiter.notify.notify_one();
+    }
+    #[cfg(test)]
+    LIVE_WAIT_TIMER_THREADS.fetch_sub(1, Ordering::SeqCst);
+}
+
 #[cfg(feature = "threads")]
 #[derive(Debug)]
 pub(crate) enum AtomicWaitResult {
@@ -258,6 +323,12 @@ struct SharedWaiter {
     id: u64,
     state: AtomicU8,
     notify: Notify,
+    /// #270: release latch for the detached timer thread armed for a
+    /// finite timeout. The timer sleeps on this condvar instead of in an
+    /// uninterruptible `thread::sleep`, and every transition out of
+    /// `WAITING` signals it, so the thread exits as soon as the wait
+    /// resolves instead of sleeping on until the original deadline.
+    timer_release: (std::sync::Mutex<()>, std::sync::Condvar),
 }
 
 #[cfg(feature = "threads")]
@@ -272,6 +343,7 @@ impl SharedWaiter {
             id,
             state: AtomicU8::new(Self::WAITING),
             notify: Notify::new(),
+            timer_release: (std::sync::Mutex::new(()), std::sync::Condvar::new()),
         }
     }
 
@@ -287,14 +359,32 @@ impl SharedWaiter {
     }
 
     fn try_mark_notified(&self) -> bool {
-        self.state
+        let claimed = self
+            .state
             .compare_exchange(
                 Self::WAITING,
                 Self::NOTIFIED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
-            .is_ok()
+            .is_ok();
+        if claimed {
+            self.release_timer();
+        }
+        claimed
+    }
+
+    /// #270: wakes the detached timer thread (if one is armed) so it can
+    /// observe that the wait has resolved and exit, instead of sleeping
+    /// on until the original deadline. The lock is taken before
+    /// signalling so the signal cannot slip between the timer's state
+    /// check and its condvar wait: the timer re-checks the state while
+    /// holding the same lock, so either it sees the resolved state
+    /// before waiting, or it is already waiting and is woken here.
+    fn release_timer(&self) {
+        let (lock, cvar) = &self.timer_release;
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        cvar.notify_all();
     }
 
     fn try_mark_timed_out(&self) -> bool {
@@ -309,14 +399,19 @@ impl SharedWaiter {
     }
 
     fn try_mark_interrupted(&self) -> bool {
-        self.state
+        let claimed = self
+            .state
             .compare_exchange(
                 Self::WAITING,
                 Self::INTERRUPTED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
-            .is_ok()
+            .is_ok();
+        if claimed {
+            self.release_timer();
+        }
+        claimed
     }
 
     fn is_waiting(&self) -> bool {
@@ -764,7 +859,11 @@ impl Memory {
     }
 
     #[inline(always)]
-    pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
+    pub(crate) fn push_to_stack<const N: usize>(
+        &self,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
         let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
             VMResult::MemoryIndexOutOfRange
         }));
@@ -1216,7 +1315,11 @@ impl LocalMemoryObject {
     }
 
     #[inline(always)]
-    pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
+    pub(crate) fn push_to_stack<const N: usize>(
+        &self,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
         self.memory.push_to_stack::<N>(stack, offset)
     }
 
@@ -1448,7 +1551,11 @@ impl SharedMemoryObject {
     }
 
     #[inline(always)]
-    pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
+    pub(crate) fn push_to_stack<const N: usize>(
+        &self,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
         self.state.lock().memory.push_to_stack::<N>(stack, offset)
     }
 
@@ -2179,5 +2286,88 @@ mod tests {
             )),
             VMResult::Success(0)
         ));
+    }
+
+    #[cfg(feature = "threads")]
+    #[test]
+    fn resolved_long_waits_release_their_timer_threads() {
+        // #270: the detached timer thread armed for a finite timeout used
+        // to sleep until the original deadline even when a notify or an
+        // interrupt resolved the wait immediately, so promptly-resolved
+        // long-timeout waits accumulated OS threads without bound (until
+        // thread::spawn panicked in the host). Timer threads must be
+        // released as soon as their wait resolves, however it resolves.
+        let shared = SharedMemoryObject::new(1, 1).unwrap();
+        assert!(matches!(
+            shared.atomic_store_u32(0, 7),
+            VMResult::Success(())
+        ));
+        let register =
+            |shared: &Arc<SharedMemoryObject>| match shared.register_wait32(0, 7).unwrap() {
+                AtomicWaitResult::Pending(wait) => wait,
+                AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+            };
+        // One hour: with the defect, every timer thread armed below is
+        // still asleep at this deadline long after the test gives up.
+        const LONG_TIMEOUT_NS: i64 = 3_600_000_000_000;
+
+        let baseline = live_wait_timer_threads();
+
+        // Waits notified before wait_result is even polled.
+        for _ in 0..16 {
+            let wait = register(&shared);
+            assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
+            assert_eq!(
+                futures::executor::block_on(wait.wait_result(shared.clone(), LONG_TIMEOUT_NS)),
+                0
+            );
+        }
+
+        // Waits notified while parked, with the timer already armed.
+        for _ in 0..16 {
+            let wait = register(&shared);
+            let notify_shared = shared.clone();
+            let notifier = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                assert_eq!(notify_shared.notify_waiters(0, 1).unwrap(), 1);
+            });
+            assert_eq!(
+                futures::executor::block_on(wait.wait_result(shared.clone(), LONG_TIMEOUT_NS)),
+                0
+            );
+            notifier.join().unwrap();
+        }
+
+        // Waits cancelled by a metering interrupt (#177) while parked.
+        for _ in 0..4 {
+            let meter = MeteringHandle::new(None);
+            let wait = register(&shared);
+            let interrupter_meter = meter.clone();
+            let interrupter = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                interrupter_meter.interrupt();
+            });
+            let outcome = futures::executor::block_on(wait.wait_result_interruptible(
+                shared.clone(),
+                LONG_TIMEOUT_NS,
+                Some(meter),
+            ));
+            interrupter.join().unwrap();
+            assert!(matches!(outcome, VMResult::Cancelled));
+        }
+
+        // Every timer thread armed above must be released promptly, not
+        // at the one-hour deadline. Poll for up to ~10 seconds.
+        for _ in 0..1_000 {
+            if live_wait_timer_threads() <= baseline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            live_wait_timer_threads() <= baseline,
+            "wait timer threads accumulated: {} live (baseline {baseline})",
+            live_wait_timer_threads()
+        );
     }
 }
