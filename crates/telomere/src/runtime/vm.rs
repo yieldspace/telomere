@@ -103,7 +103,9 @@ use crate::{
     },
     runtime::{
         memory_effect::{HostCallFuture, HostCallPending, PendingOp},
-        scheduler::{ExecutionDriver, ReadyFlag, Scheduler, SyncRunError, Task, TokioDriver},
+        scheduler::{
+            fresh_task_id, ExecutionDriver, ReadyFlag, Scheduler, SyncRunError, Task, TokioDriver,
+        },
     },
     Store,
 };
@@ -2156,7 +2158,7 @@ async fn run_module_function_with_driver_named<D: ExecutionDriver>(
 
             scheduler.push(Task {
                 fp: entry_pc,
-                task_id: 0,
+                task_id: fresh_task_id(),
                 stack,
                 local_reference,
                 ready_flag: ReadyFlag::Ready,
@@ -2259,7 +2261,7 @@ pub(crate) fn run_module_function_sync_with_runtime(
 
             scheduler.push(Task {
                 fp: entry_pc,
-                task_id: 0,
+                task_id: fresh_task_id(),
                 stack,
                 local_reference,
                 ready_flag: ReadyFlag::Ready,

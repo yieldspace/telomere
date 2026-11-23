@@ -67,6 +67,25 @@ pub(crate) enum SyncRunError {
     Stalled,
 }
 
+/// Source of identities for top-level execution tasks.
+///
+/// A driver matches completions to tasks purely by `task_id`, and an
+/// embedder's driver may retain a completion past the execution that
+/// submitted it: when the execution future is cancelled, the scheduler
+/// and its tasks are dropped while the driver keeps the submitted
+/// future, and a later execution reusing the same (undrained) driver
+/// can be handed the stale completion. Root tasks therefore take a
+/// fresh identity from this process-wide counter instead of a
+/// constant, so a retained completion can never name a task of a
+/// later execution and [`Scheduler::apply_completion`] discards it
+/// before any stack write or resume.
+static NEXT_TASK_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+/// Allocates a task identity unique across executions in this process.
+pub(crate) fn fresh_task_id() -> u32 {
+    NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) struct EffectSupplier<'a> {
     task_id: u32,
     pending_effects: &'a mut u32,
@@ -238,6 +257,10 @@ impl<'a> Scheduler<'a> {
             .iter()
             .position(|task| task.task_id == completion.task_id)
         else {
+            // No live task carries this identity: the completion belongs
+            // to an earlier execution that shared this driver (task ids
+            // are unique per execution; see `fresh_task_id`). Discard
+            // the stale outcome without writing or resuming anything.
             return;
         };
         let host_frame = if matches!(completion.payload, CompletionPayload::HostCall { .. }) {

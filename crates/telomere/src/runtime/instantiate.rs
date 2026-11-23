@@ -12,7 +12,7 @@ use crate::{
     },
     host::{AsyncHostFn, AsyncHostModule, HostFn, HostModule},
     runtime::{
-        scheduler::{ReadyFlag, Scheduler, Task},
+        scheduler::{fresh_task_id, ReadyFlag, Scheduler, Task},
         vm,
     },
     Module, Registry, Store, VMResult,
@@ -898,7 +898,7 @@ pub async fn instantiate(
                 ));
 
                 scheduler.push(Task {
-                    task_id: 0,
+                    task_id: fresh_task_id(),
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
@@ -931,7 +931,7 @@ pub async fn instantiate(
 
                 scheduler.push(Task {
                     fp: vm::wasm_entry_pc(store),
-                    task_id: 0,
+                    task_id: fresh_task_id(),
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,

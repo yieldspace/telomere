@@ -87,6 +87,92 @@ impl ExecutionDriver for MockDriver {
     }
 }
 
+/// A driver that retains submitted futures itself and polls them in
+/// submission order, returning the first completion that is ready.
+/// Unlike `TokioDriver`'s unordered set, this delivers a retained
+/// completion from an earlier, cancelled execution before the fresh
+/// execution's own completion — the ordering an embedder driver may
+/// legitimately produce.
+struct PollingDriver {
+    inflight: VecDeque<Pin<Box<dyn Future<Output = Completion>>>>,
+}
+
+impl PollingDriver {
+    fn new() -> Self {
+        Self {
+            inflight: VecDeque::new(),
+        }
+    }
+}
+
+impl ExecutionDriver for PollingDriver {
+    fn submit(&mut self, op: PendingOp) {
+        match op {
+            PendingOp::HostCall(HostCallPending {
+                task_id, future, ..
+            }) => {
+                self.inflight.push_back(Box::pin(async move {
+                    Completion {
+                        task_id,
+                        payload: CompletionPayload::HostCall {
+                            result: future.await,
+                        },
+                    }
+                }));
+            }
+            #[cfg(feature = "threads")]
+            PendingOp::MemoryWait(MemoryWaitPending {
+                task_id,
+                shared,
+                wait,
+                timeout_ns,
+                fp,
+                interrupt,
+            }) => {
+                self.inflight.push_back(Box::pin(async move {
+                    let payload = match wait
+                        .wait_result_interruptible(shared, timeout_ns, interrupt)
+                        .await
+                    {
+                        VMResult::Success(value) => CompletionPayload::ResumeWithI32 { fp, value },
+                        VMResult::Cancelled => CompletionPayload::Interrupted,
+                        _ => unreachable!("memory wait resolves only with a code or cancellation"),
+                    };
+                    Completion { task_id, payload }
+                }));
+            }
+            #[cfg(feature = "unstable-internals")]
+            PendingOp::WasmAsync(op) => {
+                panic!(
+                    "unexpected wasm async pending op for task {} in polling driver",
+                    op.task_id
+                );
+            }
+        }
+    }
+
+    fn next_completion<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<Completion>> + 'a>> {
+        let inflight = &mut self.inflight;
+        Box::pin(std::future::poll_fn(move |cx| {
+            let mut index = 0;
+            while index < inflight.len() {
+                match inflight[index].as_mut().poll(cx) {
+                    std::task::Poll::Ready(completion) => {
+                        inflight.remove(index);
+                        return std::task::Poll::Ready(Some(completion));
+                    }
+                    std::task::Poll::Pending => index += 1,
+                }
+            }
+            if inflight.is_empty() {
+                std::task::Poll::Ready(None)
+            } else {
+                std::task::Poll::Pending
+            }
+        }))
+    }
+}
+
 struct ScalarState {
     calls: AtomicUsize,
 }
@@ -598,6 +684,180 @@ async fn dropped_execution_leaves_retained_driver_future_harmless() {
     assert!(matches!(
         result,
         VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I32(42)])
+    ));
+    assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+}
+
+/// Regression test for the #216 re-review (stale completion): when an
+/// execution is cancelled and its driver is reused *without* being
+/// drained, the driver still holds the cancelled run's completion,
+/// and a driver that delivers completions in submission order (here
+/// `PollingDriver`) hands that retained outcome to the fresh run
+/// before the fresh run's own completion. Completions are bound to the execution that submitted
+/// them, so the fresh run's scheduler must discard the retained
+/// outcome (the cancelled call's result, 42) instead of applying it to
+/// its own task: the fresh call with argument 100 must produce its own
+/// result, 101.
+#[tokio::test]
+async fn retained_completion_is_not_applied_to_a_reused_driver_run() {
+    let state = Box::leak(Box::new(ScalarState {
+        calls: AtomicUsize::new(0),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let mut registry = Registry::new();
+    let host = instantiate_native_async_module(
+        AsyncHostModule {
+            functions: vec![AsyncHostFnDefinition {
+                name: Some("add-one".to_owned()),
+                signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                fp: async_add_one,
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "add-one" (func $add-one (param i32) (result i32)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $add-one))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let mut driver = PollingDriver::new();
+    {
+        let args = ResultValue::new(vec![WasmValue::I32(41)]);
+        let run =
+            telomere::run_module_function_with_driver(&instance, &store, "run", &args, &mut driver);
+        tokio::pin!(run);
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        // One poll runs the guest until the host call has been submitted
+        // to the driver and the run suspends waiting for its completion.
+        assert!(matches!(
+            run.as_mut().poll(&mut cx),
+            std::task::Poll::Pending
+        ));
+        // Dropping `run` here cancels the execution. Unlike the sibling
+        // test above, the driver is deliberately *not* drained: the
+        // retained completion is still in its in-flight set.
+    }
+
+    // Reusing the driver as-is must not let the stale completion leak
+    // into the fresh run: its result is 101, not the cancelled call's 42.
+    let result = telomere::run_module_function_with_driver(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(100)]),
+        &mut driver,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I32(101)])
+    ));
+    assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+}
+
+fn async_add_one_i64(cx: &mut HostContext<'_, '_>) -> HostFuture {
+    let state = cx.store().state;
+    let WasmValue::I64(value) = cx.args()[0] else {
+        panic!("async_add_one_i64 expects an i64 argument");
+    };
+    Box::pin(async move {
+        tokio::task::yield_now().await;
+        let state = unsafe { state.get::<ScalarState>() }.unwrap();
+        state.calls.fetch_add(1, Ordering::SeqCst);
+        VMResult::Success(vec![WasmValue::I64(value + 1)])
+    })
+}
+
+/// Signature-mismatch variant of the stale-completion regression: the
+/// cancelled run's host call returns an `i32`, while the fresh run that
+/// reuses the undrained driver calls a host function returning an
+/// `i64`. Applying the retained outcome would write the stale result
+/// into a return area laid out for the new signature; the fresh run
+/// must instead observe only its own call's result.
+#[tokio::test]
+async fn retained_completion_is_not_applied_across_signatures() {
+    let state = Box::leak(Box::new(ScalarState {
+        calls: AtomicUsize::new(0),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let mut registry = Registry::new();
+    let host = instantiate_native_async_module(
+        AsyncHostModule {
+            functions: vec![
+                AsyncHostFnDefinition {
+                    name: Some("add-one".to_owned()),
+                    signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                    fp: async_add_one,
+                },
+                AsyncHostFnDefinition {
+                    name: Some("add-one-i64".to_owned()),
+                    signature: FuncType::new(vec![ValType::I64], vec![ValType::I64]),
+                    fp: async_add_one_i64,
+                },
+            ],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "add-one" (func $add-one (param i32) (result i32)))
+          (import "host" "add-one-i64" (func $add-one-i64 (param i64) (result i64)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $add-one)
+          (func (export "run-i64") (param i64) (result i64)
+            local.get 0
+            call $add-one-i64))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let mut driver = PollingDriver::new();
+    {
+        let args = ResultValue::new(vec![WasmValue::I32(41)]);
+        let run =
+            telomere::run_module_function_with_driver(&instance, &store, "run", &args, &mut driver);
+        tokio::pin!(run);
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        assert!(matches!(
+            run.as_mut().poll(&mut cx),
+            std::task::Poll::Pending
+        ));
+        // Cancel the i32 run; its completion stays in the driver.
+    }
+
+    let result = telomere::run_module_function_with_driver(
+        &instance,
+        &store,
+        "run-i64",
+        &ResultValue::new(vec![WasmValue::I64(100)]),
+        &mut driver,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I64(101)])
     ));
     assert_eq!(state.calls.load(Ordering::SeqCst), 2);
 }

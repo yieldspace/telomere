@@ -98,6 +98,14 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and the task stack — which wrote through a dangling slot pointer. The
   future now resolves to the callback's values, and the scheduler performs
   the validated return-slot write when it applies the completion.
+- Completions from an embedder driver are now bound to the execution that
+  submitted them (#216 re-review). Root tasks take a fresh, process-unique
+  task identity instead of the constant every run used to share, so if a
+  cancelled execution's driver is reused without being drained, its
+  retained completion names no task of the later execution and the
+  scheduler discards the stale outcome before any return-slot write or
+  resume — including when the two runs' host calls have different
+  signatures.
 
 ### Removed
 
