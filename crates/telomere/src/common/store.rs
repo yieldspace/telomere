@@ -2045,13 +2045,10 @@ impl Store {
         state: StoreState,
         runtime_config: RuntimeConfig,
     ) -> Self {
-        let mut runtime_config = runtime_config;
-        if runtime_config.metering.enabled && runtime_config.jit.enabled {
-            tracing::warn!(
-                "metered execution does not support the JIT; disabling JIT for this Store"
-            );
-            runtime_config.jit.enabled = false;
-        }
+        // #171: metering no longer disables the JIT. Metered stores
+        // compile instrumented code (the store's JIT cache is private
+        // to it and its metering configuration is fixed here), so the
+        // requested configuration is kept as-is.
         let metering = runtime_config
             .metering
             .enabled

@@ -32,9 +32,10 @@ pub(crate) fn emit_baseline_function(
     code: &[crate::common::Instr],
     op_lens: &[u16],
     runtime: &crate::common::store::StoreInner,
+    metered: bool,
 ) -> Result<EmittedFunction, EmitBaselineError> {
     let plan = ops::build_baseline_plan(code, op_lens).map_err(|_| EmitBaselineError::Verify)?;
-    let env = JitEmitEnv::new(runtime);
+    let env = JitEmitEnv::new(runtime, metered);
     let emission = emit_baseline_plan(funcaddr, code, op_lens, env, &plan)
         .map_err(|_| EmitBaselineError::Emit)?;
     debug_assert!(

@@ -356,13 +356,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #269: workflow_dispatch runs 45155658610 and
-45155673480 against the PR branch at head
-`2f84a7cd392c7dcf044f93059734f827753e6d3c` (branch commits `ab7fdfe`,
-the #216 public host API; `6bc92e0`, `c5a67d1`, `47e50e3` and
-`ced821d`, the Codex review follow-ups; and merge commit `2f84a7c`
-bringing in `main` at `f3d4830`), and pull-request run 45155655301,
-which built the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
+against the code of PR #273: workflow_dispatch runs 45160924686 and
+45160938599 against the PR branch at head
+`ba31ed1bd15d823b43f51e2051b0146a72c94b6e` (branch commit `4c9646d`,
+metering covers JIT-compiled execution (#171); and merge commit
+`ba31ed1` bringing in `main` at `6373f8c`), and pull-request run
+45160922321, which built the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
 the stripped `.text` size each have a run-to-run spread of **0 B**
@@ -372,19 +371,19 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,493,728 | 1,143,447 |
-| `release` | `component` | 2,537,584 | 2,036,967 |
-| `release` | `wasi` | 2,881,584 | 2,297,095 |
-| `release` | `core-nosimd` | 1,301,112 | 1,000,343 |
-| `release` | `core-jit` | 2,031,760 | 1,581,703 |
-| `release` | `core-aot` | 1,520,992 | 1,162,391 |
-| `release` | `wasi-threads` | 3,068,344 | 2,436,263 |
+| `release` | `core` | 1,493,584 | 1,143,303 |
+| `release` | `component` | 2,537,440 | 2,036,823 |
+| `release` | `wasi` | 2,881,440 | 2,296,951 |
+| `release` | `core-nosimd` | 1,300,968 | 1,000,199 |
+| `release` | `core-jit` | 2,038,040 | 1,586,951 |
+| `release` | `core-aot` | 1,520,816 | 1,162,215 |
+| `release` | `wasi-threads` | 3,068,200 | 2,436,119 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,105,936 | 782,311 |
 | `release-size` | `component` | 1,665,856 | 1,232,263 |
 | `release-size` | `wasi` | 1,861,712 | 1,363,975 |
 | `release-size` | `core-nosimd` | 991,160 | 702,791 |
-| `release-size` | `core-jit` | 1,540,528 | 1,100,503 |
+| `release-size` | `core-jit` | 1,545,272 | 1,104,343 |
 | `release-size` | `core-aot` | 1,125,368 | 793,879 |
 | `release-size` | `wasi-threads` | 2,003,120 | 1,457,623 |
 
@@ -893,6 +892,34 @@ now release-size `component` stripped `.text` at +5.41% (1,169,031 B
 to 1,232,263 B), up from +5.05%. The baseline was re-measured on the
 merged code and updated as recorded above, following the procedure
 below.
+
+PR #273 (#171, execution metering covers JIT-compiled execution: the
+#127 normalisation that warned and disabled the JIT for metered stores
+is removed, native checkpoints are emitted at guest loop headers and
+fused-loop back-edges in all three JIT backends, a
+`MeteringCheckpoint` stub refills or raises through `vm::checkpoint`,
+and the bulk-memory, table and shared-notify stubs charge with the
+interpreter’s formulas) merged current `main` into its branch
+first; its first CI run on the merged tree then tripped the gate on
+the PR’s own change. Attribution was isolated by measuring current
+`main` alone (workflow_dispatch run 45160951447, gate success), which
+reproduces the previous baseline exactly on all 32 gated series. The
+growth is confined to `core-jit`, the only configuration linking the
+JIT (release stripped file +6,280 B / stripped `.text` +5,248 B;
+release-size +4,744 B / +3,840 B): the per-backend checkpoint
+emitters, the new stub and the stub charge calls; code emitted for
+unmetered stores is byte-identical by construction. In `release` the
+other library configurations shrink slightly (−144 B stripped file
+and `.text` in `core`, `component`, `wasi`, `core-nosimd` and
+`wasi-threads`; −176 B in `core-aot`), the code-layout effect of
+removing the normalisation block from the store constructor, while in
+`release-size` every configuration except `core-jit` is
+byte-identical and `baseline` is unchanged in both profiles. Against
+the original #164 baseline, the largest cumulative growth remains
+release-size `component` stripped `.text` at +5.41% (1,169,031 B to
+1,232,263 B), unchanged, because that series does not move here. The
+baseline was re-measured on the merged code and updated as recorded
+above, following the procedure below.
 
 ### Threshold derivation
 
