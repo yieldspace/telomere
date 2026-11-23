@@ -354,12 +354,12 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-23, the `Embedder footprint` workflow was run three times
-against the code of PR #260: workflow_dispatch runs 45089043304 and
-45089382531 against the PR branch at merge commit
-`5e83bf5733738214d30c7d31d5487b812cc0df03` (branch head
-`96cc96fd1170deb60e45c4b4dab2b8252958b6c1` with `main` at
-`5d6bc720f2281a79818dba879dcd3e67c6bdd280` merged in), and
-pull-request run 45088697826, which built the same tree
+against the code of PR #261: workflow_dispatch runs 45091414099 and
+45091418075 against the PR branch at merge commit
+`eb90479f63a1a68c51298b9d8d246a6564edd7ca` (branch head
+`0628570ce0ef32c73912ad5f3fb34d545b03fb4d` with `main` at
+`133bf4ba693d0c8beca43935678b12e8bbb920f6` merged in), and
+pull-request run 45091317129, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). Every
 run produced byte-identical sizes: for all fourteen
 profile/configuration rows, the raw file size, the `.text` size, the
@@ -374,14 +374,14 @@ baselines in the table below (stripped file / stripped `.text`, in bytes).
 | `release` | `component` | 2,471,912 | 1,979,847 |
 | `release` | `wasi` | 2,818,456 | 2,242,055 |
 | `release` | `core-nosimd` | 1,284,456 | 986,663 |
-| `release` | `core-jit` | 2,006,552 | 1,562,231 |
+| `release` | `core-jit` | 2,009,624 | 1,564,551 |
 | `release` | `wasi-threads` | 3,003,424 | 2,379,479 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,095,256 | 774,487 |
 | `release-size` | `component` | 1,627,712 | 1,200,439 |
 | `release-size` | `wasi` | 1,823,392 | 1,331,975 |
 | `release-size` | `core-nosimd` | 981,312 | 695,799 |
-| `release-size` | `core-jit` | 1,515,416 | 1,081,607 |
+| `release-size` | `core-jit` | 1,517,288 | 1,082,855 |
 | `release-size` | `wasi-threads` | 1,963,648 | 1,424,551 |
 
 #### Re-baseline history
@@ -631,6 +631,39 @@ stripped file +9,040..+9,776 B and stripped `.text`
 in both profiles (4 of 28 gated series unchanged). The baseline
 was re-measured on the merged code and updated as recorded above,
 following the procedure below.
+
+PR #261 (#195, JIT code cache: pack compiled functions into
+dual-view code slabs) merged current `main` into its branch first
+(merge commit `eb90479`, no conflicts); its first CI run then
+tripped the gate on the PR's own change. The PR rewrites
+`CodeArena` in `crates/telomere-jit-codegen/src/code_memory.rs`:
+compiled functions are bump-allocated at 16-byte alignment into
+256 KiB dual-view slabs (one shared backing — `memfd_create` on
+Linux, `shm_open` plus immediate unlink on macOS — mapped twice,
+read/write and read/execute; the writable view is permanently
+unmapped when a slab fills or seals, so the executable view is
+never writable and the W^X contract stays one-way), oversized
+functions get a dedicated slab, and environments that cannot
+create a shared backing fall back to the previous per-function
+mapping. `telomere-jit-codegen` gains a `cfg(unix)` `libc`
+dependency, the JIT cache accounting in
+`crates/telomere/src/runtime/jit/cache.rs` switches from
+page-rounded sizes to `accounted_len` (aligned code bytes), and
+aarch64 gains instruction-cache flushes (`__clear_cache` on
+Linux, `sys_icache_invalidate` on macOS). A follow-up commit on
+the branch casts the `shm_open` mode through `c_uint` so the
+macOS build compiles (`mode_t` is `u16` there and cannot be
+passed to the variadic `shm_open`; E0617). Attribution was
+isolated by measuring current `main` alone (workflow_dispatch
+run 45091421967, gate success), which reproduces the previous
+baseline exactly on all 28 gated series. Only the `core-jit`
+configuration links `telomere-jit-codegen` into the minimal
+embedder, so the delta is confined to its four gated series
+(release stripped file +3,072 B / stripped `.text` +2,320 B;
+release-size stripped file +1,872 B / stripped `.text`
++1,248 B) and the other 24 gated series are byte-identical.
+The baseline was re-measured on the merged code and updated as
+recorded above, following the procedure below.
 
 ### Threshold derivation
 

@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions ‘Embedder footprint’ runs for PR #260 (branch fix/240-fn-identity at merge commit 5e83bf5733738214d30c7d31d5487b812cc0df03 — branch head 96cc96fd1170deb60e45c4b4dab2b8252958b6c1 with current main 5d6bc720f2281a79818dba879dcd3e67c6bdd280 merged in without conflicts, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45089043304 and 45089382531 against the branch and pull-request run 45088697826, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "5e83bf5733738214d30c7d31d5487b812cc0df03",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #261 (branch fix/195-jit-code-cache at merge commit eb90479f63a1a68c51298b9d8d246a6564edd7ca \u2014 branch head 0628570ce0ef32c73912ad5f3fb34d545b03fb4d with current main 133bf4ba693d0c8beca43935678b12e8bbb920f6 merged in without conflicts, so the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45091414099 and 45091418075 against the branch and pull-request run 45091317129, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "eb90479f63a1a68c51298b9d8d246a6564edd7ca",
     "date": "2026-11-23",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45089043304,
-      45089382531
+      45091414099,
+      45091418075
     ],
     "cross_check_run_ids": [
-      45088697826
+      45091317129
     ],
-    "derivation": "Re-baseline for PR #260 (#240, pin fn-pointer handler identity against duplication and identical-code folding). The PR marks all 512 identity-compared op handlers #[inline(never)] so the compiler cannot duplicate them across codegen units, adds identity barriers (a function-local static whose address is passed to core::hint::black_box) to the byte-identical twin handlers — the shared/indexed load/store template families in crates/telomere/src/runtime/vm/memory.rs, op_f32_store / op_f64_store, and op_return in crates/telomere/src/runtime/vm/control.rs — documents the identity contract on Op in crates/telomere/src/common.rs, and adds tools/check-fn-identity.py (wired into CI) with its unit tests plus OP_SPECS decode tests. Attribution was isolated by measuring current main (5d6bc72) alone (workflow_dispatch run 45089386493, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR’s own. Growth appears in every configuration that links the telomere library and is near-uniform, as expected when 512 handler bodies stop being inlined into or merged with their dispatch sites: release stripped file +15,008..+22,864 B and stripped .text +13,952..+21,184 B (core-jit grows most because it also links the JIT backend handlers annotated in crates/telomere/src/runtime/jit/backend/ops.rs); release-size (opt-level z, fat LTO, one codegen unit) stripped file +9,040..+9,776 B and stripped .text +10,512..+11,936 B. The baseline configuration (no library) is byte-identical in both profiles, so 4 of 28 gated series are unchanged and 24 move. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, ‘Size regression gate (#164)’."
+    "derivation": "Re-baseline for PR #261 (#195, pack compiled functions into dual-view code slabs). The PR rewrites CodeArena in crates/telomere-jit-codegen/src/code_memory.rs: compiled functions are bump-allocated at 16-byte alignment into 256 KiB dual-view slabs (one shared backing mapped RW and RX; the RW view is permanently unmapped when a slab fills or seals, keeping the W^X contract one-way; oversized functions get a dedicated slab; environments without a shared backing fall back to the previous per-function mapping), adds a cfg(unix) libc dependency to telomere-jit-codegen, switches the JIT cache accounting in crates/telomere/src/runtime/jit/cache.rs from page-rounded sizes to accounted_len (aligned code bytes), and adds aarch64 instruction-cache flushes (__clear_cache on Linux, sys_icache_invalidate on macOS). A follow-up commit casts the shm_open mode through c_uint so the macOS build compiles (mode_t is u16 there and cannot be passed to the variadic shm_open; E0617). Attribution was isolated by measuring current main (133bf4b) alone (workflow_dispatch run 45091421967, gate success): it reproduces the previous baseline exactly on all 28 gated series, so every delta is this PR\u2019s own. Only the core-jit configuration links telomere-jit-codegen into the minimal embedder, so the delta is confined to its 4 gated series: release stripped file +3,072 B / stripped .text +2,320 B; release-size stripped file +1,872 B / stripped .text +1,248 B. The other 24 gated series are byte-identical. Run-to-run spread was again 0 B for every gated series (14 profile/configuration rows x stripped file and stripped .text, n=3; the raw file and .text sizes were also identical across the three runs), so each threshold equals its observed baseline exactly (baseline + 0). Any further growth requires an intentional re-baseline; see docs/benchmarks/footprint.md, \u2018Size regression gate (#164)\u2019."
   },
   "thresholds": {
     "release": {
@@ -70,12 +70,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2006552,
-          "threshold": 2006552
+          "baseline": 2009624,
+          "threshold": 2009624
         },
         "stripped_text_bytes": {
-          "baseline": 1562231,
-          "threshold": 1562231
+          "baseline": 1564551,
+          "threshold": 1564551
         }
       },
       "wasi-threads": {
@@ -142,12 +142,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1515416,
-          "threshold": 1515416
+          "baseline": 1517288,
+          "threshold": 1517288
         },
         "stripped_text_bytes": {
-          "baseline": 1081607,
-          "threshold": 1081607
+          "baseline": 1082855,
+          "threshold": 1082855
         }
       },
       "wasi-threads": {
