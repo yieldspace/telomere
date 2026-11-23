@@ -158,8 +158,14 @@ impl<'a> Validator<'a> {
             Type::Component(component_ty) => {
                 let mut summary = ResourceOwnerSummary::default();
                 for import in component_ty.imports.values() {
-                    if let ComponentImportType::Type { type_id, .. } = import {
-                        summary.merge(&self.resource_owner_summary(*type_id, visiting)?);
+                    match import {
+                        ComponentImportType::Type { type_id, .. } => {
+                            summary.merge(&self.resource_owner_summary(*type_id, visiting)?);
+                        }
+                        ComponentImportType::Value(ty) => {
+                            summary.merge(&self.valtype_resource_owner_summary(ty, visiting)?);
+                        }
+                        ComponentImportType::CoreModule(_) => {}
                     }
                 }
                 for export in component_ty.exports.values() {
@@ -170,6 +176,9 @@ impl<'a> Validator<'a> {
                         | ComponentExportType::Type(type_id)
                         | ComponentExportType::Func(type_id) => {
                             summary.merge(&self.resource_owner_summary(*type_id, visiting)?);
+                        }
+                        ComponentExportType::Value(ty) => {
+                            summary.merge(&self.valtype_resource_owner_summary(ty, visiting)?);
                         }
                     }
                 }
@@ -185,6 +194,9 @@ impl<'a> Validator<'a> {
                         | InstanceExportType::Type(type_id)
                         | InstanceExportType::Func(type_id) => {
                             summary.merge(&self.resource_owner_summary(*type_id, visiting)?);
+                        }
+                        InstanceExportType::Value(ty) => {
+                            summary.merge(&self.valtype_resource_owner_summary(ty, visiting)?);
                         }
                     }
                 }
@@ -347,6 +359,7 @@ impl<'a> Validator<'a> {
             ComponentImportType::Type { type_id, .. } => {
                 self.compute_effective_type_size(*type_id, visiting)
             }
+            ComponentImportType::Value(ty) => self.compute_valtype_size(ty, visiting),
         }
     }
 
@@ -363,6 +376,7 @@ impl<'a> Validator<'a> {
             | ComponentExportType::Func(type_id) => {
                 self.compute_effective_type_size(*type_id, visiting)
             }
+            ComponentExportType::Value(ty) => self.compute_valtype_size(ty, visiting),
         }
     }
 
@@ -379,6 +393,7 @@ impl<'a> Validator<'a> {
             | InstanceExportType::Func(type_id) => {
                 self.compute_effective_type_size(*type_id, visiting)
             }
+            InstanceExportType::Value(ty) => self.compute_valtype_size(ty, visiting),
         }
     }
 

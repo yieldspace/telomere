@@ -212,6 +212,9 @@ impl<'a> Validator<'a> {
                     };
                     ComponentImportType::Type { type_id, generic }
                 }
+                ComponentImportType::Value(ty) => {
+                    ComponentImportType::Value(self.instantiate_valtype(ty, context)?)
+                }
             };
             imports.insert(name.clone(), import);
         }
@@ -233,6 +236,9 @@ impl<'a> Validator<'a> {
                 }
                 ComponentExportType::Func(type_id) => {
                     ComponentExportType::Func(self.instantiate_type_id(*type_id, context)?)
+                }
+                ComponentExportType::Value(ty) => {
+                    ComponentExportType::Value(self.instantiate_valtype(ty, context)?)
                 }
             };
             exports.insert(name.clone(), export);
@@ -267,6 +273,9 @@ impl<'a> Validator<'a> {
                     };
                     ComponentImportType::Type { type_id, generic }
                 }
+                ComponentImportType::Value(ty) => {
+                    ComponentImportType::Value(self.freshen_import_valtype(ty, context)?)
+                }
             };
             imports.insert(name.clone(), import);
         }
@@ -289,6 +298,9 @@ impl<'a> Validator<'a> {
                 ComponentExportType::Func(type_id) => ComponentExportType::Func(
                     self.freshen_import_type_id_with_context(*type_id, context)?,
                 ),
+                ComponentExportType::Value(ty) => {
+                    ComponentExportType::Value(self.freshen_import_valtype(ty, context)?)
+                }
             };
             exports.insert(name.clone(), export);
         }
@@ -324,6 +336,9 @@ impl<'a> Validator<'a> {
                 InstanceExportType::Type(type_id) => {
                     InstanceExportType::Type(self.instantiate_type_id(*type_id, context)?)
                 }
+                InstanceExportType::Value(ty) => {
+                    InstanceExportType::Value(self.instantiate_valtype(ty, context)?)
+                }
             };
             exports.insert(name.clone(), export);
         }
@@ -353,6 +368,9 @@ impl<'a> Validator<'a> {
                 InstanceExportType::Type(type_id) => InstanceExportType::Type(
                     self.freshen_import_type_id_with_context(*type_id, context)?,
                 ),
+                InstanceExportType::Value(ty) => {
+                    InstanceExportType::Value(self.freshen_import_valtype(ty, context)?)
+                }
             };
             exports.insert(name.clone(), export);
         }
@@ -403,7 +421,7 @@ impl<'a> Validator<'a> {
         })
     }
 
-    fn instantiate_valtype(
+    pub(crate) fn instantiate_valtype(
         &mut self,
         ty: &ValType,
         context: &mut TransformContext,

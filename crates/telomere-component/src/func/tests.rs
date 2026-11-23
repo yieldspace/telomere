@@ -29,6 +29,7 @@ fn dummy_program(types: Vec<Type>) -> ComponentProgram {
         core_memory_store: HashMap::new(),
         core_global_store: HashMap::new(),
         core_table_store: HashMap::new(),
+        value_store: HashMap::new(),
     }
 }
 

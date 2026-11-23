@@ -12,7 +12,8 @@ mod variant;
 use crate::decoder::name::{is_kebab_label, parse_label_dash};
 use crate::decoder::parse_core_func_local_idx;
 use crate::decoder::types::instance::parse_instance_type;
-use crate::decoder::types::valtype::{parse_label_valtype, parse_valtype};
+use crate::decoder::types::valtype::parse_label_valtype;
+pub(crate) use crate::decoder::types::valtype::parse_valtype;
 use crate::decoder::{
     parse_option, parse_type_local_idx, parse_vec_range, ComponentParseError, ParseContext,
     ParseResult, SizedResult,

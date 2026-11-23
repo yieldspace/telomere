@@ -160,6 +160,7 @@ pub struct ComponentLinker {
     exports: HashMap<String, LinkerBinding>,
     import_instances: HashMap<String, ComponentLinkerInstance>,
     import_resource_drops: HashMap<(String, String), ResourceDropFn>,
+    import_values: HashMap<String, ComponentValue>,
 }
 
 impl ComponentLinker {
@@ -328,6 +329,25 @@ impl ComponentLinker {
 
     pub(crate) fn resolve_import(&self, name: &str) -> Option<LinkerBinding> {
         resolve_registered(&self.imports, name)
+    }
+
+    /// Registers a host-provided value for a component's value import.
+    ///
+    /// The value is checked against the import's declared type when the
+    /// component is instantiated.
+    pub fn register_import_value(&mut self, name: impl Into<String>, value: ComponentValue) {
+        self.import_values.insert(name.into(), value);
+    }
+
+    pub(crate) fn resolve_import_value(&self, name: &str) -> Option<ComponentValue> {
+        resolve_registered(&self.import_values, name)
+    }
+
+    /// Names a value import registered on an incompatible version track
+    /// (see [`crate::runtime::name_match`]).
+    pub(crate) fn incompatible_import_value(&self, name: &str) -> Option<String> {
+        name_match::incompatible_name(name, self.import_values.keys().map(String::as_str))
+            .map(str::to_owned)
     }
 
     pub(crate) fn resolve_import_instance(&self, name: &str) -> Option<ComponentLinkerInstance> {

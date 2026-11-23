@@ -1,11 +1,11 @@
 use crate::decoder::ParseResult;
 use crate::ir::types::{
     ComponentImportType, CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType,
-    CoreModuleType, CoreTableType, CoreType, GenericsReplaceDSL, Type,
+    CoreModuleType, CoreTableType, CoreType, GenericsReplaceDSL, Type, ValType,
 };
 use crate::ir::{
     Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, ExportName,
-    Func, ImportName, Instance, LocalIdx, ScopeId, TypeId,
+    Func, ImportName, Instance, LocalIdx, ScopeId, TypeId, Value,
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -77,6 +77,7 @@ pub enum ExportInfo {
     Func(TypeId),
     TypeEq(TypeId),
     TypeSub(TypeId),
+    Value(ValType),
 }
 
 pub struct ScopeGuard {
@@ -93,6 +94,9 @@ pub struct ScopeGuard {
     pub core_tables: CoreTypeStore<CoreTable, CoreTableType>,
     pub core_globals: CoreTypeStore<CoreGlobal, CoreGlobalType>,
     pub core_funcs: CoreTypeStore<CoreFunc, CoreFuncType>,
+    // The value index space stores each value's `ValType` directly: unlike
+    // the other sorts, a value's type is not a type index.
+    pub value_indexes: CoreTypeStore<Value, ValType>,
     pub imports: HashMap<String, ComponentImportType>,
     pub exports: HashMap<String, ExportInfo>,
     pub generics_replace_program: Vec<GenericsReplaceDSL>,
@@ -130,6 +134,7 @@ impl ScopeGuard {
             core_tables: Default::default(),
             core_globals: Default::default(),
             core_funcs: Default::default(),
+            value_indexes: Default::default(),
             imports: Default::default(),
             exports: Default::default(),
             generics_replace_program: Default::default(),
@@ -150,5 +155,6 @@ impl ScopeGuard {
         self.core_tables = parent.core_tables.clone();
         self.core_globals = parent.core_globals.clone();
         self.core_funcs = parent.core_funcs.clone();
+        self.value_indexes = parent.value_indexes.clone();
     }
 }

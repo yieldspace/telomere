@@ -79,6 +79,19 @@ fn parse_export_alias(
             };
             ctx.validator.scope_mut().type_indexes.add(id);
         }
+        SortType::Value => {
+            let InstanceExportType::Value(ty) = export else {
+                return Err(ComponentParseError::InvalidSignature(
+                    "alias type is mismatch".into(),
+                ));
+            };
+            let gidx = ctx
+                .state
+                .value_store
+                .register(Relation::FromExport(instance_gidx, name.original.clone()));
+            ctx.state.scope_mut().values.register(gidx);
+            ctx.validator.scope_mut().value_indexes.add(ty);
+        }
         SortType::Instance => {
             let InstanceExportType::Instance(id) = export else {
                 return Err(ComponentParseError::InvalidSignature(
@@ -331,6 +344,17 @@ fn parse_outer_export(
                 .instance_indexes
                 .get(LocalIdx::new(idx))?;
             ctx.validator.scope_mut().instance_indexes.add(ty);
+        }
+        SortType::Value => {
+            let gidx = ctx.state.outer_scope(ct)?.values.get(LocalIdx::new(idx))?;
+            ctx.state.scope_mut().values.register(gidx);
+            let ty = ctx
+                .validator
+                .outer_scope(ct)?
+                .value_indexes
+                .get(LocalIdx::new(idx))?
+                .clone();
+            ctx.validator.scope_mut().value_indexes.add(ty);
         }
         SortType::Core(kind) => {
             return Err(ComponentParseError::Unsupported(format!(

@@ -1,6 +1,7 @@
 use crate::decoder::{
     parse_component_local_idx, parse_core_module_local_idx, parse_core_sort, parse_func_local_idx,
-    parse_instance_local_idx, parse_type_local_idx, ParseContext, ParseResult,
+    parse_instance_local_idx, parse_type_local_idx, parse_value_local_idx, ParseContext,
+    ParseResult,
 };
 use crate::ir::types::{CoreSortType, SortType};
 use crate::ir::Sort;
@@ -10,6 +11,7 @@ pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Sort
     let sort = match ctx.reader.read_exact_one()? {
         0x00 => SortType::Core(parse_core_sort(ctx)?),
         0x01 => SortType::Func,
+        0x02 => SortType::Value,
         0x03 => SortType::Type,
         0x04 => SortType::Component,
         0x05 => SortType::Instance,
@@ -40,6 +42,12 @@ pub fn parse_sort_with_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
             let ty = ctx.validator.scope().func_indexes.get(idx)?;
             let idx = ctx.state.scope().funcs.get(idx)?;
             Ok(Sort::Func(idx, ty))
+        }
+        0x02 => {
+            let idx = parse_value_local_idx(ctx)?;
+            let ty = ctx.validator.scope().value_indexes.get(idx)?.clone();
+            let idx = ctx.state.scope().values.get(idx)?;
+            Ok(Sort::Value(idx, ty))
         }
         0x03 => {
             let idx = parse_type_local_idx(ctx)?;

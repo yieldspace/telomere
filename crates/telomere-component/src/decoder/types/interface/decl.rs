@@ -150,9 +150,17 @@ pub fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseRes
                     type_id,
                 ));
         }
-        crate::ir::ExternDesc::Value(_) => Err(crate::decoder::ComponentParseError::Unsupported(
-            "value exports are not supported".to_owned(),
-        ))?,
+        crate::ir::ExternDesc::Value(ty) => {
+            crate::decoder::value::validate_value_type(ctx.validator, &ty, true)?;
+            let focus = ctx.validator.scope_mut();
+            focus
+                .exports
+                .insert(name.original.clone(), ExportInfo::Value(ty.clone()));
+            focus.value_indexes.add(ty.clone());
+            focus
+                .generics_replace_program
+                .push(GenericsReplaceDSL::ExportValue(name.original.clone(), ty));
+        }
     }
 
     Ok(())

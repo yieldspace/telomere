@@ -200,6 +200,39 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             focus.func_indexes.add(export_type_id);
             Ok(())
         }
+        Sort::Value(idx, ty) => {
+            let export_ty = match desc {
+                None => ty,
+                Some(ExternDesc::Value(declared)) => {
+                    ty.assert_subtype_of(&declared, ctx.validator)?;
+                    declared
+                }
+                _ => Err(ComponentParseError::TypeMismatch(
+                    "export kind mismatch".to_owned(),
+                ))?,
+            };
+            ctx.state.scope_mut().add_export(
+                &name,
+                ComponentExport::Value {
+                    idx,
+                    ty: export_ty.clone(),
+                },
+            );
+            ctx.state.scope_mut().values.register(idx);
+            let focus = ctx.validator.scope_mut();
+            focus.exports.insert(
+                name.original.clone(),
+                crate::decoder::validator::ExportInfo::Value(export_ty.clone()),
+            );
+            focus
+                .generics_replace_program
+                .push(GenericsReplaceDSL::ExportValue(
+                    name.original.clone(),
+                    export_ty.clone(),
+                ));
+            focus.value_indexes.add(export_ty);
+            Ok(())
+        }
     }
 }
 
