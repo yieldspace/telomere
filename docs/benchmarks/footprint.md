@@ -356,14 +356,13 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #288: workflow_dispatch runs 45250727398 and
-45250749786 against the PR branch at head
-`9d9e82540ffbff386889f1c98d2052383409ce48` (branch commits
-`cf6848e`, stop erasing release tracing and publish a diagnostics
-event contract (#144), and `39cdc18`, keep the JIT compile-trace
-stderr cap from suppressing structured events; and merge commit
-`9d9e825` bringing in `main` at
-`1253c75`), and pull-request run 45250703545, which built the same
+against the code of PR #289: workflow_dispatch runs 45268180814 and
+45268200208 against the PR branch at head
+`457b2094d81e43a7452dbe56ba0aacc09c804f7f` (branch commits
+`36fb96d`, embedder-configurable resource limits via LimitsConfig
+(#126), and `457b209`, enforce the total-page ceiling on host-side
+memory growth; and merge commit `f77c527` bringing in `main` at
+`20e7e94`), and pull-request run 45268166014, which built the same
 tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
@@ -374,21 +373,21 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,584,376 | 1,198,759 |
-| `release` | `component` | 2,664,760 | 2,113,687 |
-| `release` | `wasi` | 3,008,760 | 2,373,815 |
-| `release` | `core-nosimd` | 1,393,672 | 1,053,959 |
-| `release` | `core-jit` | 2,133,576 | 1,643,431 |
-| `release` | `core-aot` | 1,614,328 | 1,218,935 |
-| `release` | `wasi-threads` | 3,223,400 | 2,540,087 |
+| `release` | `core` | 1,586,464 | 1,200,487 |
+| `release` | `component` | 2,666,816 | 2,115,351 |
+| `release` | `wasi` | 3,010,832 | 2,375,479 |
+| `release` | `core-nosimd` | 1,395,728 | 1,055,655 |
+| `release` | `core-jit` | 2,135,840 | 1,645,287 |
+| `release` | `core-aot` | 1,617,088 | 1,221,303 |
+| `release` | `wasi-threads` | 3,226,640 | 2,542,999 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,108,968 | 782,103 |
-| `release-size` | `component` | 1,670,776 | 1,233,047 |
-| `release-size` | `wasi` | 1,866,664 | 1,364,791 |
-| `release-size` | `core-nosimd` | 994,256 | 702,631 |
-| `release-size` | `core-jit` | 1,550,368 | 1,105,367 |
-| `release-size` | `core-aot` | 1,128,992 | 794,231 |
-| `release-size` | `wasi-threads` | 2,008,968 | 1,459,111 |
+| `release-size` | `core` | 1,110,248 | 783,127 |
+| `release-size` | `component` | 1,671,944 | 1,233,991 |
+| `release-size` | `wasi` | 1,867,944 | 1,365,815 |
+| `release-size` | `core-nosimd` | 995,504 | 703,623 |
+| `release-size` | `core-jit` | 1,551,616 | 1,106,231 |
+| `release-size` | `core-aot` | 1,130,112 | 795,079 |
+| `release-size` | `wasi-threads` | 2,010,248 | 1,460,167 |
 
 #### Re-baseline history
 
@@ -1186,6 +1185,50 @@ stripped file series at +9.50% (2,433,656 B to
 2,664,760 B), up from +5.47%; the `release-size`
 `component` stripped `.text` series moves from +5.47% to
 +5.48% (1,169,031 B to 1,233,047 B). The baseline was
+re-measured on the merged code and updated as recorded
+above, following the procedure below.
+
+PR #289 (#126, embedder-configurable resource limits:
+`RuntimeConfig` gains `LimitsConfig` — the store-wide
+total-memory ceiling, a per-table element cap, the guest
+value-stack size, and the JIT code-cache ceiling folded
+in from `JitConfig`) merged current `main` into its branch
+first, with no conflicts. The merged tree's first CI run
+failed clippy, feature coverage, and both JIT-test jobs
+on a single stale field reference: the `jit_code_cache`
+regression test added by PR #288 still set the code-cache
+ceiling through `JitConfig::code_cache_max_bytes`, which
+this PR moves to `LimitsConfig`; the test now sets
+`limits.max_code_cache_bytes`. Review of this PR then
+found that the total-page ceiling, checked in the store's
+grow dispatch, did not cover host callbacks: a callback
+growing memory through the public `Memory` handle handed
+out by the `HostContext` accessors never passes through
+that dispatch, and with a one-page cap its `grow(1)`
+succeeded and the guest observed two pages. The ceiling
+now lives in `Memory::grow` itself, charged against a
+shared `TotalMemoryBudget` that every memory registers
+with when the store adopts it; regression tests cover the
+caller accessors and a host function linked into a
+memory-owning instance. Attribution was isolated by
+measuring current `main` alone (workflow_dispatch run
+45266215787, gate success), which reproduces the previous
+baseline exactly on all 32 gated series, so every delta
+below is this PR's own. The deltas are the cost of the
+limits machinery in the telomere library: in `release`,
+every configuration that links the library grows —
+stripped file +2,056 B in `component` and `core-nosimd`
+to +3,240 B in `wasi-threads`, stripped `.text` +1,664 B
+to +2,912 B — largest in `wasi-threads`, where the
+shared-memory budget paths land. The `baseline`
+configuration, which links no telomere code, is
+byte-identical in both profiles. In `release-size` the
+growth is smaller and near-uniform: stripped file
++1,120 B to +1,280 B, stripped `.text` +848 B to
++1,056 B. Against the original #164 baseline, the largest
+cumulative growth is now the `release` `component`
+stripped file series at +9.58% (2,433,656 B to
+2,666,816 B), up from +9.50%. The baseline was
 re-measured on the merged code and updated as recorded
 above, following the procedure below.
 
