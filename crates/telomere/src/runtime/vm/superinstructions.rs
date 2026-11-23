@@ -86,14 +86,14 @@ impl LocalBinop32Descriptor {
     }
 
     #[inline(always)]
-    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u32 {
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
         if let Some(result) = self.fast_i32_eval(tail_code, ctx) {
-            return result;
+            return Some(result);
         }
         let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
         let lhs_bits = local_u32_bits(ctx, lhs);
-        let rhs_bits = load_binop32_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx);
-        eval_local_binop32(self.op, lhs_bits, rhs_bits)
+        let rhs_bits = load_binop32_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx)?;
+        Some(eval_local_binop32(self.op, lhs_bits, rhs_bits))
     }
 
     #[inline(always)]
@@ -142,11 +142,11 @@ impl LocalBinop64Descriptor {
     }
 
     #[inline(always)]
-    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u64 {
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u64> {
         let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
         let lhs_bits = local_u64_bits(ctx, lhs);
-        let rhs_bits = load_binop64_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx);
-        eval_local_binop64(self.op, lhs_bits, rhs_bits)
+        let rhs_bits = load_binop64_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx)?;
+        Some(eval_local_binop64(self.op, lhs_bits, rhs_bits))
     }
 }
 
@@ -169,11 +169,11 @@ impl LocalCmp32Descriptor {
     }
 
     #[inline(always)]
-    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u32 {
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
         let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
         let lhs_bits = local_u32_bits(ctx, lhs);
-        let rhs_bits = load_cmp32_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx);
-        eval_local_cmp32(self.op, lhs_bits, rhs_bits)
+        let rhs_bits = load_cmp32_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx)?;
+        Some(eval_local_cmp32(self.op, lhs_bits, rhs_bits))
     }
 }
 
@@ -196,11 +196,11 @@ impl LocalCmp64Descriptor {
     }
 
     #[inline(always)]
-    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u32 {
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
         let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
         let lhs_bits = local_u64_bits(ctx, lhs);
-        let rhs_bits = load_cmp64_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx);
-        eval_local_cmp64(self.op, lhs_bits, rhs_bits)
+        let rhs_bits = load_cmp64_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx)?;
+        Some(eval_local_cmp64(self.op, lhs_bits, rhs_bits))
     }
 }
 
@@ -427,16 +427,21 @@ fn load_binop32_rhs(
     shape: LocalFastRhsShape,
     const_kind: LocalFastConstKind,
     ctx: &mut ExecuteContext,
-) -> u32 {
+) -> Option<u32> {
     match shape {
         LocalFastRhsShape::Local => {
             let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
-            local_u32_bits(ctx, rhs)
+            Some(local_u32_bits(ctx, rhs))
         }
         LocalFastRhsShape::Const => match const_kind {
-            LocalFastConstKind::I32 => unsafe { (*tail_code.add(2)).operand.i32 as u32 },
-            LocalFastConstKind::F32 => unsafe { (*tail_code.add(2)).operand.f32.to_bits() },
-            _ => unreachable!("invalid 32-bit const kind"),
+            LocalFastConstKind::I32 => Some(unsafe { (*tail_code.add(2)).operand.i32 as u32 }),
+            LocalFastConstKind::F32 => Some(unsafe { (*tail_code.add(2)).operand.f32.to_bits() }),
+            // #128: rhs_const_kind is derived from the decoded op in
+            // Descriptor::decode, never read from the instruction stream,
+            // so a width-mismatched kind means the descriptor invariant
+            // is broken; report an invalid descriptor instead of
+            // aborting the host.
+            _ => None,
         },
     }
 }
@@ -447,16 +452,18 @@ fn load_binop64_rhs(
     shape: LocalFastRhsShape,
     const_kind: LocalFastConstKind,
     ctx: &mut ExecuteContext,
-) -> u64 {
+) -> Option<u64> {
     match shape {
         LocalFastRhsShape::Local => {
             let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
-            local_u64_bits(ctx, rhs)
+            Some(local_u64_bits(ctx, rhs))
         }
         LocalFastRhsShape::Const => match const_kind {
-            LocalFastConstKind::I64 => unsafe { (*tail_code.add(2)).operand.i64 as u64 },
-            LocalFastConstKind::F64 => unsafe { (*tail_code.add(2)).operand.f64.to_bits() },
-            _ => unreachable!("invalid 64-bit const kind"),
+            LocalFastConstKind::I64 => Some(unsafe { (*tail_code.add(2)).operand.i64 as u64 }),
+            LocalFastConstKind::F64 => Some(unsafe { (*tail_code.add(2)).operand.f64.to_bits() }),
+            // #128: see load_binop32_rhs; a width-mismatched kind is an
+            // invalid descriptor, not a host abort.
+            _ => None,
         },
     }
 }
@@ -467,7 +474,7 @@ fn load_cmp32_rhs(
     shape: LocalFastRhsShape,
     const_kind: LocalFastConstKind,
     ctx: &mut ExecuteContext,
-) -> u32 {
+) -> Option<u32> {
     load_binop32_rhs(tail_code, shape, const_kind, ctx)
 }
 
@@ -477,14 +484,14 @@ fn load_cmp64_rhs(
     shape: LocalFastRhsShape,
     const_kind: LocalFastConstKind,
     ctx: &mut ExecuteContext,
-) -> u64 {
+) -> Option<u64> {
     load_binop64_rhs(tail_code, shape, const_kind, ctx)
 }
 
 #[inline(always)]
 unsafe fn eval_binop32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
     let descriptor = LocalBinop32Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
-    Some(unsafe { descriptor.eval(tail_code, ctx) })
+    unsafe { descriptor.eval(tail_code, ctx) }
 }
 
 #[inline(always)]
@@ -512,19 +519,19 @@ unsafe fn eval_i32_const_cmp_from_tail(
 #[inline(always)]
 unsafe fn eval_binop64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u64> {
     let descriptor = LocalBinop64Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
-    Some(unsafe { descriptor.eval(tail_code, ctx) })
+    unsafe { descriptor.eval(tail_code, ctx) }
 }
 
 #[inline(always)]
 unsafe fn eval_cmp32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
     let descriptor = LocalCmp32Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
-    Some(unsafe { descriptor.eval(tail_code, ctx) })
+    unsafe { descriptor.eval(tail_code, ctx) }
 }
 
 #[inline(always)]
 unsafe fn eval_cmp64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
     let descriptor = LocalCmp64Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
-    Some(unsafe { descriptor.eval(tail_code, ctx) })
+    unsafe { descriptor.eval(tail_code, ctx) }
 }
 
 #[inline(always)]
@@ -696,15 +703,15 @@ pub unsafe fn op_local_get4_local_get4_local_get4(
 unsafe fn local_get4x3_add_const_binop_add(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-) -> u32 {
+) -> Option<u32> {
     let first = unsafe { (*tail_code).operand.local_addr as usize };
     let second = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
     let third = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
     let kind = unsafe { (*tail_code.add(3)).operand.u32 };
     let rhs = unsafe { (*tail_code.add(4)).operand.i32 as u32 };
     let inner = local_u32_bits(ctx, second).wrapping_add(local_u32_bits(ctx, third));
-    let adjusted = eval_stack_i32_const_binop(kind, inner, rhs).expect("invalid i32_const_binop");
-    local_u32_bits(ctx, first).wrapping_add(adjusted)
+    let adjusted = eval_stack_i32_const_binop(kind, inner, rhs)?;
+    Some(local_u32_bits(ctx, first).wrapping_add(adjusted))
 }
 
 /// WebAssembly `local.get x3; i32.add; i32.const; i32.binop; i32.add; local.set`.
@@ -721,7 +728,10 @@ pub unsafe fn op_local_get4x3_i32_add_const_binop_i32_add_set4(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     dispatch_profile_count("op_local_get4x3_i32_add_const_binop_i32_add_set4");
-    let result = unsafe { local_get4x3_add_const_binop_add(tail_code, ctx) };
+    let result = vm_try!(VMResult::from_option(
+        unsafe { local_get4x3_add_const_binop_add(tail_code, ctx) },
+        || VMResult::InvalidOperand
+    ));
     let dst = unsafe { (*tail_code.add(5)).operand.local_addr as usize };
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
@@ -740,7 +750,10 @@ pub unsafe fn op_local_get4x3_i32_add_const_binop_i32_add_tee4(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     dispatch_profile_count("op_local_get4x3_i32_add_const_binop_i32_add_tee4");
-    let result = unsafe { local_get4x3_add_const_binop_add(tail_code, ctx) };
+    let result = vm_try!(VMResult::from_option(
+        unsafe { local_get4x3_add_const_binop_add(tail_code, ctx) },
+        || VMResult::InvalidOperand
+    ));
     let dst = unsafe { (*tail_code.add(5)).operand.local_addr as usize };
     vm_try!(ctx.stack.push_u32_fast(result));
     ctx.stack
@@ -764,7 +777,10 @@ pub unsafe fn op_local_get4x3_i32_add_const_binop_i32_add_tee4_i32_const_store(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     dispatch_profile_count("op_local_get4x3_i32_add_const_binop_i32_add_tee4_i32_const_store");
-    let result = unsafe { local_get4x3_add_const_binop_add(tail_code, ctx) };
+    let result = vm_try!(VMResult::from_option(
+        unsafe { local_get4x3_add_const_binop_add(tail_code, ctx) },
+        || VMResult::InvalidOperand
+    ));
     let dst = unsafe { (*tail_code.add(5)).operand.local_addr as usize };
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
@@ -796,11 +812,13 @@ pub unsafe fn op_local_get4_run(tail_code: *const Instr, ctx: &mut ExecuteContex
         let value = local_u32_bits(ctx, local);
         vm_try!(ctx.stack.push_u32_fast(value));
     }
-    call_next(
-        tail_code,
-        isize::try_from(1 + count).expect("local.get run width exceeds isize::MAX"),
-        ctx,
-    )
+    // #128: count is a u32 descriptor operand, so on 64-bit targets the
+    // width always fits; fail closed on narrower targets instead of
+    // aborting the host.
+    let Ok(skip) = isize::try_from(1 + count) else {
+        return VMResult::InvalidOperand;
+    };
+    call_next(tail_code, skip, ctx)
 }
 
 /// WebAssembly straight-line `local.get` run that skips consumed source handlers.
@@ -1081,7 +1099,10 @@ pub unsafe fn op_local_get4_i32_const_add_tee4_br_if(
 
 #[inline(never)]
 pub unsafe fn op_local_binop32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let result = eval_binop32_from_tail(tail_code, ctx).expect("invalid local_binop32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_binop32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     vm_try!(ctx.stack.push_u32_fast(result));
     call_next(tail_code, 3, ctx)
 }
@@ -1091,7 +1112,10 @@ pub unsafe fn op_local_binop32_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_binop32_from_tail(tail_code, ctx).expect("invalid local_binop32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_binop32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(3)).operand.local_addr as usize;
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
@@ -1103,7 +1127,10 @@ pub unsafe fn op_local_binop32_tee4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_binop32_from_tail(tail_code, ctx).expect("invalid local_binop32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_binop32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(3)).operand.local_addr as usize;
     vm_try!(ctx.stack.push_u32_fast(result));
     ctx.stack
@@ -1116,14 +1143,19 @@ pub unsafe fn op_local_binop32_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let descriptor = LocalBinop32Descriptor::decode((*tail_code).operand.u32)
-        .expect("invalid local_binop32 kind");
+    let descriptor = vm_try!(VMResult::from_option(
+        LocalBinop32Descriptor::decode((*tail_code).operand.u32),
+        || VMResult::InvalidOperand
+    ));
     debug_assert!(
         descriptor.supports_br_if,
         "unsupported br_if kind for {}",
         local_fast_rhs_shape_name(descriptor.rhs_shape)
     );
-    let result = descriptor.eval(tail_code, ctx);
+    let result = vm_try!(VMResult::from_option(
+        descriptor.eval(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let ptr = br_if_ptr(tail_code, 3, 4, result, ctx);
     call_next(ptr, 0, ctx)
 }
@@ -1133,7 +1165,10 @@ pub unsafe fn op_i32_const_binop(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_i32_const_binop_from_tail(tail_code, ctx).expect("invalid i32_const_binop");
+    let result = vm_try!(VMResult::from_option(
+        eval_i32_const_binop_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     vm_try!(ctx.stack.push_u32_fast(result));
     call_next(tail_code, 2, ctx)
 }
@@ -1143,8 +1178,10 @@ pub unsafe fn op_i32_const_binop_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result =
-        eval_i32_const_binop_from_tail(tail_code, ctx).expect("invalid i32_const_binop_set4");
+    let result = vm_try!(VMResult::from_option(
+        eval_i32_const_binop_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(2)).operand.local_addr as usize;
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
@@ -1156,8 +1193,10 @@ pub unsafe fn op_i32_const_binop_tee4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result =
-        eval_i32_const_binop_from_tail(tail_code, ctx).expect("invalid i32_const_binop_tee4");
+    let result = vm_try!(VMResult::from_option(
+        eval_i32_const_binop_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(2)).operand.local_addr as usize;
     vm_try!(ctx.stack.push_u32_fast(result));
     ctx.stack
@@ -1170,15 +1209,20 @@ pub unsafe fn op_i32_const_binop_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result =
-        eval_i32_const_binop_from_tail(tail_code, ctx).expect("invalid i32_const_binop_br_if");
+    let result = vm_try!(VMResult::from_option(
+        eval_i32_const_binop_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let ptr = br_if_ptr(tail_code, 2, 3, result, ctx);
     call_next(ptr, 0, ctx)
 }
 
 #[inline(never)]
 pub unsafe fn op_i32_const_cmp(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let result = eval_i32_const_cmp_from_tail(tail_code, ctx).expect("invalid i32_const_cmp");
+    let result = vm_try!(VMResult::from_option(
+        eval_i32_const_cmp_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     vm_try!(ctx.stack.push_u32_fast(result));
     call_next(tail_code, 2, ctx)
 }
@@ -1188,7 +1232,10 @@ pub unsafe fn op_i32_const_cmp_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_i32_const_cmp_from_tail(tail_code, ctx).expect("invalid i32_const_cmp_set4");
+    let result = vm_try!(VMResult::from_option(
+        eval_i32_const_cmp_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(2)).operand.local_addr as usize;
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
@@ -1200,7 +1247,10 @@ pub unsafe fn op_i32_const_cmp_tee4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_i32_const_cmp_from_tail(tail_code, ctx).expect("invalid i32_const_cmp_tee4");
+    let result = vm_try!(VMResult::from_option(
+        eval_i32_const_cmp_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(2)).operand.local_addr as usize;
     vm_try!(ctx.stack.push_u32_fast(result));
     ctx.stack
@@ -1213,14 +1263,20 @@ pub unsafe fn op_i32_const_cmp_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_i32_const_cmp_from_tail(tail_code, ctx).expect("invalid i32_const_cmp_br_if");
+    let result = vm_try!(VMResult::from_option(
+        eval_i32_const_cmp_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let ptr = br_if_ptr(tail_code, 2, 3, result, ctx);
     call_next(ptr, 0, ctx)
 }
 
 #[inline(never)]
 pub unsafe fn op_local_binop64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let result = eval_binop64_from_tail(tail_code, ctx).expect("invalid local_binop64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_binop64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     vm_try!(ctx.stack.push_u64_fast(result));
     call_next(tail_code, 3, ctx)
 }
@@ -1230,7 +1286,10 @@ pub unsafe fn op_local_binop64_set8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_binop64_from_tail(tail_code, ctx).expect("invalid local_binop64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_binop64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(3)).operand.local_addr as usize;
     store_local8_bits(ctx, dst, result);
     call_next(tail_code, 4, ctx)
@@ -1241,7 +1300,10 @@ pub unsafe fn op_local_binop64_tee8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_binop64_from_tail(tail_code, ctx).expect("invalid local_binop64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_binop64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(3)).operand.local_addr as usize;
     vm_try!(ctx.stack.push_u64_fast(result));
     store_local8_bits(ctx, dst, result);
@@ -1250,7 +1312,10 @@ pub unsafe fn op_local_binop64_tee8(
 
 #[inline(never)]
 pub unsafe fn op_local_cmp32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let result = eval_cmp32_from_tail(tail_code, ctx).expect("invalid local_cmp32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_cmp32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     vm_try!(ctx.stack.push_u32_fast(result));
     call_next(tail_code, 3, ctx)
 }
@@ -1260,7 +1325,10 @@ pub unsafe fn op_local_cmp32_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_cmp32_from_tail(tail_code, ctx).expect("invalid local_cmp32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_cmp32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(3)).operand.local_addr as usize;
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
@@ -1272,7 +1340,10 @@ pub unsafe fn op_local_cmp32_tee4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_cmp32_from_tail(tail_code, ctx).expect("invalid local_cmp32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_cmp32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(3)).operand.local_addr as usize;
     vm_try!(ctx.stack.push_u32_fast(result));
     ctx.stack
@@ -1285,14 +1356,20 @@ pub unsafe fn op_local_cmp32_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_cmp32_from_tail(tail_code, ctx).expect("invalid local_cmp32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_cmp32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let ptr = br_if_ptr(tail_code, 3, 4, result, ctx);
     call_next(ptr, 0, ctx)
 }
 
 #[inline(never)]
 pub unsafe fn op_local_cmp64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let result = eval_cmp64_from_tail(tail_code, ctx).expect("invalid local_cmp64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_cmp64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     vm_try!(ctx.stack.push_u32_fast(result));
     call_next(tail_code, 3, ctx)
 }
@@ -1302,7 +1379,10 @@ pub unsafe fn op_local_cmp64_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_cmp64_from_tail(tail_code, ctx).expect("invalid local_cmp64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_cmp64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(3)).operand.local_addr as usize;
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
@@ -1314,7 +1394,10 @@ pub unsafe fn op_local_cmp64_tee4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_cmp64_from_tail(tail_code, ctx).expect("invalid local_cmp64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_cmp64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(3)).operand.local_addr as usize;
     vm_try!(ctx.stack.push_u32_fast(result));
     ctx.stack
@@ -1327,14 +1410,20 @@ pub unsafe fn op_local_cmp64_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_cmp64_from_tail(tail_code, ctx).expect("invalid local_cmp64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_cmp64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let ptr = br_if_ptr(tail_code, 3, 4, result, ctx);
     call_next(ptr, 0, ctx)
 }
 
 #[inline(never)]
 pub unsafe fn op_local_unary32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let result = eval_unary32_from_tail(tail_code, ctx).expect("invalid local_unary32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_unary32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     vm_try!(ctx.stack.push_u32_fast(result));
     call_next(tail_code, 2, ctx)
 }
@@ -1344,7 +1433,10 @@ pub unsafe fn op_local_unary32_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_unary32_from_tail(tail_code, ctx).expect("invalid local_unary32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_unary32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(2)).operand.local_addr as usize;
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
@@ -1356,7 +1448,10 @@ pub unsafe fn op_local_unary32_tee4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_unary32_from_tail(tail_code, ctx).expect("invalid local_unary32 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_unary32_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(2)).operand.local_addr as usize;
     vm_try!(ctx.stack.push_u32_fast(result));
     ctx.stack
@@ -1366,7 +1461,10 @@ pub unsafe fn op_local_unary32_tee4(
 
 #[inline(never)]
 pub unsafe fn op_local_unary64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let result = eval_unary64_from_tail(tail_code, ctx).expect("invalid local_unary64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_unary64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     vm_try!(ctx.stack.push_u64_fast(result));
     call_next(tail_code, 2, ctx)
 }
@@ -1376,7 +1474,10 @@ pub unsafe fn op_local_unary64_set8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_unary64_from_tail(tail_code, ctx).expect("invalid local_unary64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_unary64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(2)).operand.local_addr as usize;
     store_local8_bits(ctx, dst, result);
     call_next(tail_code, 3, ctx)
@@ -1387,7 +1488,10 @@ pub unsafe fn op_local_unary64_tee8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let result = eval_unary64_from_tail(tail_code, ctx).expect("invalid local_unary64 kind");
+    let result = vm_try!(VMResult::from_option(
+        eval_unary64_from_tail(tail_code, ctx),
+        || VMResult::InvalidOperand
+    ));
     let dst = (*tail_code.add(2)).operand.local_addr as usize;
     vm_try!(ctx.stack.push_u64_fast(result));
     store_local8_bits(ctx, dst, result);

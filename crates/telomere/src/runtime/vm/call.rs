@@ -1057,14 +1057,23 @@ unsafe fn internal_op_call_indirect<const IS_RETURN_CALL: bool>(
     let funcinst = ctx.gc.get_func(func_addr);
     let instance = ctx.gc.instance(funcinst.instance);
     let module = ctx.gc.get_module(instance.module_addr);
-    let actual_typeidx = module.functions.get(funcinst.funcidx as usize).unwrap();
-    let actual_ft = &module.function_types[actual_typeidx.0 as usize];
+    // #128: both runtime type lookups resolve fail-closed. Validation
+    // guarantees these indices for parsed modules, but a broken runtime
+    // invariant must surface as an error instead of aborting the host;
+    // Option::get pays the same bounds check the unwrap/indexing did.
+    let actual_typeidx = vm_try!(VMResult::from_option(
+        module.functions.get(funcinst.funcidx as usize),
+        || VMResult::InvalidOperand
+    ));
+    let actual_ft = vm_try!(VMResult::from_option(
+        module.function_types.get(actual_typeidx.0 as usize),
+        || VMResult::InvalidOperand
+    ));
     let expected_typeidx = (*tail_code.offset(1)).operand.u32;
-    let expected_ft = ctx
-        .module()
-        .function_types
-        .get(expected_typeidx as usize)
-        .unwrap();
+    let expected_ft = vm_try!(VMResult::from_option(
+        ctx.module().function_types.get(expected_typeidx as usize),
+        || VMResult::InvalidOperand
+    ));
     trace!("{:?} {:?}", actual_ft, expected_ft);
     if actual_ft != expected_ft {
         return VMResult::CallIndirectInvalidType;
