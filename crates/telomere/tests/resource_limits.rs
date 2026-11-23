@@ -7,8 +7,11 @@
 //! instantiation failures surface as `VMResult::ResourceLimitExceeded`.
 
 use telomere::{
-    instantiate, run_module_function, InstanceHandle, IoReadBinaryReader, Registry, ResultValue,
-    RuntimeConfig, Store, VMResult, WasmParser, WasmValue,
+    component_support::common::{FuncType, ValType},
+    instantiate, instantiate_native_module, link_host_function_with_function_idx,
+    run_module_function, HostContext, HostFnDefinition, HostModule, InstanceHandle,
+    IoReadBinaryReader, Registry, ResultValue, RuntimeConfig, Store, VMResult, WasmParser,
+    WasmValue,
 };
 use wast::parser::ParseBuffer;
 use wast::Wat;
@@ -312,4 +315,141 @@ fn resource_limit_error_is_distinguishable() {
     assert!(matches!(limit, VMResult::ResourceLimitExceeded));
     assert!(!matches!(limit, VMResult::Unlinkable));
     assert_ne!(limit.to_string(), VMResult::<()>::Unlinkable.to_string());
+}
+
+/// Host callback that grows the caller's memory through the direct
+/// `HostContext::caller_memory` accessor and reports the previous size,
+/// as a host allocator serving a guest request would.
+fn host_grow_via_caller_memory(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let WasmValue::I32(delta) = cx.args()[0] else {
+        return VMResult::Unreachable;
+    };
+    match cx.caller_memory() {
+        Some(memory) => match memory.grow(delta as u32) {
+            VMResult::Success(previous) => VMResult::Success(vec![WasmValue::I32(previous)]),
+            _ => VMResult::Unreachable,
+        },
+        None => VMResult::Unreachable,
+    }
+}
+
+/// Host callback that grows the caller's memory through the
+/// closure-based `HostContext::with_caller_memory` accessor.
+fn host_grow_via_caller_closure(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let WasmValue::I32(delta) = cx.args()[0] else {
+        return VMResult::Unreachable;
+    };
+    match cx.with_caller_memory(|memory| memory.grow(delta as u32)) {
+        Some(VMResult::Success(previous)) => VMResult::Success(vec![WasmValue::I32(previous)]),
+        _ => VMResult::Unreachable,
+    }
+}
+
+/// Host callback that grows the memory of the instance that owns it
+/// through `HostContext::memory`.
+fn host_grow_via_own_memory(cx: &mut HostContext<'_, '_>) -> VMResult<Vec<WasmValue>> {
+    let WasmValue::I32(delta) = cx.args()[0] else {
+        return VMResult::Unreachable;
+    };
+    match cx.memory() {
+        Some(memory) => match memory.grow(delta as u32) {
+            VMResult::Success(previous) => VMResult::Success(vec![WasmValue::I32(previous)]),
+            _ => VMResult::Unreachable,
+        },
+        None => VMResult::Unreachable,
+    }
+}
+
+const HOST_GROW_WAT: &str = r#"
+(module
+  (import "host" "grow_caller" (func $grow_caller (param i32) (result i32)))
+  (import "host" "grow_closure" (func $grow_closure (param i32) (result i32)))
+  (memory (export "mem") 1 10)
+  (func (export "grow_caller") (param i32) (result i32)
+    (call $grow_caller (local.get 0)))
+  (func (export "grow_closure") (param i32) (result i32)
+    (call $grow_closure (local.get 0)))
+  (func (export "size") (result i32) (memory.size)))
+"#;
+
+#[tokio::test]
+async fn total_memory_cap_applies_to_host_callback_growth() {
+    // Regression (PR #289 review): the store-wide ceiling was checked
+    // only on the store's grow dispatch, which guest instructions use.
+    // A host callback growing memory through the public `Memory` handle
+    // handed out by the `HostContext` accessors bypassed the ceiling
+    // entirely: with a one-page cap, `grow(1)` succeeded and the guest
+    // observed two pages. The ceiling now lives in `Memory::grow`
+    // itself, so every handle honours it.
+    let store = store_with_limits(|limits| limits.max_total_memory_pages = Some(2));
+    let mut registry = Registry::new();
+    let host = instantiate_native_module(
+        HostModule {
+            functions: vec![
+                HostFnDefinition {
+                    name: Some("grow_caller".to_owned()),
+                    signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                    fp: host_grow_via_caller_memory,
+                },
+                HostFnDefinition {
+                    name: Some("grow_closure".to_owned()),
+                    signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                    fp: host_grow_via_caller_closure,
+                },
+            ],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host);
+    let instance = instantiate_wat_ok(HOST_GROW_WAT, &store, &registry).await;
+
+    // One page of headroom remains under the cap: host-side growth up
+    // to the cap succeeds, whichever accessor drives it.
+    assert_success(
+        call_i32(&instance, &store, "grow_caller", vec![WasmValue::I32(1)]).await,
+        1,
+    );
+    assert_success(call_i32(&instance, &store, "size", vec![]).await, 2);
+    // At the cap, both accessors fail with -1 and nothing grows.
+    assert_success(
+        call_i32(&instance, &store, "grow_closure", vec![WasmValue::I32(1)]).await,
+        -1,
+    );
+    assert_success(
+        call_i32(&instance, &store, "grow_caller", vec![WasmValue::I32(1)]).await,
+        -1,
+    );
+    assert_success(call_i32(&instance, &store, "size", vec![]).await, 2);
+}
+
+#[tokio::test]
+async fn total_memory_cap_applies_to_linked_host_function_growth() {
+    // The `HostContext::memory` variant of the same regression: a host
+    // function linked into an instance that owns a memory grows that
+    // memory through the owning instance's accessor.
+    let store = store_with_limits(|limits| limits.max_total_memory_pages = Some(1));
+    let registry = Registry::new();
+    let instance = instantiate_wat_ok(
+        r#"
+        (module
+          (memory (export "mem") 1 10)
+          (func (export "host_grow") (param i32) (result i32) (i32.const -99))
+          (func (export "size") (result i32) (memory.size)))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    link_host_function_with_function_idx(&instance, 0, host_grow_via_own_memory, &store);
+
+    // The store already holds its one permitted page: the linked host
+    // function must observe -1 and the guest must still see one page.
+    assert_success(
+        call_i32(&instance, &store, "host_grow", vec![WasmValue::I32(1)]).await,
+        -1,
+    );
+    assert_success(call_i32(&instance, &store, "size", vec![]).await, 1);
 }

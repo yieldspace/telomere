@@ -287,6 +287,12 @@ const LOOP_ALLOWANCES: &[LoopAllowance] = &[
         identifier: "while:waiter . is_waiting ()",
         reason: "the detached wait-timer thread performs no guest work; it sleeps on the waiter's release condvar until the wait resolves or its own deadline expires, and is released on resolution (#270).",
     },
+    LoopAllowance {
+        source: "src/common/memory.rs",
+        function: "try_claim",
+        identifier: "loop",
+        reason: "the compare-exchange retry loop repeats only when another memory in the same store grows concurrently; each iteration is one atomic operation and performs no guest-driven work, so there is no guest work to meter (#126).",
+    },
 ];
 
 #[derive(Debug)]

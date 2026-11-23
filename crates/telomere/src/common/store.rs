@@ -1,7 +1,9 @@
 #![allow(dead_code, private_interfaces)]
 
 use super::{
-    memory::{AtomicRmwOp, LocalMemoryObject, MemoryInitError, SharedMemoryObject},
+    memory::{
+        AtomicRmwOp, LocalMemoryObject, MemoryInitError, SharedMemoryObject, TotalMemoryBudget,
+    },
     object_ref::ObjectRef,
     AsyncHostFunction, CallFrameCache, Data, Elem, ExportSection, FuncType, GlobalType,
     HostFunction, Instr, LocalsData, MemType, MeteringConfig, MeteringHandle, ModuleNames, Stack,
@@ -351,7 +353,9 @@ impl Default for MemoryConfig {
 pub struct LimitsConfig {
     /// Ceiling on the total number of pages held by all linear memories
     /// in the store, local and shared combined. `None` imposes no
-    /// store-wide total.
+    /// store-wide total. Growth is charged against the ceiling on every
+    /// path: guest `memory.grow` instructions and growth performed by
+    /// host callbacks through the `HostContext` memory accessors alike.
     pub max_total_memory_pages: Option<u64>,
     /// Ceiling on the element count of any single table in the store.
     /// A table whose declared minimum exceeds the ceiling fails to
@@ -552,6 +556,9 @@ pub struct StoreInner {
     pub(crate) segments: StoreSegments,
     next_instance_id: u32,
     limits: LimitsConfig,
+    /// Page budget shared by every memory this store adopts; present
+    /// only when `limits.max_total_memory_pages` is configured.
+    total_budget: Option<Arc<TotalMemoryBudget>>,
 }
 
 macro_rules! define_store_local_shared_const_read {
@@ -700,6 +707,12 @@ impl StoreInner {
 
     pub(crate) fn set_limits(&mut self, limits: LimitsConfig) {
         self.limits = limits;
+        // Limits are fixed at store construction, before any memory
+        // exists, so the budget starts empty; memories register their
+        // initial pages as the store adopts them.
+        self.total_budget = limits
+            .max_total_memory_pages
+            .map(|cap| Arc::new(TotalMemoryBudget::new(cap)));
     }
 
     pub(crate) fn limits(&self) -> LimitsConfig {
@@ -720,15 +733,6 @@ impl StoreInner {
             .map(|memory| u64::from(memory.page_size()))
             .sum();
         local + shared
-    }
-
-    /// Whether growing one memory by `page_size_delta` pages would keep
-    /// the store within its configured total-memory ceiling.
-    pub(crate) fn total_memory_growth_allowed(&self, page_size_delta: u32) -> bool {
-        match self.limits.max_total_memory_pages {
-            None => true,
-            Some(cap) => self.total_memory_pages() + u64::from(page_size_delta) <= cap,
-        }
     }
 
     pub(crate) fn set_last_trap(&mut self, trap: Option<Box<TrapContext>>) {
@@ -1109,7 +1113,10 @@ impl StoreInner {
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
-    pub(crate) fn alloc_local_memory(&mut self, memory: LocalMemoryObject) -> MemoryHandle {
+    pub(crate) fn alloc_local_memory(&mut self, mut memory: LocalMemoryObject) -> MemoryHandle {
+        if let Some(budget) = &self.total_budget {
+            memory.attach_total_budget(Arc::clone(budget));
+        }
         let id = LocalMemoryId::from_index(self.local_memories.len());
         self.local_memories.push(memory);
         MemoryHandle::Local(id)
@@ -1125,6 +1132,9 @@ impl StoreInner {
     }
 
     pub(crate) fn alloc_shared_memory(&mut self, memory: Arc<SharedMemoryObject>) -> MemoryHandle {
+        if let Some(budget) = &self.total_budget {
+            memory.attach_total_budget(Arc::clone(budget));
+        }
         let id = SharedMemoryId::from_index(self.shared_memories.len());
         self.shared_memories.push(memory);
         MemoryHandle::Shared(id)
@@ -1303,9 +1313,10 @@ impl StoreInner {
         id: LocalMemoryId,
         page_size_delta: u32,
     ) -> VMResult<i32> {
-        if !self.total_memory_growth_allowed(page_size_delta) {
-            return VMResult::Success(-1);
-        }
+        // The store-wide total ceiling is enforced inside
+        // `Memory::grow` through the shared page budget, which also
+        // covers growth driven by host callbacks on a public `Memory`
+        // handle (that path never reaches this dispatch).
         self.local_memory_mut(id).grow(page_size_delta)
     }
 
@@ -1315,9 +1326,8 @@ impl StoreInner {
         id: SharedMemoryId,
         page_size_delta: u32,
     ) -> VMResult<i32> {
-        if !self.total_memory_growth_allowed(page_size_delta) {
-            return VMResult::Success(-1);
-        }
+        // See `local_grow_memory`: the total ceiling lives in
+        // `Memory::grow`, not in this dispatch.
         self.shared_memory(id).grow(page_size_delta)
     }
 

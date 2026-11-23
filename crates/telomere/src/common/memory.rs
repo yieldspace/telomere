@@ -1,4 +1,12 @@
-use std::{fmt, ptr::NonNull, slice::SliceIndex, sync::Arc};
+use std::{
+    fmt,
+    ptr::NonNull,
+    slice::SliceIndex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -6,7 +14,7 @@ use std::cell::Cell;
 #[cfg(feature = "threads")]
 use std::{
     collections::{HashMap, VecDeque},
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::AtomicU8,
     time::{Duration, Instant},
 };
 
@@ -708,10 +716,75 @@ fn ensure_atomic_alignment(offset: usize, alignment: usize) -> VMResult<()> {
     }
 }
 
+/// Store-wide page budget shared by every linear memory one store
+/// creates when `LimitsConfig::max_total_memory_pages` is configured.
+///
+/// The budget is enforced in the growth path itself (`Memory::grow`)
+/// rather than in the store's grow dispatch, so growth driven by host
+/// callbacks through a public `Memory` handle — which never passes
+/// through the store dispatch — is charged against the same ceiling as
+/// guest `memory.grow` instructions. The running total is exact: a
+/// memory registers its initial pages when the store adopts it, every
+/// growth claims its delta before committing, and a failed commit
+/// releases the claim. Memories are never removed from a store or
+/// shrunk, so the total otherwise never decreases.
+#[derive(Debug)]
+pub(crate) struct TotalMemoryBudget {
+    cap_pages: u64,
+    total_pages: AtomicU64,
+}
+
+impl TotalMemoryBudget {
+    pub(crate) fn new(cap_pages: u64) -> Self {
+        Self {
+            cap_pages,
+            total_pages: AtomicU64::new(0),
+        }
+    }
+
+    /// Charges a newly adopted memory's initial pages to the budget.
+    fn register_initial(&self, pages: u32) {
+        self.total_pages
+            .fetch_add(u64::from(pages), Ordering::Relaxed);
+    }
+
+    /// Claims `delta` pages for a growth that is about to commit.
+    /// Returns `false` without claiming when the claim would exceed
+    /// the ceiling.
+    fn try_claim(&self, delta: u32) -> bool {
+        let delta = u64::from(delta);
+        let mut current = self.total_pages.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = current.checked_add(delta) else {
+                return false;
+            };
+            if next > self.cap_pages {
+                return false;
+            }
+            match self.total_pages.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Releases a claim whose growth did not commit.
+    fn release(&self, delta: u32) {
+        self.total_pages
+            .fetch_sub(u64::from(delta), Ordering::Relaxed);
+    }
+}
+
 pub struct Memory {
     region: MmapRegion,
     current_pages: u32,
     max_pages: u32,
+    total_budget: Option<Arc<TotalMemoryBudget>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -757,6 +830,16 @@ impl Memory {
         Self::new_with_mapping(page_count, max_page_size, true)
     }
 
+    /// Adopts this memory into a store-wide page budget, charging the
+    /// memory's initial pages to it. The store calls this when it takes
+    /// ownership of the memory; a memory belongs to one store for its
+    /// whole life, so this runs exactly once per memory.
+    pub(crate) fn attach_total_budget(&mut self, budget: Arc<TotalMemoryBudget>) {
+        debug_assert!(self.total_budget.is_none());
+        budget.register_initial(self.current_pages);
+        self.total_budget = Some(budget);
+    }
+
     fn new_with_mapping(
         page_count: u32,
         max_page_size: u32,
@@ -778,6 +861,7 @@ impl Memory {
             region,
             current_pages: page_count,
             max_pages: max_page_size,
+            total_budget: None,
         })
     }
 
@@ -1247,7 +1331,19 @@ impl Memory {
         if new_committed_bytes > self.region.reserved_bytes() {
             return VMResult::Success(-1);
         }
+        // Charge the store-wide total (when one is configured) before
+        // committing, so growth through any handle — a guest instruction
+        // dispatched by the store, or a host callback holding a public
+        // `Memory` handle — honours the same ceiling.
+        if let Some(budget) = &self.total_budget {
+            if !budget.try_claim(page_size_delta) {
+                return VMResult::Success(-1);
+            }
+        }
         if self.region.commit(new_committed_bytes).is_err() {
+            if let Some(budget) = &self.total_budget {
+                budget.release(page_size_delta);
+            }
             return VMResult::Success(-1);
         }
         self.current_pages = new_page_size;
@@ -1295,6 +1391,10 @@ impl LocalMemoryObject {
         Ok(Self {
             memory: Memory::new(page_count, max_page_size)?,
         })
+    }
+
+    pub(crate) fn attach_total_budget(&mut self, budget: Arc<TotalMemoryBudget>) {
+        self.memory.attach_total_budget(budget);
     }
 
     pub fn memory(&self) -> &Memory {
@@ -1539,6 +1639,10 @@ impl SharedMemoryObject {
                 next_waiter_id: 1,
             }),
         }))
+    }
+
+    pub(crate) fn attach_total_budget(&self, budget: Arc<TotalMemoryBudget>) {
+        self.state.lock().memory.attach_total_budget(budget);
     }
 
     pub fn page_size(&self) -> u32 {
