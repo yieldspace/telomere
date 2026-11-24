@@ -26,6 +26,7 @@ the body for the details.
 | [core/trap-reporting.md](core/trap-reporting.md) | Current | Owned core trap diagnostics, consuming retrieval, names, output format, and JIT program-counter limits. |
 | [core/diagnostics.md](core/diagnostics.md) | Current | Embedder observability contract: documented tracing targets and events, environment-variable switches, and feature-gated profiling facilities. |
 | [core/preview1-scope.md](core/preview1-scope.md) | Current | Preview1 runner scope contract: the twelve implemented host functions, the environment policy, and why the filesystem family stays out (#137). |
+| [core/sockets-scope.md](core/sockets-scope.md) | Current | Sockets scope decision record: `wasi:sockets` is excluded from the default provider world so importing components fail at instantiation, the capability model recorded for a future implementation, and the re-entry conditions (#135). |
 | [core/execution-state.md](core/execution-state.md) | Current | Execution state placement rule: per-execution state lives in `ExecuteContext`, the classification of every existing mechanism, and the JIT bridge stop signal's owner (#213). |
 | [core/c-abi.md](core/c-abi.md) | Current | C ABI decision record: v1 integration is Rust-only, the measured platform assumptions (std, Unix `mmap`, Unix-only JIT), and the re-entry conditions for a future C surface (#146). |
 | [support-matrix.md](support-matrix.md) | Current | Core proposal, Component Model canonical ABI, and WASI 0.2.6 support boundaries with source-backed coverage counts. |
