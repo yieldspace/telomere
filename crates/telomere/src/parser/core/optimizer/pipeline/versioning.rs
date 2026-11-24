@@ -1157,15 +1157,15 @@ fn raw_memarg(operand: Option<&LoweredOperand>) -> Option<MemArg> {
 }
 
 fn raw_local_operand(local_addr: u32) -> LoweredOperand {
-    LoweredOperand::Raw(unsafe { Operand { local_addr }.encoded })
+    LoweredOperand::Raw(unsafe { Operand::from_local_addr(local_addr).encoded })
 }
 
 fn raw_i32_operand(i32: i32) -> LoweredOperand {
-    LoweredOperand::Raw(unsafe { Operand { i32 }.encoded })
+    LoweredOperand::Raw(unsafe { Operand::from_i32(i32).encoded })
 }
 
 fn raw_u32_operand(u32: u32) -> LoweredOperand {
-    LoweredOperand::Raw(unsafe { Operand { u32 }.encoded })
+    LoweredOperand::Raw(unsafe { Operand::from_u32(u32).encoded })
 }
 
 fn match_edge_const_base(block: &CanonBlock, target: usize) -> Option<(u32, usize)> {

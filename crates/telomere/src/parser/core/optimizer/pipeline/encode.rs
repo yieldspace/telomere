@@ -930,7 +930,7 @@ fn raw_local_addr(operand: Option<&LoweredOperand>) -> Option<u32> {
 }
 
 fn raw_u32_operand(value: u32) -> LoweredOperand {
-    LoweredOperand::Raw(unsafe { Operand { u32: value }.encoded })
+    LoweredOperand::Raw(unsafe { Operand::from_u32(value).encoded })
 }
 
 fn lowered_i32_scalar_load_kind(op: Op) -> Option<u32> {
@@ -1126,11 +1126,11 @@ mod tests {
     }
 
     fn raw_i32(value: i32) -> LoweredOperand {
-        LoweredOperand::Raw(unsafe { Operand { i32: value }.encoded })
+        LoweredOperand::Raw(unsafe { Operand::from_i32(value).encoded })
     }
 
     fn raw_u32(value: u32) -> LoweredOperand {
-        LoweredOperand::Raw(unsafe { Operand { u32: value }.encoded })
+        LoweredOperand::Raw(unsafe { Operand::from_u32(value).encoded })
     }
 
     fn raw_memarg(offset: u32) -> LoweredOperand {

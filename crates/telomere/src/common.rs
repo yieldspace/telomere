@@ -823,6 +823,62 @@ pub union Operand {
     pub start_host_function: HostFunction,
 }
 
+impl Operand {
+    /// Builds an operand holding a 32-bit value, with the high four bytes
+    /// of the raw encoding zeroed.
+    ///
+    /// A union literal such as `Operand { u32: v }` leaves the bytes
+    /// outside the written field uninitialized. That is fine while the
+    /// value is only ever read back through the same field, but the
+    /// optimizer pipeline also reads operands through the `encoded` arm
+    /// (the raw eight-byte lowering in `lower_operand`), where the
+    /// uninitialized tail makes constructing the `[u8; 8]` value
+    /// undefined behaviour (found by Miri, #292). Operands that can reach
+    /// the pipeline — anything built by the parser or by the pipeline
+    /// itself — must therefore be fully initialized, and these
+    /// constructors are the canonical way to build a narrow operand:
+    /// the meaningful bytes in the low half, zeroes in the high half.
+    pub const fn from_i32(value: i32) -> Self {
+        let bytes = value.to_ne_bytes();
+        Self {
+            encoded: [bytes[0], bytes[1], bytes[2], bytes[3], 0, 0, 0, 0],
+        }
+    }
+
+    /// See [`Operand::from_i32`] for why narrow operands are built here.
+    pub const fn from_u32(value: u32) -> Self {
+        let bytes = value.to_ne_bytes();
+        Self {
+            encoded: [bytes[0], bytes[1], bytes[2], bytes[3], 0, 0, 0, 0],
+        }
+    }
+
+    /// See [`Operand::from_i32`] for why narrow operands are built here.
+    pub const fn from_f32(value: f32) -> Self {
+        Self::from_u32(value.to_bits())
+    }
+
+    /// See [`Operand::from_i32`] for why narrow operands are built here.
+    pub const fn from_jump_addr(value: u32) -> Self {
+        Self::from_u32(value)
+    }
+
+    /// See [`Operand::from_i32`] for why narrow operands are built here.
+    pub const fn from_drop_size(value: u32) -> Self {
+        Self::from_u32(value)
+    }
+
+    /// See [`Operand::from_i32`] for why narrow operands are built here.
+    pub const fn from_local_addr(value: u32) -> Self {
+        Self::from_u32(value)
+    }
+
+    /// See [`Operand::from_i32`] for why narrow operands are built here.
+    pub const fn from_select(value: u32) -> Self {
+        Self::from_u32(value)
+    }
+}
+
 /// One interpreter instruction handler in the direct-threaded dispatch.
 ///
 /// # Handler identity contract (#240)
@@ -1107,10 +1163,9 @@ impl LoweredOperand {
             Self::ConstPoolRef(index) => Operand {
                 encoded: const_pool[*index as usize],
             },
-            Self::JumpTarget(label) => Operand {
-                jump_addr: u32::try_from(label_to_addr[*label])
-                    .expect("lowered jump target exceeds u32::MAX"),
-            },
+            Self::JumpTarget(label) => Operand::from_jump_addr(
+                u32::try_from(label_to_addr[*label]).expect("lowered jump target exceeds u32::MAX"),
+            ),
             Self::CallRecipeRef(target) => {
                 let resolved = recipe_slots
                     .and_then(|slots| slots.get(target.funcidx as usize).copied())

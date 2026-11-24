@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #293 (branch fix/191-jit-direct-calls at head 1fa6db7889158ac6d1eb8abc1c9d573bf19378d7 \u2014 branch commit f0015b9 (enter JIT callees directly on native-to-native calls (#191)), merge commit 159796d bringing in main 41bca95 (PR #290, #190), commit de0de8f bounding native entry by the host stack (Codex P1 fix), and merge commit 1fa6db7 bringing in current main 1b25df0 (PR #291, #137); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45327945752 and 45327956071 against the branch and pull-request run 45327889910, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "1fa6db7889158ac6d1eb8abc1c9d573bf19378d7",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #294 (branch fix/292-optimizer-miri-uninit at head 46931a9d03bccc58b8135269aaa612fd01d639c3 \u2014 branch commit fe8e601 (fully initialize narrow operands so raw lowering reads no uninitialized bytes (#292)) and merge commit 46931a9 bringing in current main 3922f93 (PR #293, #191; which itself includes PR #291 and PR #290); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45334558431 and 45334660340 against the branch and pull-request run 45334543654, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "46931a9d03bccc58b8135269aaa612fd01d639c3",
     "date": "2026-11-24",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45327945752,
-      45327956071
+      45334558431,
+      45334660340
     ],
     "cross_check_run_ids": [
-      45327889910
+      45334543654
     ],
-    "derivation": "Second re-baseline for PR #293 (#191, JIT-to-JIT calls round-tripping through the runtime with a per-call mutex), after the Codex P1 fix de0de8f and the merge of current main (1b25df0, PR #291). The P1 fix bounds native entry by the host stack: both native entry boundaries (generic enter_current_frame_raw and direct enter_compiled_from_jit_call) compare the current stack pointer against a floor recorded on the ExecuteContext (the executing thread's OS stack low bound plus a 256 KiB reserve, established lazily at first entry, with a fixed 512 KiB budget as fallback), and decline the entry through the existing fallback results when the remaining stack runs low, so deep guest recursion reaches the value-stack StackOverflow instead of aborting the process on small host stacks. No TLS and no depth counter are reintroduced. Attribution was isolated by measuring current main alone (workflow_dispatch run 45327968623, gate success): it reproduces the pre-#191 baseline exactly on all 32 gated series, so every delta below is this PR's own. Against main, 18 of the 32 gated series change. In release, core-jit grows by 1,904 B stripped file / 1,616 B stripped .text, core-aot grows by 32 B stripped .text only, and component, core, core-nosimd, wasi and wasi-threads each grow by 16 B / 16 B (the ExecuteContext stack-floor field in shared code). In release-size, core-jit grows by 896 B / 688 B, core-aot shrinks by 128 B / 80 B, and wasi grows by 16 B stripped .text only. Against the first PR #293 re-baseline (head efe8dea), the increment attributable to the P1 fix alone is: release core-jit +752 B / +640 B, core-aot +560 B / +480 B, and +16 B / +16 B on component, core, core-nosimd, wasi and wasi-threads; release-size core-jit +624 B / +448 B, core-aot +320 B / +224 B, wasi +16 B stripped .text. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series, unchanged at +9.59% (2,433,656 B to 2,667,136 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was again 0 B for every gated series across the three samples."
+    "derivation": "Re-baseline for PR #294 (#292, Miri-found uninitialized read in the optimizer pipeline). The fix adds canonical constructors on the Operand union (from_i32/from_u32/from_f32/from_jump_addr/from_drop_size/from_local_addr/from_select, each zeroing the high four bytes of the raw encoding) and replaces 78 narrow union literals across the parser and the pipeline raw_* helpers with them, so the raw eight-byte lowering in lower_operand never reads uninitialized bytes. Attribution was isolated by measuring current main alone (workflow_dispatch run 45334673188, gate success): it reproduces the pre-#292 baseline exactly on all 32 gated series, so every delta below is this PR's own. Against main, 28 of the 32 gated series change; the baseline configuration is unchanged. In release every changed series grows by exactly its stripped .text delta (pure code growth, no data change): core, core-aot and core-jit each grow by 448 B stripped file / 448 B stripped .text, component and wasi by 208 B / 208 B, wasi-threads by 224 B / 224 B, and core-nosimd by 144 B / 144 B. In release-size the deltas are small and mixed: component grows by 96 B / 96 B, wasi by 96 B / 96 B, wasi-threads by 64 B / 64 B, core shrinks by 48 B / 16 B, core-jit by 48 B / 32 B, core-nosimd by 48 B / 32 B, and core-aot by 32 B / 16 B. Against the original #164 baseline, the largest cumulative growth is the release component stripped file series at +9.60% (2,433,656 B to 2,667,344 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was again 0 B for every gated series across the three samples."
   },
   "thresholds": {
     "release": {
@@ -30,72 +30,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1586336,
-          "threshold": 1586336
+          "baseline": 1586784,
+          "threshold": 1586784
         },
         "stripped_text_bytes": {
-          "baseline": 1200279,
-          "threshold": 1200279
+          "baseline": 1200727,
+          "threshold": 1200727
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2667136,
-          "threshold": 2667136
+          "baseline": 2667344,
+          "threshold": 2667344
         },
         "stripped_text_bytes": {
-          "baseline": 2115575,
-          "threshold": 2115575
+          "baseline": 2115783,
+          "threshold": 2115783
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 3011136,
-          "threshold": 3011136
+          "baseline": 3011344,
+          "threshold": 3011344
         },
         "stripped_text_bytes": {
-          "baseline": 2375703,
-          "threshold": 2375703
+          "baseline": 2375911,
+          "threshold": 2375911
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1395584,
-          "threshold": 1395584
+          "baseline": 1395728,
+          "threshold": 1395728
         },
         "stripped_text_bytes": {
-          "baseline": 1055447,
-          "threshold": 1055447
+          "baseline": 1055591,
+          "threshold": 1055591
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2127008,
-          "threshold": 2127008
+          "baseline": 2127456,
+          "threshold": 2127456
         },
         "stripped_text_bytes": {
-          "baseline": 1636119,
-          "threshold": 1636119
+          "baseline": 1636567,
+          "threshold": 1636567
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1632144,
-          "threshold": 1632144
+          "baseline": 1632592,
+          "threshold": 1632592
         },
         "stripped_text_bytes": {
-          "baseline": 1233303,
-          "threshold": 1233303
+          "baseline": 1233751,
+          "threshold": 1233751
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3226592,
-          "threshold": 3226592
+          "baseline": 3226816,
+          "threshold": 3226816
         },
         "stripped_text_bytes": {
-          "baseline": 2542855,
-          "threshold": 2542855
+          "baseline": 2543079,
+          "threshold": 2543079
         }
       }
     },
@@ -112,72 +112,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1110712,
-          "threshold": 1110712
+          "baseline": 1110664,
+          "threshold": 1110664
         },
         "stripped_text_bytes": {
-          "baseline": 783527,
-          "threshold": 783527
+          "baseline": 783511,
+          "threshold": 783511
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1672344,
-          "threshold": 1672344
+          "baseline": 1672440,
+          "threshold": 1672440
         },
         "stripped_text_bytes": {
-          "baseline": 1234343,
-          "threshold": 1234343
+          "baseline": 1234439,
+          "threshold": 1234439
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1868328,
-          "threshold": 1868328
+          "baseline": 1868424,
+          "threshold": 1868424
         },
         "stripped_text_bytes": {
-          "baseline": 1366167,
-          "threshold": 1366167
+          "baseline": 1366263,
+          "threshold": 1366263
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 995920,
-          "threshold": 995920
+          "baseline": 995872,
+          "threshold": 995872
         },
         "stripped_text_bytes": {
-          "baseline": 703991,
-          "threshold": 703991
+          "baseline": 703959,
+          "threshold": 703959
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1534816,
-          "threshold": 1534816
+          "baseline": 1534768,
+          "threshold": 1534768
         },
         "stripped_text_bytes": {
-          "baseline": 1089207,
-          "threshold": 1089207
+          "baseline": 1089175,
+          "threshold": 1089175
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1149920,
-          "threshold": 1149920
+          "baseline": 1149888,
+          "threshold": 1149888
         },
         "stripped_text_bytes": {
-          "baseline": 808887,
-          "threshold": 808887
+          "baseline": 808871,
+          "threshold": 808871
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2010632,
-          "threshold": 2010632
+          "baseline": 2010696,
+          "threshold": 2010696
         },
         "stripped_text_bytes": {
-          "baseline": 1460471,
-          "threshold": 1460471
+          "baseline": 1460535,
+          "threshold": 1460535
         }
       }
     }

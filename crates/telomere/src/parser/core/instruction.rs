@@ -372,7 +372,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         if memidx == 0 {
             instrs.push_with_operand(op, &[Operand { memarg }]);
         } else {
-            instrs.push_with_operand(op, &[Operand { memarg }, Operand { u32: memidx }]);
+            instrs.push_with_operand(op, &[Operand { memarg }, Operand::from_u32(memidx)]);
         }
         Ok(())
     }
@@ -390,7 +390,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         if memidx == 0 {
             instrs.push(Instr { op });
         } else {
-            instrs.push_with_operand(op, &[Operand { u32: memidx }]);
+            instrs.push_with_operand(op, &[Operand::from_u32(memidx)]);
         }
         Ok(())
     }
@@ -408,9 +408,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
     ) -> Result<()> {
         let op = self.select_memory_op(memidx, local, shared, indexed_local, indexed_shared)?;
         if memidx == 0 {
-            instrs.push_with_operand(op, &[Operand { u32: extra }]);
+            instrs.push_with_operand(op, &[Operand::from_u32(extra)]);
         } else {
-            instrs.push_with_operand(op, &[Operand { u32: extra }, Operand { u32: memidx }]);
+            instrs.push_with_operand(op, &[Operand::from_u32(extra), Operand::from_u32(memidx)]);
         }
         Ok(())
     }
@@ -443,7 +443,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         } else {
             instrs.push_with_operand(
                 op,
-                &[Operand { u32: dst_memidx }, Operand { u32: src_memidx }],
+                &[Operand::from_u32(dst_memidx), Operand::from_u32(src_memidx)],
             );
         }
         Ok(())
@@ -789,9 +789,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let if_meta_start = instrs.len();
                 instrs.push(Instr { op: vm::op_if });
                 instrs.push(Instr {
-                    operand: Operand {
-                        jump_addr: 0xFCFCFCFC,
-                    },
+                    operand: Operand::from_jump_addr(0xFCFCFCFC),
                 });
 
                 checker.op(&[ValType::I32], &[])?;
@@ -830,9 +828,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     next_depth,
                 )?;
                 if !is_unreachable_if_block {
-                    instrs[index].operand = Operand {
-                        jump_addr: else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
-                    };
+                    instrs[index].operand = Operand::from_jump_addr(
+                        else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
+                    );
                 }
                 match blocktype {
                     BlockType::Void => {
@@ -898,9 +896,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr { op: vm::op_else });
                     jump_resolver.push(JumpResolverDSL::Br(0, instrs.len() as u32));
                     instrs.push(Instr {
-                        operand: Operand {
-                            jump_addr: 0xFFFB0000,
-                        },
+                        operand: Operand::from_jump_addr(0xFFFB0000),
                     });
                     *else_addr = Some(instrs.len() as u32);
                     if let (BlockKind::If, blocktype, _block_base_stack_len) =
@@ -965,9 +961,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr { op: vm::op_br });
                     jump_resolver.push(JumpResolverDSL::Br(idx, instrs.len() as u32));
                     instrs.push(Instr {
-                        operand: Operand {
-                            u32: 0xFFFF0000 | idx,
-                        },
+                        operand: Operand::from_u32(0xFFFF0000 | idx),
                     });
                     instrs.set_unreachable();
                 }
@@ -1038,9 +1032,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr { op: vm::op_br_if });
                     jump_resolver.push(JumpResolverDSL::Br(idx, instrs.len() as u32));
                     instrs.push(Instr {
-                        operand: Operand {
-                            u32: 0xFFFE0000 | idx,
-                        },
+                        operand: Operand::from_u32(0xFFFE0000 | idx),
                     });
                 }
                 (1 + len, false)
@@ -1062,23 +1054,17 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         op: vm::op_br_table,
                     });
                     instrs.push(Instr {
-                        operand: Operand {
-                            u32: idxs.len() as u32,
-                        },
+                        operand: Operand::from_u32(idxs.len() as u32),
                     });
                     for idx in &idxs {
                         jump_resolver.push(JumpResolverDSL::Br(*idx, instrs.len() as u32));
                         instrs.push(Instr {
-                            operand: Operand {
-                                u32: 0xFFFD0000 | *idx,
-                            },
+                            operand: Operand::from_u32(0xFFFD0000 | *idx),
                         });
                     }
                     jump_resolver.push(JumpResolverDSL::Br(default_idx, instrs.len() as u32));
                     instrs.push(Instr {
-                        operand: Operand {
-                            u32: 0xFFFD0000 | default_idx,
-                        },
+                        operand: Operand::from_u32(0xFFFD0000 | default_idx),
                     });
                 }
                 checker.unreachable();
@@ -1091,9 +1077,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr { op: vm::op_return });
                     jump_resolver.push(JumpResolverDSL::Return(instrs.len() as u32));
                     instrs.push(Instr {
-                        operand: Operand {
-                            jump_addr: 0xFFFC0000,
-                        },
+                        operand: Operand::from_jump_addr(0xFFFC0000),
                     });
                     instrs.set_unreachable();
                 }
@@ -1150,10 +1134,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     op: vm::op_call_indirect,
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: tableidx },
+                    operand: Operand::from_u32(tableidx),
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: typeidx },
+                    operand: Operand::from_u32(typeidx),
                 });
 
                 (1 + len + len2, false)
@@ -1210,10 +1194,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     op: vm::op_return_call_indirect,
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: tableidx },
+                    operand: Operand::from_u32(tableidx),
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: typeidx },
+                    operand: Operand::from_u32(typeidx),
                 });
 
                 (1 + len + len2, false)
@@ -1229,9 +1213,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 if let MaybeUnreachable::Normal(x) = x {
                     instrs.push(Instr { op: vm::op_drop });
                     instrs.push(Instr {
-                        operand: Operand {
-                            drop_size: x.stack_size().u32(),
-                        },
+                        operand: Operand::from_drop_size(x.stack_size().u32()),
                     });
                 } else {
                     // valid
@@ -1252,9 +1234,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }
                     instrs.push(Instr { op: vm::op_select });
                     instrs.push(Instr {
-                        operand: Operand {
-                            select: x.stack_size().u32(),
-                        },
+                        operand: Operand::from_select(x.stack_size().u32()),
                     });
                 } else {
                     let x = checker.pop()?;
@@ -1267,9 +1247,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     if let MaybeUnreachable::Normal(x) = x {
                         instrs.push(Instr { op: vm::op_select });
                         instrs.push(Instr {
-                            operand: Operand {
-                                select: x.stack_size().u32(),
-                            },
+                            operand: Operand::from_select(x.stack_size().u32()),
                         });
 
                         checker.push(x);
@@ -1300,7 +1278,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     let bytes = operand.iter().map(|v| v.stack_size().u32()).sum();
                     instrs.push(Instr { op: vm::op_select });
                     instrs.push(Instr {
-                        operand: Operand { select: bytes },
+                        operand: Operand::from_select(bytes),
                     });
                 }
                 (1 + len, false)
@@ -1326,7 +1304,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }),
                 };
                 instrs.push(Instr {
-                    operand: Operand { local_addr: addr },
+                    operand: Operand::from_local_addr(addr),
                 });
 
                 checker.op(&[], &[ty])?;
@@ -1350,7 +1328,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }),
                 };
                 instrs.push(Instr {
-                    operand: Operand { local_addr: addr },
+                    operand: Operand::from_local_addr(addr),
                 });
 
                 checker.op(&[ty], &[])?;
@@ -1374,7 +1352,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }),
                 };
                 instrs.push(Instr {
-                    operand: Operand { local_addr: addr },
+                    operand: Operand::from_local_addr(addr),
                 });
 
                 checker.op(&[ty], &[ty])?;
@@ -1404,7 +1382,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 };
 
                 instrs.push(Instr {
-                    operand: Operand { u32: idx },
+                    operand: Operand::from_u32(idx),
                 });
 
                 (1 + len, false)
@@ -1434,7 +1412,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 };
 
                 instrs.push(Instr {
-                    operand: Operand { u32: idx },
+                    operand: Operand::from_u32(idx),
                 });
 
                 (1 + len, false)
@@ -1451,7 +1429,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     op: vm::op_table_get,
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: idx },
+                    operand: Operand::from_u32(idx),
                 });
 
                 (1 + len, false)
@@ -1468,7 +1446,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     op: vm::op_table_set,
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: idx },
+                    operand: Operand::from_u32(idx),
                 });
 
                 (1 + len, false)
@@ -1887,7 +1865,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     op: vm::op_i32_const,
                 });
                 instrs.push(Instr {
-                    operand: Operand { i32: operand },
+                    operand: Operand::from_i32(operand),
                 });
 
                 checker.op(&[], &[ValType::I32])?;
@@ -1913,7 +1891,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     op: vm::op_f32_const,
                 });
                 instrs.push(Instr {
-                    operand: Operand { f32: operand },
+                    operand: Operand::from_f32(operand),
                 });
 
                 checker.op(&[], &[ValType::F32])?;
@@ -3054,7 +3032,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_data_drop,
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: idx },
+                            operand: Operand::from_u32(idx),
                         });
 
                         (1 + len + len2, false)
@@ -3112,10 +3090,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_table_init,
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: elemidx },
+                            operand: Operand::from_u32(elemidx),
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: tableidx },
+                            operand: Operand::from_u32(tableidx),
                         });
 
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
@@ -3131,7 +3109,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_elem_drop,
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: elemidx },
+                            operand: Operand::from_u32(elemidx),
                         });
 
                         (1 + len + len2, false)
@@ -3156,10 +3134,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_table_copy,
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: tableidx },
+                            operand: Operand::from_u32(tableidx),
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: tableidx2 },
+                            operand: Operand::from_u32(tableidx2),
                         });
 
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
@@ -3177,7 +3155,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_table_grow,
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: tableidx },
+                            operand: Operand::from_u32(tableidx),
                         });
 
                         (1 + len + len2, false)
@@ -3193,7 +3171,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_table_size,
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: tableidx },
+                            operand: Operand::from_u32(tableidx),
                         });
 
                         (1 + len + len2, false)
@@ -3210,7 +3188,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_table_fill,
                         });
                         instrs.push(Instr {
-                            operand: Operand { u32: tableidx },
+                            operand: Operand::from_u32(tableidx),
                         });
 
                         (1 + len + len2, false)
@@ -3336,7 +3314,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     op: vm::op_ref_func,
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: idx },
+                    operand: Operand::from_u32(idx),
                 });
 
                 checker.op(&[], &[ValType::FuncRef])?;
@@ -3755,7 +3733,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                                 },
                             });
                             instrs.push(Instr {
-                                operand: Operand { u32: 0 },
+                                operand: Operand::from_u32(0),
                             });
                             checker.op(&[], &[])?;
                             (2 + len, false)
