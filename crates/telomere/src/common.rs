@@ -8,6 +8,8 @@ pub(crate) mod op_registry;
 /// Precompiled core-module codec (#196): stable op IDs and
 /// `LoweredFunction` serialization with exact-build fingerprinting.
 pub(crate) mod precompiled;
+#[cfg(feature = "aot-load")]
+pub(crate) mod sha256;
 pub use metering::{InterruptReason, MeteringConfig, MeteringHandle};
 /// Runtime result values shared by the interpreter and embedding API.
 #[warn(missing_docs)]

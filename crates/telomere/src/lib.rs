@@ -210,6 +210,51 @@ pub use runtime::aliasing;
 pub use runtime::get_global;
 /// Instantiates a parsed core WebAssembly module in a store.
 pub use runtime::instantiate;
+/// Builds an AoT artifact container for a parsed module (#198).
+#[cfg(feature = "jit")]
+pub use runtime::jit::aot_artifact::build_aot_artifact;
+/// This build's AoT fingerprint (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::current_fingerprint;
+/// Installs an opened AoT artifact into a store's JIT cache (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::install_aot_artifact;
+/// Returns true when bytes start with the AoT container magic (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::is_aot_artifact;
+/// Opens (verifies and deserializes) an AoT artifact (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::open_aot_artifact;
+/// An opened (verified) AoT artifact (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotArtifact;
+/// Errors returned by the AoT artifact producer and loader (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotError;
+/// The exact-build fingerprint carried by an AoT artifact (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotFingerprint;
+/// One function's native blob in an opened AoT artifact (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotFunction;
+/// The outcome of installing an AoT artifact (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotInstallReport;
+/// Load policy for opening AoT artifacts (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotLoadPolicy;
+/// One relocation inside an AoT function's blob (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotReloc;
+/// The kind of an AoT relocation (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotRelocKind;
+/// Signs AoT artifact payloads (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotSigner;
+/// Verifies AoT artifact signatures (#198).
+#[cfg(feature = "aot-load")]
+pub use runtime::jit::aot_artifact::AotVerifier;
 #[cfg(feature = "aot-load")]
 /// Statistics for the optional store-local native-code cache.
 ///

@@ -64,6 +64,16 @@ jobs:
           TELOMERE_WAST_PRECOMPILED_REQUIRE_ACCEPT: "1"
         run: cargo test --verbose -p telomere --test wast
 
+      # Guards the #198 AoT artifact container: the whole wast corpus
+      # must pass when every module is built into a signed artifact
+      # offline, opened through the fail-closed loader, and run from
+      # the installed native blobs, enforced fail-closed.
+      - name: Test wast with the AoT artifact lane
+        env:
+          TELOMERE_WAST_AOT: "1"
+          TELOMERE_WAST_AOT_REQUIRE_ACCEPT: "1"
+        run: cargo test --verbose -p telomere --features jit --test wast
+
   minimal-embedder:
     name: Standalone minimal embedder
     runs-on: ubuntu-latest

@@ -25,6 +25,7 @@ jobs:
           - parse_core_module
           - decode_component
           - decode_precompiled_module
+          - decode_aot_artifact
           - canon_lift_args
 
     steps:
@@ -56,7 +57,7 @@ jobs:
       # fuzzing toolchain itself. Other targets' corpora are raw
       # wasm/component bytes and keep the stable generator.
       - name: Install fuzzing toolchain early for precompiled corpus generation
-        if: matrix.target == 'decode_precompiled_module'
+        if: matrix.target == 'decode_precompiled_module' || matrix.target == 'decode_aot_artifact'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
@@ -68,10 +69,18 @@ jobs:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
           generator_toolchain="1.96.0"
-          if [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+          if [ "${{ matrix.target }}" = "decode_precompiled_module" ] || [ "${{ matrix.target }}" = "decode_aot_artifact" ]; then
             generator_toolchain="nightly-2026-07-31"
           fi
-          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+          if [ "${{ matrix.target }}" = "decode_aot_artifact" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            # Both seed generators embed this build's exact-build
+            # fingerprint (the AoT generator is additionally gated on
+            # the `jit` feature), and the fuzz decoders are built with
+            # `jit` + `aot-load` (see fuzz/Cargo.toml), so generation
+            # must enable the same features or every seed is rejected
+            # at the fingerprint check before any decoding happens.
+            cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release --features jit,aot-load -- --nocapture
+          elif [ "${{ matrix.target }}" = "parse_core_module" ]; then
             cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
             cargo +"$generator_toolchain" test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
@@ -126,6 +135,7 @@ jobs:
           - parse_core_module
           - decode_component
           - decode_precompiled_module
+          - decode_aot_artifact
           - canon_lift_args
 
     steps:
@@ -155,7 +165,7 @@ jobs:
       # fuzzing toolchain itself. Other targets' corpora are raw
       # wasm/component bytes and keep the stable generator.
       - name: Install fuzzing toolchain early for precompiled corpus generation
-        if: matrix.target == 'decode_precompiled_module'
+        if: matrix.target == 'decode_precompiled_module' || matrix.target == 'decode_aot_artifact'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
@@ -167,10 +177,18 @@ jobs:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
           generator_toolchain="1.96.0"
-          if [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+          if [ "${{ matrix.target }}" = "decode_precompiled_module" ] || [ "${{ matrix.target }}" = "decode_aot_artifact" ]; then
             generator_toolchain="nightly-2026-07-31"
           fi
-          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+          if [ "${{ matrix.target }}" = "decode_aot_artifact" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            # Both seed generators embed this build's exact-build
+            # fingerprint (the AoT generator is additionally gated on
+            # the `jit` feature), and the fuzz decoders are built with
+            # `jit` + `aot-load` (see fuzz/Cargo.toml), so generation
+            # must enable the same features or every seed is rejected
+            # at the fingerprint check before any decoding happens.
+            cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release --features jit,aot-load -- --nocapture
+          elif [ "${{ matrix.target }}" = "parse_core_module" ]; then
             cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
             cargo +"$generator_toolchain" test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
@@ -219,6 +237,7 @@ jobs:
           - parse_core_module
           - decode_component
           - decode_precompiled_module
+          - decode_aot_artifact
           - canon_lift_args
 
     steps:
@@ -248,7 +267,7 @@ jobs:
       # fuzzing toolchain itself. Other targets' corpora are raw
       # wasm/component bytes and keep the stable generator.
       - name: Install fuzzing toolchain early for precompiled corpus generation
-        if: matrix.target == 'decode_precompiled_module'
+        if: matrix.target == 'decode_precompiled_module' || matrix.target == 'decode_aot_artifact'
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
@@ -260,10 +279,18 @@ jobs:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
           generator_toolchain="1.96.0"
-          if [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+          if [ "${{ matrix.target }}" = "decode_precompiled_module" ] || [ "${{ matrix.target }}" = "decode_aot_artifact" ]; then
             generator_toolchain="nightly-2026-07-31"
           fi
-          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+          if [ "${{ matrix.target }}" = "decode_aot_artifact" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            # Both seed generators embed this build's exact-build
+            # fingerprint (the AoT generator is additionally gated on
+            # the `jit` feature), and the fuzz decoders are built with
+            # `jit` + `aot-load` (see fuzz/Cargo.toml), so generation
+            # must enable the same features or every seed is rejected
+            # at the fingerprint check before any decoding happens.
+            cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release --features jit,aot-load -- --nocapture
+          elif [ "${{ matrix.target }}" = "parse_core_module" ]; then
             cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
             cargo +"$generator_toolchain" test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture

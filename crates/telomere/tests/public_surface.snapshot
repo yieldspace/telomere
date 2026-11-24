@@ -1,3 +1,13 @@
+telomere::AotArtifact | cfg(feature = "aot-load")
+telomere::AotError | cfg(feature = "aot-load")
+telomere::AotFingerprint | cfg(feature = "aot-load")
+telomere::AotFunction | cfg(feature = "aot-load")
+telomere::AotInstallReport | cfg(feature = "aot-load")
+telomere::AotLoadPolicy | cfg(feature = "aot-load")
+telomere::AotReloc | cfg(feature = "aot-load")
+telomere::AotRelocKind | cfg(feature = "aot-load")
+telomere::AotSigner | cfg(feature = "aot-load")
+telomere::AotVerifier | cfg(feature = "aot-load")
 telomere::AsyncHostFn | always
 telomere::AsyncHostFnDefinition | always
 telomere::AsyncHostModule | always
@@ -50,6 +60,7 @@ telomere::WasmParser | always
 telomere::WasmParserError | always
 telomere::WasmValue | always
 telomere::aliasing | always
+telomere::build_aot_artifact | cfg(feature = "jit")
 telomere::component_support | always
 telomere::component_support::binary | always
 telomere::component_support::binary::BinaryReader | always
@@ -110,13 +121,16 @@ telomere::component_support::runtime::aliasing | always
 telomere::component_support::runtime::instantiate | always
 telomere::component_support::runtime::run_core_export_sync_reentrant | always
 telomere::component_support::runtime::run_module_function | always
+telomere::current_fingerprint | cfg(feature = "aot-load")
 telomere::deserialize_module | always
 telomere::deserialize_module_timed | always
 telomere::diagnostics | always
 telomere::get_global | always
+telomere::install_aot_artifact | cfg(feature = "aot-load")
 telomere::instantiate | always
 telomere::instantiate_native_async_module | always
 telomere::instantiate_native_module | always
+telomere::is_aot_artifact | cfg(feature = "aot-load")
 telomere::is_precompiled_module | always
 telomere::jit_supported | always
 telomere::link_async_host_function_with_export_name | always
@@ -124,6 +138,7 @@ telomere::link_async_host_function_with_function_idx | always
 telomere::link_host_function_with_export_name | always
 telomere::link_host_function_with_function_idx | always
 telomere::measure_switches | cfg(feature = "measure-switches")
+telomere::open_aot_artifact | cfg(feature = "aot-load")
 telomere::run_module_function | always
 telomere::run_module_function_with_driver | always
 telomere::serialize_module | always

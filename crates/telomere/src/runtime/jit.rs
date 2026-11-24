@@ -11,6 +11,8 @@
 
 #[cfg(feature = "aot-load")]
 mod abi;
+#[cfg(feature = "aot-load")]
+pub(crate) mod aot_artifact;
 #[cfg(all(test, feature = "jit"))]
 mod artifact_measure;
 #[cfg(feature = "jit")]

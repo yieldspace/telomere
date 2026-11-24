@@ -173,7 +173,7 @@ pub struct PrecompiledTimings {
 
 /// The feature-set string pinned into the fingerprint. Only features
 /// that change the handler set or value layouts are listed.
-fn feature_set_string() -> String {
+pub(crate) fn feature_set_string() -> String {
     let mut parts: Vec<&'static str> = Vec::new();
     if cfg!(feature = "simd") {
         parts.push("simd");

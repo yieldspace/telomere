@@ -288,6 +288,121 @@ impl StoreJitCache {
         inner.disabled.insert(funcaddr);
     }
 
+    /// Installs a batch of already-patched native functions
+    /// atomically (#198 AoT loader): either every entry lands in the
+    /// cache or none does. Entries naming a disabled (JIT-rejected)
+    /// function, a batch that names one function twice, or a batch
+    /// whose resident bytes exceed `max_bytes` fail with
+    /// `Err(needed_bytes)` and leave the cache untouched.
+    ///
+    /// An entry naming an already-cached function is *accepted*, not
+    /// an error: with native execution enabled, instantiation runs
+    /// the module's start function before the caller can install, so
+    /// lazy compilation may already have cached part of the batch.
+    /// The cached entry is the same function's native code, so it is
+    /// kept (recency refreshed) and its bytes are not charged twice.
+    ///
+    /// Every fresh mapping is allocated *before* any eviction or
+    /// insertion: arena allocation never depends on eviction (the
+    /// arena grows by fresh slabs), so an allocation failure still
+    /// leaves the cache map and its accounting exactly as they were.
+    /// Eviction of *other* cached functions to make room follows the
+    /// same policy as on-demand compilation; batch entries themselves
+    /// are never eviction victims.
+    pub(crate) fn install_batch(
+        &self,
+        batch: &[(ObjectRef, Vec<u8>, Vec<u32>)],
+        max_bytes: usize,
+    ) -> Result<Vec<Arc<CompiledFunction>>, usize> {
+        let mut resident_total: usize = 0;
+        for (_, code, trap_sites) in batch {
+            let allocation_len = CodeArena::accounted_len(code.len()).map_err(|_| usize::MAX)?;
+            resident_total = resident_total
+                .saturating_add(allocation_len)
+                .saturating_add(trap_sites.len() * std::mem::size_of::<u32>());
+        }
+        if resident_total > max_bytes {
+            return Err(resident_total);
+        }
+        let clock = self.next_tick();
+        let mut inner = self.inner.lock();
+        let mut seen: HashSet<ObjectRef> = HashSet::with_capacity(batch.len());
+        for (funcaddr, _, _) in batch {
+            if inner.disabled.contains(funcaddr) || !seen.insert(*funcaddr) {
+                return Err(resident_total);
+            }
+        }
+        // Partition into already-cached entries (accepted as-is) and
+        // fresh entries (to allocate), charging the budget for the
+        // union: cached bytes are already resident, fresh bytes are
+        // new, and together they must fit.
+        let mut existing_bytes: usize = 0;
+        let mut fresh_resident: usize = 0;
+        let mut installed = Vec::with_capacity(batch.len());
+        for (funcaddr, code, trap_sites) in batch {
+            if let Some(cached) = inner.compiled.get(funcaddr) {
+                let active = cached.tiers.active().clone();
+                active.note_used(clock);
+                existing_bytes = existing_bytes.saturating_add(cached.tiers.resident_bytes());
+                installed.push(active);
+            } else {
+                let allocation_len =
+                    CodeArena::accounted_len(code.len()).map_err(|_| resident_total)?;
+                fresh_resident = fresh_resident
+                    .saturating_add(allocation_len)
+                    .saturating_add(trap_sites.len() * std::mem::size_of::<u32>());
+            }
+        }
+        if existing_bytes.saturating_add(fresh_resident) > max_bytes {
+            return Err(existing_bytes.saturating_add(fresh_resident));
+        }
+        // Allocate every fresh mapping before evicting or inserting
+        // any entry, so an allocation failure leaves the cache
+        // untouched.
+        let mut compiled_batch = Vec::with_capacity(batch.len());
+        for (funcaddr, code, trap_sites) in batch {
+            if inner.compiled.contains_key(funcaddr) {
+                continue;
+            }
+            let compiled = CompiledFunction::from_bytes(code, trap_sites.clone(), &inner.arena)
+                .map_err(|_| resident_total)?;
+            compiled_batch.push((*funcaddr, Arc::new(compiled)));
+        }
+        // Evict non-batch entries until the fresh entries fit. The
+        // fit check above guarantees this terminates without touching
+        // a batch entry: evicting everything else leaves at most
+        // `existing_bytes`, and existing + fresh <= max_bytes.
+        let target_used = max_bytes.saturating_sub(fresh_resident);
+        while inner.used_bytes > target_used {
+            let victim = inner
+                .compiled
+                .iter()
+                .filter(|(addr, _)| !seen.contains(*addr))
+                .min_by_key(|(_, cached)| cached.tiers.active().last_used())
+                .map(|(addr, _)| *addr);
+            let Some(victim) = victim else {
+                break;
+            };
+            if let Some(cached) = inner.compiled.remove(&victim) {
+                inner.used_bytes = inner
+                    .used_bytes
+                    .saturating_sub(cached.tiers.resident_bytes());
+            }
+        }
+        for (funcaddr, compiled) in compiled_batch {
+            compiled.note_used(clock);
+            inner.used_bytes = inner.used_bytes.saturating_add(compiled.resident_bytes());
+            inner.compiled.insert(
+                funcaddr,
+                CachedFunction {
+                    tiers: CompiledTiers::baseline(compiled.clone()),
+                },
+            );
+            installed.push(compiled);
+        }
+        Ok(installed)
+    }
+
     pub(crate) fn stats(&self) -> JitCacheStats {
         let inner = self.inner.lock();
         JitCacheStats {
@@ -581,6 +696,107 @@ mod tests {
             .store(DIRECT_CALL_TOUCH_INTERVAL + 1, Ordering::Relaxed);
         cache.note_direct_call(&compiled);
         assert_eq!(compiled.last_used(), DIRECT_CALL_TOUCH_INTERVAL + 2);
+    }
+
+    #[test]
+    fn install_batch_accepts_already_cached_entries() {
+        let cache = StoreJitCache::default();
+        let func_a = ObjectRef(11);
+        let func_b = ObjectRef(12);
+        let code = vec![0x90u8; 32];
+
+        let first = cache
+            .install_batch(&[(func_a, code.clone(), Vec::new())], 4096)
+            .expect("first install must succeed");
+        assert_eq!(first.len(), 1);
+        let used_after_first = cache.stats().used_bytes;
+
+        // Installing a batch that overlaps the cached entry (the
+        // start-function case: lazy compilation got there first) must
+        // succeed, keep the original entry, and not double-charge it.
+        let second = cache
+            .install_batch(
+                &[
+                    (func_a, code.clone(), Vec::new()),
+                    (func_b, code.clone(), Vec::new()),
+                ],
+                4096,
+            )
+            .expect("install overlapping the cache must succeed");
+        assert_eq!(second.len(), 2);
+        assert!(Arc::ptr_eq(&second[0], &first[0]));
+        let stats = cache.stats();
+        assert_eq!(stats.compiled_functions, 2);
+        assert_eq!(stats.used_bytes, used_after_first * 2);
+    }
+
+    #[test]
+    fn install_batch_failure_leaves_cache_untouched() {
+        let cache = StoreJitCache::default();
+        let resident = ObjectRef(21);
+        let newcomer = ObjectRef(22);
+        let rejected = ObjectRef(23);
+        let code = vec![0x90u8; 32];
+        cache
+            .install_batch(&[(resident, code.clone(), Vec::new())], 4096)
+            .expect("seed install must succeed");
+        {
+            let mut inner = cache.inner.lock();
+            inner.disabled.insert(rejected);
+        }
+        let before = cache.stats();
+
+        // A batch naming a disabled function fails wholesale: the
+        // valid newcomer in the same batch must not be installed and
+        // the resident entry must survive.
+        let result = cache.install_batch(
+            &[
+                (newcomer, code.clone(), Vec::new()),
+                (rejected, code.clone(), Vec::new()),
+            ],
+            4096,
+        );
+        assert!(result.is_err());
+        let after = cache.stats();
+        assert_eq!(after.compiled_functions, before.compiled_functions);
+        assert_eq!(after.used_bytes, before.used_bytes);
+        assert!(cache.get_cached(resident).is_some());
+        assert!(cache.get_cached(newcomer).is_none());
+    }
+
+    #[test]
+    fn install_batch_evicts_others_but_never_batch_entries() {
+        let cache = StoreJitCache::default();
+        let kept = ObjectRef(31);
+        let evictable = ObjectRef(32);
+        let newcomer = ObjectRef(33);
+        let code = vec![0x90u8; 32];
+        // Two 32-byte residents exactly fill a 64-byte budget.
+        cache
+            .install_batch(
+                &[
+                    (kept, code.clone(), Vec::new()),
+                    (evictable, code.clone(), Vec::new()),
+                ],
+                64,
+            )
+            .expect("seed install must succeed");
+
+        // Re-installing `kept` together with a newcomer under the
+        // same budget must evict only the non-batch entry.
+        cache
+            .install_batch(
+                &[
+                    (kept, code.clone(), Vec::new()),
+                    (newcomer, code.clone(), Vec::new()),
+                ],
+                64,
+            )
+            .expect("batch install must succeed");
+        assert!(cache.get_cached(kept).is_some());
+        assert!(cache.get_cached(newcomer).is_some());
+        assert!(cache.get_cached(evictable).is_none());
+        assert_eq!(cache.stats().used_bytes, 64);
     }
 
     fn test_compiled(code_size: usize) -> Arc<CompiledFunction> {
