@@ -25,6 +25,7 @@ the body for the details.
 | [core/parser-limits.md](core/parser-limits.md) | Current | Parser and component-decoder nesting policy, scope, and embedder-facing limits. |
 | [core/trap-reporting.md](core/trap-reporting.md) | Current | Owned core trap diagnostics, consuming retrieval, names, output format, and JIT program-counter limits. |
 | [core/diagnostics.md](core/diagnostics.md) | Current | Embedder observability contract: documented tracing targets and events, environment-variable switches, and feature-gated profiling facilities. |
+| [core/preview1-scope.md](core/preview1-scope.md) | Current | Preview1 runner scope contract: the twelve implemented host functions, the environment policy, and why the filesystem family stays out (#137). |
 | [support-matrix.md](support-matrix.md) | Current | Core proposal, Component Model canonical ABI, and WASI 0.2.6 support boundaries with source-backed coverage counts. |
 | [core/optimizer.md](core/optimizer.md) | Current | The canonical optimizer pipeline and runtime boundary. |
 | [core/metering.md](core/metering.md) | Current | Store-scoped fuel, accounting, and cancellation across the interpreter and the JIT. |

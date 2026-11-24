@@ -58,10 +58,13 @@ async fn run_core_module_with_stdio(
 ) -> anyhow::Result<ExitCode> {
     let module = parse_module_from_path(&command.name)?;
     if should_run_wasi(&command, &module) {
+        let environ =
+            core_wasi_preview1::collect_guest_environ(!command.no_inherit_env, &command.env)?;
         return core_wasi_preview1::run(
             module,
             &command.name,
             &command.tail_args,
+            environ,
             stdio,
             command.jit,
             command.jit_code_cache_mib,
@@ -260,6 +263,8 @@ mod tests {
             args_after_separator: true,
             jit: false,
             jit_code_cache_mib: 4,
+            env: Vec::new(),
+            no_inherit_env: false,
         };
         let captured = core_wasi_preview1::CapturedStdio::default();
 
@@ -272,6 +277,33 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS);
 
         String::from_utf8(captured.stdout()).expect("the example only writes utf-8")
+    }
+
+    /// Run the committed stock `wasm32-wasip1` fixture with captured stdio
+    /// and return its stdout. The fixture's environment comes from this
+    /// process's environment, like a real CLI invocation.
+    async fn run_preview1_stock(args: Vec<String>, stdin: Vec<u8>) -> String {
+        let path = example_path("wasi-preview1-stock-hello.wasm");
+        let command = CoreCommand {
+            name: path,
+            tail_args: args,
+            args_after_separator: true,
+            jit: false,
+            jit_code_cache_mib: 4,
+            env: Vec::new(),
+            no_inherit_env: false,
+        };
+        let captured = core_wasi_preview1::CapturedStdio::with_stdin(stdin);
+
+        let exit = run_core_module_with_stdio(
+            command,
+            core_wasi_preview1::StdioMode::Capture(captured.clone()),
+        )
+        .await
+        .expect("the stock preview1 fixture should run");
+        assert_eq!(exit, ExitCode::SUCCESS);
+
+        String::from_utf8(captured.stdout()).expect("the fixture only writes utf-8")
     }
 
     fn write_wasm(stem: &str, wat: &str) -> std::path::PathBuf {
@@ -291,6 +323,22 @@ mod tests {
         assert_eq!(
             stdout,
             format!("{PREVIEW1_GREETING}\n{PREVIEW1_ARGV0}\none\ntwo\n")
+        );
+    }
+
+    /// The stock-toolchain fixture (a plain Rust `wasm32-wasip1` binary, not
+    /// hand-written WAT) runs end to end: it reads argv and the environment,
+    /// seeds a `HashMap` (which imports `random_get`), echoes stdin's length
+    /// through `fd_read`, and exits 0. See docs/core/preview1-scope.md.
+    #[tokio::test]
+    async fn preview1_stock_wasip1_fixture_runs_end_to_end() {
+        std::env::set_var("TELOMERE_PREVIEW1_FIXTURE", "present");
+        let stdout = run_preview1_stock(vec!["one".to_owned()], b"abc".to_vec()).await;
+        std::env::remove_var("TELOMERE_PREVIEW1_FIXTURE");
+
+        assert_eq!(
+            stdout,
+            "stock wasip1 hello\nargc=2\narg=wasi-preview1-stock-hello.wasm\narg=one\nfixture-env=present\nhashmap=42\nstdin-len=3\n"
         );
     }
 
@@ -348,6 +396,8 @@ mod tests {
             args_after_separator: false,
             jit: false,
             jit_code_cache_mib: 4,
+            env: Vec::new(),
+            no_inherit_env: false,
         };
 
         let error = run_core_module(command)
@@ -376,6 +426,8 @@ mod tests {
             args_after_separator: false,
             jit: false,
             jit_code_cache_mib: 4,
+            env: Vec::new(),
+            no_inherit_env: false,
         };
 
         let exit = run_core_module_with_stdio(
@@ -427,6 +479,8 @@ mod tests {
             args_after_separator: false,
             jit: false,
             jit_code_cache_mib: 4,
+            env: Vec::new(),
+            no_inherit_env: false,
         };
         let captured = core_wasi_preview1::CapturedStdio::default();
 
@@ -491,6 +545,8 @@ mod tests {
             args_after_separator: false,
             jit: false,
             jit_code_cache_mib: 4,
+            env: Vec::new(),
+            no_inherit_env: false,
         };
         let captured = core_wasi_preview1::CapturedStdio::default();
 

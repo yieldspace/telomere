@@ -32,6 +32,15 @@ pub struct Cli {
     #[arg(long = "jit-code-cache-mib", value_name = "MIB", default_value_t = 4)]
     pub jit_code_cache_mib: u32,
 
+    /// Set an environment variable for a preview1 command guest.
+    /// Repeatable; only used when the module runs as a preview1 command.
+    #[arg(long = "env", value_name = "KEY=VALUE")]
+    pub env: Vec<String>,
+
+    /// Do not pass the host environment through to a preview1 command guest.
+    #[arg(long = "no-inherit-env", default_value_t = false)]
+    pub no_inherit_env: bool,
+
     /// Path to the core Wasm module to run.
     #[arg(value_name = "MODULE")]
     pub name: Option<PathBuf>,
@@ -84,6 +93,8 @@ pub struct CoreCommand {
     pub args_after_separator: bool,
     pub jit: bool,
     pub jit_code_cache_mib: u32,
+    pub env: Vec<String>,
+    pub no_inherit_env: bool,
 }
 
 impl Cli {
@@ -99,6 +110,8 @@ impl Cli {
             args_after_separator: has_separator(raw_args),
             jit: self.jit,
             jit_code_cache_mib: self.jit_code_cache_mib,
+            env: self.env.clone(),
+            no_inherit_env: self.no_inherit_env,
         })
     }
 }
@@ -178,6 +191,8 @@ mod tests {
                 args_after_separator: false,
                 jit: false,
                 jit_code_cache_mib: 4,
+                env: Vec::new(),
+                no_inherit_env: false,
             }
         );
     }
@@ -238,6 +253,8 @@ mod tests {
                 args_after_separator: true,
                 jit: false,
                 jit_code_cache_mib: 4,
+                env: Vec::new(),
+                no_inherit_env: false,
             }
         );
     }
