@@ -35,7 +35,10 @@ a build fingerprint:
 - the rustc version that compiled the build,
 - the target triple,
 - the enabled feature set (the subset that changes handler sets or
-  value layouts), and
+  value layouts),
+- a hash of the crate's source tree as compiled into the build (so a
+  handler whose implementation or operand interpretation changed —
+  without any rename — still produces a different fingerprint), and
 - a hash of the op-ID table compiled into the build.
 
 `deserialize_module` compares every field against the running build and

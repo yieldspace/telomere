@@ -70,7 +70,7 @@ fn round_trip_preserves_behavior() {
 }
 
 #[test]
-fn round_trip_covers_tables_elems_and_simd() {
+fn round_trip_covers_tables_and_elems() {
     let module = parse_module(
         r#"
         (module
@@ -79,21 +79,39 @@ fn round_trip_covers_tables_elems_and_simd() {
           (func $a (result i32) (i32.const 1))
           (func $b (result i32) (i32.const 2))
           (func (export "pick") (param i32) (result i32)
-            (call_indirect (result i32) (local.get 0)))
-          (func (export "sum") (param v128) (result i32)
-            (i32x4.extract_lane 0
-              (i32x4.add (local.get 0) (v128.const i32x4 10 20 30 40))))
-        )
+            (call_indirect (result i32) (local.get 0))))
         "#,
     );
     let artifact = serialize_module(&module).expect("module must serialize");
     let restored = deserialize_module(&artifact).expect("artifact must deserialize");
     assert_eq!(run_i32(restored, "pick", &[1]), 2);
     let restored = deserialize_module(&artifact).expect("artifact must deserialize");
-    // v128 argument path is exercised by the wast harness; here just
-    // confirm a second export from the same artifact instantiates.
     assert_eq!(run_i32(restored, "pick", &[0]), 1);
-    let _ = module;
+}
+
+// The SIMD half of the original combined test is gated on the `simd`
+// feature, following the convention of the other SIMD tests in this
+// workspace: without the feature the parser rejects SIMD opcodes by
+// design (see `parser_feature_gates`), so a SIMD module cannot even be
+// parsed in a `--no-default-features` build such as the minimal-embedder
+// CI job. The tables/elems half above stays ungated so it still runs
+// in that configuration.
+#[cfg(feature = "simd")]
+#[test]
+fn round_trip_covers_simd() {
+    let module = parse_module(
+        r#"
+        (module
+          (func (export "sum") (result i32)
+            (i32x4.extract_lane 0
+              (i32x4.add
+                (v128.const i32x4 1 2 3 4)
+                (v128.const i32x4 10 20 30 40)))))
+        "#,
+    );
+    let artifact = serialize_module(&module).expect("module must serialize");
+    let restored = deserialize_module(&artifact).expect("artifact must deserialize");
+    assert_eq!(run_i32(restored, "sum", &[]), 11);
 }
 
 #[test]
@@ -127,7 +145,7 @@ fn every_truncation_is_a_typed_error() {
     }
 }
 
-/// Length of the artifact header: magic + version + four fingerprint
+/// Length of the artifact header: magic + version + five fingerprint
 /// strings + the op-table hash.
 fn header_len(artifact: &[u8]) -> usize {
     fn leb(bytes: &[u8], pos: &mut usize) -> usize {
@@ -145,7 +163,7 @@ fn header_len(artifact: &[u8]) -> usize {
     }
     let mut pos = 8;
     let _version = leb(artifact, &mut pos);
-    for _ in 0..4 {
+    for _ in 0..5 {
         let len = leb(artifact, &mut pos);
         pos += len;
     }
@@ -217,7 +235,7 @@ fn first_op_id_offset(artifact: &[u8]) -> usize {
     }
     let mut pos = 8; // magic
     let _version = leb(artifact, &mut pos);
-    for _ in 0..4 {
+    for _ in 0..5 {
         let len = leb(artifact, &mut pos);
         pos += len; // fingerprint strings
     }

@@ -10,8 +10,12 @@
 //!
 //! The format makes **no cross-version stability promise**. Every
 //! artifact carries a build fingerprint (format version, crate version,
-//! rustc version, target triple, feature set, and a hash of the op-ID
-//! table). [`deserialize_module`] rejects any artifact whose fingerprint
+//! rustc version, target triple, feature set, a hash of the crate's
+//! source tree, and a hash of the op-ID table). The source-tree hash
+//! (computed in `build.rs`) is what pins the fingerprint to the actual
+//! handler implementations: changing a handler's operand interpretation
+//! without renaming it changes the fingerprint, so artifacts from the
+//! older build are rejected instead of being executed by the new one. [`deserialize_module`] rejects any artifact whose fingerprint
 //! does not match the running build exactly, with a typed
 //! [`PrecompiledError`]; the library never falls back to re-parsing.
 //! Artifacts are a cache for one exact build, nothing more.
@@ -21,7 +25,8 @@
 //! ```text
 //! header:  magic "TELOPRE1" | format_version (LEB u32)
 //!          crate_version (string) | rustc_version (string)
-//!          target (string) | features (string) | op_table_hash (u64 LE)
+//!          target (string) | features (string) | source_hash (string)
+//!          | op_table_hash (u64 LE)
 //! body:    length-prefixed sections in fixed order, each tagged:
 //!          types, functions, imports, mems, globals, exports, tables,
 //!          elems, data, start, name, codes
@@ -52,7 +57,7 @@ const MAGIC: &[u8; 8] = b"TELOPRE1";
 
 /// Format version written by this build. Bumped on any format change;
 /// artifacts with any other version are rejected, never migrated.
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 // Section tags, in the fixed order they appear in the body.
 const SEC_TYPES: u8 = 1;
@@ -1071,6 +1076,53 @@ fn validate_lowered(lowered: &LoweredFunction, shape: &ModuleShape) -> Result<()
         .len()
         .checked_add(lowered.code.len())
         .ok_or(PrecompiledError::Corrupt("lowered function size overflow"))?;
+    // Block labels are the only legal symbolic jump destinations,
+    // mirroring the optimizer pipeline's own `encode::verify`: every
+    // `JumpTarget` operand and every jump-table entry must name a
+    // block-map label, and block labels must be unique.
+    let mut block_ids: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for block in &lowered.block_map {
+        if block_ids.insert(block.label, block.block_id).is_some() {
+            return Err(PrecompiledError::Corrupt("duplicate block label"));
+        }
+    }
+    for target in &lowered.jump_table {
+        if block_ids.get(&target.label) != Some(&target.block_id) {
+            return Err(PrecompiledError::Corrupt(
+                "jump table entry does not match the block map",
+            ));
+        }
+    }
+    // The canonical branch handlers dispatch through their operands as
+    // code addresses (`op_br` and friends offset the code pointer by
+    // the operand unconditionally). Optimizer output carries those
+    // operands in two forms: symbolic `JumpTarget`s (kernel-encoded
+    // functions) and `Raw` operands holding an absolute instruction
+    // index (functions lowered from the materialized stream). Both
+    // forms are validated here: a `JumpTarget` must name a block-map
+    // label (checked in the operand loop below), and a `Raw` branch
+    // operand's `jump_addr` must land inside this function's
+    // materialized instruction stream. Any other operand kind in a
+    // branch op, or a branch op with the wrong operand count, would be
+    // copied verbatim into the materialized stream and executed as an
+    // unchecked address, so it is rejected.
+    let is_branch_op = |op: &Op| {
+        std::ptr::fn_addr_eq(*op, crate::runtime::vm::op_br as Op)
+            || std::ptr::fn_addr_eq(*op, crate::runtime::vm::op_br_if as Op)
+            || std::ptr::fn_addr_eq(*op, crate::runtime::vm::op_else as Op)
+            || std::ptr::fn_addr_eq(*op, crate::runtime::vm::op_if as Op)
+    };
+    let is_br_table = |op: &Op| std::ptr::fn_addr_eq(*op, crate::runtime::vm::op_br_table as Op);
+    let materialized_len: usize = lowered.code.iter().map(|op| 1 + op.operands.len()).sum();
+    let raw_jump_in_range = |raw: &[u8; 8]| {
+        let addr = u32::from_ne_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
+        addr < materialized_len
+    };
+    let branch_operand_ok = |operand: &LoweredOperand| match operand {
+        LoweredOperand::JumpTarget(_) => true,
+        LoweredOperand::Raw(raw) => raw_jump_in_range(raw),
+        _ => false,
+    };
     let mut op_labels = std::collections::HashSet::new();
     for op in &lowered.code {
         if let Some(label) = op.label {
@@ -1078,6 +1130,20 @@ fn validate_lowered(lowered: &LoweredFunction, shape: &ModuleShape) -> Result<()
                 return Err(PrecompiledError::Corrupt("op label out of range"));
             }
             op_labels.insert(label);
+        }
+        if is_branch_op(&op.op) {
+            if op.operands.len() != 1 || !branch_operand_ok(&op.operands[0]) {
+                return Err(PrecompiledError::Corrupt(
+                    "branch op must carry exactly one in-range branch operand",
+                ));
+            }
+        }
+        if is_br_table(&op.op)
+            && (op.operands.is_empty() || !op.operands.iter().all(branch_operand_ok))
+        {
+            return Err(PrecompiledError::Corrupt(
+                "br_table operands must all be in-range branch operands",
+            ));
         }
         for operand in &op.operands {
             match operand {
@@ -1089,7 +1155,7 @@ fn validate_lowered(lowered: &LoweredFunction, shape: &ModuleShape) -> Result<()
                     }
                 }
                 LoweredOperand::JumpTarget(label) => {
-                    if *label >= lowered.block_map.len() && !op_labels.contains(label) {
+                    if !block_ids.contains_key(label) {
                         return Err(PrecompiledError::Corrupt("jump target label out of range"));
                     }
                 }
@@ -1174,6 +1240,7 @@ pub fn serialize_module_timed(
     w.string(env!("TELOMERE_BUILD_RUSTC_VERSION"));
     w.string(env!("TELOMERE_BUILD_TARGET"));
     w.string(&feature_set_string());
+    w.string(env!("TELOMERE_BUILD_SOURCE_HASH"));
     w.fixed_u64(op_registry::OP_TABLE_HASH);
     let header_done = Instant::now();
     {
@@ -1341,6 +1408,11 @@ pub fn deserialize_module_timed(
     )?;
     check_fingerprint("target triple", r.string()?, env!("TELOMERE_BUILD_TARGET"))?;
     check_fingerprint("feature set", r.string()?, &feature_set_string())?;
+    check_fingerprint(
+        "source hash",
+        r.string()?,
+        env!("TELOMERE_BUILD_SOURCE_HASH"),
+    )?;
     let artifact_hash = r.fixed_u64()?;
     if artifact_hash != op_registry::OP_TABLE_HASH {
         return Err(PrecompiledError::FingerprintMismatch {
