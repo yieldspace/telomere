@@ -16,7 +16,8 @@ use sha2::{Digest, Sha256};
 use telomere::{
     build_aot_artifact, current_fingerprint, install_aot_artifact, instantiate, is_aot_artifact,
     open_aot_artifact, run_module_function, AotError, AotLoadPolicy, AotSigner, AotVerifier,
-    IoReadBinaryReader, Module, Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
+    IoReadBinaryReader, JitConfig, Module, Registry, ResultValue, RuntimeConfig, Store, VMResult,
+    WasmParser, WasmValue,
 };
 
 // A test signer/verifier pair: HMAC-SHA256 over the payload, built on
@@ -101,6 +102,27 @@ fn run_i32_on(store: &Store, instance: &telomere::InstanceHandle, export: &str, 
     }
 }
 
+/// A store with native execution enabled. `Store::new()` leaves
+/// `runtime_config.jit.enabled` false, and the native entry path
+/// refuses cached code in that posture — execution tests must use
+/// this store or the installed blobs are never actually entered.
+fn jit_store() -> Store {
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig { enabled: true };
+    Store::new_with_runtime_config(runtime_config)
+}
+
+fn run_export_i32(store: &Store, instance: &telomere::InstanceHandle, export: &str) -> i32 {
+    let args = ResultValue::new(vec![]);
+    match block_on(run_module_function(instance, store, export, &args)) {
+        VMResult::Success(values) => match values.iter().next() {
+            Some(WasmValue::I32(v)) => *v,
+            other => panic!("expected one i32 result, got {other:?}"),
+        },
+        result => panic!("export must run, got {result:?}"),
+    }
+}
+
 fn instantiate_on(store: &Store, module: Module) -> telomere::InstanceHandle {
     let registry = Registry::new();
     match block_on(instantiate(module, store, &registry)) {
@@ -125,7 +147,11 @@ fn signed_round_trip_installs_and_executes_native_code() {
     let trap_sites: usize = opened.functions().iter().map(|f| f.trap_site_count()).sum();
     assert!(trap_sites > 0, "artifact must carry trap-site tables");
 
-    let store = Store::new();
+    let store = jit_store();
+    assert!(
+        store.runtime_config().jit.enabled,
+        "execution tests must run with native execution enabled"
+    );
     let instance = instantiate_on(&store, opened.module().clone());
     let report = install_aot_artifact(&store, &instance, &opened).expect("install must succeed");
     assert_eq!(report.installed, opened.functions().len());
@@ -155,7 +181,7 @@ fn two_instances_get_independently_patched_copies() {
     let opened = open_aot_artifact(&bytes, Some(&signer()), AotLoadPolicy::default())
         .expect("signed artifact must open");
 
-    let store = Store::new();
+    let store = jit_store();
     let first = instantiate_on(&store, opened.module().clone());
     let second = instantiate_on(&store, opened.module().clone());
     let first_report = install_aot_artifact(&store, &first, &opened).expect("first install");
@@ -326,7 +352,7 @@ fn mismatched_instance_is_rejected_without_touching_cache() {
         .expect("signed artifact must open");
 
     let other = parse_module("(module (func (export \"x\") (result i32) (i32.const 1)))");
-    let store = Store::new();
+    let store = jit_store();
     let instance = instantiate_on(&store, other);
     let before = store.jit_cache_stats().compiled_functions;
     let result = install_aot_artifact(&store, &instance, &opened);
@@ -338,5 +364,111 @@ fn mismatched_instance_is_rejected_without_touching_cache() {
         store.jit_cache_stats().compiled_functions,
         before,
         "a failed install must leave the cache untouched"
+    );
+}
+
+#[test]
+fn install_into_importing_instance_is_rejected_and_provider_is_untouched() {
+    // The provider's exported `main` calls its own funcidx 1 and
+    // returns 99. The importer resolves funcidx 0 to that provider
+    // function and defines a funcidx 1 returning 42. The artifact
+    // module has the same function count and the same lowered body at
+    // every index as the importer's index space — but its funcidx 0
+    // is a function it defines itself. Installing it into the
+    // importer must fail: the blob for funcidx 0 would otherwise be
+    // installed under the provider function's address, patched
+    // against the importer's function table, and the provider's
+    // `main` would start returning 42.
+    let provider = parse_module(
+        "(module (func (export \"main\") (result i32) (call 1)) \
+         (func (result i32) (i32.const 99)))",
+    );
+    let importer = parse_module(
+        "(module (import \"p\" \"main\" (func (result i32))) \
+         (func (export \"run\") (result i32) (i32.const 42)))",
+    );
+    let artifact_module =
+        parse_module("(module (func (result i32) (call 1)) (func (result i32) (i32.const 42)))");
+    let bytes = build_aot_artifact(&artifact_module, Some(&signer())).expect("artifact must build");
+    let opened = open_aot_artifact(&bytes, Some(&signer()), AotLoadPolicy::default())
+        .expect("signed artifact must open");
+
+    let store = jit_store();
+    let provider_instance = instantiate_on(&store, provider);
+    let mut registry = Registry::new();
+    registry.register("p", provider_instance.clone());
+    let importer_instance = match block_on(instantiate(importer, &store, &registry)) {
+        VMResult::Success(instance) => instance,
+        result => panic!("importer must instantiate, got {result:?}"),
+    };
+
+    let before = store.jit_cache_stats().compiled_functions;
+    let result = install_aot_artifact(&store, &importer_instance, &opened);
+    assert!(
+        matches!(result, Err(AotError::InstanceMismatch)),
+        "installing into an importing instance must fail, got {result:?}"
+    );
+    assert_eq!(
+        store.jit_cache_stats().compiled_functions,
+        before,
+        "a failed install must leave the cache untouched"
+    );
+    assert_eq!(
+        run_export_i32(&store, &provider_instance, "main"),
+        99,
+        "the provider function's behavior must be unchanged"
+    );
+}
+
+#[test]
+fn install_succeeds_after_start_function_populated_the_cache() {
+    // With native execution enabled, instantiation runs the start
+    // function, and lazy compilation caches the functions it reaches
+    // before `install_aot_artifact` can be called. Installation must
+    // accept entries that are already cached instead of failing the
+    // whole batch as a budget error.
+    let module = parse_module(
+        "(module (func $get (result i32) (i32.const 7)) \
+         (func $start (drop (call $get))) (start $start) \
+         (func (export \"get\") (result i32) (call $get)))",
+    );
+    let bytes = build_aot_artifact(&module, Some(&signer())).expect("artifact must build");
+    let opened = open_aot_artifact(&bytes, Some(&signer()), AotLoadPolicy::default())
+        .expect("signed artifact must open");
+
+    let store = jit_store();
+    let instance = instantiate_on(&store, opened.module().clone());
+    let cached_before = store.jit_cache_stats().compiled_functions;
+    assert!(
+        cached_before > 0,
+        "the start function must have populated the cache, got {cached_before}"
+    );
+    let report = install_aot_artifact(&store, &instance, &opened)
+        .expect("install after the start function must succeed");
+    assert_eq!(report.installed, opened.functions().len());
+    assert_eq!(run_export_i32(&store, &instance, "get"), 7);
+}
+
+#[test]
+fn producer_enforces_the_loader_function_limit() {
+    // One more defined function than the loader's MAX_FUNCTIONS: the
+    // producer must fail instead of returning an artifact this same
+    // build cannot open.
+    let mut wat = String::from("(module (type (func))");
+    for _ in 0..=65_536 {
+        wat.push_str(" (func (type 0) nop)");
+    }
+    wat.push(')');
+    let module = parse_module(&wat);
+    let result = build_aot_artifact(&module, None);
+    assert!(
+        matches!(
+            result,
+            Err(AotError::LimitExceeded {
+                what: "function count",
+                ..
+            })
+        ),
+        "production over the container limit must fail, got {result:?}"
     );
 }

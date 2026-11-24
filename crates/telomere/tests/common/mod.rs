@@ -558,15 +558,21 @@ fn wast_benchmark_recognizers() -> bool {
 #[cfg(feature = "jit")]
 fn wast_store() -> Store {
     let benchmark_recognizers = wast_benchmark_recognizers();
-    let store = if (std::env::var_os("TELOMERE_WAST_JIT").is_some() && telomere::jit_supported())
-        || benchmark_recognizers
-    {
+    // The AoT lane installs native blobs into the cache, but the
+    // native entry path refuses cached code unless jit execution is
+    // enabled — without this, the lane would install code and then
+    // run the whole corpus interpreted. The AoT lane therefore
+    // requests native execution exactly like the JIT lane.
+    let native_requested = (std::env::var_os("TELOMERE_WAST_JIT").is_some()
+        || std::env::var_os("TELOMERE_WAST_AOT").is_some())
+        && telomere::jit_supported();
+    let store = if native_requested || benchmark_recognizers {
         let code_cache_max_bytes = std::env::var("TELOMERE_WAST_JIT_CACHE_MAX_BYTES")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(64 * 1024 * 1024);
         let mut runtime_config = telomere::RuntimeConfig::default();
-        if std::env::var_os("TELOMERE_WAST_JIT").is_some() && telomere::jit_supported() {
+        if native_requested {
             runtime_config.jit = telomere::JitConfig { enabled: true };
             runtime_config.limits.max_code_cache_bytes = code_cache_max_bytes;
         }
@@ -584,6 +590,16 @@ fn wast_store() -> Store {
         assert!(
             store.runtime_config().jit.enabled,
             "TELOMERE_WAST_JIT_REQUIRE_ACCEPT requires TELOMERE_WAST_JIT=1"
+        );
+    }
+    if std::env::var_os("TELOMERE_WAST_AOT_REQUIRE_ACCEPT").is_some() {
+        assert!(
+            telomere::jit_supported(),
+            "TELOMERE_WAST_AOT_REQUIRE_ACCEPT requires JIT support on this target"
+        );
+        assert!(
+            store.runtime_config().jit.enabled,
+            "TELOMERE_WAST_AOT_REQUIRE_ACCEPT requires native execution so installed AoT code is entered, not just installed"
         );
     }
 

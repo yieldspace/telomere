@@ -3,7 +3,7 @@
 Measurements for the AoT artifact container
 ([contract](../core/aot-artifacts.md), #198), taken on
 fleur-du-lapin (Ryzen 9 5900X host, release profile, this change's
-tree) with `crates/telomere/examples/aot_cold_start.rs`. Method:
+tree) with `crates/telomere/benches/aot_cold_start.rs`. Method:
 aggregate in-process times over the fuzz-corpus `parse_core_module`
 directory (the wasm-testsuite spec corpus modules extracted by the
 fuzz corpus generator, 1,346 parseable modules, 5,895 defined

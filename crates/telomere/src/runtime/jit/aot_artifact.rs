@@ -24,14 +24,18 @@
 //!    table structurally (funcidx range, reloc offsets inside the
 //!    blob, stub indices inside the stub table).
 //!
-//! Only [`install_aot_artifact`] touches a store: it re-checks every
-//! function's layout checksum against the materialized form of the
-//! instance's actual functions, patches a private copy of each blob
-//! (stub addresses from this process, funcaddrs from this instance),
-//! and installs the whole batch into the store's JIT cache atomically
-//! — any failure installs nothing. There is no silent fallback to
-//! parsing wasm anywhere in this path; falling back is the embedder's
-//! explicit decision.
+//! Only [`install_aot_artifact`] touches a store: it first binds the
+//! artifact to the instance's complete module identity (the module
+//! facts recorded at instantiation, plus per-function ownership — a
+//! blob is only ever installed for a function the target instance
+//! itself defines, never for an imported slot naming another
+//! instance's function), re-checks every function's layout checksum
+//! against the materialized form of the instance's actual functions,
+//! patches a private copy of each blob (stub addresses from this
+//! process, funcaddrs from this instance), and installs the whole
+//! batch into the store's JIT cache atomically — any failure installs
+//! nothing. There is no silent fallback to parsing wasm anywhere in
+//! this path; falling back is the embedder's explicit decision.
 //!
 //! # Fingerprint
 //!
@@ -41,8 +45,10 @@
 //! crate version, rustc version, target triple, cargo feature set, the
 //! #196 source-tree hash (any change to a layout constant's source
 //! changes it mechanically), the op-ID table hash, the stub-table
-//! hash, a layout digest (`size_of`/`align_of` of the types whose
-//! layout emission reads), and the emission mode string. The mode is
+//! hash, a layout digest (the `size_of`/`align_of` facts and every
+//! field offset emission bakes into native code — execute-context,
+//! local-reference, global-value, and memory layouts), and the
+//! emission mode string. The mode is
 //! `baseline-unmetered-v1`: AoT emission never instruments metering
 //! checkpoints, so installation into a metered store is refused.
 //!
@@ -346,13 +352,55 @@ fn fnv1a(mut hash: u64, bytes: &[u8]) -> u64 {
 
 fn layout_hash() -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for value in [
+    // Every layout fact the emitters bake into native code: the sizes
+    // and alignments of the types whose representation emission reads,
+    // and the field offsets emission dereferences through the execute
+    // context (the backends' `offset_of!` sites), the local-reference
+    // block, and the JIT layout snapshots for globals and memories.
+    // Two builds that differ in any of these — e.g. through layout
+    // randomization — must not accept each other's artifacts, so the
+    // digest covers the offsets themselves, not just type sizes.
+    // The mut binding is only exercised by the cfg(jit) extension below.
+    #[allow(unused_mut)]
+    let mut facts: Vec<u64> = vec![
         std::mem::size_of::<Instr>() as u64,
         std::mem::align_of::<Instr>() as u64,
         std::mem::size_of::<ObjectRef>() as u64,
+        std::mem::align_of::<ObjectRef>() as u64,
         std::mem::size_of::<super::JitNativeExit>() as u64,
+        std::mem::align_of::<super::JitNativeExit>() as u64,
         std::mem::size_of::<usize>() as u64,
-    ] {
+        std::mem::size_of::<crate::common::ExecuteContext<'_>>() as u64,
+        std::mem::align_of::<crate::common::ExecuteContext<'_>>() as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, stack_memory_ptr) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, stack_memory_len) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, stack_top_ptr) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, local_reference) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, local_base_ptr) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, default_local_memory_ptr) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, default_local_memory_base) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, default_local_memory_len) as u64,
+        std::mem::offset_of!(
+            crate::common::ExecuteContext<'_>,
+            current_instance_globals_ptr
+        ) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, global_values_ptr) as u64,
+        std::mem::offset_of!(crate::common::ExecuteContext<'_>, budget) as u64,
+        std::mem::size_of::<crate::common::stack::LocalReference>() as u64,
+        std::mem::align_of::<crate::common::stack::LocalReference>() as u64,
+        std::mem::offset_of!(crate::common::stack::LocalReference, local_top) as u64,
+        std::mem::offset_of!(crate::common::stack::LocalReference, local_size) as u64,
+    ];
+    #[cfg(feature = "jit")]
+    {
+        let global_layout = crate::common::store::GlobalValueJitLayout::get();
+        facts.push(global_layout.bytes as u64);
+        facts.push(global_layout.size as u64);
+        let memory_layout = crate::common::memory::MemoryJitLayout::get();
+        facts.push(memory_layout.region_ptr as u64);
+        facts.push(memory_layout.current_pages as u64);
+    }
+    for value in facts {
         hash = fnv1a(hash, &value.to_le_bytes());
     }
     fnv1a(hash, EMIT_MODE.as_bytes())
@@ -654,6 +702,47 @@ fn layout_checksum(
     Ok(hash)
 }
 
+/// Compares the module facts the runtime recorded for an instance
+/// against the artifact's embedded module: function types for the
+/// complete index space (imports included), the type section, table /
+/// global / memory types, and the export map. The name section is
+/// deliberately excluded — it is diagnostic metadata, not identity.
+fn module_facts_match(instance: &crate::common::store::ModuleInstance, module: &Module) -> bool {
+    if instance.function_types != module.fts.0
+        || instance.functions != module.functions
+        || instance.tables != module.tables
+        || instance.globals != module.globals
+        || instance.mems != module.mems
+        || instance.exports.0.len() != module.exs.0.len()
+    {
+        return false;
+    }
+    instance
+        .exports
+        .0
+        .iter()
+        .zip(module.exs.0.iter())
+        .all(|(recorded, embedded)| {
+            recorded.0 == embedded.0
+                && match (&recorded.1, &embedded.1) {
+                    (crate::common::ExportDesc::Func(a), crate::common::ExportDesc::Func(b)) => {
+                        a.0 == b.0
+                    }
+                    (crate::common::ExportDesc::Table(a), crate::common::ExportDesc::Table(b)) => {
+                        a.0 == b.0
+                    }
+                    (crate::common::ExportDesc::Mem(a), crate::common::ExportDesc::Mem(b)) => {
+                        a.0 == b.0
+                    }
+                    (
+                        crate::common::ExportDesc::Global(a),
+                        crate::common::ExportDesc::Global(b),
+                    ) => a.0 == b.0,
+                    _ => false,
+                }
+        })
+}
+
 fn imported_func_count(module: &Module) -> u32 {
     module
         .imports
@@ -697,6 +786,15 @@ pub fn build_aot_artifact(module: &Module, signer: Option<&dyn AotSigner>) -> Re
             Ok(emission) => emission,
             Err(_) => continue, // JIT-rejected: no blob, interpreted.
         };
+        // The loader refuses artifacts whose function table exceeds
+        // MAX_FUNCTIONS, so production must fail here instead of
+        // returning an artifact this same build cannot open.
+        if function_count as usize >= MAX_FUNCTIONS {
+            return Err(AotError::LimitExceeded {
+                what: "function count",
+                value: u64::from(function_count) + 1,
+            });
+        }
         let checksum = layout_checksum(lowered, &op_ids)?;
         functions.leb_u32(funcidx);
         functions.fixed_u64(checksum);
@@ -1067,6 +1165,16 @@ pub fn install_aot_artifact(
     if instance_data.funcs.len() != artifact.module.functions.len() {
         return Err(AotError::InstanceMismatch);
     }
+    // Bind installation to the instance's complete module identity:
+    // the module facts the runtime recorded at instantiation (function
+    // types for the whole index space, table/global/memory types, and
+    // exports) must equal the artifact module's. A matching function
+    // count and matching lowered bodies are not enough — two modules
+    // can share both while their import mapping differs.
+    let module_instance = runtime.get_module(instance_data.module_addr);
+    if !module_facts_match(module_instance, &artifact.module) {
+        return Err(AotError::InstanceMismatch);
+    }
     let op_ids = op_id_map();
     let funcs = instance_data.funcs.clone();
     drop(runtime);
@@ -1081,6 +1189,14 @@ pub fn install_aot_artifact(
             .ok_or(AotError::InstanceMismatch)?;
         let runtime = store.lock_runtime_or_panic();
         let func = runtime.get_func(funcaddr);
+        // The target slot must name a function this instance itself
+        // defines, at the same index. An imported slot holds another
+        // instance's function object; installing a blob under its
+        // address would silently rewrite that provider function's
+        // behavior for every instance importing it.
+        if func.instance != instance.instance || func.funcidx != function.funcidx {
+            return Err(AotError::InstanceMismatch);
+        }
         let FunctionBody::Wasm { lowered, .. } = &func.body else {
             return Err(AotError::InstanceMismatch);
         };

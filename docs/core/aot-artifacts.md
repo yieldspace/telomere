@@ -74,11 +74,19 @@ Accordingly:
    stub table, funcaddr targets inside the module's function space.
 
 Installation is a separate, explicit step. `install_aot_artifact`
-re-checks every layout checksum against the materialized form of
-the *instance's actual functions*, patches a private copy of each
-blob (stub addresses from this process, funcaddrs from this
-instance), and installs the whole batch into the store's JIT cache
-atomically — any failure installs nothing. It refuses metered
+first binds the artifact to the instance's complete module
+identity: the module facts recorded at instantiation (function
+types for the whole index space, table/global/memory types, and
+exports) must equal the artifact module's, and every blob's target
+slot must name a function the instance itself defines at that
+index — never an imported slot holding another instance's function
+object. It then re-checks every layout checksum against the
+materialized form of the *instance's actual functions*, patches a
+private copy of each blob (stub addresses from this process,
+funcaddrs from this instance), and installs the whole batch into
+the store's JIT cache atomically — any failure installs nothing.
+Entries the start function already cached through lazy compilation
+are accepted as-is rather than failing the batch. It refuses metered
 stores (AoT code is emitted unmetered; #127/#171 gaps apply to AoT
 code identically). There is no silent fallback to parsing wasm
 anywhere in this path; falling back is the embedder's explicit
@@ -104,7 +112,9 @@ rustc version, target triple, cargo feature set, the #196
 source-tree hash (any change to a layout constant's source changes
 it mechanically, with no developer discipline involved), the op-ID
 table hash, the stub-table hash, a layout digest over the
-`size_of`/`align_of` facts emission reads, and the emission mode
+`size_of`/`align_of` facts and every field offset emission bakes
+into native code (execute-context, local-reference, global-value,
+and memory layouts), and the emission mode
 string (`baseline-unmetered-v1`). There is no cross-target artifact
 production; riscv64 is excluded until #161 resolves.
 
@@ -134,8 +144,9 @@ here rather than silently assumed.
 
 - `TELOMERE_WAST_AOT=1 TELOMERE_WAST_AOT_REQUIRE_ACCEPT=1` routes
   every wast-corpus module through build → open → instantiate →
-  install in the test harness; CI runs it fail-closed in the
-  debug-wast job (same pass list as the JIT lane).
+  install in the test harness, with native execution enabled so
+  the installed code is actually entered; CI runs it fail-closed
+  in the debug-wast job (same pass list as the JIT lane).
 - `crates/telomere/tests/aot_artifact.rs` covers the tamper matrix,
   fingerprint mismatch, unsigned refusal, two-instance patching,
   and cache atomicity.

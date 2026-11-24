@@ -15,7 +15,12 @@ members = ["."]
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
-telomere = { path = "../crates/telomere", features = ["aot-load"] }
+# `jit` is enabled alongside `aot-load` so this build's exact-build
+# fingerprint (which covers the cargo feature set) matches the
+# corpus generator build in fuzz.yaml: AoT seeds are produced by a
+# `jit` build, and a decoder whose feature set differs would reject
+# every seed at the fingerprint check before any decoding happens.
+telomere = { path = "../crates/telomere", features = ["aot-load", "jit"] }
 telomere-component = { path = "../crates/telomere-component", features = ["fuzzing"] }
 
 [profile.dev]

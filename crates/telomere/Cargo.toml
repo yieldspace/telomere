@@ -38,6 +38,10 @@ criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 name = "telomere_bench"
 harness = false
 
+[[bench]]
+name = "aot_cold_start"
+harness = false
+
 [[test]]
 name = "wast"
 path = "tests/harnesses/wast.rs"

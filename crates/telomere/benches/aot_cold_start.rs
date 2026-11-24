@@ -11,8 +11,8 @@
 //!
 //! ```sh
 //! TELOMERE_FUZZ_CORPUS_OUT=/tmp/fuzz-corpus \
-//!   cargo test -p telomere --test fuzz_corpus_replay --release
-//! cargo run --release --example aot_cold_start --features jit -- \
+//!   cargo test -p telomere --test fuzz_corpus_replay --release --features jit
+//! cargo bench -p telomere --bench aot_cold_start --features jit -- \
 //!   /tmp/fuzz-corpus/parse_core_module
 //! ```
 //!
