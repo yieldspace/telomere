@@ -694,7 +694,10 @@ pub(crate) extern "C" fn runtime_continuation_op(
     profile::count(Counter::RuntimeDirectCallFast);
     let ctx = unsafe { &mut *ctx };
     let tail_code = unsafe { pc.add(1) };
-    let _guard = super::JitInterpreterStopGuard::new(stop_pc);
+    let mut guard = super::JitInterpreterStopGuard::new(ctx, stop_pc);
+    // Dispatch through the guard's retained borrow (see the guard's
+    // definition in the parent module for the provenance argument).
+    let ctx = guard.context();
     let result = match kind {
         RUNTIME_CONT_CURRENT_VM_HANDLER
             if std::ptr::fn_addr_eq(

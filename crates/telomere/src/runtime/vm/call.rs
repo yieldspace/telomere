@@ -616,7 +616,7 @@ unsafe fn op_call_jit_lazy_inner<const IS_RETURN_CALL: bool>(
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    if IS_RETURN_CALL && crate::runtime::jit::interpreter_stop_active() {
+    if IS_RETURN_CALL && crate::runtime::jit::interpreter_stop_active(ctx) {
         return unsafe { op_return_call(tail_code, ctx) };
     }
     let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };

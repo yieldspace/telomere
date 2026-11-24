@@ -1517,7 +1517,7 @@ const _: () = assert!(
 #[inline(always)]
 pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     #[cfg(feature = "aot-load")]
-    if crate::runtime::jit::should_stop_interpreter_at(tail_code) {
+    if crate::runtime::jit::should_stop_interpreter_at(ctx, tail_code) {
         ctx.cont = tail_code;
         return VMResult::Success(());
     }
