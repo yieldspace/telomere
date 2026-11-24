@@ -368,6 +368,273 @@ fn compile_stdout_drop_component_with_version(version: &str) -> Vec<u8> {
     .expect("stdout drop component wat must parse")
 }
 
+const FILESYSTEM_ERROR_CODE_ENUM: &str = r#"
+  (type $error-code
+    (enum
+      "access" "would-block" "already" "bad-descriptor" "busy" "deadlock"
+      "quota" "exist" "file-too-large" "illegal-byte-sequence" "in-progress"
+      "interrupted" "invalid" "io" "is-directory" "loop" "too-many-links"
+      "message-size" "name-too-long" "no-device" "no-entry" "no-lock"
+      "insufficient-memory" "insufficient-space" "not-directory" "not-empty"
+      "not-recoverable" "unsupported" "no-tty" "no-such-device" "overflow"
+      "not-permitted" "pipe" "read-only" "invalid-seek" "text-file-busy"
+      "cross-device"
+    )
+  )
+"#;
+
+fn compile_filesystem_reader_component() -> Vec<u8> {
+    wat::parse_str(format!(
+        r#"
+(component
+  {FILESYSTEM_ERROR_CODE_ENUM}
+  (type $path-flags (flags "symlink-follow"))
+  (type $open-flags (flags "create" "directory" "exclusive" "truncate"))
+  (type $desc-flags
+    (flags
+      "read" "write" "file-integrity-sync" "data-integrity-sync"
+      "requested-write-sync" "mutate-directory"
+    )
+  )
+  (type $types-i
+    (instance
+      (alias outer 1 $error-code (type $e))
+      (export "error-code" (type (eq $e)))
+      (alias outer 1 $path-flags (type $pf))
+      (export "path-flags" (type (eq $pf)))
+      (alias outer 1 $open-flags (type $of))
+      (export "open-flags" (type (eq $of)))
+      (alias outer 1 $desc-flags (type $df))
+      (export "descriptor-flags" (type (eq $df)))
+      (export "descriptor" (type $desc (sub resource)))
+      (type $open-result (result (own $desc) (error $e)))
+      (export "[method]descriptor.open-at"
+        (func
+          (param "self" (borrow $desc))
+          (param "path-flags" $pf)
+          (param "path" string)
+          (param "open-flags" $of)
+          (param "flags" $df)
+          (result $open-result)
+        )
+      )
+      (type $read-result (result (tuple (list u8) bool) (error $e)))
+      (export "[method]descriptor.read"
+        (func
+          (param "self" (borrow $desc))
+          (param "length" u64)
+          (param "offset" u64)
+          (result $read-result)
+        )
+      )
+    )
+  )
+  (import "wasi:filesystem/types@0.2.6" (instance $types (type $types-i)))
+  (alias export $types "descriptor" (type $desc))
+  (alias export $types "[method]descriptor.open-at" (func $open-at))
+  (alias export $types "[method]descriptor.read" (func $read))
+
+  (type $preopens-i
+    (instance
+      (alias outer 1 $desc (type $d))
+      (export "descriptor" (type (eq $d)))
+      (export "get-directories" (func (result (list (tuple (own $d) string)))))
+    )
+  )
+  (import "wasi:filesystem/preopens@0.2.6" (instance $preopens (type $preopens-i)))
+  (alias export $preopens "get-directories" (func $get-directories))
+
+  (core module $memmod
+    (memory (export "mem") 1)
+    (global $bump (mut i32) (i32.const 4096))
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      (local $p i32)
+      (local.set $p (global.get $bump))
+      (global.set $bump (i32.add (local.get $p) (local.get 3)))
+      (local.get $p)
+    )
+    (data (i32.const 2048) "hello.txt")
+  )
+  (core instance $meminst (instantiate $memmod))
+  (alias core export $meminst "mem" (core memory $mem))
+  (alias core export $meminst "realloc" (core func $realloc))
+
+  (core func $gd-lower (canon lower (func $get-directories) (memory $mem) (realloc $realloc)))
+  (core func $open-lower (canon lower (func $open-at) (memory $mem) (realloc $realloc)))
+  (core func $read-lower (canon lower (func $read) (memory $mem) (realloc $realloc)))
+
+  (core module $caller
+    (import "" "mem" (memory 1))
+    (import "" "gd" (func $gd (param i32)))
+    (import "" "open" (func $open (param i32 i32 i32 i32 i32 i32 i32)))
+    (import "" "read" (func $read (param i32 i64 i64 i32)))
+    (func (export "read-hello") (result i32)
+      (local $root i32)
+      (local $file i32)
+      ;; get-directories writes (list-ptr, list-len) into the return area at 0;
+      ;; the first tuple element is the preopen descriptor handle.
+      (call $gd (i32.const 0))
+      (local.set $root (i32.load (i32.load (i32.const 0))))
+      ;; open-at(root, no path flags, "hello.txt", no open flags, read flag,
+      ;; return area at 16): discriminant at 16, descriptor handle at 20.
+      (call $open
+        (local.get $root) (i32.const 0) (i32.const 2048) (i32.const 9)
+        (i32.const 0) (i32.const 1) (i32.const 16))
+      (if (i32.load (i32.const 16)) (then (return (i32.const -1))))
+      (local.set $file (i32.load (i32.const 20)))
+      ;; read(file, 64, 0, return area at 32): discriminant at 32,
+      ;; byte count at 40.
+      (call $read (local.get $file) (i64.const 64) (i64.const 0) (i32.const 32))
+      (if (i32.load (i32.const 32)) (then (return (i32.const -1))))
+      (i32.load (i32.const 40))
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "mem" (memory $mem))
+        (export "gd" (func $gd-lower))
+        (export "open" (func $open-lower))
+        (export "read" (func $read-lower))
+      ))
+    )
+  )
+  (func (export "read-hello") (result s32)
+    (canon lift (core func $caller "read-hello"))
+  )
+)
+"#
+    ))
+    .expect("filesystem reader component wat must parse")
+}
+
+fn compile_filesystem_writer_component() -> Vec<u8> {
+    wat::parse_str(format!(
+        r#"
+(component
+  {FILESYSTEM_ERROR_CODE_ENUM}
+  (type $types-i
+    (instance
+      (alias outer 1 $error-code (type $e))
+      (export "error-code" (type (eq $e)))
+      (export "descriptor" (type $desc (sub resource)))
+      (type $write-result (result u64 (error $e)))
+      (export "[method]descriptor.write"
+        (func
+          (param "self" (borrow $desc))
+          (param "data" (list u8))
+          (param "offset" u64)
+          (result $write-result)
+        )
+      )
+    )
+  )
+  (import "wasi:filesystem/types@0.2.6" (instance $types (type $types-i)))
+  (alias export $types "[method]descriptor.write" (func $write))
+
+  (core module $memmod
+    (memory (export "mem") 1)
+    (global $bump (mut i32) (i32.const 4096))
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      (local $p i32)
+      (local.set $p (global.get $bump))
+      (global.set $bump (i32.add (local.get $p) (local.get 3)))
+      (local.get $p)
+    )
+  )
+  (core instance $meminst (instantiate $memmod))
+  (alias core export $meminst "mem" (core memory $mem))
+  (alias core export $meminst "realloc" (core func $realloc))
+
+  (core func $write-lower (canon lower (func $write) (memory $mem) (realloc $realloc)))
+
+  (core module $caller
+    (import "" "write" (func $write (param i32 i32 i32 i64 i32)))
+    (func (export "call-write") (result i32)
+      (call $write (i32.const 0) (i32.const 0) (i32.const 0) (i64.const 0) (i32.const 0))
+      (i32.const 0)
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "write" (func $write-lower))
+      ))
+    )
+  )
+  (func (export "call-write") (result s32)
+    (canon lift (core func $caller "call-write"))
+  )
+)
+"#
+    ))
+    .expect("filesystem writer component wat must parse")
+}
+
+fn temp_preopen_dir() -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "telomere-component-wasi-runtime-test-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).expect("temp dir should be created");
+    path
+}
+
+#[tokio::test]
+async fn wasi_filesystem_read_only_guest_runs_end_to_end() {
+    let dir = temp_preopen_dir();
+    std::fs::write(dir.join("hello.txt"), b"hello wasi").expect("fixture should be written");
+
+    let bytes = compile_filesystem_reader_component();
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let mut linker = ComponentLinker::new();
+    add_to_linker_sync(&mut linker, state).expect("wasi linker registration should succeed");
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("read-only filesystem guest should instantiate");
+    let result = instance
+        .call(&store, "read-hello", &[])
+        .await
+        .expect("read-hello should succeed");
+    assert_eq!(result, vec![ComponentValue::S32(10)]);
+
+    std::fs::remove_dir_all(dir).expect("temp dir should be removed");
+}
+
+#[tokio::test]
+async fn wasi_filesystem_write_guest_fails_at_link_time() {
+    let bytes = compile_filesystem_writer_component();
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    // The mutating descriptor methods are withheld from the linker, so the
+    // guest fails at instantiation instead of trapping on its first write.
+    for add in [add_to_linker_sync, add_to_linker_async] {
+        let mut linker = ComponentLinker::new();
+        add(&mut linker, WasiState::builder().build())
+            .expect("wasi linker registration should succeed");
+        let store = telomere::Store::new();
+        let error = match engine.instantiate(&program, &store, &linker).await {
+            Ok(_) => panic!("writing guest should fail to instantiate"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:?}").contains("descriptor.write"),
+            "link error should name the withheld function, got {error:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn wasi_stdout_handle_can_be_dropped_and_is_released() {
     run_stdout_drop(compile_stdout_drop_component()).await;

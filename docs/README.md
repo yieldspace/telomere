@@ -29,6 +29,7 @@ the body for the details.
 | [core/sockets-scope.md](core/sockets-scope.md) | Current | Sockets scope decision record: `wasi:sockets` is excluded from the default provider world so importing components fail at instantiation, the capability model recorded for a future implementation, and the re-entry conditions (#135). |
 | [core/execution-state.md](core/execution-state.md) | Current | Execution state placement rule: per-execution state lives in `ExecuteContext`, the classification of every existing mechanism, and the JIT bridge stop signal's owner (#213). |
 | [core/c-abi.md](core/c-abi.md) | Current | C ABI decision record: v1 integration is Rust-only, the measured platform assumptions (std, Unix `mmap`, Unix-only JIT), and the re-entry conditions for a future C surface (#146). |
+| [core/filesystem-scope.md](core/filesystem-scope.md) | Current | Filesystem scope contract: `wasi:filesystem` is read-only, the completed non-mutating surface, the mutating functions withheld at link time, and the re-entry conditions for write support (#134). |
 | [support-matrix.md](support-matrix.md) | Current | Core proposal, Component Model canonical ABI, and WASI 0.2.6 support boundaries with source-backed coverage counts. |
 | [core/optimizer.md](core/optimizer.md) | Current | The canonical optimizer pipeline and runtime boundary. |
 | [core/metering.md](core/metering.md) | Current | Store-scoped fuel, accounting, and cancellation across the interpreter and the JIT. |

@@ -4,13 +4,13 @@ use crate::bindings::imports::{
     wasi_filesystem_preopens as filesystem_preopens, wasi_filesystem_types as filesystem_types,
 };
 use crate::bindings::types::{
-    WasiClocksWallClockDatetime, WasiFilesystemTypesDescriptor,
+    WasiClocksWallClockDatetime, WasiFilesystemTypesAdvice, WasiFilesystemTypesDescriptor,
     WasiFilesystemTypesDescriptorBorrow, WasiFilesystemTypesDescriptorFlags,
     WasiFilesystemTypesDescriptorStat, WasiFilesystemTypesDescriptorType,
     WasiFilesystemTypesDirectoryEntry, WasiFilesystemTypesDirectoryEntryStream,
     WasiFilesystemTypesDirectoryEntryStreamBorrow, WasiFilesystemTypesErrorCode,
-    WasiFilesystemTypesOpenFlags, WasiFilesystemTypesPathFlags, WasiIoErrorErrorBorrow,
-    WasiIoStreamsInputStream,
+    WasiFilesystemTypesMetadataHashValue, WasiFilesystemTypesOpenFlags,
+    WasiFilesystemTypesPathFlags, WasiIoErrorErrorBorrow, WasiIoStreamsInputStream,
 };
 use crate::state::{
     DescriptorEntry, DirectoryEntryStreamEntry, InputStreamEntry, InputStreamSource,
@@ -132,7 +132,12 @@ impl WasiHost {
         flags: WasiFilesystemTypesDescriptorFlags,
     ) -> Result<Result<WasiFilesystemTypesDescriptor, WasiFilesystemTypesErrorCode>, ComponentError>
     {
-        if open_flags.create || open_flags.exclusive || open_flags.truncate || flags.write {
+        if open_flags.create
+            || open_flags.exclusive
+            || open_flags.truncate
+            || flags.write
+            || flags.mutate_directory
+        {
             return Ok(Err(WasiFilesystemTypesErrorCode::ReadOnly));
         }
 
@@ -306,6 +311,90 @@ impl WasiHost {
         }
         resolve_guest_path(&entry.host_path, path, follow_symlink)
     }
+
+    fn descriptor_advise(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        _offset: u64,
+        _length: u64,
+        _advice: WasiFilesystemTypesAdvice,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        // Access-pattern advice is a hint the host may ignore; the only
+        // observable requirement is that the descriptor is live.
+        Ok(self.descriptor_entry(descriptor.handle()).map(|_| ()))
+    }
+
+    fn descriptor_sync(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        // The WIT contract for `sync`/`sync-data` is "succeeds with no effect
+        // if the file descriptor is not opened for writing". No descriptor in
+        // this provider is ever opened for writing, so a validated no-op is
+        // the conforming behaviour, not a stub.
+        Ok(self.descriptor_entry(descriptor.handle()).map(|_| ()))
+    }
+
+    fn descriptor_readlink_at(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        path: String,
+    ) -> Result<Result<String, WasiFilesystemTypesErrorCode>, ComponentError> {
+        Ok(self
+            .descriptor_child_path(descriptor.handle(), &path, false)
+            .and_then(|host_path| {
+                let target = fs::read_link(&host_path).map_err(|error| map_io_error(&error))?;
+                if target.is_absolute() {
+                    return Err(WasiFilesystemTypesErrorCode::NotPermitted);
+                }
+                target
+                    .to_str()
+                    .map(str::to_owned)
+                    .ok_or(WasiFilesystemTypesErrorCode::Invalid)
+            }))
+    }
+
+    fn descriptor_is_same_object(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        other: WasiFilesystemTypesDescriptorBorrow,
+    ) -> Result<bool, ComponentError> {
+        // The signature has no error channel, so an unknown handle simply
+        // cannot be the same object as anything.
+        let (Ok(left), Ok(right)) = (
+            self.descriptor_entry(descriptor.handle()),
+            self.descriptor_entry(other.handle()),
+        ) else {
+            return Ok(false);
+        };
+        Ok(same_filesystem_object(&left.host_path, &right.host_path))
+    }
+
+    fn descriptor_metadata_hash(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+    ) -> Result<
+        Result<WasiFilesystemTypesMetadataHashValue, WasiFilesystemTypesErrorCode>,
+        ComponentError,
+    > {
+        Ok(self
+            .descriptor_entry(descriptor.handle())
+            .and_then(|entry| metadata_hash_for_path(&entry.host_path)))
+    }
+
+    fn descriptor_metadata_hash_at(
+        &self,
+        descriptor: WasiFilesystemTypesDescriptorBorrow,
+        path_flags: WasiFilesystemTypesPathFlags,
+        path: String,
+    ) -> Result<
+        Result<WasiFilesystemTypesMetadataHashValue, WasiFilesystemTypesErrorCode>,
+        ComponentError,
+    > {
+        Ok(self
+            .descriptor_child_path(descriptor.handle(), &path, path_flags.symlink_follow)
+            .and_then(|path| metadata_hash_for_path(&path)))
+    }
 }
 
 impl filesystem_preopens::Host for WasiHost {
@@ -416,6 +505,75 @@ impl filesystem_types::Host for WasiHost {
     ) -> Result<Result<WasiFilesystemTypesDescriptor, WasiFilesystemTypesErrorCode>, ComponentError>
     {
         self.descriptor_open_at(self_, path_flags, path, open_flags, flags)
+    }
+
+    fn descriptor_advise(
+        &self,
+        _store: &Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+        offset: u64,
+        length: u64,
+        advice: WasiFilesystemTypesAdvice,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        self.descriptor_advise(self_, offset, length, advice)
+    }
+
+    fn descriptor_sync_data(
+        &self,
+        _store: &Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        self.descriptor_sync(self_)
+    }
+
+    fn descriptor_sync(
+        &self,
+        _store: &Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+    ) -> Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError> {
+        self.descriptor_sync(self_)
+    }
+
+    fn descriptor_readlink_at(
+        &self,
+        _store: &Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+        path: String,
+    ) -> Result<Result<String, WasiFilesystemTypesErrorCode>, ComponentError> {
+        self.descriptor_readlink_at(self_, path)
+    }
+
+    fn descriptor_is_same_object(
+        &self,
+        _store: &Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+        other: WasiFilesystemTypesDescriptorBorrow,
+    ) -> Result<bool, ComponentError> {
+        self.descriptor_is_same_object(self_, other)
+    }
+
+    fn descriptor_metadata_hash(
+        &self,
+        _store: &Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+    ) -> Result<
+        Result<WasiFilesystemTypesMetadataHashValue, WasiFilesystemTypesErrorCode>,
+        ComponentError,
+    > {
+        self.descriptor_metadata_hash(self_)
+    }
+
+    fn descriptor_metadata_hash_at(
+        &self,
+        _store: &Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+        path_flags: WasiFilesystemTypesPathFlags,
+        path: String,
+    ) -> Result<
+        Result<WasiFilesystemTypesMetadataHashValue, WasiFilesystemTypesErrorCode>,
+        ComponentError,
+    > {
+        self.descriptor_metadata_hash_at(self_, path_flags, path)
     }
 
     fn directory_entry_stream_read_directory_entry(
@@ -551,6 +709,82 @@ impl filesystem_types::HostAsync for WasiHost {
         Box::pin(async move { self.descriptor_open_at(self_, path_flags, path, open_flags, flags) })
     }
 
+    fn descriptor_advise<'a>(
+        &'a self,
+        _store: &'a Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+        offset: u64,
+        length: u64,
+        advice: WasiFilesystemTypesAdvice,
+    ) -> ComponentFuture<'a, Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError>> {
+        Box::pin(async move { self.descriptor_advise(self_, offset, length, advice) })
+    }
+
+    fn descriptor_sync_data<'a>(
+        &'a self,
+        _store: &'a Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+    ) -> ComponentFuture<'a, Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError>> {
+        Box::pin(async move { self.descriptor_sync(self_) })
+    }
+
+    fn descriptor_sync<'a>(
+        &'a self,
+        _store: &'a Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+    ) -> ComponentFuture<'a, Result<Result<(), WasiFilesystemTypesErrorCode>, ComponentError>> {
+        Box::pin(async move { self.descriptor_sync(self_) })
+    }
+
+    fn descriptor_readlink_at<'a>(
+        &'a self,
+        _store: &'a Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+        path: String,
+    ) -> ComponentFuture<'a, Result<Result<String, WasiFilesystemTypesErrorCode>, ComponentError>>
+    {
+        Box::pin(async move { self.descriptor_readlink_at(self_, path) })
+    }
+
+    fn descriptor_is_same_object<'a>(
+        &'a self,
+        _store: &'a Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+        other: WasiFilesystemTypesDescriptorBorrow,
+    ) -> ComponentFuture<'a, Result<bool, ComponentError>> {
+        Box::pin(async move { self.descriptor_is_same_object(self_, other) })
+    }
+
+    fn descriptor_metadata_hash<'a>(
+        &'a self,
+        _store: &'a Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+    ) -> ComponentFuture<
+        'a,
+        Result<
+            Result<WasiFilesystemTypesMetadataHashValue, WasiFilesystemTypesErrorCode>,
+            ComponentError,
+        >,
+    > {
+        Box::pin(async move { self.descriptor_metadata_hash(self_) })
+    }
+
+    fn descriptor_metadata_hash_at<'a>(
+        &'a self,
+        _store: &'a Store,
+        self_: WasiFilesystemTypesDescriptorBorrow,
+        path_flags: WasiFilesystemTypesPathFlags,
+        path: String,
+    ) -> ComponentFuture<
+        'a,
+        Result<
+            Result<WasiFilesystemTypesMetadataHashValue, WasiFilesystemTypesErrorCode>,
+            ComponentError,
+        >,
+    > {
+        Box::pin(async move { self.descriptor_metadata_hash_at(self_, path_flags, path) })
+    }
+
     fn directory_entry_stream_read_directory_entry<'a>(
         &'a self,
         _store: &'a Store,
@@ -639,6 +873,102 @@ fn stat_for_path(
         data_modification_timestamp: metadata.modified().ok().map(system_time_to_datetime),
         status_change_timestamp: None,
     })
+}
+
+fn canonical_or_literal(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Filesystem identity of the object a path refers to, as the WIT contract
+/// for `is-same-object` defines it: device and inode numbers on POSIX,
+/// volume serial number and file index on Windows. The metadata lookup
+/// follows symlinks, so the identity is that of the object the descriptor
+/// ultimately refers to. Platforms with no stable identity key fall back
+/// to the canonical path, which cannot recognise hard links but never
+/// equates two distinct live objects.
+///
+/// `CanonicalPath` is only constructed on platforms without a stable
+/// identity key (and on Windows when the file index is unavailable), so on
+/// Unix it is never built; the `allow(dead_code)` covers that.
+#[allow(dead_code)]
+#[derive(PartialEq, Eq)]
+enum ObjectIdentity {
+    DeviceAndInode(u64, u64),
+    CanonicalPath(PathBuf),
+}
+
+fn object_identity(path: &Path) -> Option<ObjectIdentity> {
+    let metadata = fs::metadata(path).ok()?;
+    object_identity_from_metadata(&metadata, path)
+}
+
+#[cfg(unix)]
+fn object_identity_from_metadata(metadata: &fs::Metadata, _path: &Path) -> Option<ObjectIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    Some(ObjectIdentity::DeviceAndInode(
+        metadata.dev(),
+        metadata.ino(),
+    ))
+}
+
+#[cfg(windows)]
+fn object_identity_from_metadata(metadata: &fs::Metadata, path: &Path) -> Option<ObjectIdentity> {
+    use std::os::windows::fs::MetadataExt;
+    metadata
+        .file_index()
+        .map(|index| {
+            ObjectIdentity::DeviceAndInode(u64::from(metadata.volume_serial_number()), index)
+        })
+        .or_else(|| Some(ObjectIdentity::CanonicalPath(canonical_or_literal(path))))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn object_identity_from_metadata(_metadata: &fs::Metadata, path: &Path) -> Option<ObjectIdentity> {
+    Some(ObjectIdentity::CanonicalPath(canonical_or_literal(path)))
+}
+
+/// Whether two paths refer to the same filesystem object, comparing
+/// identities rather than names so that hard links and symlink routes to
+/// one file count as the same object. When either identity cannot be read
+/// (for example the object was deleted after the descriptor was opened),
+/// fall back to the canonical-path comparison.
+fn same_filesystem_object(left: &Path, right: &Path) -> bool {
+    match (object_identity(left), object_identity(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => canonical_or_literal(left) == canonical_or_literal(right),
+    }
+}
+
+/// Hash of a filesystem object's metadata, following the inputs the WIT
+/// contract names (last-modification timestamp and file size). FNV-1a is
+/// deterministic across runs, so an unmodified object keeps its hash and a
+/// size or timestamp change changes it; the contract encourages, but does
+/// not require, stronger properties.
+fn metadata_hash_for_path(
+    path: &Path,
+) -> Result<WasiFilesystemTypesMetadataHashValue, WasiFilesystemTypesErrorCode> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| map_io_error(&error))?;
+    let modified = metadata.modified().map_err(|error| map_io_error(&error))?;
+    let since_epoch = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
+
+    let mut material = Vec::with_capacity(24);
+    material.extend_from_slice(&metadata.len().to_le_bytes());
+    material.extend_from_slice(&since_epoch.as_secs().to_le_bytes());
+    material.extend_from_slice(&since_epoch.subsec_nanos().to_le_bytes());
+
+    Ok(WasiFilesystemTypesMetadataHashValue {
+        lower: fnv1a_64(0xcbf2_9ce4_8422_2325, &material),
+        upper: fnv1a_64(0x8422_2325_cbf2_9ce4, &material),
+    })
+}
+
+fn fnv1a_64(seed: u64, bytes: &[u8]) -> u64 {
+    let mut hash = seed;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn system_time_to_datetime(time: std::time::SystemTime) -> WasiClocksWallClockDatetime {

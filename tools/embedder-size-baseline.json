@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #294 (branch fix/292-optimizer-miri-uninit at head 46931a9d03bccc58b8135269aaa612fd01d639c3 \u2014 branch commit fe8e601 (fully initialize narrow operands so raw lowering reads no uninitialized bytes (#292)) and merge commit 46931a9 bringing in current main 3922f93 (PR #293, #191; which itself includes PR #291 and PR #290); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45334558431 and 45334660340 against the branch and pull-request run 45334543654, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "46931a9d03bccc58b8135269aaa612fd01d639c3",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #298 (branch fix/134-filesystem-contract at head 62e3b88d11f1f1d6eb3032a8500b4562c3bfaad2 \u2014 branch commit a83777e (make wasi:filesystem read-only by contract (#134)), merge commit d6e6aa8 bringing in current main 6d29650 (PR #297, #135), and fix commit 62e3b88 (is-same-object: compare filesystem identity, not canonical paths); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45359403134 and 45359413144 against the branch and pull-request run 45359097175, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "62e3b88d11f1f1d6eb3032a8500b4562c3bfaad2",
     "date": "2026-11-24",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45334558431,
-      45334660340
+      45359403134,
+      45359413144
     ],
     "cross_check_run_ids": [
-      45334543654
+      45359097175
     ],
-    "derivation": "Re-baseline for PR #294 (#292, Miri-found uninitialized read in the optimizer pipeline). The fix adds canonical constructors on the Operand union (from_i32/from_u32/from_f32/from_jump_addr/from_drop_size/from_local_addr/from_select, each zeroing the high four bytes of the raw encoding) and replaces 78 narrow union literals across the parser and the pipeline raw_* helpers with them, so the raw eight-byte lowering in lower_operand never reads uninitialized bytes. Attribution was isolated by measuring current main alone (workflow_dispatch run 45334673188, gate success): it reproduces the pre-#292 baseline exactly on all 32 gated series, so every delta below is this PR's own. Against main, 28 of the 32 gated series change; the baseline configuration is unchanged. In release every changed series grows by exactly its stripped .text delta (pure code growth, no data change): core, core-aot and core-jit each grow by 448 B stripped file / 448 B stripped .text, component and wasi by 208 B / 208 B, wasi-threads by 224 B / 224 B, and core-nosimd by 144 B / 144 B. In release-size the deltas are small and mixed: component grows by 96 B / 96 B, wasi by 96 B / 96 B, wasi-threads by 64 B / 64 B, core shrinks by 48 B / 16 B, core-jit by 48 B / 32 B, core-nosimd by 48 B / 32 B, and core-aot by 32 B / 16 B. Against the original #164 baseline, the largest cumulative growth is the release component stripped file series at +9.60% (2,433,656 B to 2,667,344 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was again 0 B for every gated series across the three samples."
+    "derivation": "Re-baseline for PR #298 (#134, wasi:filesystem read-only contract). The PR adds an exclude option to the component bindgen so named functions are omitted from the generated add_to_linker, excludes the twelve mutating filesystem functions from registration (write, write-via-stream, append-via-stream, set-size, set-times, set-times-at, create-directory-at, remove-directory-at, rename-at, unlink-file-at, link-at, symlink-at), implements the remaining seven non-mutating functions (advise, sync, sync-data, readlink-at, is-same-object, metadata-hash, metadata-hash-at), rejects mutate-directory opens in open-at, and \u2014 after a Codex P2 finding \u2014 makes is-same-object compare filesystem identity from fs::metadata ((device, inode) on Unix, (volume serial, file index) on Windows, canonical-path fallback) instead of canonical path strings. Attribution was isolated by measuring current main alone (workflow_dispatch run 45359420790, gate success). Unlike the previous rounds, that control does not reproduce the checked-in baseline on the eight wasi and wasi-threads gated series: PR #297 (#135, wasi:sockets stub removal) landed on main after the PR #294 re-baseline and shrank those series itself, and the size gate only fails on growth, so no re-baseline was taken then. This update therefore absorbs both parts, split by the control measurement. PR #297's part (checked-in baseline to main control): in release, wasi and wasi-threads each shrink by 96,960 B stripped file / 71,424 B stripped .text; in release-size, wasi shrinks by 62,448 B / 41,952 B and wasi-threads by 62,448 B / 41,936 B. This PR's own part (main control to branch): 8 of the 32 gated series change, all in wasi and wasi-threads and all shrinking \u2014 in release, wasi shrinks by 19,456 B stripped file / 14,256 B stripped .text and wasi-threads by 19,440 B / 14,256 B; in release-size, wasi shrinks by 12,288 B / 8,096 B and wasi-threads by 12,272 B / 8,096 B. Every other gated series, including the baseline configuration, is unchanged. Against the original #164 baseline, the largest cumulative growth is unchanged: the release component stripped file series at +9.60% (2,433,656 B to 2,667,344 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was again 0 B for every gated series across the three samples."
   },
   "thresholds": {
     "release": {
@@ -50,12 +50,12 @@
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 3011344,
-          "threshold": 3011344
+          "baseline": 2894928,
+          "threshold": 2894928
         },
         "stripped_text_bytes": {
-          "baseline": 2375911,
-          "threshold": 2375911
+          "baseline": 2290231,
+          "threshold": 2290231
         }
       },
       "core-nosimd": {
@@ -90,12 +90,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3226816,
-          "threshold": 3226816
+          "baseline": 3110416,
+          "threshold": 3110416
         },
         "stripped_text_bytes": {
-          "baseline": 2543079,
-          "threshold": 2543079
+          "baseline": 2457399,
+          "threshold": 2457399
         }
       }
     },
@@ -132,12 +132,12 @@
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1868424,
-          "threshold": 1868424
+          "baseline": 1793688,
+          "threshold": 1793688
         },
         "stripped_text_bytes": {
-          "baseline": 1366263,
-          "threshold": 1366263
+          "baseline": 1316215,
+          "threshold": 1316215
         }
       },
       "core-nosimd": {
@@ -172,12 +172,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 2010696,
-          "threshold": 2010696
+          "baseline": 1935976,
+          "threshold": 1935976
         },
         "stripped_text_bytes": {
-          "baseline": 1460535,
-          "threshold": 1460535
+          "baseline": 1410503,
+          "threshold": 1410503
         }
       }
     }

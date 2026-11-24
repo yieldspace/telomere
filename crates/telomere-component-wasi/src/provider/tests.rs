@@ -5,10 +5,11 @@ use crate::bindings::imports::{
     wasi_io_error as io_error, wasi_io_poll as io_poll, wasi_io_streams as io_streams,
 };
 use crate::bindings::types::{
-    WasiFilesystemTypesDescriptorBorrow, WasiFilesystemTypesDescriptorFlags,
-    WasiFilesystemTypesDescriptorType, WasiFilesystemTypesErrorCode, WasiFilesystemTypesOpenFlags,
-    WasiFilesystemTypesPathFlags, WasiIoErrorErrorBorrow, WasiIoPollPollableBorrow,
-    WasiIoStreamsInputStreamBorrow, WasiIoStreamsOutputStreamBorrow, WasiIoStreamsStreamError,
+    WasiFilesystemTypesAdvice, WasiFilesystemTypesDescriptorBorrow,
+    WasiFilesystemTypesDescriptorFlags, WasiFilesystemTypesDescriptorType,
+    WasiFilesystemTypesErrorCode, WasiFilesystemTypesOpenFlags, WasiFilesystemTypesPathFlags,
+    WasiIoErrorErrorBorrow, WasiIoPollPollableBorrow, WasiIoStreamsInputStreamBorrow,
+    WasiIoStreamsOutputStreamBorrow, WasiIoStreamsStreamError,
 };
 use crate::state::{InputStreamSource, PollableEntry, WasiState};
 use std::fs;
@@ -340,6 +341,258 @@ fn provider_rejects_reads_when_descriptor_lacks_read_rights() {
     )
     .unwrap();
     assert_eq!(stream, Err(WasiFilesystemTypesErrorCode::NotPermitted));
+
+    fs::remove_dir_all(dir).expect("temp dir should be removed");
+}
+
+#[test]
+fn provider_open_at_rejects_mutate_directory_flag() {
+    let dir = temp_sandbox();
+    fs::write(dir.join("hello.txt"), b"hello wasi").expect("fixture file should be written");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let host = WasiHost::new(state);
+    let store = telomere::Store::new();
+
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
+    let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
+    let mut mutate_flags = read_only_flags();
+    mutate_flags.mutate_directory = true;
+    let result = <WasiHost as filesystem_types::Host>::descriptor_open_at(
+        &host,
+        &store,
+        root,
+        empty_path_flags(),
+        "hello.txt".to_owned(),
+        empty_open_flags(),
+        mutate_flags,
+    )
+    .unwrap();
+    assert_eq!(result, Err(WasiFilesystemTypesErrorCode::ReadOnly));
+
+    fs::remove_dir_all(dir).expect("temp dir should be removed");
+}
+
+#[test]
+fn provider_read_only_completions_work() {
+    let dir = temp_sandbox();
+    let file = dir.join("hello.txt");
+    fs::write(&file, b"hello wasi").expect("fixture file should be written");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let host = WasiHost::new(state);
+    let store = telomere::Store::new();
+
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
+    let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
+    let open_file = |host: &WasiHost, name: &str| {
+        <WasiHost as filesystem_types::Host>::descriptor_open_at(
+            host,
+            &store,
+            root,
+            empty_path_flags(),
+            name.to_owned(),
+            empty_open_flags(),
+            read_only_flags(),
+        )
+        .unwrap()
+        .unwrap()
+    };
+    let first = open_file(&host, "hello.txt");
+    let second = open_file(&host, "hello.txt");
+    let first_borrow = WasiFilesystemTypesDescriptorBorrow::new(first.handle());
+    let second_borrow = WasiFilesystemTypesDescriptorBorrow::new(second.handle());
+
+    // is-same-object: two opens of one file are the same object; the file
+    // and its parent directory are not.
+    let same = <WasiHost as filesystem_types::Host>::descriptor_is_same_object(
+        &host,
+        &store,
+        first_borrow,
+        second_borrow,
+    )
+    .unwrap();
+    assert!(same);
+    let different = <WasiHost as filesystem_types::Host>::descriptor_is_same_object(
+        &host,
+        &store,
+        first_borrow,
+        root,
+    )
+    .unwrap();
+    assert!(!different);
+
+    // metadata-hash: stable for an unmodified file, and the -at form agrees
+    // with the descriptor form.
+    let hash =
+        <WasiHost as filesystem_types::Host>::descriptor_metadata_hash(&host, &store, first_borrow)
+            .unwrap()
+            .unwrap();
+    let hash_again = <WasiHost as filesystem_types::Host>::descriptor_metadata_hash(
+        &host,
+        &store,
+        second_borrow,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(hash, hash_again);
+    let hash_at = <WasiHost as filesystem_types::Host>::descriptor_metadata_hash_at(
+        &host,
+        &store,
+        root,
+        empty_path_flags(),
+        "hello.txt".to_owned(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(hash, hash_at);
+
+    // Growing the file changes the hash.
+    fs::write(&file, b"hello wasi, now longer").expect("fixture file should be rewritten");
+    let grown =
+        <WasiHost as filesystem_types::Host>::descriptor_metadata_hash(&host, &store, first_borrow)
+            .unwrap()
+            .unwrap();
+    assert_ne!(hash, grown);
+
+    // advise and the sync pair are validated no-ops on read-only descriptors.
+    <WasiHost as filesystem_types::Host>::descriptor_advise(
+        &host,
+        &store,
+        first_borrow,
+        0,
+        10,
+        WasiFilesystemTypesAdvice::Sequential,
+    )
+    .unwrap()
+    .unwrap();
+    <WasiHost as filesystem_types::Host>::descriptor_sync(&host, &store, first_borrow)
+        .unwrap()
+        .unwrap();
+    <WasiHost as filesystem_types::Host>::descriptor_sync_data(&host, &store, first_borrow)
+        .unwrap()
+        .unwrap();
+    let unknown = WasiFilesystemTypesDescriptorBorrow::new(u32::MAX);
+    let advise = <WasiHost as filesystem_types::Host>::descriptor_advise(
+        &host,
+        &store,
+        unknown,
+        0,
+        0,
+        WasiFilesystemTypesAdvice::Normal,
+    )
+    .unwrap();
+    assert_eq!(advise, Err(WasiFilesystemTypesErrorCode::BadDescriptor));
+
+    fs::remove_dir_all(dir).expect("temp dir should be removed");
+}
+
+#[cfg(unix)]
+#[test]
+fn provider_is_same_object_uses_filesystem_identity() {
+    let dir = temp_sandbox();
+    let original = dir.join("original.txt");
+    fs::write(&original, b"hello wasi").expect("fixture file should be written");
+    // A hard link is a second name for the same filesystem object: the two
+    // canonical paths differ, but the device/inode identity is shared, and
+    // the WIT contract defines `is-same-object` by that identity.
+    fs::hard_link(&original, dir.join("alias.txt")).expect("hard link should be created");
+    fs::write(dir.join("other.txt"), b"other").expect("fixture file should be written");
+    std::os::unix::fs::symlink("original.txt", dir.join("link.txt"))
+        .expect("symlink should be created");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let host = WasiHost::new(state);
+    let store = telomere::Store::new();
+
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
+    let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
+    let open_file = |name: &str| {
+        <WasiHost as filesystem_types::Host>::descriptor_open_at(
+            &host,
+            &store,
+            root,
+            empty_path_flags(),
+            name.to_owned(),
+            empty_open_flags(),
+            read_only_flags(),
+        )
+        .unwrap()
+        .unwrap()
+        .handle()
+    };
+    let is_same = |left: u32, right: u32| {
+        <WasiHost as filesystem_types::Host>::descriptor_is_same_object(
+            &host,
+            &store,
+            WasiFilesystemTypesDescriptorBorrow::new(left),
+            WasiFilesystemTypesDescriptorBorrow::new(right),
+        )
+        .unwrap()
+    };
+
+    let original_handle = open_file("original.txt");
+    let alias_handle = open_file("alias.txt");
+    let other_handle = open_file("other.txt");
+    let link_handle = open_file("link.txt");
+    assert!(
+        is_same(original_handle, alias_handle),
+        "hard links to one file are the same object"
+    );
+    assert!(
+        !is_same(original_handle, other_handle),
+        "distinct files are not the same object"
+    );
+    assert!(
+        is_same(original_handle, link_handle),
+        "a descriptor reached through a symlink is the same object"
+    );
+
+    fs::remove_dir_all(dir).expect("temp dir should be removed");
+}
+
+#[cfg(unix)]
+#[test]
+fn provider_readlink_at_reports_relative_targets_and_rejects_escapes() {
+    use std::os::unix::fs::symlink;
+
+    let dir = temp_sandbox();
+    fs::write(dir.join("hello.txt"), b"hello wasi").expect("fixture file should be written");
+    symlink("hello.txt", dir.join("relative-link")).expect("symlink should be created");
+    symlink("/etc/passwd", dir.join("absolute-link")).expect("symlink should be created");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let host = WasiHost::new(state);
+    let store = telomere::Store::new();
+
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
+    let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
+    let readlink = |host: &WasiHost, path: &str| {
+        <WasiHost as filesystem_types::Host>::descriptor_readlink_at(
+            host,
+            &store,
+            root,
+            path.to_owned(),
+        )
+        .unwrap()
+    };
+
+    assert_eq!(readlink(&host, "relative-link"), Ok("hello.txt".to_owned()));
+    // A link whose contents are an absolute host path must not be reported.
+    assert_eq!(
+        readlink(&host, "absolute-link"),
+        Err(WasiFilesystemTypesErrorCode::NotPermitted)
+    );
+    // The path argument itself may not escape the preopen either.
+    assert_eq!(
+        readlink(&host, "../outside-link"),
+        Err(WasiFilesystemTypesErrorCode::NotPermitted)
+    );
+    // A non-symlink target is an ordinary error, not a trap.
+    assert_eq!(
+        readlink(&host, "hello.txt"),
+        Err(WasiFilesystemTypesErrorCode::Invalid)
+    );
 
     fs::remove_dir_all(dir).expect("temp dir should be removed");
 }

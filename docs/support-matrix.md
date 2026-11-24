@@ -181,7 +181,7 @@ blocks: helper methods and async duplicates are excluded.
 | `wasi:clocks/monotonic-clock` | 4 / 4 | Time, resolution, and poll subscriptions. |
 | `wasi:clocks/wall-clock` | 2 / 2 | Current wall-clock time and resolution. |
 | `wasi:clocks/timezone` | 0 / 2 | Provider is not registered. |
-| `wasi:filesystem/types` | 10 / 29 | Read-oriented path, descriptor, directory, and error-code operations only. |
+| `wasi:filesystem/types` | 17 / 29 | Read-only contract: every non-mutating operation. The 12 mutating operations are not registered, so guests importing them fail at link time ([filesystem scope record](core/filesystem-scope.md), #134). |
 | `wasi:filesystem/preopens` | 1 / 1 | Preopened-directory enumeration. |
 | `wasi:io/error` | 1 / 1 | Error string conversion. |
 | `wasi:io/poll` | 3 / 3 | Pollable readiness, blocking, and polling. |
