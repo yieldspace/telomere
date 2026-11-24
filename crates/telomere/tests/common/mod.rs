@@ -315,16 +315,30 @@ pub async fn run_wast_with_spec_divergences(
     assert_wast_jit_acceptance(&store);
 }
 
+/// Whether the suite should run with the quarantined benchmark-shaped
+/// recognizers (#188) reconnected. The default run keeps them off; the
+/// `TELOMERE_WAST_BENCHMARK_RECOGNIZERS=1` run proves the suite also passes
+/// with them on.
+fn wast_benchmark_recognizers() -> bool {
+    std::env::var_os("TELOMERE_WAST_BENCHMARK_RECOGNIZERS").is_some()
+}
+
 #[cfg(feature = "jit")]
 fn wast_store() -> Store {
-    let store = if std::env::var_os("TELOMERE_WAST_JIT").is_some() && telomere::jit_supported() {
+    let benchmark_recognizers = wast_benchmark_recognizers();
+    let store = if (std::env::var_os("TELOMERE_WAST_JIT").is_some() && telomere::jit_supported())
+        || benchmark_recognizers
+    {
         let code_cache_max_bytes = std::env::var("TELOMERE_WAST_JIT_CACHE_MAX_BYTES")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(64 * 1024 * 1024);
         let mut runtime_config = telomere::RuntimeConfig::default();
-        runtime_config.jit = telomere::JitConfig { enabled: true };
-        runtime_config.limits.max_code_cache_bytes = code_cache_max_bytes;
+        if std::env::var_os("TELOMERE_WAST_JIT").is_some() && telomere::jit_supported() {
+            runtime_config.jit = telomere::JitConfig { enabled: true };
+            runtime_config.limits.max_code_cache_bytes = code_cache_max_bytes;
+        }
+        runtime_config.recognizers.benchmark_shaped = benchmark_recognizers;
         Store::new_with_runtime_config(runtime_config)
     } else {
         Store::new()
@@ -352,7 +366,13 @@ fn wast_store() -> Store {
         );
     }
 
-    Store::new()
+    if wast_benchmark_recognizers() {
+        let mut runtime_config = telomere::RuntimeConfig::default();
+        runtime_config.recognizers.benchmark_shaped = true;
+        Store::new_with_runtime_config(runtime_config)
+    } else {
+        Store::new()
+    }
 }
 
 fn assert_wast_jit_acceptance(store: &Store) {

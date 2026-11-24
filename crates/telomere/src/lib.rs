@@ -146,6 +146,8 @@ pub use common::MeteringConfig;
 pub use common::MeteringHandle;
 /// The parsed, validated representation supplied to [`instantiate`].
 pub use common::Module;
+/// Controls the quarantined benchmark-shaped recognizers for a [`Store`].
+pub use common::RecognizerConfig;
 /// Resolves imported module names to already-instantiated instances.
 pub use common::Registry;
 /// Ordered values passed to, or returned from, an exported WebAssembly function.

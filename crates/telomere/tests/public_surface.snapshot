@@ -28,6 +28,7 @@ telomere::MeteringHandle | always
 telomere::Module | always
 telomere::PendingOp | always
 telomere::ProposalFeature | always
+telomere::RecognizerConfig | always
 telomere::Registry | always
 telomere::ResultValue | always
 telomere::RuntimeConfig | always

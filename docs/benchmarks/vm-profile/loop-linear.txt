@@ -1,0 +1,10 @@
+[telomere-vm-profile] total_instrs=50000002 elapsed_ms=7628.827 top_k=16 layout_stability_phases=2
+[telomere-vm-profile] family=op_i32_load_const_base count=50000001 elapsed_ms=7628.827 share_pct=100.00
+[telomere-vm-profile] family=op_local_get4 count=1 elapsed_ms=0.000 share_pct=0.00
+[telomere-vm-profile] pair=op_i32_load_const_base=>op_i32_load_const_base count=50000000 layout_span=0 groups=Memory=>Memory
+[telomere-vm-profile] pair=op_i32_load_const_base=>op_local_get4 count=1 layout_span=2 groups=Memory=>Locals
+[telomere-vm-profile] triple=op_i32_load_const_base=>op_i32_load_const_base=>op_i32_load_const_base count=49999999 layout_span=0 groups=Memory=>Memory=>Memory
+[telomere-vm-profile] triple=op_i32_load_const_base=>op_i32_load_const_base=>op_local_get4 count=1 layout_span=2 groups=Memory=>Memory=>Locals
+[telomere-vm-profile] family_group=local/control top_k=16 stats=[op_local_get4:count=1] pairs=[] triples=[]
+[telomere-vm-profile] family_group=memory top_k=16 stats=[op_i32_load_const_base:count=50000001] pairs=[op_i32_load_const_base=>op_i32_load_const_base:count=50000000,layout_span=0,op_i32_load_const_base=>op_local_get4:count=1,layout_span=2] triples=[op_i32_load_const_base=>op_i32_load_const_base=>op_i32_load_const_base:count=49999999,layout_span=0,op_i32_load_const_base=>op_i32_load_const_base=>op_local_get4:count=1,layout_span=2]
+[telomere-vm-profile] family_group=call/select top_k=16 stats=[] pairs=[] triples=[]

@@ -32,6 +32,14 @@ pub struct Cli {
     #[arg(long = "jit-code-cache-mib", value_name = "MIB", default_value_t = 4)]
     pub jit_code_cache_mib: u32,
 
+    /// Reconnect the quarantined benchmark-shaped recognizers (#188).
+    ///
+    /// Measurement/evaluation only: the instantiate-time rewrites shaped
+    /// after specific CoreMark functions stay disconnected unless this flag
+    /// is passed. See `docs/core/superinstruction-selection.md`.
+    #[arg(long = "benchmark-recognizers", default_value_t = false)]
+    pub benchmark_recognizers: bool,
+
     /// Set an environment variable for a preview1 command guest.
     /// Repeatable; only used when the module runs as a preview1 command.
     #[arg(long = "env", value_name = "KEY=VALUE")]
@@ -93,6 +101,7 @@ pub struct CoreCommand {
     pub args_after_separator: bool,
     pub jit: bool,
     pub jit_code_cache_mib: u32,
+    pub benchmark_recognizers: bool,
     pub env: Vec<String>,
     pub no_inherit_env: bool,
 }
@@ -110,6 +119,7 @@ impl Cli {
             args_after_separator: has_separator(raw_args),
             jit: self.jit,
             jit_code_cache_mib: self.jit_code_cache_mib,
+            benchmark_recognizers: self.benchmark_recognizers,
             env: self.env.clone(),
             no_inherit_env: self.no_inherit_env,
         })
@@ -191,6 +201,7 @@ mod tests {
                 args_after_separator: false,
                 jit: false,
                 jit_code_cache_mib: 4,
+                benchmark_recognizers: false,
                 env: Vec::new(),
                 no_inherit_env: false,
             }
@@ -253,6 +264,7 @@ mod tests {
                 args_after_separator: true,
                 jit: false,
                 jit_code_cache_mib: 4,
+                benchmark_recognizers: false,
                 env: Vec::new(),
                 no_inherit_env: false,
             }

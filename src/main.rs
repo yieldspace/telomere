@@ -68,6 +68,7 @@ async fn run_core_module_with_stdio(
             stdio,
             command.jit,
             command.jit_code_cache_mib,
+            command.benchmark_recognizers,
         )
         .await;
     }
@@ -86,6 +87,7 @@ async fn run_core_module_with_stdio(
         &wasm_args,
         command.jit,
         command.jit_code_cache_mib,
+        command.benchmark_recognizers,
     )
     .await?;
     println!("{}", format_result_values(&ret));
@@ -150,16 +152,18 @@ async fn run_exported_core_function(
     wasm_args: &ResultValue,
     jit: bool,
     jit_code_cache_mib: u32,
+    benchmark_recognizers: bool,
 ) -> anyhow::Result<ResultValue> {
     if jit && !telomere::jit_supported() {
         anyhow::bail!(
             "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux-gnu riscv64gc"
         );
     }
-    let store = if jit {
+    let store = if jit || benchmark_recognizers {
         let mut runtime_config = RuntimeConfig::default();
-        runtime_config.jit = JitConfig { enabled: true };
+        runtime_config.jit = JitConfig { enabled: jit };
         runtime_config.limits.max_code_cache_bytes = jit_code_cache_mib.saturating_mul(1024 * 1024);
+        runtime_config.recognizers.benchmark_shaped = benchmark_recognizers;
         telomere::Store::new_with_runtime_config(runtime_config)
     } else {
         telomere::Store::new()
@@ -263,6 +267,7 @@ mod tests {
             args_after_separator: true,
             jit: false,
             jit_code_cache_mib: 4,
+            benchmark_recognizers: false,
             env: Vec::new(),
             no_inherit_env: false,
         };
@@ -290,6 +295,7 @@ mod tests {
             args_after_separator: true,
             jit: false,
             jit_code_cache_mib: 4,
+            benchmark_recognizers: false,
             env: Vec::new(),
             no_inherit_env: false,
         };
@@ -396,6 +402,7 @@ mod tests {
             args_after_separator: false,
             jit: false,
             jit_code_cache_mib: 4,
+            benchmark_recognizers: false,
             env: Vec::new(),
             no_inherit_env: false,
         };
@@ -426,6 +433,7 @@ mod tests {
             args_after_separator: false,
             jit: false,
             jit_code_cache_mib: 4,
+            benchmark_recognizers: false,
             env: Vec::new(),
             no_inherit_env: false,
         };
@@ -479,6 +487,7 @@ mod tests {
             args_after_separator: false,
             jit: false,
             jit_code_cache_mib: 4,
+            benchmark_recognizers: false,
             env: Vec::new(),
             no_inherit_env: false,
         };
@@ -545,6 +554,7 @@ mod tests {
             args_after_separator: false,
             jit: false,
             jit_code_cache_mib: 4,
+            benchmark_recognizers: false,
             env: Vec::new(),
             no_inherit_env: false,
         };

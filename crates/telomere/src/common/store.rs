@@ -417,6 +417,28 @@ impl Default for DiagnosticsConfig {
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Controls the quarantined benchmark-shaped recognizers (#188).
+///
+/// The instantiate-time rewrites and specialized call handlers shaped after
+/// specific CoreMark functions (the CRC16 update kernels, the list/matrix CRC
+/// summaries, the core-state state machine, and the numeric-token transition)
+/// are not part of the general superinstruction families: they only fire on
+/// benchmark-shaped code. They have been disconnected from the production
+/// instantiate path since the baseline JIT landed, and stay disconnected
+/// unless an embedder explicitly opts in here. The default therefore
+/// preserves the behaviour every current build has: the recognizers never
+/// run. Enabling the flag reconnects the instantiate-time quickening pass so
+/// the recognizers can be measured (see
+/// `docs/core/superinstruction-selection.md`); it is a measurement and
+/// evaluation switch, not a recommended production setting.
+pub struct RecognizerConfig {
+    /// Reconnects the benchmark-shaped instantiate-time rewrites and
+    /// specialized call handlers for this store's instances.
+    pub benchmark_shaped: bool,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// Runtime options used to create a [`Store`].
 ///
 /// Use the default unless an embedder needs to bound memory, opt into JIT, or
@@ -432,6 +454,8 @@ pub struct RuntimeConfig {
     pub diagnostics: DiagnosticsConfig,
     /// Embedder-configured resource limits for this store.
     pub limits: LimitsConfig,
+    /// Quarantined benchmark-shaped recognizer settings for this store.
+    pub recognizers: RecognizerConfig,
 }
 
 #[repr(C, align(4))]

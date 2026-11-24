@@ -1,0 +1,5 @@
+[telomere-vm-profile] total_instrs=1 elapsed_ms=725.025 top_k=16 layout_stability_phases=2
+[telomere-vm-profile] family=op_local_get8 count=1 elapsed_ms=725.025 share_pct=100.00
+[telomere-vm-profile] family_group=local/control top_k=16 stats=[op_local_get8:count=1] pairs=[] triples=[]
+[telomere-vm-profile] family_group=memory top_k=16 stats=[] pairs=[] triples=[]
+[telomere-vm-profile] family_group=call/select top_k=16 stats=[] pairs=[] triples=[]
