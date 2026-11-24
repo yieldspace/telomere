@@ -217,7 +217,7 @@ pub(crate) unsafe fn jit_call_direct<const IS_RETURN_CALL: bool>(
             )
         } {
             VMResult::Success(()) => unsafe {
-                finish_jit_wasm_call::<IS_RETURN_CALL>(tail_code.offset(1), recipe, ctx)
+                finish_prepared_jit_wasm_call::<IS_RETURN_CALL>(tail_code.offset(1), recipe, ctx)
             },
             other => crate::runtime::jit::JitNativeExit::trap(other),
         };
@@ -263,7 +263,7 @@ pub(crate) unsafe fn jit_call_direct_wasm_fast(
             finish_rejected_direct_wasm_call(continuation, recipe, ctx)
         },
         VMResult::Success(()) => unsafe {
-            finish_jit_wasm_call::<false>(continuation, recipe, ctx)
+            finish_prepared_jit_wasm_call::<false>(continuation, recipe, ctx)
         },
         other => crate::runtime::jit::JitNativeExit::trap(other),
     }
@@ -333,7 +333,7 @@ pub(crate) unsafe fn jit_call_indirect<const IS_RETURN_CALL: bool>(
             )
         } {
             VMResult::Success(()) => unsafe {
-                finish_jit_wasm_call::<IS_RETURN_CALL>(tail_code.offset(2), recipe, ctx)
+                finish_prepared_jit_wasm_call::<IS_RETURN_CALL>(tail_code.offset(2), recipe, ctx)
             },
             other => crate::runtime::jit::JitNativeExit::trap(other),
         };
@@ -387,6 +387,74 @@ unsafe fn finish_jit_wasm_call<const IS_RETURN_CALL: bool>(
     ctx: &mut ExecuteContext,
 ) -> crate::runtime::jit::JitNativeExit {
     let exit = unsafe { crate::runtime::jit::enter_current_frame_from_jit_call(ctx) };
+    unsafe { finish_jit_wasm_call_with_exit::<IS_RETURN_CALL>(continuation, recipe, ctx, exit) }
+}
+
+/// #191: entry step for a JIT wasm call whose callee frame has just
+/// been prepared by `prepare_jit_wasm_call`.
+///
+/// Fast path: the callee's slot in the store's entry table
+/// (`StoreInner::jit_cached_compiled_func`, a flat per-store table
+/// indexed by the callee's funcaddr) still upgrades to a live compiled
+/// function, so the callee is entered directly through
+/// `jit::enter_compiled_from_jit_call` — no store-cache lock, no
+/// per-call LRU touch under the mutex, no second round-trip through
+/// the generic entry bookkeeping. The upgraded `Arc` is held across
+/// the native call, which keeps the executable code alive even if the
+/// cache evicts the function mid-flight (eviction only drops the
+/// cache's own `Arc`); recency is refreshed lock-free through
+/// `StoreJitCache::note_direct_call`.
+///
+/// Slow path: the callee is rejected, or the slot has no live entry
+/// (never compiled, or evicted and fully released), which defers to
+/// `finish_jit_wasm_call` and the ordinary lazy-compile /
+/// interpreter-fallback entry.
+///
+/// Metering hook point: per-call fuel charging, if it is ever added
+/// on the call path (#171 follow-ups), belongs in
+/// `prepare_jit_wasm_call` / this helper — the one Rust crossing every
+/// native-to-native call still makes. Metered code's loop-header
+/// checkpoints live inside the callee's own emitted code and are
+/// unaffected by how the callee was entered.
+///
+/// # Safety
+/// Same contract as `finish_jit_wasm_call`: the callee frame described
+/// by `recipe` must be the current frame, prepared by
+/// `prepare_jit_wasm_call`, and `continuation` must be the instruction
+/// after the call site in the caller.
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
+unsafe fn finish_prepared_jit_wasm_call<const IS_RETURN_CALL: bool>(
+    continuation: *const Instr,
+    recipe: CallDispatchCache,
+    ctx: &mut ExecuteContext,
+) -> crate::runtime::jit::JitNativeExit {
+    // #191: the rejected flag is the source of truth for the entry
+    // table (a rejected function's slot may still hold a stale weak
+    // handle), so it is consulted before the slot is upgraded.
+    if !ctx.gc.jit_rejected_func(recipe.frame.code_addr) {
+        if let Some(compiled) = ctx.gc.jit_cached_compiled_func(recipe.frame.code_addr) {
+            ctx.store.jit_cache().note_direct_call(&compiled);
+            crate::runtime::jit::profile::count(
+                crate::runtime::jit::profile::Counter::RuntimeDirectNativeCall,
+            );
+            let exit = unsafe { crate::runtime::jit::enter_compiled_from_jit_call(ctx, &compiled) };
+            return unsafe {
+                finish_jit_wasm_call_with_exit::<IS_RETURN_CALL>(continuation, recipe, ctx, exit)
+            };
+        }
+    }
+    unsafe { finish_jit_wasm_call::<IS_RETURN_CALL>(continuation, recipe, ctx) }
+}
+
+#[cfg_attr(all(feature = "aot-load", not(feature = "jit")), allow(dead_code))]
+#[cfg(feature = "aot-load")]
+unsafe fn finish_jit_wasm_call_with_exit<const IS_RETURN_CALL: bool>(
+    continuation: *const Instr,
+    recipe: CallDispatchCache,
+    ctx: &mut ExecuteContext,
+    exit: crate::runtime::jit::JitNativeExit,
+) -> crate::runtime::jit::JitNativeExit {
     let returned_to_continuation = exit.kind == crate::runtime::jit::JitNativeExit::DONE
         || (exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR
             && exit.value == continuation as u64)

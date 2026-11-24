@@ -38,7 +38,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "aot-load")]
 thread_local! {
-    static JIT_ENTRY_DEPTH: Cell<usize> = const { Cell::new(0) };
     static JIT_INTERPRETER_STOP_AT: Cell<*const Instr> = const { Cell::new(std::ptr::null()) };
 }
 
@@ -110,6 +109,49 @@ pub(crate) unsafe fn enter_current_frame_from_jit_call(
         VMResult::Unimplemented => JitNativeExit::fallback_pc(code_base),
         other => JitNativeExit::trap(other),
     }
+}
+
+/// #191: direct native-to-native entry.
+///
+/// The caller (a JIT call helper in `vm::call`) has already prepared
+/// the callee frame through the ordinary call path — so the
+/// value-stack reservation that bounds recursion depth is charged —
+/// and resolved the callee's compiled function from the per-store
+/// entry table (the `StoreInner` slot for the callee's funcaddr,
+/// upgraded from its `Weak`). This function is the callee's entry
+/// boundary: it invokes the native entry point and resolves a trap
+/// exit's site id against the callee's own trap-site table, exactly
+/// like [`enter_current_frame_raw`] does for interpreter-side entries.
+///
+/// It deliberately does not consult the store cache lock: the caller
+/// holds the `Arc<CompiledFunction>` across the call, which keeps the
+/// executable code alive even if the cache evicts the function
+/// mid-flight (eviction only drops the cache's own `Arc`). Recency is
+/// refreshed separately through
+/// [`StoreJitCache::note_direct_call`].
+///
+/// # Safety
+/// - `ctx.current_frame` must be the prepared frame of the function
+///   `compiled` was built from, with `ctx.local_base_ptr` pointing at
+///   that frame's local area (the state `prepare_jit_wasm_call`
+///   leaves behind).
+/// - `compiled` must be the active compiled function for that frame's
+///   funcaddr in this store.
+#[cfg(feature = "aot-load")]
+pub(crate) unsafe fn enter_compiled_from_jit_call(
+    ctx: &mut ExecuteContext<'_>,
+    compiled: &CompiledFunction,
+) -> JitNativeExit {
+    let code_base = ctx.code();
+    let exit = unsafe {
+        (compiled.entry())(
+            ctx as *mut ExecuteContext<'_>,
+            code_base,
+            ctx.local_base_ptr,
+        )
+    };
+    let exit = resolve_trap_site(exit, compiled, code_base, ctx);
+    unsafe { absolutize_fallback_index(exit, code_base) }
 }
 
 #[cfg(feature = "aot-load")]
@@ -211,21 +253,21 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
         profile::count(profile::Counter::CompileRejectKnownRejected);
         return VMResult::Unimplemented;
     }
-    let too_deep = JIT_ENTRY_DEPTH.with(|depth| {
-        let current = depth.get();
-        if current >= 256 {
-            if std::env::var_os("TELOMERE_JIT_TRACE_FALLBACK").is_some() {
-                eprintln!("[telomere-jit] entry_depth_overflow current={current}");
-            }
-            return true;
-        }
-        depth.set(current.saturating_add(1));
-        false
-    });
-    if too_deep {
-        return VMResult::StackOverflow;
-    }
-    let _entry_guard = JitEntryDepthGuard;
+    // #191: there is deliberately no separate native-entry depth cap
+    // here (the pre-#191 TLS counter stopped at 256 nested entries).
+    // Every native entry — from the interpreter, from a lazy call, or
+    // from a direct native-to-native call — runs on a frame that was
+    // prepared through `function_call_cached`, whose reservation
+    // (locals + call record + the callee's validated maximum operand
+    // depth, #186) is charged against the store's value-stack byte
+    // limit (#126 `limits.value_stack_bytes`) and fails with
+    // `StackOverflow` before the frame exists. Native nesting depth is
+    // therefore bounded by the same accounting that bounds interpreter
+    // recursion (#166), and the per-level host stack stays small: a
+    // native frame plus the direct-call helper is a few hundred bytes,
+    // while each level reserves at least a full call record on the
+    // value stack. The `jit_deep_recursion_traps_as_stack_overflow`
+    // test pins this on a default-sized thread stack.
     let (compiled, code_base) = {
         let func = ctx.gc.get_func(funcaddr);
         let FunctionBody::Wasm { code, .. } = &func.body else {
@@ -334,9 +376,6 @@ fn load_or_compile(
 }
 
 #[cfg(feature = "aot-load")]
-struct JitEntryDepthGuard;
-
-#[cfg(feature = "aot-load")]
 struct JitInterpreterStopGuard {
     previous: *const Instr,
 }
@@ -353,13 +392,6 @@ impl JitInterpreterStopGuard {
             previous
         });
         Self { previous }
-    }
-}
-
-#[cfg(feature = "aot-load")]
-impl Drop for JitEntryDepthGuard {
-    fn drop(&mut self) {
-        JIT_ENTRY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
 

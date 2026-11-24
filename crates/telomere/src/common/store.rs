@@ -555,8 +555,18 @@ pub struct StoreInner {
     last_trap: Option<TrapSlot>,
     #[cfg(feature = "aot-load")]
     jit_rejected_funcs: Vec<AtomicBool>,
+    /// #191: the store's JIT entry table — one slot per function,
+    /// holding a weak handle to the function's installed compiled code
+    /// (empty when the function has none). Native-to-native calls read
+    /// the callee's slot and upgrade the weak handle: the upgraded
+    /// `Arc` is what keeps the executable code alive across the call,
+    /// and an empty slot (never compiled, evicted and fully released,
+    /// or rejected) routes the call to the lazy-compile entry path.
+    /// Slots are only mutated under `&mut StoreInner` (rejection,
+    /// install) or read through `&StoreInner`, matching the store's
+    /// one-execution-at-a-time discipline.
     #[cfg(feature = "aot-load")]
-    jit_compiled_funcs: Vec<RefCell<Weak<CompiledFunction>>>,
+    jit_compiled_funcs: Vec<Weak<CompiledFunction>>,
     tables: Vec<super::TableInstance>,
     globals: Vec<GlobalValue>,
     local_memories: Vec<LocalMemoryObject>,
@@ -944,7 +954,7 @@ impl StoreInner {
         #[cfg(feature = "aot-load")]
         self.jit_rejected_funcs.push(AtomicBool::new(false));
         #[cfg(feature = "aot-load")]
-        self.jit_compiled_funcs.push(RefCell::new(Weak::new()));
+        self.jit_compiled_funcs.push(Weak::new());
         id
     }
 
@@ -1003,7 +1013,12 @@ impl StoreInner {
     pub(crate) fn mark_jit_rejected_func(&self, addr: ObjectRef) {
         let slot = self.call_recipe_slot_for_func_addr(addr);
         self.jit_rejected_funcs[slot].store(true, Ordering::Relaxed);
-        *self.jit_compiled_funcs[slot].borrow_mut() = Weak::new();
+        // #191: the entry-table slot is deliberately not cleared here.
+        // The rejected flag above is the source of truth and every
+        // entry path (interpreter entry, direct native call) consults
+        // it before upgrading the slot, so a stale weak handle to code
+        // compiled before the rejection is never executed; it also
+        // keeps nothing alive by itself.
     }
 
     #[cfg(feature = "aot-load")]
@@ -1012,17 +1027,17 @@ impl StoreInner {
         addr: ObjectRef,
     ) -> Option<Arc<CompiledFunction>> {
         let slot = self.call_recipe_slot_for_func_addr(addr);
-        self.jit_compiled_funcs[slot].borrow().upgrade()
+        self.jit_compiled_funcs[slot].upgrade()
     }
 
     #[cfg(feature = "aot-load")]
     pub(crate) fn set_jit_cached_compiled_func(
-        &self,
+        &mut self,
         addr: ObjectRef,
         compiled: &Arc<CompiledFunction>,
     ) {
         let slot = self.call_recipe_slot_for_func_addr(addr);
-        *self.jit_compiled_funcs[slot].borrow_mut() = Arc::downgrade(compiled);
+        self.jit_compiled_funcs[slot] = Arc::downgrade(compiled);
     }
 
     pub(crate) fn call_recipe(&self, slot: u32) -> Option<CallRecipe> {
