@@ -356,17 +356,16 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-25, the `Embedder footprint` workflow was run three times
-against the code of PR #303: workflow_dispatch runs 45458213378 and
-45458228446 against the PR branch at head
-`9a3c4f2e2596f51eb9326b87cc198f858d6382d3` (the #301 commit
-`9a3c4f2` — the generated op-registry shape table and the
-`validate_lowered` shape/kind validation in the precompiled
-codec, on current `main` at
+against the code of PR #302: workflow_dispatch runs 45454071608 and
+45454083553 against the PR branch at head
+`1cdd6778f371f6639d7849cc715ba36c8a09527d` (the #189 study
+commits `9af1b31` and `1cdd677` — the study document and the
+standalone prototype under `tools/`, on current `main` at
 `04bca9a` (PRs #299 and #300)),
-and pull-request run 45453767970, which built the same tree
+and pull-request run 45441631498, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). A three-run control against
 unmodified `main` at `04bca9a` (workflow_dispatch runs
-45458248974, 45458268050 and 45458286306) produced the same
+45454023404, 45454038378 and 45454054158) produced the same
 values again. Every run produced
 byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
@@ -1537,51 +1536,42 @@ to 2,673,416 B). The baseline was re-measured on the
 branch and updated as recorded above, following the
 procedure below.
 
-PR #303 (#301, validate per-op operand shape/count when
-decoding precompiled artifacts) extends the generated op
-registry with a per-op operand shape table (`OpShape`:
-`Exact` / `Variadic` / `AnyOf`, plus a `jump_target` flag
-on all 1,297 `OpEntry` rows, derived from the handlers
-themselves by `tools/gen-op-registry.py`) and adds
-shape/count and operand-kind validation to
-`validate_lowered` in the precompiled-module codec. Its
-first footprint run nevertheless tripped the gate on two
-series, each +16 B. Attribution was isolated by measuring
-current `main` alone three times (workflow_dispatch runs
-45458248974, 45458268050 and 45458286306 on `main` at
-`04bca9a`): unmodified `main` produces byte-identical
-sizes to this branch on all 32 gated series and fails
-the gate on the same two series, so this PR's own
-contribution to every gated series is 0 B — the shape
-table and the validation code are not retained in any
-gated embedder configuration — and the delta is
-entirely main-side baseline staleness. The previous
-baseline was measured on the PR #300 branch tree
+PR #302 (#189, TOS-in-register dispatch study) changes no
+code linked into any embedder configuration: it adds the
+study document `docs/core/tos-register-study.md` and the
+standalone prototype `tools/tos-register-prototype.rs` (a
+single-file `rustc` program, not a Cargo target; the Codex
+fix on the PR moved it out of `docs/`, which `AGENTS.md`
+reserves for non-executable notes). Its first footprint run
+nevertheless tripped the gate on two series, each +16 B.
+Attribution was isolated by measuring current `main` alone
+three times (workflow_dispatch runs 45454023404, 45454038378
+and 45454054158 on `main` at `04bca9a`): unmodified `main`
+produces byte-identical sizes to this branch on all 32
+gated series and fails the gate on the same two series, so
+the delta is entirely main-side baseline staleness. The
+previous baseline was measured on the PR #300 branch tree
 (`3421c44`: `main` at `93581e8` plus PR #300) before
 PR #299 (precompiled-module codec, #196) merged; on the
-merged `main` (`04bca9a`), 26 of the 32 gated series
-differ from that baseline. Most library configurations
-shrink (in `release`, stripped file -1,000 B in `core`
-to -1,896 B in `wasi`, stripped `.text` -1,056 B to
--1,952 B; in `release-size`, stripped file -32 B to
--128 B and stripped `.text` -16 B to -80 B where they
-change); the `baseline` configuration is unchanged in
-both profiles. Only two series grow, each by 16 B:
-`release-size` `core` stripped `.text` (787,111 B to
-787,127 B) and `release-size` `wasi-threads` stripped
-file (1,940,824 B to 1,940,840 B). The measured values
-coincide on every series with the re-baseline recorded
-for PR #302, which measured the same `main`. Against
-the original #164 baseline, the largest cumulative
-growth is now the `release` `core-nosimd` stripped
-file series at +9.83% (1,275,448 B to 1,400,792 B),
-followed by the `release` `component` stripped file
-series at +9.77% (2,433,656 B to 2,671,528 B) — both
-slightly below the PR #300 cumulative figures, because
-the merged `main` shrank against the PR #300 branch
-tree. The baseline was re-measured on the branch and
-updated as recorded above, following the procedure
-below.
+merged `main` (`04bca9a`), 26 of the 32 gated series differ
+from that baseline. Most library configurations shrink (in
+`release`, stripped file -1,000 B in `core` to -1,896 B in
+`wasi`, stripped `.text` -1,056 B to -1,952 B; in
+`release-size`, stripped file -32 B to -128 B and stripped
+`.text` -16 B to -80 B where they change); the `baseline`
+configuration is unchanged in both profiles. Only two
+series grow, each by 16 B: `release-size` `core` stripped
+`.text` (787,111 B to 787,127 B) and `release-size`
+`wasi-threads` stripped file (1,940,824 B to 1,940,840 B).
+Against the original #164 baseline, the largest cumulative
+growth is now the `release` `core-nosimd` stripped file
+series at +9.83% (1,275,448 B to 1,400,792 B), followed by
+the `release` `component` stripped file series at +9.77%
+(2,433,656 B to 2,671,528 B) — both slightly below the
+PR #300 cumulative figures, because the merged `main`
+shrank against the PR #300 branch tree. The baseline was
+re-measured on the branch and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
