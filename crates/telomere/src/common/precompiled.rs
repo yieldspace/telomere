@@ -43,7 +43,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::custom_section::NameSubSection;
-use super::op_registry;
+use super::op_registry::{self, OpShape};
 use super::{
     CallRecipeRef, CodeSection, ConstExpr, Data, DataMode, DataSection, Elem, ElemInit, ElemMode,
     ElementSection, Export, ExportDesc, ExportSection, Func, FuncIdx, FuncType, FunctionBody,
@@ -1066,11 +1066,38 @@ fn read_lowered(r: &mut Reader<'_>, ops_by_id: &HashMap<u16, Op>) -> Result<Lowe
     })
 }
 
+/// Operand shape of every registered handler, keyed by fn-pointer
+/// identity (the same keying as the op-id maps). Built from the
+/// generated registry, whose shapes are derived from the handlers' own
+/// dispatch advances by `tools/gen-op-registry.py` (#301).
+fn op_shape_map() -> HashMap<usize, (OpShape, bool)> {
+    let mut map = HashMap::new();
+    op_registry::for_each_op_entry(|entry| {
+        map.insert(entry.op as usize, (entry.shape, entry.jump_target));
+    });
+    map
+}
+
 /// Structural validation of a decoded lowered function, mirroring the
 /// invariants the optimizer's own `verify` checks plus the bounds
 /// `materialize` relies on. Keeps later phases panic-free on decoded
 /// input that passed the byte-level checks.
-fn validate_lowered(lowered: &LoweredFunction, shape: &ModuleShape) -> Result<()> {
+///
+/// Every op is additionally checked against the generated per-op
+/// operand-shape table (#301): its operand count must match the
+/// handler's shape, a `JumpTarget` operand may appear only on a handler
+/// that interprets an operand as a jump target, and a `CallRecipeRef`
+/// operand only as the first operand of a direct-call handler (the
+/// only position the optimizer's lowering ever produces one).
+/// `Raw` and `ConstPoolRef` operands are interchangeable for shape
+/// purposes: both materialize to the same 8-byte operand (a const-pool
+/// ref is the pooled encoding of a raw operand), and const-pool refs
+/// are range-checked below.
+fn validate_lowered(
+    lowered: &LoweredFunction,
+    shape: &ModuleShape,
+    shapes: &HashMap<usize, (OpShape, bool)>,
+) -> Result<()> {
     let label_bound = lowered
         .block_map
         .len()
@@ -1130,6 +1157,42 @@ fn validate_lowered(lowered: &LoweredFunction, shape: &ModuleShape) -> Result<()
                 return Err(PrecompiledError::Corrupt("op label out of range"));
             }
             op_labels.insert(label);
+        }
+        let (op_shape, jump_target) =
+            shapes
+                .get(&(op.op as usize))
+                .copied()
+                .ok_or(PrecompiledError::Corrupt(
+                    "lowered op has no registered operand shape",
+                ))?;
+        let count_ok = match op_shape {
+            OpShape::Exact(n) => op.operands.len() == n as usize,
+            OpShape::AnyOf(a, b) => {
+                op.operands.len() == a as usize || op.operands.len() == b as usize
+            }
+            OpShape::Variadic(min) => op.operands.len() >= min as usize,
+        };
+        if !count_ok {
+            return Err(PrecompiledError::Corrupt(
+                "lowered op operand count does not match its registered shape",
+            ));
+        }
+        for (index, operand) in op.operands.iter().enumerate() {
+            match operand {
+                LoweredOperand::JumpTarget(_) if !jump_target => {
+                    return Err(PrecompiledError::Corrupt(
+                        "jump target operand on an op that takes no jump target",
+                    ));
+                }
+                LoweredOperand::CallRecipeRef(_)
+                    if !(index == 0 && super::is_direct_call_op(op.op)) =>
+                {
+                    return Err(PrecompiledError::Corrupt(
+                        "call recipe operand on an op that takes no call recipe",
+                    ));
+                }
+                _ => {}
+            }
         }
         if is_branch_op(&op.op) && (op.operands.len() != 1 || !branch_operand_ok(&op.operands[0])) {
             return Err(PrecompiledError::Corrupt(
@@ -1548,12 +1611,13 @@ pub fn deserialize_module_timed(
     let codes = {
         let mut s = r.section(SEC_CODES)?;
         let ops_by_id = op_by_id_map();
+        let shapes = op_shape_map();
         let n = s.count()?;
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             let locals = read_locals(&mut s)?;
             let lowered = read_lowered(&mut s, &ops_by_id)?;
-            validate_lowered(&lowered, &shape)?;
+            validate_lowered(&lowered, &shape, &shapes)?;
             let materialized = lowered.materialize();
             out.push(FunctionBody::Wasm(Func {
                 locals,
@@ -1698,4 +1762,246 @@ fn validate_module(module: &Module, shape: &ModuleShape) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::vm;
+
+    fn module_shape() -> ModuleShape {
+        ModuleShape {
+            types: 1,
+            functions: 1,
+            tables: 0,
+            mems: 0,
+            globals: 0,
+        }
+    }
+
+    fn lowered(code: Vec<LoweredOp>) -> LoweredFunction {
+        LoweredFunction {
+            code,
+            const_pool: Vec::new(),
+            call_recipes: Vec::new(),
+            jump_table: Vec::new(),
+            block_map: Vec::new(),
+            materialized_preview: None,
+            max_operand_bytes: 0,
+        }
+    }
+
+    fn op(op: Op, operands: Vec<LoweredOperand>) -> LoweredOp {
+        LoweredOp {
+            label: None,
+            op,
+            operands,
+        }
+    }
+
+    fn raw() -> LoweredOperand {
+        LoweredOperand::Raw([0; 8])
+    }
+
+    fn validate(code: Vec<LoweredOp>) -> Result<()> {
+        validate_lowered(&lowered(code), &module_shape(), &op_shape_map())
+    }
+
+    /// #301 coverage: every handler compiled into this build has a
+    /// shape entry, so a handler added without a derived shape fails
+    /// here (and at registry regeneration, which fails closed).
+    #[test]
+    fn every_registered_op_has_a_shape() {
+        let shapes = op_shape_map();
+        let mut entries = 0;
+        op_registry::for_each_op_entry(|entry| {
+            entries += 1;
+            assert!(
+                shapes.contains_key(&(entry.op as usize)),
+                "registered op {} has no operand shape",
+                entry.name
+            );
+        });
+        assert!(entries > 0);
+    }
+
+    #[test]
+    fn shape_table_matches_known_handlers() {
+        let shapes = op_shape_map();
+        let shape_of = |op: Op| shapes.get(&(op as usize)).copied();
+        // Zero-operand stack op.
+        assert_eq!(
+            shape_of(vm::op_i32_add as Op),
+            Some((OpShape::Exact(0), false))
+        );
+        // One raw/const-pool operand.
+        assert_eq!(
+            shape_of(vm::op_i32_const as Op),
+            Some((OpShape::Exact(1), false))
+        );
+        // Canonical branch: one jump-target operand.
+        assert_eq!(shape_of(vm::op_br as Op), Some((OpShape::Exact(1), true)));
+        // Direct call: one call-recipe operand.
+        assert_eq!(
+            shape_of(vm::op_call as Op),
+            Some((OpShape::Exact(1), false))
+        );
+        // Branch table: variadic over a count + targets.
+        assert_eq!(
+            shape_of(vm::op_br_table as Op),
+            Some((OpShape::Variadic(2), true))
+        );
+    }
+
+    #[test]
+    fn wrong_operand_count_is_rejected() {
+        // The issue's example: op_i32_const with zero operands.
+        assert!(matches!(
+            validate(vec![op(vm::op_i32_const as Op, vec![])]),
+            Err(PrecompiledError::Corrupt(_))
+        ));
+        // Too many operands for an exact shape.
+        assert!(matches!(
+            validate(vec![op(vm::op_i32_const as Op, vec![raw(), raw()])]),
+            Err(PrecompiledError::Corrupt(_))
+        ));
+        // A zero-operand op carrying an operand.
+        assert!(matches!(
+            validate(vec![op(vm::op_i32_add as Op, vec![raw()])]),
+            Err(PrecompiledError::Corrupt(_))
+        ));
+        // Correct counts validate.
+        assert!(validate(vec![op(vm::op_i32_const as Op, vec![raw()])]).is_ok());
+        assert!(validate(vec![op(vm::op_i32_add as Op, vec![])]).is_ok());
+    }
+
+    #[test]
+    fn wrong_operand_kind_is_rejected() {
+        // A jump target on a non-branch op (the label is in range, so
+        // only the kind check can reject this).
+        let mut func = lowered(vec![LoweredOp {
+            label: Some(0),
+            op: vm::op_i32_const as Op,
+            operands: vec![LoweredOperand::JumpTarget(0)],
+        }]);
+        func.block_map.push(LoweredBlockMap {
+            block_id: 0,
+            label: 0,
+            code_index: 0,
+        });
+        func.jump_table.push(LoweredJumpTarget {
+            label: 0,
+            block_id: 0,
+        });
+        assert!(matches!(
+            validate_lowered(&func, &module_shape(), &op_shape_map()),
+            Err(PrecompiledError::Corrupt(_))
+        ));
+        // A call recipe on a non-call op.
+        assert!(matches!(
+            validate(vec![op(
+                vm::op_i32_const as Op,
+                vec![LoweredOperand::CallRecipeRef(CallRecipeRef::from_funcidx(
+                    0
+                ))],
+            )]),
+            Err(PrecompiledError::Corrupt(_))
+        ));
+        // A call recipe in a non-first position of a call op.
+        assert!(matches!(
+            validate(vec![op(
+                vm::op_call_indirect as Op,
+                vec![
+                    raw(),
+                    LoweredOperand::CallRecipeRef(CallRecipeRef::from_funcidx(0)),
+                ],
+            )]),
+            Err(PrecompiledError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn representative_shapes_of_every_class_validate() {
+        // Zero-operand class.
+        assert!(validate(vec![op(vm::op_i32_add as Op, vec![])]).is_ok());
+        // Const-pool class: a pooled operand on a const op.
+        let mut func = lowered(vec![op(
+            vm::op_i32_const as Op,
+            vec![LoweredOperand::ConstPoolRef(0)],
+        )]);
+        func.const_pool.push([42; 8]);
+        assert!(validate_lowered(&func, &module_shape(), &op_shape_map()).is_ok());
+        // Call-recipe class: recipe as the first operand of a call.
+        assert!(validate(vec![op(
+            vm::op_call as Op,
+            vec![LoweredOperand::CallRecipeRef(CallRecipeRef::from_funcidx(
+                0
+            ))],
+        )])
+        .is_ok());
+        // Branch class: a symbolic target naming the block map.
+        let mut func = lowered(vec![LoweredOp {
+            label: Some(0),
+            op: vm::op_br as Op,
+            operands: vec![LoweredOperand::JumpTarget(0)],
+        }]);
+        func.block_map.push(LoweredBlockMap {
+            block_id: 0,
+            label: 0,
+            code_index: 0,
+        });
+        func.jump_table.push(LoweredJumpTarget {
+            label: 0,
+            block_id: 0,
+        });
+        assert!(validate_lowered(&func, &module_shape(), &op_shape_map()).is_ok());
+        // Variadic class: br_table with a count and two targets, in
+        // the materialized Raw form the branch check accepts.
+        let mut target = [0u8; 8];
+        target[..4].copy_from_slice(&1u32.to_ne_bytes());
+        let mut func = lowered(vec![LoweredOp {
+            label: Some(0),
+            op: vm::op_br_table as Op,
+            operands: vec![
+                LoweredOperand::Raw(target),
+                LoweredOperand::JumpTarget(0),
+                LoweredOperand::JumpTarget(0),
+            ],
+        }]);
+        func.block_map.push(LoweredBlockMap {
+            block_id: 0,
+            label: 0,
+            code_index: 0,
+        });
+        func.jump_table.push(LoweredJumpTarget {
+            label: 0,
+            block_id: 0,
+        });
+        assert!(validate_lowered(&func, &module_shape(), &op_shape_map()).is_ok());
+        // AnyOf class: when a registered handler carries an AnyOf
+        // shape (a handler whose INDEXED variant is registered
+        // directly, without a picking macro), exercise both counts
+        // with raw operands, plus a count outside the pair. The
+        // current handler set instantiates every INDEXED variant as
+        // its own Exact handler, so this section is conditional; the
+        // shape, generator support, and validation arm are kept for
+        // the class.
+        let mut any_of_op = None;
+        op_registry::for_each_op_entry(|entry| {
+            if let OpShape::AnyOf(a, b) = entry.shape {
+                if any_of_op.is_none() {
+                    any_of_op = Some((entry.op, a, b));
+                }
+            }
+        });
+        if let Some((any_of, a, b)) = any_of_op {
+            assert!(validate(vec![op(any_of, vec![raw(); a as usize])]).is_ok());
+            assert!(validate(vec![op(any_of, vec![raw(); b as usize])]).is_ok());
+            let outside = if a > 0 { a - 1 } else { b + 1 };
+            assert!(matches!(
+                validate(vec![op(any_of, vec![raw(); outside as usize])]),
+                Err(PrecompiledError::Corrupt(_))
+            ));
+        }
+    }
 }
