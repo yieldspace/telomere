@@ -39,6 +39,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "decode_precompiled_module"
+path = "fuzz_targets/decode_precompiled_module.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "canon_lift_args"
 path = "fuzz_targets/canon_lift_args.rs"
 test = false

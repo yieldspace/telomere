@@ -126,6 +126,20 @@ pub const MAX_CONTROL_NESTING_DEPTH: u32 = 512;
 
 /// Reads core WebAssembly bytes from any value that implements [`std::io::Read`].
 pub use binary::IoReadBinaryReader;
+/// Deserializes a precompiled artifact back into a module (#196).
+pub use common::precompiled::deserialize_module;
+/// Deserializes a precompiled artifact, recording per-phase timings (#196).
+pub use common::precompiled::deserialize_module_timed;
+/// Whether the given bytes start with the precompiled artifact magic (#196).
+pub use common::precompiled::is_precompiled_module;
+/// Serializes a parsed core module into the precompiled artifact format (#196).
+pub use common::precompiled::serialize_module;
+/// Serializes a parsed core module, recording per-phase timings (#196).
+pub use common::precompiled::serialize_module_timed;
+/// Errors returned by the precompiled-module codec (#196).
+pub use common::precompiled::PrecompiledError;
+/// Per-phase timings for the precompiled-module codec (#196).
+pub use common::precompiled::PrecompiledTimings;
 /// Configures diagnostic metadata retained by a [`Store`].
 pub use common::DiagnosticsConfig;
 /// A cloneable, store-bound handle to an instantiated WebAssembly module.

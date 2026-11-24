@@ -22,6 +22,12 @@ it:
     cp target/release/telomere-cli /tmp/telomere-cli-jit
     TELOMERE_JIT_BIN=/tmp/telomere-cli-jit python3 tools/measure-cold-start.py
 
+The stock-hello pair additionally measures the precompiled-module codec
+(#196): the script compiles `examples/wasi-preview1-stock-hello.wasm` with
+`telomere-cli compile` and then measures the same preview1 command running
+from the `.wasm` and from the `.tpre` artifact, so the parse-vs-deserialize
+difference shows up in whole-process wall time.
+
 Output is JSON on stdout.
 """
 
@@ -45,6 +51,10 @@ RSS_RUNS = 5
 
 CLI = os.path.join("target", "release", "telomere-cli")
 JIT_CLI = os.environ.get("TELOMERE_JIT_BIN")
+STOCK_HELLO_WASM = os.path.join("examples", "wasi-preview1-stock-hello.wasm")
+STOCK_HELLO_PRECOMPILED = os.path.join(
+    "target", "precompiled", "wasi-preview1-stock-hello.tpre"
+)
 
 
 def measure(name: str, cmd: "list[str]") -> dict:
@@ -88,6 +98,18 @@ def cases() -> "list[tuple[str, list[str]]]":
                 [JIT_CLI, "--jit", "examples/add.wasm", "main", "1", "2"],
             ),
         )
+    selected.extend(
+        [
+            (
+                "wasi-preview1-stock-hello.wasm preview1 command",
+                [CLI, STOCK_HELLO_WASM],
+            ),
+            (
+                "wasi-preview1-stock-hello.tpre precompiled preview1 command",
+                [CLI, STOCK_HELLO_PRECOMPILED],
+            ),
+        ]
+    )
     return selected
 
 
@@ -98,6 +120,22 @@ def main() -> int:
     if JIT_CLI and not os.path.exists(JIT_CLI):
         print(
             f"TELOMERE_JIT_BIN points at {JIT_CLI}, which does not exist",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Build the precompiled artifact the .tpre case measures (#196).
+    os.makedirs(os.path.dirname(STOCK_HELLO_PRECOMPILED), exist_ok=True)
+    try:
+        subprocess.run(
+            [CLI, "compile", STOCK_HELLO_WASM, "-o", STOCK_HELLO_PRECOMPILED],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        print(
+            f"failed to compile the precompiled stock-hello artifact: {error.stderr}",
             file=sys.stderr,
         )
         return 1

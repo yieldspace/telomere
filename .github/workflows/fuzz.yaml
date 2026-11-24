@@ -24,6 +24,7 @@ jobs:
         target:
           - parse_core_module
           - decode_component
+          - decode_precompiled_module
           - canon_lift_args
 
     steps:
@@ -47,16 +48,33 @@ jobs:
         with:
           toolchain: "1.96.0"
 
-      - name: Generate corpus from stable workspace tests
+      # Precompiled artifacts embed the producing build's fingerprint
+      # (rustc version included), and the fuzz target below is built
+      # with the pinned nightly. Generating that target's corpus with
+      # stable 1.96.0 would make every seed fail the fingerprint check
+      # before any body decoding, so its corpus is generated with the
+      # fuzzing toolchain itself. Other targets' corpora are raw
+      # wasm/component bytes and keep the stable generator.
+      - name: Install fuzzing toolchain early for precompiled corpus generation
+        if: matrix.target == 'decode_precompiled_module'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+
+      - name: Generate corpus from workspace tests
         if: matrix.target != 'canon_lift_args'
         working-directory: .
         env:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
-          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
-            cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
+          generator_toolchain="1.96.0"
+          if [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            generator_toolchain="nightly-2026-07-31"
+          fi
+          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
-            cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
+            cargo +"$generator_toolchain" test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
           fi
 
       - name: Create the canonical target corpus directory
@@ -107,6 +125,7 @@ jobs:
         target:
           - parse_core_module
           - decode_component
+          - decode_precompiled_module
           - canon_lift_args
 
     steps:
@@ -128,16 +147,33 @@ jobs:
         with:
           toolchain: "1.96.0"
 
-      - name: Generate corpus from stable workspace tests
+      # Precompiled artifacts embed the producing build's fingerprint
+      # (rustc version included), and the fuzz target below is built
+      # with the pinned nightly. Generating that target's corpus with
+      # stable 1.96.0 would make every seed fail the fingerprint check
+      # before any body decoding, so its corpus is generated with the
+      # fuzzing toolchain itself. Other targets' corpora are raw
+      # wasm/component bytes and keep the stable generator.
+      - name: Install fuzzing toolchain early for precompiled corpus generation
+        if: matrix.target == 'decode_precompiled_module'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+
+      - name: Generate corpus from workspace tests
         if: matrix.target != 'canon_lift_args'
         working-directory: .
         env:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
-          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
-            cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
+          generator_toolchain="1.96.0"
+          if [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            generator_toolchain="nightly-2026-07-31"
+          fi
+          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
-            cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
+            cargo +"$generator_toolchain" test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
           fi
 
       - name: Create the canonical target corpus directory
@@ -182,6 +218,7 @@ jobs:
         target:
           - parse_core_module
           - decode_component
+          - decode_precompiled_module
           - canon_lift_args
 
     steps:
@@ -203,16 +240,33 @@ jobs:
         with:
           toolchain: "1.96.0"
 
-      - name: Generate corpus from stable workspace tests
+      # Precompiled artifacts embed the producing build's fingerprint
+      # (rustc version included), and the fuzz target below is built
+      # with the pinned nightly. Generating that target's corpus with
+      # stable 1.96.0 would make every seed fail the fingerprint check
+      # before any body decoding, so its corpus is generated with the
+      # fuzzing toolchain itself. Other targets' corpora are raw
+      # wasm/component bytes and keep the stable generator.
+      - name: Install fuzzing toolchain early for precompiled corpus generation
+        if: matrix.target == 'decode_precompiled_module'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+
+      - name: Generate corpus from workspace tests
         if: matrix.target != 'canon_lift_args'
         working-directory: .
         env:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
-          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
-            cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
+          generator_toolchain="1.96.0"
+          if [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            generator_toolchain="nightly-2026-07-31"
+          fi
+          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
+            cargo +"$generator_toolchain" test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
-            cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
+            cargo +"$generator_toolchain" test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
           fi
 
       - name: Create the canonical target corpus directory

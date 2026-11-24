@@ -62,9 +62,30 @@ pub struct Cli {
 pub enum Command {
     /// Run a WASI 0.2 component that exports `wasi:cli/run` (semver-compatible versions accepted).
     Component(ComponentCommand),
+    /// Compile a core Wasm module into a precompiled artifact (#196).
+    ///
+    /// The artifact skips parsing and optimization when this exact build
+    /// loads it later (any command that takes a core module path accepts
+    /// the artifact transparently). Artifacts are pinned to the exact
+    /// build that produced them: a different telomere build rejects
+    /// them with a fingerprint error instead of loading them.
+    Compile(CompileCommand),
     /// Print the resolved measurement-only optimizer switch state as JSON.
     #[cfg(feature = "measure-switches")]
     MeasureSwitchesProbe,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CompileCommand {
+    /// Path to the core Wasm module to compile.
+    #[arg(value_name = "MODULE")]
+    pub name: PathBuf,
+
+    /// Where to write the precompiled artifact.
+    ///
+    /// Defaults to the module path with `.tpre` appended.
+    #[arg(long = "output", short = 'o', value_name = "OUTPUT")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
