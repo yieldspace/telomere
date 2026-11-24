@@ -1537,6 +1537,43 @@ to 2,673,416 B). The baseline was re-measured on the
 branch and updated as recorded above, following the
 procedure below.
 
+PR #302 (#189, TOS-in-register dispatch study) changes no
+code linked into any embedder configuration: it adds the
+study document `docs/core/tos-register-study.md` and the
+standalone prototype `tools/tos-register-prototype.rs` (a
+single-file `rustc` program, not a Cargo target; the Codex
+fix on the PR moved it out of `docs/`, which `AGENTS.md`
+reserves for non-executable notes). Its first footprint run
+nevertheless tripped the gate on two series, each +16 B.
+Attribution was isolated by measuring current `main` alone
+three times (workflow_dispatch runs 45454023404, 45454038378
+and 45454054158 on `main` at `04bca9a`): unmodified `main`
+produces byte-identical sizes to this branch on all 32
+gated series and fails the gate on the same two series, so
+the delta is entirely main-side baseline staleness. The
+previous baseline was measured on the PR #300 branch tree
+(`3421c44`: `main` at `93581e8` plus PR #300) before
+PR #299 (precompiled-module codec, #196) merged; on the
+merged `main` (`04bca9a`), 26 of the 32 gated series differ
+from that baseline. Most library configurations shrink (in
+`release`, stripped file -1,000 B in `core` to -1,896 B in
+`wasi`, stripped `.text` -1,056 B to -1,952 B; in
+`release-size`, stripped file -32 B to -128 B and stripped
+`.text` -16 B to -80 B where they change); the `baseline`
+configuration is unchanged in both profiles. Only two
+series grow, each by 16 B: `release-size` `core` stripped
+`.text` (787,111 B to 787,127 B) and `release-size`
+`wasi-threads` stripped file (1,940,824 B to 1,940,840 B).
+Against the original #164 baseline, the largest cumulative
+growth is now the `release` `core-nosimd` stripped file
+series at +9.83% (1,275,448 B to 1,400,792 B), followed by
+the `release` `component` stripped file series at +9.77%
+(2,433,656 B to 2,671,528 B) — both slightly below the
+PR #300 cumulative figures, because the merged `main`
+shrank against the PR #300 branch tree. The baseline was
+re-measured on the branch and updated as recorded above, following the
+procedure below.
+
 PR #304 (#198, AoT artifact container) tripped the gate on
 four `release-size` series. Attribution was isolated by
 measuring current `main` alone three times
