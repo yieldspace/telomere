@@ -46,6 +46,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "decode_aot_artifact"
+path = "fuzz_targets/decode_aot_artifact.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "canon_lift_args"
 path = "fuzz_targets/canon_lift_args.rs"
 test = false

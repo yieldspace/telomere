@@ -89,6 +89,163 @@ pub fn assert_wast_precompiled_round_tripped() {
     }
 }
 
+/// Number of wast functions installed from AoT artifacts (#198) in
+/// this harness process.
+#[cfg(feature = "jit")]
+static WAST_AOT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the wast harness should route every parsed module through
+/// the AoT artifact container (#198): parse -> build artifact -> open
+/// (verify) -> instantiate the embedded module -> install the native
+/// blobs, so the whole corpus runs on AoT-loaded code.
+#[cfg(feature = "jit")]
+fn wast_aot_enabled() -> bool {
+    std::env::var_os("TELOMERE_WAST_AOT").is_some()
+}
+
+#[cfg(feature = "jit")]
+fn wast_aot_required() -> bool {
+    std::env::var_os("TELOMERE_WAST_AOT_REQUIRE_ACCEPT").is_some()
+}
+
+/// Harness signer/verifier for the wast AoT lane: HMAC-SHA256 with a
+/// fixed test key (the same construction the container's integration
+/// tests use). The lane exercises the container mechanics, not key
+/// management.
+#[cfg(feature = "jit")]
+struct WastAotKey;
+
+#[cfg(feature = "jit")]
+fn wast_aot_hmac(message: &[u8]) -> Vec<u8> {
+    let key: &[u8] = b"telomere-wast-aot-harness-key";
+    let mut key_block = [0u8; 64];
+    key_block[..key.len()].copy_from_slice(key);
+    let mut inner = Sha256::new();
+    inner.update(key_block.map(|b| b ^ 0x36));
+    inner.update(message);
+    let inner_hash = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(key_block.map(|b| b ^ 0x5c));
+    outer.update(inner_hash);
+    outer.finalize().to_vec()
+}
+
+#[cfg(feature = "jit")]
+impl telomere::AotSigner for WastAotKey {
+    fn key_id(&self) -> &str {
+        "wast-harness"
+    }
+    fn sign(&self, payload: &[u8]) -> Vec<u8> {
+        wast_aot_hmac(payload)
+    }
+}
+
+#[cfg(feature = "jit")]
+impl telomere::AotVerifier for WastAotKey {
+    fn key_id(&self) -> &str {
+        "wast-harness"
+    }
+    fn verify(&self, payload: &[u8], signature: &[u8]) -> bool {
+        wast_aot_hmac(payload) == signature
+    }
+}
+
+/// Builds and opens an AoT artifact for `m` when the lane is enabled,
+/// returning the module to instantiate (the artifact's embedded
+/// module) and the opened artifact to install afterwards. Failures
+/// are hard failures under `TELOMERE_WAST_AOT_REQUIRE_ACCEPT` and
+/// keep the parsed module otherwise.
+#[cfg(feature = "jit")]
+fn aot_prepare(m: telomere::Module) -> (telomere::Module, Option<WastAotArtifact>) {
+    if !wast_aot_enabled() {
+        return (m, None);
+    }
+    let required = wast_aot_required();
+    let key = WastAotKey;
+    let bytes = match telomere::build_aot_artifact(&m, Some(&key)) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            assert!(
+                !required,
+                "TELOMERE_WAST_AOT_REQUIRE_ACCEPT: build failed: {err}"
+            );
+            return (m, None);
+        }
+    };
+    match telomere::open_aot_artifact(&bytes, Some(&key), telomere::AotLoadPolicy::default()) {
+        Ok(opened) => {
+            let module = opened.module().clone();
+            (module, Some(opened))
+        }
+        Err(err) => {
+            assert!(
+                !required,
+                "TELOMERE_WAST_AOT_REQUIRE_ACCEPT: open failed: {err}"
+            );
+            (m, None)
+        }
+    }
+}
+
+/// The artifact type the wast AoT lane carries between prepare and
+/// install; Infallible in non-jit builds, where the lane is off and
+/// no artifact can exist (the container API itself needs aot-load,
+/// which a plain build does not enable).
+#[cfg(feature = "jit")]
+type WastAotArtifact = telomere::AotArtifact;
+#[cfg(not(feature = "jit"))]
+type WastAotArtifact = std::convert::Infallible;
+
+#[cfg(not(feature = "jit"))]
+fn aot_prepare(m: telomere::Module) -> (telomere::Module, Option<WastAotArtifact>) {
+    (m, None)
+}
+
+/// Installs a prepared AoT artifact into the instance just created
+/// from its module. See [`aot_prepare`] for the failure posture.
+#[cfg(feature = "jit")]
+fn aot_install(store: &Store, instance: &InstanceHandle, artifact: Option<WastAotArtifact>) {
+    let Some(artifact) = artifact else {
+        return;
+    };
+    match telomere::install_aot_artifact(store, instance, &artifact) {
+        Ok(report) => {
+            WAST_AOT_INSTALLED.fetch_add(report.installed, Ordering::Relaxed);
+        }
+        Err(err) => {
+            assert!(
+                !wast_aot_required(),
+                "TELOMERE_WAST_AOT_REQUIRE_ACCEPT: install failed: {err}"
+            );
+        }
+    }
+}
+
+#[cfg(not(feature = "jit"))]
+fn aot_install(_store: &Store, _instance: &InstanceHandle, _artifact: Option<WastAotArtifact>) {}
+
+#[allow(dead_code)]
+pub fn reset_wast_aot_installed() {
+    #[cfg(feature = "jit")]
+    WAST_AOT_INSTALLED.store(0, Ordering::Relaxed);
+}
+
+#[allow(dead_code)]
+pub fn assert_wast_aot_installed() {
+    #[cfg(feature = "jit")]
+    if wast_aot_required() {
+        assert!(
+            wast_aot_enabled(),
+            "TELOMERE_WAST_AOT_REQUIRE_ACCEPT requires TELOMERE_WAST_AOT=1"
+        );
+        let installed = WAST_AOT_INSTALLED.load(Ordering::Relaxed);
+        assert!(
+            installed > 0,
+            "TELOMERE_WAST_AOT_REQUIRE_ACCEPT completed the wast suite without installing any AoT function"
+        );
+    }
+}
+
 pub struct SpecDivergence {
     pub module_sha256: &'static str,
     pub why: &'static str,
@@ -280,8 +437,11 @@ pub async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> I
     let mut parser = WasmParser::new(&mut reader);
 
     let m = precompiled_round_trip(parser.parse_module().unwrap());
+    let (m, aot_artifact) = aot_prepare(m);
 
-    instantiate(m, store, registry).await.unwrap()
+    let instance = instantiate(m, store, registry).await.unwrap();
+    aot_install(store, &instance, aot_artifact);
+    instance
 }
 fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
     args.iter()
@@ -535,8 +695,10 @@ async fn run_wast_with_spec_divergences_in_context(
                     }
                 };
                 let m = precompiled_round_trip(m);
+                let (m, aot_artifact) = aot_prepare(m);
                 tracing::trace!("instantiating parsed module");
                 let inst = instantiate(m, store, registry).await.unwrap();
+                aot_install(store, &inst, aot_artifact);
                 if let Some(name) = name {
                     registry.register(name.name(), inst.clone());
                 }

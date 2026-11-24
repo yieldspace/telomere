@@ -288,6 +288,59 @@ impl StoreJitCache {
         inner.disabled.insert(funcaddr);
     }
 
+    /// Installs a batch of already-patched native functions
+    /// atomically (#198 AoT loader): either every entry lands in the
+    /// cache or none does. Entries naming a disabled (JIT-rejected)
+    /// or already-cached function, or a batch whose resident bytes
+    /// exceed `max_bytes`, fail with `Err(needed_bytes)` and leave
+    /// the cache untouched. Eviction of *other* cached functions to
+    /// make room follows the same policy as on-demand compilation.
+    pub(crate) fn install_batch(
+        &self,
+        batch: &[(ObjectRef, Vec<u8>, Vec<u32>)],
+        max_bytes: usize,
+    ) -> Result<Vec<Arc<CompiledFunction>>, usize> {
+        let mut resident_total: usize = 0;
+        for (_, code, trap_sites) in batch {
+            let allocation_len = CodeArena::accounted_len(code.len()).map_err(|_| usize::MAX)?;
+            resident_total = resident_total
+                .saturating_add(allocation_len)
+                .saturating_add(trap_sites.len() * std::mem::size_of::<u32>());
+        }
+        if resident_total > max_bytes {
+            return Err(resident_total);
+        }
+        let clock = self.next_tick();
+        let mut inner = self.inner.lock();
+        for (funcaddr, _, _) in batch {
+            if inner.disabled.contains(funcaddr) || inner.compiled.contains_key(funcaddr) {
+                return Err(resident_total);
+            }
+        }
+        inner.evict_until(max_bytes.saturating_sub(resident_total));
+        // Allocate every mapping before inserting any entry, so an
+        // allocation failure still leaves the cache untouched.
+        let mut compiled_batch = Vec::with_capacity(batch.len());
+        for (funcaddr, code, trap_sites) in batch {
+            let compiled = CompiledFunction::from_bytes(code, trap_sites.clone(), &inner.arena)
+                .map_err(|_| resident_total)?;
+            compiled_batch.push((*funcaddr, Arc::new(compiled)));
+        }
+        let mut installed = Vec::with_capacity(compiled_batch.len());
+        for (funcaddr, compiled) in compiled_batch {
+            compiled.note_used(clock);
+            inner.used_bytes = inner.used_bytes.saturating_add(compiled.resident_bytes());
+            inner.compiled.insert(
+                funcaddr,
+                CachedFunction {
+                    tiers: CompiledTiers::baseline(compiled.clone()),
+                },
+            );
+            installed.push(compiled);
+        }
+        Ok(installed)
+    }
+
     pub(crate) fn stats(&self) -> JitCacheStats {
         let inner = self.inner.lock();
         JitCacheStats {
