@@ -355,41 +355,43 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #300: workflow_dispatch runs 45398465490 and
-45398481840 against the PR branch at head
-`3421c442138fb8dc2a8a41ee06db11e3f6f67bb9` (branch commit
-`3ca9974`, quarantine benchmark-shaped recognizers behind a runtime
-flag (#188), on current `main` at `93581e8` (PR #298), plus fix
-commit `3421c44`, moving the vm-profile corpus workloads out of
-`docs/` into `tools/vm-profile/`),
-and pull-request run 45398441987, which built the same tree
-(`ubuntu-24.04`, Rust 1.96.0). Every run produced
+On 2026-11-25, the `Embedder footprint` workflow was run three times
+against the code of PR #302: workflow_dispatch runs 45454071608 and
+45454083553 against the PR branch at head
+`1cdd6778f371f6639d7849cc715ba36c8a09527d` (the #189 study
+commits `9af1b31` and `1cdd677` — the study document and the
+standalone prototype under `tools/`, on current `main` at
+`04bca9a` (PRs #299 and #300)),
+and pull-request run 45441631498, which built the same tree
+(`ubuntu-24.04`, Rust 1.96.0). A three-run control against
+unmodified `main` at `04bca9a` (workflow_dispatch runs
+45454023404, 45454038378 and 45454054158) produced the same
+values again. Every run produced
 byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
 the stripped file size, and the stripped `.text` size each have a
-run-to-run spread of **0 B** across the three samples. The observed
+run-to-run spread of **0 B** across the samples. The observed
 values are the baselines in the table below (stripped file /
 stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,592,904 | 1,205,495 |
-| `release` | `component` | 2,673,416 | 2,120,503 |
-| `release` | `wasi` | 2,900,984 | 2,294,951 |
-| `release` | `core-nosimd` | 1,401,864 | 1,060,359 |
-| `release` | `core-jit` | 2,131,928 | 1,639,975 |
-| `release` | `core-aot` | 1,639,272 | 1,239,063 |
-| `release` | `wasi-threads` | 3,116,600 | 2,462,263 |
+| `release` | `core` | 1,591,904 | 1,204,439 |
+| `release` | `component` | 2,671,528 | 2,118,551 |
+| `release` | `wasi` | 2,899,088 | 2,292,999 |
+| `release` | `core-nosimd` | 1,400,792 | 1,059,271 |
+| `release` | `core-jit` | 2,130,632 | 1,638,775 |
+| `release` | `core-aot` | 1,638,152 | 1,237,895 |
+| `release` | `wasi-threads` | 3,114,792 | 2,460,311 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,115,560 | 787,111 |
-| `release-size` | `component` | 1,677,000 | 1,237,703 |
-| `release-size` | `wasi` | 1,798,248 | 1,319,479 |
-| `release-size` | `core-nosimd` | 1,000,800 | 707,591 |
-| `release-size` | `core-jit` | 1,538,080 | 1,091,575 |
-| `release-size` | `core-aot` | 1,154,640 | 812,375 |
-| `release-size` | `wasi-threads` | 1,940,824 | 1,414,119 |
+| `release-size` | `core` | 1,115,512 | 787,127 |
+| `release-size` | `component` | 1,676,936 | 1,237,671 |
+| `release-size` | `wasi` | 1,798,120 | 1,319,399 |
+| `release-size` | `core-nosimd` | 1,000,736 | 707,591 |
+| `release-size` | `core-jit` | 1,538,048 | 1,091,559 |
+| `release-size` | `core-aot` | 1,154,576 | 812,343 |
+| `release-size` | `wasi-threads` | 1,940,840 | 1,414,119 |
 
 #### Re-baseline history
 
@@ -1533,6 +1535,43 @@ the largest cumulative growth is now the `release`
 to 2,673,416 B). The baseline was re-measured on the
 branch and updated as recorded above, following the
 procedure below.
+
+PR #302 (#189, TOS-in-register dispatch study) changes no
+code linked into any embedder configuration: it adds the
+study document `docs/core/tos-register-study.md` and the
+standalone prototype `tools/tos-register-prototype.rs` (a
+single-file `rustc` program, not a Cargo target; the Codex
+fix on the PR moved it out of `docs/`, which `AGENTS.md`
+reserves for non-executable notes). Its first footprint run
+nevertheless tripped the gate on two series, each +16 B.
+Attribution was isolated by measuring current `main` alone
+three times (workflow_dispatch runs 45454023404, 45454038378
+and 45454054158 on `main` at `04bca9a`): unmodified `main`
+produces byte-identical sizes to this branch on all 32
+gated series and fails the gate on the same two series, so
+the delta is entirely main-side baseline staleness. The
+previous baseline was measured on the PR #300 branch tree
+(`3421c44`: `main` at `93581e8` plus PR #300) before
+PR #299 (precompiled-module codec, #196) merged; on the
+merged `main` (`04bca9a`), 26 of the 32 gated series differ
+from that baseline. Most library configurations shrink (in
+`release`, stripped file -1,000 B in `core` to -1,896 B in
+`wasi`, stripped `.text` -1,056 B to -1,952 B; in
+`release-size`, stripped file -32 B to -128 B and stripped
+`.text` -16 B to -80 B where they change); the `baseline`
+configuration is unchanged in both profiles. Only two
+series grow, each by 16 B: `release-size` `core` stripped
+`.text` (787,111 B to 787,127 B) and `release-size`
+`wasi-threads` stripped file (1,940,824 B to 1,940,840 B).
+Against the original #164 baseline, the largest cumulative
+growth is now the `release` `core-nosimd` stripped file
+series at +9.83% (1,275,448 B to 1,400,792 B), followed by
+the `release` `component` stripped file series at +9.77%
+(2,433,656 B to 2,671,528 B) — both slightly below the
+PR #300 cumulative figures, because the merged `main`
+shrank against the PR #300 branch tree. The baseline was
+re-measured on the branch and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
