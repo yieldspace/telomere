@@ -356,19 +356,19 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #290: workflow_dispatch runs 45308598282 and
-45308607305 against the PR branch at head
-`208dcba57d4aeb59a6ae4294effaa6b9a7bfb425` (branch commit
-`208dcba`, keep the interpreter stop target on ExecuteContext, not
-a thread local (#190); the branch is based directly on `main` at
-`b39b116`, which had not moved since the branch was cut, so no
-merge commit was needed), and pull-request run 45306829128, which
-built the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
-produced byte-identical sizes: for all sixteen profile/configuration
-rows, the raw file size, the `.text` size, the stripped file size, and
-the stripped `.text` size each have a run-to-run spread of **0 B**
-across the three samples. The observed values are the baselines in the
-table below (stripped file / stripped `.text`, in bytes).
+against the code of PR #293: workflow_dispatch runs 45320518752 and
+45320533005 against the PR branch at head
+`764a453e568e6ed29855c6c0ca7f6eff1cd5a912` (branch commit
+`f0015b9`, enter JIT callees directly on native-to-native calls
+(#191), plus merge commit `159796d` bringing in current `main` at
+`41bca95` (PR #290) and a formatting fix), and pull-request run
+45320509989, which built the same tree (`ubuntu-24.04`, Rust
+1.96.0). Every run produced byte-identical sizes: for all sixteen
+profile/configuration rows, the raw file size, the `.text` size,
+the stripped file size, and the stripped `.text` size each have a
+run-to-run spread of **0 B** across the three samples. The observed
+values are the baselines in the table below (stripped file /
+stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
@@ -377,16 +377,16 @@ table below (stripped file / stripped `.text`, in bytes).
 | `release` | `component` | 2,667,120 | 2,115,559 |
 | `release` | `wasi` | 3,011,120 | 2,375,687 |
 | `release` | `core-nosimd` | 1,395,568 | 1,055,431 |
-| `release` | `core-jit` | 2,125,104 | 1,634,503 |
-| `release` | `core-aot` | 1,632,144 | 1,233,271 |
+| `release` | `core-jit` | 2,126,256 | 1,635,479 |
+| `release` | `core-aot` | 1,631,584 | 1,232,823 |
 | `release` | `wasi-threads` | 3,226,576 | 2,542,839 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,110,712 | 783,527 |
 | `release-size` | `component` | 1,672,344 | 1,234,343 |
 | `release-size` | `wasi` | 1,868,328 | 1,366,151 |
 | `release-size` | `core-nosimd` | 995,920 | 703,991 |
-| `release-size` | `core-jit` | 1,533,920 | 1,088,519 |
-| `release-size` | `core-aot` | 1,150,048 | 808,967 |
+| `release-size` | `core-jit` | 1,534,192 | 1,088,759 |
+| `release-size` | `core-aot` | 1,149,600 | 808,663 |
 | `release-size` | `wasi-threads` | 2,010,632 | 1,460,471 |
 
 #### Re-baseline history
@@ -1344,6 +1344,39 @@ stripped file series, at +9.59% (2,433,656 B to 2,667,120 B),
 unchanged in rounded terms. The baseline was re-measured on the
 branch and updated as recorded above, following the procedure
 below.
+
+PR #293 (#191, JIT-to-JIT calls round-tripping through the
+runtime with a per-call mutex) makes native-to-native calls enter
+the compiled callee directly: after the ordinary frame
+preparation, the call helpers resolve the callee through the
+per-store entry table (the `StoreInner` funcaddr slots, upgraded
+from `Weak`) and enter it via `enter_compiled_from_jit_call`,
+falling back to the previous lazy-compile path on a miss. The
+per-call cache mutex touch is gone: recency lives in an
+`AtomicU64` stamp on `CompiledFunction`, advanced on every direct
+call but only rewritten every 32 ticks. The TLS entry-depth
+counter (the 256 nested-entry cap) is removed; native recursion
+depth is bounded by the same value-stack accounting as
+interpreter recursion (#166, #126 limits). The branch was cut
+from `main` at `b39b116` before PR #290 (#190) merged, so current
+`main` (`41bca95`) was merged in before measurement (merge commit
+`159796d`); the merge combines #191's removal of the entry-depth
+thread-local with #190's move of the interpreter stop target
+into `ExecuteContext`, and both thread-locals are gone from the
+merged tree. Attribution was isolated by measuring current
+`main` alone (workflow_dispatch run 45320550102, gate success),
+which reproduces the previous baseline exactly on all 32 gated
+series, so every delta below is this PR's own. Only 8 of the 32
+gated series change — the two configurations that link the JIT
+entry code. In `release`, `core-jit` grows by 1,152 B stripped
+file / 976 B stripped `.text` and `core-aot` shrinks by 560 B /
+448 B. In `release-size`, `core-jit` grows by 272 B / 240 B and
+`core-aot` shrinks by 448 B / 304 B. Against the original #164
+baseline, the largest cumulative growth remains the `release`
+`component` stripped file series, unchanged at +9.59%
+(2,433,656 B to 2,667,120 B). The baseline was re-measured on
+the branch and updated as recorded above, following the
+procedure below.
 
 ### Threshold derivation
 

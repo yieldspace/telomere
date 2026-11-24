@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #290 (branch fix/190-jit-feature-tax at head 208dcba57d4aeb59a6ae4294effaa6b9a7bfb425 \u2014 branch commit 208dcba (keep the interpreter stop target on ExecuteContext, not a thread local (#190)); the branch is based directly on current main b39b116, which had not moved since the branch was cut, so no merge commit was needed and the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45308598282 and 45308607305 against the branch and pull-request run 45306829128, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "208dcba57d4aeb59a6ae4294effaa6b9a7bfb425",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #293 (branch fix/191-jit-direct-calls at head 764a453e568e6ed29855c6c0ca7f6eff1cd5a912 \u2014 branch commit f0015b9 (enter JIT callees directly on native-to-native calls (#191)), merge commit 159796d bringing in current main 41bca95 (PR #290, #190), and a formatting fix on top; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45320518752 and 45320533005 against the branch and pull-request run 45320509989, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "764a453e568e6ed29855c6c0ca7f6eff1cd5a912",
     "date": "2026-11-24",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45308598282,
-      45308607305
+      45320518752,
+      45320533005
     ],
     "cross_check_run_ids": [
-      45306829128
+      45320509989
     ],
-    "derivation": "Re-baseline for PR #290 (#190, the jit feature tax: compiling the jit feature slowed the interpreter even when the JIT never ran). The change moves the JIT interpreter stop target out of the JIT_INTERPRETER_STOP_AT thread-local into a new trailing field of ExecuteContext (jit_stop_pc); JitInterpreterStopGuard saves and restores that field through a slot pointer, keeping the save/restore nesting semantics, and the per-dispatch check compares the current pc against the ctx field in a single equality (the pc is never null by construction). On Darwin the thread-local read went through a TLV thunk call on every dispatch; the field read removes that call. Attribution was isolated by measuring current main (b39b116) alone (workflow_dispatch run 45308616450, gate success): it reproduces the previous baseline exactly on all 32 gated series, and the only code change since the previous baseline is the 208dcba commit, so every delta below is that commit's own. 28 of the 32 gated series change; the baseline configuration, which links no telomere code, is byte-identical in both profiles. In release, the non-JIT library configurations shrink by 16 B in stripped file and stripped .text alike, core-jit shrinks by 10,240 B (stripped file and .text), and core-aot grows by 15,536 B stripped file / 12,512 B stripped .text. In release-size, core, component, wasi, core-nosimd and wasi-threads grow by 64..80 B stripped file (48..80 B stripped .text), core-jit shrinks by 18,272 B stripped file / 18,224 B stripped .text, and core-aot grows by 19,568 B / 13,600 B. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series, now at +9.59% (2,433,656 B to 2,667,120 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was again 0 B for every gated series across the three samples."
+    "derivation": "Re-baseline for PR #293 (#191, JIT-to-JIT calls round-tripping through the runtime with a per-call mutex). Native-to-native calls now enter the compiled callee directly: after the ordinary frame preparation, the call helpers resolve the callee through the per-store entry table (the StoreInner funcaddr slots, upgraded from Weak) and enter it via enter_compiled_from_jit_call, falling back to the previous lazy-compile path on a miss. The per-call cache mutex touch is gone: recency lives in an AtomicU64 stamp on CompiledFunction, advanced on every direct call but only rewritten every 32 ticks. The TLS entry-depth counter (the 256 nested-entry cap) is removed; native recursion depth is bounded by the same value-stack accounting as interpreter recursion (#166, #126 limits). The branch was cut from main at b39b116 before PR #290 (#190) merged, so current main (41bca95) was merged in before measurement (merge commit 159796d); the merge combines #191's removal of the entry-depth thread-local with #190's move of the interpreter stop target into ExecuteContext, and both thread-locals are gone from the merged tree. Attribution was isolated by measuring current main alone (workflow_dispatch run 45320550102, gate success): it reproduces the previous baseline exactly on all 32 gated series, so every delta below is this PR's own. Only 8 of the 32 gated series change \u2014 the two configurations that link the JIT entry code. In release, core-jit grows by 1,152 B stripped file / 976 B stripped .text and core-aot shrinks by 560 B / 448 B. In release-size, core-jit grows by 272 B / 240 B and core-aot shrinks by 448 B / 304 B. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series, unchanged at +9.59% (2,433,656 B to 2,667,120 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was again 0 B for every gated series across the three samples."
   },
   "thresholds": {
     "release": {
@@ -70,22 +70,22 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2125104,
-          "threshold": 2125104
+          "baseline": 2126256,
+          "threshold": 2126256
         },
         "stripped_text_bytes": {
-          "baseline": 1634503,
-          "threshold": 1634503
+          "baseline": 1635479,
+          "threshold": 1635479
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1632144,
-          "threshold": 1632144
+          "baseline": 1631584,
+          "threshold": 1631584
         },
         "stripped_text_bytes": {
-          "baseline": 1233271,
-          "threshold": 1233271
+          "baseline": 1232823,
+          "threshold": 1232823
         }
       },
       "wasi-threads": {
@@ -152,22 +152,22 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1533920,
-          "threshold": 1533920
+          "baseline": 1534192,
+          "threshold": 1534192
         },
         "stripped_text_bytes": {
-          "baseline": 1088519,
-          "threshold": 1088519
+          "baseline": 1088759,
+          "threshold": 1088759
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1150048,
-          "threshold": 1150048
+          "baseline": 1149600,
+          "threshold": 1149600
         },
         "stripped_text_bytes": {
-          "baseline": 808967,
-          "threshold": 808967
+          "baseline": 808663,
+          "threshold": 808663
         }
       },
       "wasi-threads": {
