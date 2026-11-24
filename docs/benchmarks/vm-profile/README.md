@@ -22,14 +22,14 @@ contains no counted handler, so it records a single counted dispatch.
 | `f64-kernel.txt` | `tools/baseline/f64-kernel.wat` (sha256 `ae9561c4…`) | `run 50000000` | 1 (see counting scope) |
 | `coremark.txt` | CoreMark 1.0, `coremark.wasm` (sha256 `5acb1c0e…`) | default `_start` | 145,885,206 |
 | `coremark-recognizers-on.txt` | same module, `--benchmark-recognizers` | default `_start` | 145,885,232 |
-| `json-agg.txt` | `json_agg.rs` in this directory (sha256 of wasm `404714f0…`) | `run 3000` | 39,579,842 |
-| `text-index.txt` | `text_index.rs` in this directory (sha256 of wasm `f0a9644e…`) | `run 3000` | 44,749,225 |
+| `json-agg.txt` | `tools/vm-profile/json_agg.rs` (sha256 of wasm `404714f0…`) | `run 3000` | 39,579,842 |
+| `text-index.txt` | `tools/vm-profile/text_index.rs` (sha256 of wasm `f0a9644e…`) | `run 3000` | 44,749,225 |
 
 The two Rust modules are small but real compiled workloads (a JSON parser
 aggregating into hash maps; a text tokenizer building an inverted index),
 built with `rustc -O --crate-type cdylib --target wasm32-unknown-unknown`
-(Rust 1.92.0). Their sources are committed here so the reports can be
-regenerated; the wasm binaries are not committed.
+(Rust 1.92.0). Their sources are committed under `tools/vm-profile/` so the reports
+can be regenerated; the wasm binaries are not committed.
 
 CoreMark note: the artifact above is the file served from
 `https://wasm3.github.io/wasm-coremark/coremark.wasm`. Its sha256
