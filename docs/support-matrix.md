@@ -70,7 +70,8 @@ not WAST trap-message strings; [#131](https://github.com/yieldspace/telomere/iss
 owns those strings. This core-only bridge does not alter `VMResult` or core
 call signatures: [#143](https://github.com/yieldspace/telomere/issues/143)
 owns the public error redesign and [#146](https://github.com/yieldspace/telomere/issues/146)
-owns the C ABI mirror. Component-layer trace stitching is outside this matrix's
+decided against a C ABI mirror for v1 (see
+[the C ABI decision](core/c-abi.md)). Component-layer trace stitching is outside this matrix's
 current core capability and belongs to
 [#211](https://github.com/yieldspace/telomere/issues/211).
 

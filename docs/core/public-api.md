@@ -33,7 +33,8 @@ best-effort on the calling thread, and it leaves `VMResult` plus the existing
 execution signatures unchanged. It is therefore a diagnostic bridge rather
 than the public error redesign: [#143](https://github.com/yieldspace/telomere/issues/143)
 owns that redesign, while [#146](https://github.com/yieldspace/telomere/issues/146)
-owns the corresponding C ABI surface. See [trap reporting](trap-reporting.md)
+decided the corresponding C ABI question: no C surface ships in v1 (see
+[the C ABI decision](c-abi.md)). See [trap reporting](trap-reporting.md)
 for the exact retrieval, formatting, name-retention, and JIT boundaries.
 
 ### H1: designed host-function API

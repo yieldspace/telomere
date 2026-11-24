@@ -111,7 +111,9 @@ Start with [docs/README.md](docs/README.md) for the documentation map.
   overflow the host stack in release builds — so it is not supported yet.
 - A Unix-like development environment for the current JIT executable-memory
   backend tests. The non-JIT interpreter and component tests are the portable
-  baseline.
+  baseline. The runtime itself assumes a Unix-like host: linear memory is
+  reserved with `mmap` unconditionally, and the JIT uses Unix
+  executable-memory facilities.
 - The upstream Wasm testsuite submodule when running the full workspace test
   set.
 
@@ -203,6 +205,12 @@ that Component Model follow-up is [#167](https://github.com/yieldspace/telomere/
 The sample does not change component-runtime internals. See the measured
 footprint and its boundaries in
 [docs/benchmarks/footprint.md](docs/benchmarks/footprint.md).
+
+Embedding is Rust-only in v1: telomere ships no C ABI - there is no
+`cdylib`/`staticlib` artifact and no C header, so C/C++ hosts cannot link
+the runtime directly. The decision, the platform assumptions behind it,
+and the conditions under which a C surface would be reconsidered are
+recorded in [docs/core/c-abi.md](docs/core/c-abi.md).
 
 ## CLI usage
 
