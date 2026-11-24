@@ -355,41 +355,44 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #300: workflow_dispatch runs 45398465490 and
-45398481840 against the PR branch at head
-`3421c442138fb8dc2a8a41ee06db11e3f6f67bb9` (branch commit
-`3ca9974`, quarantine benchmark-shaped recognizers behind a runtime
-flag (#188), on current `main` at `93581e8` (PR #298), plus fix
-commit `3421c44`, moving the vm-profile corpus workloads out of
-`docs/` into `tools/vm-profile/`),
-and pull-request run 45398441987, which built the same tree
-(`ubuntu-24.04`, Rust 1.96.0). Every run produced
+On 2026-11-25, the `Embedder footprint` workflow was run three times
+against the code of PR #304: workflow_dispatch runs 45459026158 and
+45459043471 against the PR branch at head
+`ba0feb7de1ee4b074685e9b849f050cb0fe0be0d` (the #198 AoT artifact
+container commit `c15d6de` on current `main` at
+`04bca9a` (PRs #299 and #300), plus fuzz-build fix commit
+`ba0feb7`, which enables `aot-load` in the fuzz crate and
+changes no embedder-linked code),
+and pull-request run 45459015271, which built the same tree
+(`ubuntu-24.04`, Rust 1.96.0). A three-run control against
+unmodified `main` at `04bca9a` (workflow_dispatch runs
+45459064907, 45459081941 and 45459101432) isolates the
+attribution recorded in the re-baseline history below. Every run produced
 byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
 the stripped file size, and the stripped `.text` size each have a
-run-to-run spread of **0 B** across the three samples. The observed
+run-to-run spread of **0 B** across the samples. The observed
 values are the baselines in the table below (stripped file /
 stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,592,904 | 1,205,495 |
-| `release` | `component` | 2,673,416 | 2,120,503 |
-| `release` | `wasi` | 2,900,984 | 2,294,951 |
-| `release` | `core-nosimd` | 1,401,864 | 1,060,359 |
-| `release` | `core-jit` | 2,131,928 | 1,639,975 |
-| `release` | `core-aot` | 1,639,272 | 1,239,063 |
-| `release` | `wasi-threads` | 3,116,600 | 2,462,263 |
+| `release` | `core` | 1,591,904 | 1,204,439 |
+| `release` | `component` | 2,671,528 | 2,118,551 |
+| `release` | `wasi` | 2,899,088 | 2,292,999 |
+| `release` | `core-nosimd` | 1,400,792 | 1,059,271 |
+| `release` | `core-jit` | 2,130,648 | 1,638,423 |
+| `release` | `core-aot` | 1,637,896 | 1,237,703 |
+| `release` | `wasi-threads` | 3,114,792 | 2,460,311 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,115,560 | 787,111 |
-| `release-size` | `component` | 1,677,000 | 1,237,703 |
-| `release-size` | `wasi` | 1,798,248 | 1,319,479 |
-| `release-size` | `core-nosimd` | 1,000,800 | 707,591 |
-| `release-size` | `core-jit` | 1,538,080 | 1,091,575 |
-| `release-size` | `core-aot` | 1,154,640 | 812,375 |
-| `release-size` | `wasi-threads` | 1,940,824 | 1,414,119 |
+| `release-size` | `core` | 1,115,512 | 787,127 |
+| `release-size` | `component` | 1,676,936 | 1,237,671 |
+| `release-size` | `wasi` | 1,798,120 | 1,319,399 |
+| `release-size` | `core-nosimd` | 1,000,736 | 707,591 |
+| `release-size` | `core-jit` | 1,538,432 | 1,091,767 |
+| `release-size` | `core-aot` | 1,154,592 | 812,343 |
+| `release-size` | `wasi-threads` | 1,940,840 | 1,414,119 |
 
 #### Re-baseline history
 
@@ -1533,6 +1536,56 @@ the largest cumulative growth is now the `release`
 to 2,673,416 B). The baseline was re-measured on the
 branch and updated as recorded above, following the
 procedure below.
+
+PR #304 (#198, AoT artifact container) tripped the gate on
+four `release-size` series. Attribution was isolated by
+measuring current `main` alone three times
+(workflow_dispatch runs 45459064907, 45459081941 and
+45459101432 on `main` at `04bca9a`; the values reproduce
+the PR #302 control measurements exactly). Two failures
+are main-side baseline staleness alone, shared with
+PR #302: the previous baseline was measured on the
+PR #300 branch tree (`3421c44`: `main` at `93581e8` plus
+PR #300) before PR #299 (precompiled-module codec, #196)
+merged; on the merged `main`, 26 of the 32 gated series
+differ from that baseline and most library configurations
+shrink (in `release`, stripped file -1,000 B in `core` to
+-1,896 B in `wasi`, stripped `.text` -1,056 B to -1,952 B;
+in `release-size`, stripped file -32 B to -128 B and
+stripped `.text` -16 B to -80 B where they change), while
+the `baseline` configuration is unchanged in both
+profiles. The two staleness-only failures are each +16 B:
+`release-size` `core` stripped `.text` (787,111 B to
+787,127 B) and `release-size` `wasi-threads` stripped
+file (1,940,824 B to 1,940,840 B) — this branch is
+byte-identical to `main` on both. This PR's own delta
+against the main control is confined to the only two
+configurations that link the AoT/JIT code path
+(`core-jit` and `core-aot`); the other six configurations
+are byte-identical to `main` on every gated series,
+because the new `aot_artifact` module is gated behind
+the `aot-load`/`jit` features and the unreferenced
+remainder is link-time eliminated in the minimal
+embedder. The seven differing series are: `release`
+`core-aot` stripped file -256 B / stripped `.text`
+-192 B, `release` `core-jit` stripped file +16 B /
+stripped `.text` -352 B, `release-size` `core-aot`
+stripped file +16 B (stripped `.text` unchanged), and
+`release-size` `core-jit` stripped file +384 B /
+stripped `.text` +208 B. Against the checked-in baseline
+the remaining two gate failures are therefore
+`release-size` `core-jit` stripped file +352 B
+(1,538,080 B to 1,538,432 B) and stripped `.text` +192 B
+(1,091,575 B to 1,091,767 B), the net of this PR's growth
+and the main-side shrink. Against the original #164
+baseline, the largest cumulative growth remains the
+`release` `core-nosimd` stripped file series at +9.83%
+(1,275,448 B to 1,400,792 B), followed by the `release`
+`component` stripped file series at +9.77% (2,433,656 B
+to 2,671,528 B) — unchanged from the PR #302 figures,
+because this PR does not grow those series. The baseline was
+re-measured on the branch and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
