@@ -136,8 +136,9 @@ record or its format.
 Issue [#143](https://github.com/yieldspace/telomere/issues/143) owns the
 overall public error redesign. It may carry this owned `TrapInfo` payload, but
 this API deliberately leaves `VMResult` and existing call signatures intact.
-Issue [#146](https://github.com/yieldspace/telomere/issues/146) owns the C ABI
-mirror; ownership here is the compatibility boundary it can rely on. Component
+Issue [#146](https://github.com/yieldspace/telomere/issues/146) decided the
+C ABI question - no C mirror ships in v1 (see [the C ABI decision](c-abi.md)) -
+so this record has no C counterpart it must stay compatible with. Component
 surface decisions remain with #211 rather than adding this report to
 `component_support` now.
 
