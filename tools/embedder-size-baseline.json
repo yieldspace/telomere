@@ -1,20 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #290 (branch fix/190-jit-feature-tax at head 208dcba57d4aeb59a6ae4294effaa6b9a7bfb425 \u2014 branch commit 208dcba (keep the interpreter stop target on ExecuteContext, not a thread local (#190)); the branch is based directly on current main b39b116, which had not moved since the branch was cut, so no merge commit was needed and the pull-request run built the same tree; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45308598282 and 45308607305 against the branch and pull-request run 45306829128, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "208dcba57d4aeb59a6ae4294effaa6b9a7bfb425",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #293 (branch fix/191-jit-direct-calls at head 1fa6db7889158ac6d1eb8abc1c9d573bf19378d7 \u2014 branch commit f0015b9 (enter JIT callees directly on native-to-native calls (#191)), merge commit 159796d bringing in main 41bca95 (PR #290, #190), commit de0de8f bounding native entry by the host stack (Codex P1 fix), and merge commit 1fa6db7 bringing in current main 1b25df0 (PR #291, #137); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45327945752 and 45327956071 against the branch and pull-request run 45327889910, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "1fa6db7889158ac6d1eb8abc1c9d573bf19378d7",
     "date": "2026-11-24",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45308598282,
-      45308607305
+      45327945752,
+      45327956071
     ],
     "cross_check_run_ids": [
-      45306829128
+      45327889910
     ],
-    "derivation": "Re-baseline for PR #290 (#190, the jit feature tax: compiling the jit feature slowed the interpreter even when the JIT never ran). The change moves the JIT interpreter stop target out of the JIT_INTERPRETER_STOP_AT thread-local into a new trailing field of ExecuteContext (jit_stop_pc); JitInterpreterStopGuard saves and restores that field through a slot pointer, keeping the save/restore nesting semantics, and the per-dispatch check compares the current pc against the ctx field in a single equality (the pc is never null by construction). On Darwin the thread-local read went through a TLV thunk call on every dispatch; the field read removes that call. Attribution was isolated by measuring current main (b39b116) alone (workflow_dispatch run 45308616450, gate success): it reproduces the previous baseline exactly on all 32 gated series, and the only code change since the previous baseline is the 208dcba commit, so every delta below is that commit's own. 28 of the 32 gated series change; the baseline configuration, which links no telomere code, is byte-identical in both profiles. In release, the non-JIT library configurations shrink by 16 B in stripped file and stripped .text alike, core-jit shrinks by 10,240 B (stripped file and .text), and core-aot grows by 15,536 B stripped file / 12,512 B stripped .text. In release-size, core, component, wasi, core-nosimd and wasi-threads grow by 64..80 B stripped file (48..80 B stripped .text), core-jit shrinks by 18,272 B stripped file / 18,224 B stripped .text, and core-aot grows by 19,568 B / 13,600 B. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series, now at +9.59% (2,433,656 B to 2,667,120 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was again 0 B for every gated series across the three samples."
+    "derivation": "Second re-baseline for PR #293 (#191, JIT-to-JIT calls round-tripping through the runtime with a per-call mutex), after the Codex P1 fix de0de8f and the merge of current main (1b25df0, PR #291). The P1 fix bounds native entry by the host stack: both native entry boundaries (generic enter_current_frame_raw and direct enter_compiled_from_jit_call) compare the current stack pointer against a floor recorded on the ExecuteContext (the executing thread's OS stack low bound plus a 256 KiB reserve, established lazily at first entry, with a fixed 512 KiB budget as fallback), and decline the entry through the existing fallback results when the remaining stack runs low, so deep guest recursion reaches the value-stack StackOverflow instead of aborting the process on small host stacks. No TLS and no depth counter are reintroduced. Attribution was isolated by measuring current main alone (workflow_dispatch run 45327968623, gate success): it reproduces the pre-#191 baseline exactly on all 32 gated series, so every delta below is this PR's own. Against main, 18 of the 32 gated series change. In release, core-jit grows by 1,904 B stripped file / 1,616 B stripped .text, core-aot grows by 32 B stripped .text only, and component, core, core-nosimd, wasi and wasi-threads each grow by 16 B / 16 B (the ExecuteContext stack-floor field in shared code). In release-size, core-jit grows by 896 B / 688 B, core-aot shrinks by 128 B / 80 B, and wasi grows by 16 B stripped .text only. Against the first PR #293 re-baseline (head efe8dea), the increment attributable to the P1 fix alone is: release core-jit +752 B / +640 B, core-aot +560 B / +480 B, and +16 B / +16 B on component, core, core-nosimd, wasi and wasi-threads; release-size core-jit +624 B / +448 B, core-aot +320 B / +224 B, wasi +16 B stripped .text. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series, unchanged at +9.59% (2,433,656 B to 2,667,136 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was again 0 B for every gated series across the three samples."
   },
   "thresholds": {
     "release": {
@@ -30,52 +30,52 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1586320,
-          "threshold": 1586320
+          "baseline": 1586336,
+          "threshold": 1586336
         },
         "stripped_text_bytes": {
-          "baseline": 1200263,
-          "threshold": 1200263
+          "baseline": 1200279,
+          "threshold": 1200279
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2667120,
-          "threshold": 2667120
+          "baseline": 2667136,
+          "threshold": 2667136
         },
         "stripped_text_bytes": {
-          "baseline": 2115559,
-          "threshold": 2115559
+          "baseline": 2115575,
+          "threshold": 2115575
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 3011120,
-          "threshold": 3011120
+          "baseline": 3011136,
+          "threshold": 3011136
         },
         "stripped_text_bytes": {
-          "baseline": 2375687,
-          "threshold": 2375687
+          "baseline": 2375703,
+          "threshold": 2375703
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1395568,
-          "threshold": 1395568
+          "baseline": 1395584,
+          "threshold": 1395584
         },
         "stripped_text_bytes": {
-          "baseline": 1055431,
-          "threshold": 1055431
+          "baseline": 1055447,
+          "threshold": 1055447
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2125104,
-          "threshold": 2125104
+          "baseline": 2127008,
+          "threshold": 2127008
         },
         "stripped_text_bytes": {
-          "baseline": 1634503,
-          "threshold": 1634503
+          "baseline": 1636119,
+          "threshold": 1636119
         }
       },
       "core-aot": {
@@ -84,18 +84,18 @@
           "threshold": 1632144
         },
         "stripped_text_bytes": {
-          "baseline": 1233271,
-          "threshold": 1233271
+          "baseline": 1233303,
+          "threshold": 1233303
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3226576,
-          "threshold": 3226576
+          "baseline": 3226592,
+          "threshold": 3226592
         },
         "stripped_text_bytes": {
-          "baseline": 2542839,
-          "threshold": 2542839
+          "baseline": 2542855,
+          "threshold": 2542855
         }
       }
     },
@@ -136,8 +136,8 @@
           "threshold": 1868328
         },
         "stripped_text_bytes": {
-          "baseline": 1366151,
-          "threshold": 1366151
+          "baseline": 1366167,
+          "threshold": 1366167
         }
       },
       "core-nosimd": {
@@ -152,22 +152,22 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1533920,
-          "threshold": 1533920
+          "baseline": 1534816,
+          "threshold": 1534816
         },
         "stripped_text_bytes": {
-          "baseline": 1088519,
-          "threshold": 1088519
+          "baseline": 1089207,
+          "threshold": 1089207
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1150048,
-          "threshold": 1150048
+          "baseline": 1149920,
+          "threshold": 1149920
         },
         "stripped_text_bytes": {
-          "baseline": 808967,
-          "threshold": 808967
+          "baseline": 808887,
+          "threshold": 808887
         }
       },
       "wasi-threads": {

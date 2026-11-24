@@ -2766,3 +2766,282 @@ async fn jit_falls_back_when_function_exceeds_code_cache_limit() {
 
     assert_success_i32(result, 1);
 }
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_direct_native_calls_match_interpreter_results() {
+    // #191: mutual recursion and self recursion exercise the direct
+    // native-to-native call path across and within functions; results
+    // must match the interpreter exactly.
+    const WAT: &str = r#"
+        (module
+          (func $even (param i32) (result i32)
+            local.get 0
+            i32.eqz
+            if (result i32)
+              i32.const 1
+            else
+              local.get 0
+              i32.const 1
+              i32.sub
+              call $odd
+            end)
+          (func $odd (param i32) (result i32)
+            local.get 0
+            i32.eqz
+            if (result i32)
+              i32.const 0
+            else
+              local.get 0
+              i32.const 1
+              i32.sub
+              call $even
+            end)
+          (func $fib (param i32) (result i32)
+            local.get 0
+            i32.const 2
+            i32.lt_s
+            if (result i32)
+              local.get 0
+            else
+              local.get 0
+              i32.const 1
+              i32.sub
+              call $fib
+              local.get 0
+              i32.const 2
+              i32.sub
+              call $fib
+              i32.add
+            end)
+          (func (export "even") (param i32) (result i32)
+            local.get 0
+            call $even)
+          (func (export "fib") (param i32) (result i32)
+            local.get 0
+            call $fib))
+        "#;
+
+    for (name, arg, expected) in [("even", 1_000, 1), ("even", 999, 0), ("fib", 20, 6_765)] {
+        let jit = invoke_jit(WAT, name, vec![WasmValue::I32(arg)]).await;
+        assert_success_i32(jit, expected);
+        let interpreter = invoke_interpreter(WAT, name, vec![WasmValue::I32(arg)]).await;
+        assert_success_i32(interpreter, expected);
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[test]
+fn jit_deep_recursion_traps_as_stack_overflow() {
+    // #191: native entry depth is bounded by the value-stack frame
+    // reservation (the interpreter's stack-limit accounting), not by a
+    // separate native-entry counter. Unbounded self-recursion must
+    // therefore trap as StackOverflow — on a default-sized 2 MiB
+    // thread stack, without overflowing the host stack — exactly like
+    // the interpreter. (Measured on x86_64 Linux: the trap fires after
+    // ~3,196 nested entries at the default 128 KiB value-stack limit.)
+    std::thread::Builder::new()
+        .name("jit-deep-recursion".to_string())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building a runtime for the recursion test");
+            runtime.block_on(async {
+                const WAT: &str = r#"
+                    (module
+                      (func (export "run")
+                        call 0))
+                    "#;
+                let jit_result = invoke_jit(WAT, "run", vec![]).await;
+                assert!(
+                    matches!(jit_result, VMResult::StackOverflow),
+                    "JIT recursion must trap as stack overflow, got {jit_result:?}"
+                );
+                let interpreter_result = invoke_interpreter(WAT, "run", vec![]).await;
+                assert!(
+                    matches!(interpreter_result, VMResult::StackOverflow),
+                    "interpreter recursion must trap as stack overflow, got {interpreter_result:?}"
+                );
+            });
+        })
+        .expect("spawning the recursion test thread")
+        .join()
+        .expect("the recursion test thread must not panic");
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[test]
+fn jit_recursion_on_small_stacks() {
+    // PR #293 (Codex P1 on #191): the value-stack reservation bounds
+    // recursion depth, but each nested native entry also spends real
+    // host stack (~0.5 KiB for the minimal frame), so the ~3.2k
+    // entries the default limits allow overflow a 1 MiB host thread
+    // and aborted the process before the value-stack bound was
+    // reached. The native entry stack guard must decline to the
+    // interpreter before the stack runs out, so unbounded
+    // self-recursion traps as StackOverflow on a 1 MiB thread --
+    // without aborting -- exactly like the interpreter. On a roomy
+    // 8 MiB thread it still traps, with the value-stack bound as the
+    // binding limit.
+    const WAT: &str = r#"
+        (module
+          (func (export "run")
+            call 0))
+        "#;
+    for (label, stack_size) in [("1mib", 1024 * 1024), ("8mib", 8 * 1024 * 1024)] {
+        std::thread::Builder::new()
+            .name(format!("jit-recursion-{label}"))
+            .stack_size(stack_size)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("building a runtime for the small-stack recursion test");
+                runtime.block_on(async {
+                    let jit_result = invoke_jit(WAT, "run", vec![]).await;
+                    assert!(
+                        matches!(jit_result, VMResult::StackOverflow),
+                        "JIT recursion on a {label} stack must trap as stack overflow, got {jit_result:?}"
+                    );
+                    let interpreter_result = invoke_interpreter(WAT, "run", vec![]).await;
+                    assert!(
+                        matches!(interpreter_result, VMResult::StackOverflow),
+                        "interpreter recursion on a {label} stack must trap as stack overflow, got {interpreter_result:?}"
+                    );
+                });
+            })
+            .expect("spawning the small-stack recursion test thread")
+            .join()
+            .expect("the small-stack recursion test thread must not panic");
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[test]
+fn jit_bounded_deep_recursion_on_1mib_stack_matches_interpreter() {
+    // PR #293: a bounded recursion of depth 1,500 needs more host
+    // stack than a 1 MiB thread can give to native frames alone, but
+    // the interpreter runs it flat. With the entry stack guard
+    // declining to the interpreter once the stack runs low, the JIT
+    // execution completes with the interpreter's result instead of
+    // trapping early (or aborting).
+    std::thread::Builder::new()
+        .name("jit-bounded-recursion-1mib".to_string())
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building a runtime for the bounded recursion test");
+            runtime.block_on(async {
+                const WAT: &str = r#"
+                    (module
+                      (func $count (param i32) (result i32)
+                        local.get 0
+                        i32.eqz
+                        if (result i32)
+                          i32.const 0
+                        else
+                          local.get 0
+                          i32.const 1
+                          i32.sub
+                          call $count
+                        end)
+                      (func (export "count") (param i32) (result i32)
+                        local.get 0
+                        call $count))
+                    "#;
+                let jit = invoke_jit(WAT, "count", vec![WasmValue::I32(1_500)]).await;
+                assert_success_i32(jit, 0);
+                let interpreter =
+                    invoke_interpreter(WAT, "count", vec![WasmValue::I32(1_500)]).await;
+                assert_success_i32(interpreter, 0);
+            });
+        })
+        .expect("spawning the bounded recursion test thread")
+        .join()
+        .expect("the bounded recursion test thread must not panic");
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_direct_calls_stay_correct_under_cache_eviction_pressure() {
+    // #191: with a code-cache cap that only holds a couple of the
+    // functions this module calls, direct native calls, evictions and
+    // recompilations interleave; results must stay correct and the
+    // resident byte accounting must respect the cap throughout.
+    const CAP: u32 = 2_560;
+    let mut wat = String::from("(module\n");
+    for i in 0..8 {
+        wat.push_str(&format!(
+            "  (func $f{i} (param i32) (result i32) local.get 0 i32.const {} i32.add)\n",
+            i + 1
+        ));
+    }
+    wat.push_str("  (func (export \"run\") (param i32) (result i32)\n    local.get 0\n");
+    for i in 0..8 {
+        wat.push_str(&format!("    call $f{i}\n"));
+    }
+    wat.push_str("  )\n)\n");
+
+    let mut runtime_config = RuntimeConfig::default();
+    runtime_config.jit = JitConfig { enabled: true };
+    runtime_config.limits.max_code_cache_bytes = CAP;
+    let store = Store::new_with_runtime_config(runtime_config);
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(&wat, &store, &registry).await;
+
+    // run(0) = ((((0+1)+2)+3)+4)+5)+6)+7)+8 = 36.
+    for pass in 0..3 {
+        let result = telomere::run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(0)]),
+        )
+        .await;
+        assert_success_i32(result, 36);
+        let stats = store.jit_cache_stats();
+        assert!(
+            stats.used_bytes <= CAP as usize,
+            "pass {pass}: resident bytes must respect the cap, stats={stats:?}"
+        );
+    }
+}

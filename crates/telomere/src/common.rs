@@ -1463,6 +1463,34 @@ pub struct ExecuteContext<'a> {
     // the dead_code lint cannot see that use in non-JIT builds.
     #[allow(dead_code)]
     pub(crate) jit_stop_pc: *const Instr,
+    /// PR #293 (Codex P1 on #191): lowest host-stack address a native
+    /// (JIT) entry may approach in this execution, or 0 while it has
+    /// not been established yet.
+    ///
+    /// Native-to-native calls nest real host frames (the call helper,
+    /// the entry boundary, the callee's own native frame), so the
+    /// value-stack reservation that bounds recursion depth cannot by
+    /// itself keep guest recursion from exhausting a small host thread
+    /// stack: at the default limits the minimal self-recursive frame
+    /// nests ~3.2k entries, which fits a 2 MiB stack but overflows a
+    /// 1 MiB one and aborts the embedding process. The JIT entry
+    /// boundaries therefore compare the current stack pointer against
+    /// this floor and decline the entry -- falling back to the
+    /// interpreter, whose dispatch consumes no host stack per level --
+    /// once the remaining stack runs low. The floor is established
+    /// lazily at the first native entry of the context from the
+    /// current thread's OS stack bounds plus a safety reserve (see
+    /// `runtime::jit`), so it tracks the thread the execution actually
+    /// runs on, including across scheduler re-dispatches and
+    /// host-function re-entry, where a depth counter carried on the
+    /// context would silently reset while the host stack stays spent.
+    /// Appended at the end of the struct for the same `offset_of!`
+    /// reason as `jit_stop_pc`.
+    // Read and written only by the JIT entry boundaries (feature
+    // `aot-load`); the dead_code lint cannot see that use in non-JIT
+    // builds.
+    #[allow(dead_code)]
+    pub(crate) jit_native_stack_floor: usize,
 }
 
 /// Flat `(base, committed_len)` view of the active frame's default local

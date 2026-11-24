@@ -29,6 +29,14 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ComponentError::GuestTrap` preserves the core `TrapKind` for guest traps
   crossing the component boundary, so component-level callers can match on
   the trap cause instead of parsing a message string.
+- The preview1 runner now implements `environ_sizes_get`, `environ_get`,
+  `fd_read` (stdin), and `random_get`, so stock `wasm32-wasip1` command
+  modules that use argv, the environment, stdio, clocks, and random run end
+  to end (#137). The guest environment is inherited from the host process
+  by default, matching the `component` subcommand; the core command path
+  gains `--env KEY=VALUE` and `--no-inherit-env` for it. The preview1
+  filesystem family remains unimplemented and fail-closed; the scope
+  decision is recorded in `docs/core/preview1-scope.md`.
 - `HostContext::with_memory` and `HostContext::with_caller_memory` closure
   accessors on the public host boundary (#216). Unlike `memory` /
   `caller_memory`, which return `None` when the default memory is shared,

@@ -204,12 +204,16 @@ the table says *registered* rather than *not linked*.
 
 ### Preview1 CLI runner
 
-The compact core-Wasm preview1 runner supplies exactly these eight host
-functions: `args_sizes_get`, `args_get`, `clock_time_get`, `fd_close`,
-`fd_fdstat_get`, `fd_seek`, `fd_write`, and `proc_exit`
-([source][preview1]). It intentionally does not provide `environ_get` or
-`environ_sizes_get`; that gap prevents a stock `wasm32-wasip1` Rust program
-from producing output through this runner.
+The compact core-Wasm preview1 runner supplies exactly these twelve host
+functions: `args_sizes_get`, `args_get`, `clock_time_get`,
+`environ_sizes_get`, `environ_get`, `fd_close`, `fd_fdstat_get`, `fd_read`,
+`fd_seek`, `fd_write`, `proc_exit`, and `random_get` ([source][preview1]).
+That set runs stock `wasm32-wasip1` Rust command modules that use argv,
+the environment, stdio, clocks, and random. The filesystem family
+(`fd_prestat_*`, `path_*`, `fd_filestat_get`) is intentionally not
+provided, so a stock program that opens files still fails closed at
+validation; the scope decision and its evidence are recorded in the
+[preview1 scope record](core/preview1-scope.md) (#137).
 
 ## Pointers, not duplicate claims
 
