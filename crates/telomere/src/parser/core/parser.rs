@@ -851,9 +851,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             op: vm::special_function_return,
         });
         instrs.push(Instr {
-            operand: Operand {
-                drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
-            },
+            operand: Operand::from_drop_size(functype.1.iter().map(|v| v.stack_size().u32()).sum()),
         });
         instruction_meta.push(optimizer::InstructionMeta {
             start: function_return_start,

@@ -51,6 +51,78 @@ mod tests {
         assert_eq!(func.lowered.max_operand_bytes, 16);
     }
 
+    #[test]
+    fn narrow_operands_are_fully_initialized_with_zero_tails() {
+        // #292: a union literal such as `Operand { u32: v }` leaves the
+        // high four bytes of the operand slot uninitialized, and the
+        // pipeline raw lowering (`lower_operand`) reads all eight bytes
+        // through the `encoded` arm — constructing a `[u8; 8]` value from
+        // uninitialized memory is undefined behaviour, which Miri flagged
+        // on this exact path. Narrow operands are now built through the
+        // `Operand::from_*` constructors, which zero the tail. Pin the
+        // invariant on the parser stream the pipeline consumes: every
+        // operand slot of these modules is narrow, so the high half of
+        // every slot must be zero.
+        let func = function_at("(module (func (param i32) (result i32) local.get 0))", 0);
+        let slots = operand_slots(&func);
+        assert!(!slots.is_empty());
+        assert!(slots.iter().all(|slot| slot[4..] == [0, 0, 0, 0]));
+
+        let func = function_at("(module (func (result i32) i32.const 11))", 0);
+        let slots = operand_slots(&func);
+        assert!(slots.iter().all(|slot| slot[4..] == [0, 0, 0, 0]));
+        assert!(slots.iter().any(|slot| slot[..4] == [11, 0, 0, 0]));
+    }
+
+    #[cfg(feature = "simd")]
+    #[test]
+    fn miri_repro_module_operands_are_fully_initialized() {
+        // The module shape from the #292 Miri report: the uninitialized
+        // read fired while lowering this function (the extract-lane lane
+        // index is a narrow `u32` operand). All of its operand slots are
+        // narrow or zero-extended encodings, so all high halves must be
+        // zero.
+        let func = function_at(
+            "(module
+               (func (param i32) (result i32)
+                 (block (result i32)
+                   v128.const i8x16 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                   i8x16.extract_lane_s 0
+                   local.get 0
+                   br_if 0
+                   drop
+                   i32.const 11)))",
+            0,
+        );
+        let slots = operand_slots(&func);
+        assert!(!slots.is_empty());
+        // The one legitimate nonzero high half is the block operand: a
+        // `block_return` is a full eight-byte field whose high half is
+        // the block return size (4 for the i32 result, stack_top 0).
+        let nonzero_tails: Vec<[u8; 8]> = slots
+            .iter()
+            .copied()
+            .filter(|slot| slot[4..] != [0, 0, 0, 0])
+            .collect();
+        assert_eq!(nonzero_tails, vec![[0, 0, 0, 0, 4, 0, 0, 0]]);
+        // And the narrow operands that used to carry uninitialized tails
+        // are present in canonical form: the lane index and the const.
+        assert!(slots.iter().any(|slot| slot == &[11, 0, 0, 0, 0, 0, 0, 0]));
+    }
+
+    fn operand_slots(func: &Func) -> Vec<[u8; 8]> {
+        let mut slots = Vec::new();
+        let mut cursor = 0usize;
+        for len in &func.op_lens {
+            let width = usize::from(*len);
+            for offset in 1..width {
+                slots.push(unsafe { func.expr[cursor + offset].operand.encoded });
+            }
+            cursor += width;
+        }
+        slots
+    }
+
     fn function_at(wat: &str, func_idx: usize) -> Func {
         let module = module_from_wat(wat);
         let FunctionBody::Wasm(func) = &module.codes.0[func_idx] else {
@@ -3101,7 +3173,7 @@ mod tests {
                     id: InstId(2),
                     op: vm::op_i32_const as crate::common::Op,
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                        Operand { i32: 0 }.encoded
+                        Operand::from_i32(0).encoded
                     })],
                     stack_before: Vec::new(),
                     stack_after: vec![ValType::I32],
@@ -3150,7 +3222,7 @@ mod tests {
                 id: InstId(6),
                 op: vm::op_i32_const as crate::common::Op,
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                    Operand { i32: 1 }.encoded
+                    Operand::from_i32(1).encoded
                 })],
                 stack_before: Vec::new(),
                 stack_after: vec![ValType::I32],
@@ -3168,7 +3240,7 @@ mod tests {
                 id: InstId(7),
                 op: vm::op_i32_const as crate::common::Op,
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                    Operand { i32: 2 }.encoded
+                    Operand::from_i32(2).encoded
                 })],
                 stack_before: Vec::new(),
                 stack_after: vec![ValType::I32],
@@ -3340,7 +3412,7 @@ mod tests {
                     id: InstId(0),
                     op: vm::op_i32_const as crate::common::Op,
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                        Operand { i32: 4 }.encoded
+                        Operand::from_i32(4).encoded
                     })],
                     stack_before: Vec::new(),
                     stack_after: vec![ValType::I32],
@@ -3410,7 +3482,7 @@ mod tests {
                 id: InstId(4),
                 op: vm::op_i32_const as crate::common::Op,
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                    Operand { i32: 0 }.encoded
+                    Operand::from_i32(0).encoded
                 })],
                 stack_before: Vec::new(),
                 stack_after: vec![ValType::I32],
@@ -3490,7 +3562,7 @@ mod tests {
                     id: InstId(0),
                     op: vm::op_i32_const as crate::common::Op,
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                        Operand { i32: 1 }.encoded
+                        Operand::from_i32(1).encoded
                     })],
                     stack_before: Vec::new(),
                     stack_after: vec![ValType::I32],
@@ -3560,7 +3632,7 @@ mod tests {
                 id: InstId(4),
                 op: vm::op_i32_const as crate::common::Op,
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                    Operand { i32: 0 }.encoded
+                    Operand::from_i32(0).encoded
                 })],
                 stack_before: Vec::new(),
                 stack_after: vec![ValType::I32],
@@ -3623,7 +3695,7 @@ mod tests {
                     id: InstId(0),
                     op: vm::op_i32_const as crate::common::Op,
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                        Operand { i32: 8 }.encoded
+                        Operand::from_i32(8).encoded
                     })],
                     stack_before: Vec::new(),
                     stack_after: vec![ValType::I32],
@@ -3768,7 +3840,7 @@ mod tests {
                     id: InstId(1),
                     op: vm::op_i32_const as crate::common::Op,
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                        Operand { i32: 12 }.encoded
+                        Operand::from_i32(12).encoded
                     })],
                     stack_before: vec![ValType::I32],
                     stack_after: vec![ValType::I32, ValType::I32],
@@ -3848,7 +3920,7 @@ mod tests {
                 id: InstId(6),
                 op: vm::op_i32_const as crate::common::Op,
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                    Operand { i32: 0 }.encoded
+                    Operand::from_i32(0).encoded
                 })],
                 stack_before: Vec::new(),
                 stack_after: vec![ValType::I32],
@@ -3952,7 +4024,7 @@ mod tests {
                     id: InstId(2),
                     op: vm::op_i32_const as crate::common::Op,
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                        Operand { i32: 2 }.encoded
+                        Operand::from_i32(2).encoded
                     })],
                     stack_before: vec![ValType::I32, ValType::I32],
                     stack_after: vec![ValType::I32, ValType::I32, ValType::I32],
@@ -3984,7 +4056,7 @@ mod tests {
                     id: InstId(5),
                     op: vm::op_i32_const as crate::common::Op,
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                        Operand { i32: 16 }.encoded
+                        Operand::from_i32(16).encoded
                     })],
                     stack_before: vec![ValType::I32],
                     stack_after: vec![ValType::I32, ValType::I32],
@@ -4064,7 +4136,7 @@ mod tests {
                 id: InstId(10),
                 op: vm::op_i32_const as crate::common::Op,
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
-                    Operand { i32: 0 }.encoded
+                    Operand::from_i32(0).encoded
                 })],
                 stack_before: Vec::new(),
                 stack_after: vec![ValType::I32],

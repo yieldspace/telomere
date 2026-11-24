@@ -59,7 +59,7 @@ fn push_memarg_instruction<R: BinaryReader>(
         ctx.instrs.push_with_operand(op, &[Operand { memarg }]);
     } else {
         ctx.instrs
-            .push_with_operand(op, &[Operand { memarg }, Operand { u32: memidx }]);
+            .push_with_operand(op, &[Operand { memarg }, Operand::from_u32(memidx)]);
     }
     Ok(())
 }
@@ -78,14 +78,14 @@ fn push_memarg_lane_instruction<R: BinaryReader>(
     let op = select_memory_op(ctx, memidx, local, shared, indexed_local, indexed_shared)?;
     if memidx == 0 {
         ctx.instrs
-            .push_with_operand(op, &[Operand { memarg }, Operand { u32: lane }]);
+            .push_with_operand(op, &[Operand { memarg }, Operand::from_u32(lane)]);
     } else {
         ctx.instrs.push_with_operand(
             op,
             &[
                 Operand { memarg },
-                Operand { u32: lane },
-                Operand { u32: memidx },
+                Operand::from_u32(lane),
+                Operand::from_u32(memidx),
             ],
         );
     }
@@ -177,7 +177,7 @@ macro_rules! extract_lane_parser {
                 super::validate_lane(CODE, lane, $lane_count)?;
                 ctx.checker.op(&[ValType::V128], &[$output])?;
                 ctx.instrs
-                    .push_with_operand(vm::simd::$name, &[Operand { u32: lane as u32 }]);
+                    .push_with_operand(vm::simd::$name, &[Operand::from_u32(lane as u32)]);
                 Ok(len)
             }
         }
@@ -196,7 +196,7 @@ macro_rules! replace_lane_parser {
                 super::validate_lane(CODE, lane, $lane_count)?;
                 ctx.checker.op(&[ValType::V128, $input], &[ValType::V128])?;
                 ctx.instrs
-                    .push_with_operand(vm::simd::$name, &[Operand { u32: lane as u32 }]);
+                    .push_with_operand(vm::simd::$name, &[Operand::from_u32(lane as u32)]);
                 Ok(len)
             }
         }
@@ -603,7 +603,7 @@ pub(crate) mod i8x16_extract_lane_s {
 
         ctx.instrs.push_with_operand(
             vm::simd::op_i8x16_extract_lane_s,
-            &[Operand { u32: lane as u32 }],
+            &[Operand::from_u32(lane as u32)],
         );
         Ok(len)
     }

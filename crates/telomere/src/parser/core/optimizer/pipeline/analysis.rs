@@ -1154,7 +1154,7 @@ mod tests {
     }
 
     fn raw_i32_operand(value: i32) -> LoweredOperand {
-        LoweredOperand::Raw(unsafe { Operand { i32: value }.encoded })
+        LoweredOperand::Raw(unsafe { Operand::from_i32(value).encoded })
     }
 
     fn inst(
