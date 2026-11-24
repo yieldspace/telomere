@@ -39,7 +39,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "aot-load")]
 thread_local! {
     static JIT_ENTRY_DEPTH: Cell<usize> = const { Cell::new(0) };
-    static JIT_INTERPRETER_STOP_AT: Cell<*const Instr> = const { Cell::new(std::ptr::null()) };
 }
 
 #[cfg(feature = "aot-load")]
@@ -154,7 +153,7 @@ pub(crate) unsafe fn run_interpreter_continue_from_jit_call(
     ctx: &mut ExecuteContext<'_>,
 ) -> JitNativeExit {
     trace_fallback_exit(ctx, "nested_continue", pc);
-    let _guard = JitInterpreterStopGuard::new(stop_pc);
+    let _guard = JitInterpreterStopGuard::new(ctx, stop_pc);
     let mut next = pc;
     loop {
         match unsafe { vm::call_code(next, ctx) } {
@@ -174,19 +173,28 @@ pub(crate) unsafe fn run_interpreter_continue_from_jit_call(
 }
 
 #[cfg(feature = "aot-load")]
-pub(crate) fn should_stop_interpreter_at(pc: *const Instr) -> bool {
-    JIT_INTERPRETER_STOP_AT.with(|stop| {
-        let target = stop.get();
-        !target.is_null() && target == pc
-    })
+pub(crate) fn should_stop_interpreter_at(ctx: &ExecuteContext<'_>, pc: *const Instr) -> bool {
+    // #190: the stop target lives on the execution context, not in a
+    // thread local, so this per-dispatch check is a single compare
+    // against a field of the already-live context pointer.
+    //
+    // The null check from the thread-local form is folded into the
+    // comparison: `pc` is a decoded-instruction pointer, non-null by
+    // construction at every call site, so an inactive (null) stop target
+    // can never equal it. Keeping this a single equality matters -- the
+    // two-condition form made LLVM materialise the boolean through a
+    // `setcc`/`and` chain in several handlers instead of one fused
+    // compare-and-branch, which measured slower than the TLS read it
+    // replaced.
+    ctx.jit_stop_pc == pc
 }
 
 #[cfg(feature = "aot-load")]
-pub(crate) fn interpreter_stop_active() -> bool {
+pub(crate) fn interpreter_stop_active(ctx: &ExecuteContext<'_>) -> bool {
     // Return-call and function-return handlers must leave the interpreter loop
     // whenever any bridge owns control. The loop then decides whether the
     // observed continuation is the requested stop PC or another VM PC to resume.
-    JIT_INTERPRETER_STOP_AT.with(|stop| !stop.get().is_null())
+    !ctx.jit_stop_pc.is_null()
 }
 
 #[cfg(feature = "aot-load")]
@@ -338,21 +346,26 @@ struct JitEntryDepthGuard;
 
 #[cfg(feature = "aot-load")]
 struct JitInterpreterStopGuard {
+    // Pointer to the owning context's `jit_stop_pc` field. The guard is
+    // stack-scoped inside the bridge entry points, which keep the context
+    // alive for the guard's whole lifetime, so the slot outlives the guard.
+    slot: *mut *const Instr,
     previous: *const Instr,
 }
 
 #[cfg(feature = "aot-load")]
 impl JitInterpreterStopGuard {
-    fn new(stop_pc: *const Instr) -> Self {
+    fn new(ctx: &mut ExecuteContext<'_>, stop_pc: *const Instr) -> Self {
         // Continuation bridges can re-enter the interpreter while an outer bridge
         // is already active. The innermost native caller owns the active stop PC;
         // the previous target is restored when that bridge returns.
-        let previous = JIT_INTERPRETER_STOP_AT.with(|stop| {
-            let previous = stop.get();
-            stop.set(stop_pc);
-            previous
-        });
-        Self { previous }
+        let slot = std::ptr::addr_of_mut!(ctx.jit_stop_pc);
+        // SAFETY: the caller keeps `ctx` alive and exclusively borrowed for
+        // the guard's lifetime; the guard only reads and writes this one
+        // field through the slot, and restores it on drop.
+        let previous = unsafe { *slot };
+        unsafe { *slot = stop_pc };
+        Self { slot, previous }
     }
 }
 
@@ -366,7 +379,9 @@ impl Drop for JitEntryDepthGuard {
 #[cfg(feature = "aot-load")]
 impl Drop for JitInterpreterStopGuard {
     fn drop(&mut self) {
-        JIT_INTERPRETER_STOP_AT.with(|stop| stop.set(self.previous));
+        // SAFETY: same slot invariant as `new`; the context is still alive
+        // because the guard is dropped before the bridge entry point returns.
+        unsafe { *self.slot = self.previous };
     }
 }
 

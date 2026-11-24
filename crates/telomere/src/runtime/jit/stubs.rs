@@ -694,7 +694,7 @@ pub(crate) extern "C" fn runtime_continuation_op(
     profile::count(Counter::RuntimeDirectCallFast);
     let ctx = unsafe { &mut *ctx };
     let tail_code = unsafe { pc.add(1) };
-    let _guard = super::JitInterpreterStopGuard::new(stop_pc);
+    let _guard = super::JitInterpreterStopGuard::new(ctx, stop_pc);
     let result = match kind {
         RUNTIME_CONT_CURRENT_VM_HANDLER
             if std::ptr::fn_addr_eq(

@@ -633,6 +633,7 @@ impl<'a> Scheduler<'a> {
                     reserved: 0,
                     budget_epoch: 0,
                     jit_trap_pc: std::ptr::null(),
+                    jit_stop_pc: std::ptr::null(),
                 };
                 let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
                 if let Some(metering) = self.store.metering_ref() {

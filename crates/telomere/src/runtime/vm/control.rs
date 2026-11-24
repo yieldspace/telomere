@@ -346,12 +346,12 @@ pub unsafe fn special_function_return(
     match prepare_function_return(tail_code, ctx) {
         Some(tail_code) => {
             #[cfg(feature = "aot-load")]
-            if crate::runtime::jit::interpreter_stop_active() {
+            if crate::runtime::jit::interpreter_stop_active(ctx) {
                 ctx.cont = tail_code;
                 return VMResult::Success(());
             }
             #[cfg(feature = "aot-load")]
-            if crate::runtime::jit::should_stop_interpreter_at(tail_code) {
+            if crate::runtime::jit::should_stop_interpreter_at(ctx, tail_code) {
                 ctx.cont = tail_code;
                 return VMResult::Success(());
             }
