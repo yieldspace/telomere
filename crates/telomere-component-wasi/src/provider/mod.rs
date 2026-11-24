@@ -4,7 +4,6 @@ mod common;
 mod filesystem;
 mod io;
 mod random;
-mod sockets;
 
 #[cfg(test)]
 mod tests;
@@ -60,7 +59,6 @@ fn register_sync(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
     filesystem::add_to_linker_sync(linker, Rc::clone(&host));
     io::add_to_linker_sync(linker, Rc::clone(&host));
     random::add_to_linker_sync(linker, Rc::clone(&host));
-    sockets::add_to_linker_sync(linker, Rc::clone(&host));
     register_resource_drops(linker, host);
 }
 
@@ -70,7 +68,6 @@ fn register_async(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
     filesystem::add_to_linker_async(linker, Rc::clone(&host));
     io::add_to_linker_async(linker, Rc::clone(&host));
     random::add_to_linker_async(linker, Rc::clone(&host));
-    sockets::add_to_linker_async(linker, Rc::clone(&host));
     register_resource_drops(linker, host);
 }
 
@@ -81,8 +78,10 @@ fn register_async(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
 /// Every handle is allocated from one counter in [WasiState] and lives in
 /// exactly one table, so one release operation serves every resource type.
 /// The terminal-input/terminal-output resources are omitted: the provider
-/// never issues handles for them. Sockets resources are omitted for the
-/// same reason — their functions are unimplemented and issue no handles.
+/// never issues handles for them. Sockets resources are omitted for a
+/// stronger reason: the provider does not register the `wasi:sockets`
+/// interfaces at all, so no guest can hold a sockets handle through this
+/// provider (see docs/core/sockets-scope.md).
 fn register_resource_drops(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
     const RESOURCE_TYPES: &[(&str, &str)] = &[
         ("wasi:io/error@0.2.6", "error"),

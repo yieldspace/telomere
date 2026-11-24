@@ -339,8 +339,11 @@ implemented host functions for argv, environment, clocks, stdin read, fd
 write/seek/stat/close, random, and `proc_exit`; the filesystem family is out
 of scope for this runner (see
 [docs/core/preview1-scope.md](docs/core/preview1-scope.md)). The component WASI provider registers the generated WIT bindings
-for cli, io, clocks, random, filesystem, and sockets, with capability supplied
-through `WasiState`.
+for cli, io, clocks, random, and filesystem, with capability supplied
+through `WasiState`. The sockets interfaces are not registered: a component
+that imports `wasi:sockets` fails during instantiation with an error naming
+the interface, instead of trapping on first use (see
+[docs/core/sockets-scope.md](docs/core/sockets-scope.md)).
 
 Known gaps on these paths, with reproductions, are collected in
 [examples/README.md](examples/README.md): the preview1 runner does not implement
