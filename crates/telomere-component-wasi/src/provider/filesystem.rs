@@ -367,7 +367,7 @@ impl WasiHost {
         ) else {
             return Ok(false);
         };
-        Ok(canonical_or_literal(&left.host_path) == canonical_or_literal(&right.host_path))
+        Ok(same_filesystem_object(&left.host_path, &right.host_path))
     }
 
     fn descriptor_metadata_hash(
@@ -877,6 +877,66 @@ fn stat_for_path(
 
 fn canonical_or_literal(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Filesystem identity of the object a path refers to, as the WIT contract
+/// for `is-same-object` defines it: device and inode numbers on POSIX,
+/// volume serial number and file index on Windows. The metadata lookup
+/// follows symlinks, so the identity is that of the object the descriptor
+/// ultimately refers to. Platforms with no stable identity key fall back
+/// to the canonical path, which cannot recognise hard links but never
+/// equates two distinct live objects.
+///
+/// `CanonicalPath` is only constructed on platforms without a stable
+/// identity key (and on Windows when the file index is unavailable), so on
+/// Unix it is never built; the `allow(dead_code)` covers that.
+#[allow(dead_code)]
+#[derive(PartialEq, Eq)]
+enum ObjectIdentity {
+    DeviceAndInode(u64, u64),
+    CanonicalPath(PathBuf),
+}
+
+fn object_identity(path: &Path) -> Option<ObjectIdentity> {
+    let metadata = fs::metadata(path).ok()?;
+    object_identity_from_metadata(&metadata, path)
+}
+
+#[cfg(unix)]
+fn object_identity_from_metadata(metadata: &fs::Metadata, _path: &Path) -> Option<ObjectIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    Some(ObjectIdentity::DeviceAndInode(
+        metadata.dev(),
+        metadata.ino(),
+    ))
+}
+
+#[cfg(windows)]
+fn object_identity_from_metadata(metadata: &fs::Metadata, path: &Path) -> Option<ObjectIdentity> {
+    use std::os::windows::fs::MetadataExt;
+    metadata
+        .file_index()
+        .map(|index| {
+            ObjectIdentity::DeviceAndInode(u64::from(metadata.volume_serial_number()), index)
+        })
+        .or_else(|| Some(ObjectIdentity::CanonicalPath(canonical_or_literal(path))))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn object_identity_from_metadata(_metadata: &fs::Metadata, path: &Path) -> Option<ObjectIdentity> {
+    Some(ObjectIdentity::CanonicalPath(canonical_or_literal(path)))
+}
+
+/// Whether two paths refer to the same filesystem object, comparing
+/// identities rather than names so that hard links and symlink routes to
+/// one file count as the same object. When either identity cannot be read
+/// (for example the object was deleted after the descriptor was opened),
+/// fall back to the canonical-path comparison.
+fn same_filesystem_object(left: &Path, right: &Path) -> bool {
+    match (object_identity(left), object_identity(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => canonical_or_literal(left) == canonical_or_literal(right),
+    }
 }
 
 /// Hash of a filesystem object's metadata, following the inputs the WIT

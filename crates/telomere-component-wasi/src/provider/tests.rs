@@ -489,6 +489,70 @@ fn provider_read_only_completions_work() {
 
 #[cfg(unix)]
 #[test]
+fn provider_is_same_object_uses_filesystem_identity() {
+    let dir = temp_sandbox();
+    let original = dir.join("original.txt");
+    fs::write(&original, b"hello wasi").expect("fixture file should be written");
+    // A hard link is a second name for the same filesystem object: the two
+    // canonical paths differ, but the device/inode identity is shared, and
+    // the WIT contract defines `is-same-object` by that identity.
+    fs::hard_link(&original, dir.join("alias.txt")).expect("hard link should be created");
+    fs::write(dir.join("other.txt"), b"other").expect("fixture file should be written");
+    std::os::unix::fs::symlink("original.txt", dir.join("link.txt"))
+        .expect("symlink should be created");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let host = WasiHost::new(state);
+    let store = telomere::Store::new();
+
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
+    let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
+    let open_file = |name: &str| {
+        <WasiHost as filesystem_types::Host>::descriptor_open_at(
+            &host,
+            &store,
+            root,
+            empty_path_flags(),
+            name.to_owned(),
+            empty_open_flags(),
+            read_only_flags(),
+        )
+        .unwrap()
+        .unwrap()
+        .handle()
+    };
+    let is_same = |left: u32, right: u32| {
+        <WasiHost as filesystem_types::Host>::descriptor_is_same_object(
+            &host,
+            &store,
+            WasiFilesystemTypesDescriptorBorrow::new(left),
+            WasiFilesystemTypesDescriptorBorrow::new(right),
+        )
+        .unwrap()
+    };
+
+    let original_handle = open_file("original.txt");
+    let alias_handle = open_file("alias.txt");
+    let other_handle = open_file("other.txt");
+    let link_handle = open_file("link.txt");
+    assert!(
+        is_same(original_handle, alias_handle),
+        "hard links to one file are the same object"
+    );
+    assert!(
+        !is_same(original_handle, other_handle),
+        "distinct files are not the same object"
+    );
+    assert!(
+        is_same(original_handle, link_handle),
+        "a descriptor reached through a symlink is the same object"
+    );
+
+    fs::remove_dir_all(dir).expect("temp dir should be removed");
+}
+
+#[cfg(unix)]
+#[test]
 fn provider_readlink_at_reports_relative_targets_and_rejects_escapes() {
     use std::os::unix::fs::symlink;
 
