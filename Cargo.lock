@@ -1102,6 +1102,7 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
+ "getrandom",
  "libc",
  "telomere",
  "telomere-component",

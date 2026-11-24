@@ -327,15 +327,18 @@ Telomere has two WASI entry points:
 
 The preview1 runner is intentionally small. It currently supports command-style
 modules that import `wasi_snapshot_preview1`, export `_start`, and use the
-implemented host functions for argv, clocks, fd write/seek/stat/close, and
-`proc_exit`. The component WASI provider registers the generated WIT bindings
+implemented host functions for argv, environment, clocks, stdin read, fd
+write/seek/stat/close, random, and `proc_exit`; the filesystem family is out
+of scope for this runner (see
+[docs/core/preview1-scope.md](docs/core/preview1-scope.md)). The component WASI provider registers the generated WIT bindings
 for cli, io, clocks, random, filesystem, and sockets, with capability supplied
 through `WasiState`.
 
 Known gaps on these paths, with reproductions, are collected in
 [examples/README.md](examples/README.md): the preview1 runner does not implement
-`environ_get`/`environ_sizes_get` (so a stock `wasm32-wasip1` Rust binary will
-not run).
+the preview1 filesystem functions (`fd_prestat_*`, `path_*`), so a stock
+`wasm32-wasip1` Rust binary that opens files will not run; stock binaries
+that stick to argv, environment, stdio, clocks, and random do run.
 
 ## Security
 
