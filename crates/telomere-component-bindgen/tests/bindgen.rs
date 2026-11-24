@@ -121,6 +121,102 @@ impl bindings::imports::math::Host for MathHost {
     }
 }
 
+telomere_component_bindgen::bindgen!({
+    inline: r#"
+        package ex:partial;
+
+        world partial {
+            import math: interface {
+                double: func(value: u32) -> u32;
+                triple: func(value: u32) -> u32;
+            }
+
+            export run: func(value: u32) -> u32;
+        }
+    "#,
+    world: "partial",
+    module: "partial_bindings",
+    exclude: {
+        "math": ["triple"],
+    }
+});
+
+struct PartialMathHost;
+
+impl partial_bindings::imports::math::Host for PartialMathHost {
+    fn double(&self, _store: &Store, value: u32) -> Result<u32, ComponentError> {
+        Ok(value * 2)
+    }
+}
+
+fn compile_partial_component(export_name: &str) -> Vec<u8> {
+    wat::parse_str(format!(
+        r#"
+(component
+  (type $math-t (func (param "value" u32) (result u32)))
+  (type $math-i (instance (export "{export_name}" (func (type $math-t)))))
+  (import "math" (instance $math (type $math-i)))
+  (alias export $math "{export_name}" (func $imported))
+
+  (core func $imported-lower (canon lower (func $imported)))
+
+  (core module $guest-m
+    (import "" "f" (func $f (param i32) (result i32)))
+    (func (export "run") (param i32) (result i32)
+      local.get 0
+      call $f)
+  )
+  (core instance $guest-core
+    (instantiate $guest-m
+      (with "" (instance
+        (export "f" (func $imported-lower))
+      ))
+    )
+  )
+  (type $run-t (func (param "value" u32) (result u32)))
+  (func (export "run") (type $run-t)
+    (canon lift (core func $guest-core "run")))
+)
+"#
+    ))
+    .expect("partial component wat must parse")
+}
+
+#[tokio::test]
+async fn bindgen_excluded_function_is_not_registered() {
+    let engine = ComponentEngine::new();
+    let store = telomere::Store::new();
+
+    let mut linker = ComponentLinker::new();
+    partial_bindings::imports::math::add_to_linker(&mut linker, Rc::new(PartialMathHost));
+
+    // The retained function links and runs.
+    let bytes = compile_partial_component("double");
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate with a retained function should succeed");
+    let result = partial_bindings::Exports::new(instance)
+        .run(&store, 21)
+        .await
+        .expect("run should succeed");
+    assert_eq!(result, 42);
+
+    // The excluded function is absent from the linker instance, so a guest
+    // importing it fails at instantiation instead of trapping on first call.
+    let bytes = compile_partial_component("triple");
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let error = match engine.instantiate(&program, &store, &linker).await {
+        Ok(_) => panic!("instantiate with an excluded function should fail"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{error:?}").contains("triple"),
+        "link error should name the withheld function, got {error:?}"
+    );
+}
+
 #[tokio::test]
 async fn bindgen_supports_root_and_interface_bindings() {
     let bytes = compile_component();

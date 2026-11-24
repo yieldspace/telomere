@@ -35,6 +35,17 @@ struct AdoptMapping {
     path: Path,
 }
 
+/// Functions of one imported interface that the generated `add_to_linker`
+/// must not register. The functions remain in the generated host trait (with
+/// the usual trapping default), so a host may still implement them in Rust;
+/// they are only absent from the linker instance, which makes a guest that
+/// imports one fail at instantiation time instead of trapping mid-call.
+#[derive(Clone)]
+struct ExcludeMapping {
+    interface: LitStr,
+    functions: Vec<LitStr>,
+}
+
 pub struct BindgenInput {
     inline: Option<LitStr>,
     path: Option<LitStr>,
@@ -43,6 +54,7 @@ pub struct BindgenInput {
     module: Option<LitStr>,
     host_mode: HostMode,
     adopt: Vec<AdoptMapping>,
+    exclude: Vec<ExcludeMapping>,
     strip_interface_version: bool,
 }
 
@@ -58,6 +70,7 @@ impl Parse for BindgenInput {
         let mut module = None;
         let mut host_mode = None;
         let mut adopt = Vec::new();
+        let mut exclude = Vec::new();
         let mut strip_interface_version = None;
 
         while !content.is_empty() {
@@ -127,6 +140,43 @@ impl Parse for BindgenInput {
                         adopt_content.parse::<Token![,]>()?;
                     }
                 }
+                "exclude" => {
+                    let exclude_content;
+                    braced!(exclude_content in content);
+                    while !exclude_content.is_empty() {
+                        let interface = exclude_content.parse::<LitStr>()?;
+                        exclude_content.parse::<Token![:]>()?;
+                        let functions_content;
+                        bracketed!(functions_content in exclude_content);
+                        let mut functions = Vec::new();
+                        while !functions_content.is_empty() {
+                            functions.push(functions_content.parse::<LitStr>()?);
+                            if functions_content.is_empty() {
+                                break;
+                            }
+                            functions_content.parse::<Token![,]>()?;
+                        }
+                        if exclude.iter().any(|mapping: &ExcludeMapping| {
+                            mapping.interface.value() == interface.value()
+                        }) {
+                            return Err(Error::new(
+                                interface.span(),
+                                format!(
+                                    "`exclude` lists interface `{}` more than once",
+                                    interface.value()
+                                ),
+                            ));
+                        }
+                        exclude.push(ExcludeMapping {
+                            interface,
+                            functions,
+                        });
+                        if exclude_content.is_empty() {
+                            break;
+                        }
+                        exclude_content.parse::<Token![,]>()?;
+                    }
+                }
                 "strip_interface_version" => {
                     let value = content.parse::<LitBool>()?;
                     if strip_interface_version.replace(value.value).is_some() {
@@ -166,6 +216,7 @@ impl Parse for BindgenInput {
             module,
             host_mode: host_mode.unwrap_or(HostMode::Sync),
             adopt,
+            exclude,
             strip_interface_version: strip_interface_version.unwrap_or(false),
         })
     }
@@ -200,6 +251,7 @@ pub fn expand(input: BindgenInput) -> Result<TokenStream2> {
         bindgen_path,
         input.host_mode,
         input.adopt,
+        input.exclude,
         input.strip_interface_version,
     )?;
     let body = generator.generate()?;
@@ -295,6 +347,7 @@ struct Generator {
     bindgen_path: syn::Path,
     host_mode: HostMode,
     adopt_mappings: Vec<AdoptMapping>,
+    excluded_functions: HashMap<String, HashSet<String>>,
     strip_interface_version: bool,
     direct_imports: Vec<FunctionBinding>,
     direct_exports: Vec<FunctionBinding>,
@@ -310,6 +363,7 @@ struct Generator {
 }
 
 impl Generator {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         resolve: Resolve,
         world_id: WorldId,
@@ -317,6 +371,7 @@ impl Generator {
         bindgen_path: syn::Path,
         host_mode: HostMode,
         adopt_mappings: Vec<AdoptMapping>,
+        exclude_mappings: Vec<ExcludeMapping>,
         strip_interface_version: bool,
     ) -> Result<Self> {
         let import_items = {
@@ -343,6 +398,19 @@ impl Generator {
             bindgen_path,
             host_mode,
             adopt_mappings,
+            excluded_functions: exclude_mappings
+                .iter()
+                .map(|mapping| {
+                    (
+                        mapping.interface.value(),
+                        mapping
+                            .functions
+                            .iter()
+                            .map(|function| function.value())
+                            .collect::<HashSet<_>>(),
+                    )
+                })
+                .collect(),
             strip_interface_version,
             direct_imports: Vec::new(),
             direct_exports: Vec::new(),
@@ -363,6 +431,7 @@ impl Generator {
         for (name, item) in export_items {
             generator.collect_world_item(name, item, false)?;
         }
+        generator.validate_excluded_functions(&exclude_mappings)?;
         if generator.strip_interface_version {
             generator.validate_stripped_interface_name_collisions()?;
         }
@@ -380,6 +449,60 @@ impl Generator {
         generator.assign_type_names();
 
         Ok(generator)
+    }
+
+    /// Checks every `exclude` entry against the imported interfaces of the
+    /// world. An entry naming an interface the world does not import, or a
+    /// function the interface does not declare, is a compile error: a stale
+    /// exclusion must fail loudly instead of silently registering a function
+    /// the bindings claim to withhold.
+    fn validate_excluded_functions(&self, mappings: &[ExcludeMapping]) -> Result<()> {
+        for mapping in mappings {
+            let interface = mapping.interface.value();
+            let Some(namespace) = self
+                .import_interfaces
+                .iter()
+                .find(|namespace| namespace.wit_name == interface)
+            else {
+                return Err(Error::new(
+                    mapping.interface.span(),
+                    format!(
+                        "`exclude` names interface `{interface}`, which the world does not import"
+                    ),
+                ));
+            };
+            if namespace.adopt_path.is_some() {
+                return Err(Error::new(
+                    mapping.interface.span(),
+                    format!(
+                        "`exclude` cannot withhold functions of adopted interface `{interface}`; \
+                         the exclusion belongs to the bindgen invocation that generates that interface"
+                    ),
+                ));
+            }
+            for function in &mapping.functions {
+                let name = function.value();
+                if !namespace
+                    .functions
+                    .iter()
+                    .any(|binding| binding.wit_name == name)
+                {
+                    return Err(Error::new(
+                        function.span(),
+                        format!(
+                            "`exclude` names function `{name}`, which interface `{interface}` does not declare"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn is_excluded(&self, namespace: &InterfaceNamespace, binding: &FunctionBinding) -> bool {
+        self.excluded_functions
+            .get(&namespace.wit_name)
+            .is_some_and(|functions| functions.contains(&binding.wit_name))
     }
 
     fn adopt_path_for(&self, wit_name: &str) -> Option<Path> {
@@ -1864,6 +1987,7 @@ impl Generator {
             let registrations = namespace
                 .functions
                 .iter()
+                .filter(|binding| !self.is_excluded(namespace, binding))
                 .map(|binding| self.generate_instance_import_registration(binding, false))
                 .collect::<Result<Vec<_>>>()?;
             Some(quote! {
@@ -1886,6 +2010,7 @@ impl Generator {
             let registrations = namespace
                 .functions
                 .iter()
+                .filter(|binding| !self.is_excluded(namespace, binding))
                 .map(|binding| self.generate_instance_import_registration(binding, true))
                 .collect::<Result<Vec<_>>>()?;
             Some(quote! {

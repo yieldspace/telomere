@@ -16,6 +16,23 @@ use proc_macro::TokenStream;
 /// registration helpers, and typed export wrappers. Use inline WIT for a small
 /// self-contained interface or path plus deps for a package on disk.
 ///
+/// The `exclude` option withholds named functions of an imported interface
+/// from the generated linker registration:
+///
+/// ```text
+/// exclude: {
+///     "wasi:filesystem/types@0.2.6": ["[method]descriptor.write"],
+/// }
+/// ```
+///
+/// An excluded function stays in the generated host trait (with the usual
+/// trapping default implementation), but `add_to_linker` does not register
+/// it, so a guest importing it fails at instantiation time instead of
+/// trapping when the function is first called. Exclusions are validated at
+/// expansion time: naming an interface the world does not import, a function
+/// the interface does not declare, or an adopted interface is a compile
+/// error.
+///
 /// # Example
 ///
 /// This component imports a custom math interface and exports a function that

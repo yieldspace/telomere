@@ -4,7 +4,9 @@
 //! `cli`, `io`, `clocks`, `random`, `filesystem`, and `sockets` bindings in a
 //! component linker. Function-level coverage is intentionally narrower than
 //! the bundled WIT surface; consult the support matrix for coverage details,
-//! including partial filesystem support and currently unimplemented sockets.
+//! including the read-only filesystem contract (mutating `wasi:filesystem`
+//! functions are not registered, so guests importing them fail at link time;
+//! see `docs/core/filesystem-scope.md`) and currently unimplemented sockets.
 //!
 //! Process-derived settings - arguments, environment, preopened directories,
 //! and standard I/O inheritance - are configured through [`WasiState`]. The
@@ -96,7 +98,26 @@ telomere_component_bindgen::bindgen!({
     world: "wasi:cli/command@0.2.6",
     module: "bindings",
     host_mode: "both",
-    strip_interface_version: true
+    strip_interface_version: true,
+    // The filesystem contract is read-only (see docs/core/filesystem-scope.md):
+    // every mutating descriptor method is withheld from the linker, so a guest
+    // importing one fails at instantiation time instead of trapping mid-call.
+    exclude: {
+        "wasi:filesystem/types@0.2.6": [
+            "[method]descriptor.append-via-stream",
+            "[method]descriptor.create-directory-at",
+            "[method]descriptor.link-at",
+            "[method]descriptor.remove-directory-at",
+            "[method]descriptor.rename-at",
+            "[method]descriptor.set-size",
+            "[method]descriptor.set-times",
+            "[method]descriptor.set-times-at",
+            "[method]descriptor.symlink-at",
+            "[method]descriptor.unlink-file-at",
+            "[method]descriptor.write",
+            "[method]descriptor.write-via-stream"
+        ]
+    }
 });
 
 include!(concat!(env!("OUT_DIR"), "/generated_bindgen.rs"));
