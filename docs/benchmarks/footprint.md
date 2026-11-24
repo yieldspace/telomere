@@ -356,13 +356,15 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #293: workflow_dispatch runs 45320518752 and
-45320533005 against the PR branch at head
-`764a453e568e6ed29855c6c0ca7f6eff1cd5a912` (branch commit
+against the code of PR #293 after its Codex P1 fix: workflow_dispatch runs 45327945752 and
+45327956071 against the PR branch at head
+`1fa6db7889158ac6d1eb8abc1c9d573bf19378d7` (branch commit
 `f0015b9`, enter JIT callees directly on native-to-native calls
-(#191), plus merge commit `159796d` bringing in current `main` at
-`41bca95` (PR #290) and a formatting fix), and pull-request run
-45320509989, which built the same tree (`ubuntu-24.04`, Rust
+(#191), plus merge commit `159796d` bringing in `main` at
+`41bca95` (PR #290), commit `de0de8f` bounding native entry by
+the host stack, and merge commit `1fa6db7` bringing in current
+`main` at `1b25df0` (PR #291)), and pull-request run
+45327889910, which built the same tree (`ubuntu-24.04`, Rust
 1.96.0). Every run produced byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
 the stripped file size, and the stripped `.text` size each have a
@@ -373,20 +375,20 @@ stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,586,320 | 1,200,263 |
-| `release` | `component` | 2,667,120 | 2,115,559 |
-| `release` | `wasi` | 3,011,120 | 2,375,687 |
-| `release` | `core-nosimd` | 1,395,568 | 1,055,431 |
-| `release` | `core-jit` | 2,126,256 | 1,635,479 |
-| `release` | `core-aot` | 1,631,584 | 1,232,823 |
-| `release` | `wasi-threads` | 3,226,576 | 2,542,839 |
+| `release` | `core` | 1,586,336 | 1,200,279 |
+| `release` | `component` | 2,667,136 | 2,115,575 |
+| `release` | `wasi` | 3,011,136 | 2,375,703 |
+| `release` | `core-nosimd` | 1,395,584 | 1,055,447 |
+| `release` | `core-jit` | 2,127,008 | 1,636,119 |
+| `release` | `core-aot` | 1,632,144 | 1,233,303 |
+| `release` | `wasi-threads` | 3,226,592 | 2,542,855 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,110,712 | 783,527 |
 | `release-size` | `component` | 1,672,344 | 1,234,343 |
-| `release-size` | `wasi` | 1,868,328 | 1,366,151 |
+| `release-size` | `wasi` | 1,868,328 | 1,366,167 |
 | `release-size` | `core-nosimd` | 995,920 | 703,991 |
-| `release-size` | `core-jit` | 1,534,192 | 1,088,759 |
-| `release-size` | `core-aot` | 1,149,600 | 808,663 |
+| `release-size` | `core-jit` | 1,534,816 | 1,089,207 |
+| `release-size` | `core-aot` | 1,149,920 | 808,887 |
 | `release-size` | `wasi-threads` | 2,010,632 | 1,460,471 |
 
 #### Re-baseline history
@@ -1377,6 +1379,47 @@ baseline, the largest cumulative growth remains the `release`
 (2,433,656 B to 2,667,120 B). The baseline was re-measured on
 the branch and updated as recorded above, following the
 procedure below.
+
+PR #293 was re-baselined a second time after the Codex P1 fix
+(`de0de8f`) and the merge of current `main` (`1b25df0`, PR #291;
+merge commit `1fa6db7`). The P1 fix bounds native entry by the
+host stack: removing the TLS entry-depth counter had left
+recursion depth bounded only by the value-stack reservation,
+which does not charge the real host stack each native level
+spends, so on a 1 MiB host thread deep guest recursion aborted
+the process before the value-stack bound was reached. Both
+native entry boundaries (generic `enter_current_frame_raw` and
+direct `enter_compiled_from_jit_call`) now compare the current
+stack pointer against a floor recorded on the `ExecuteContext`
+(the executing thread's OS stack low bound plus a 256 KiB
+reserve, established lazily at first entry, with a fixed
+512 KiB budget as fallback) and decline the entry through the
+existing fallback results when the remaining stack runs low,
+so the frame runs in the interpreter and deep recursion reaches
+the same value-stack `StackOverflow` on any host stack size.
+No TLS and no depth counter are reintroduced. Attribution was
+isolated by measuring current `main` alone (workflow_dispatch
+run 45327968623, gate success), which reproduces the pre-#191
+baseline exactly on all 32 gated series, so every delta below
+is this PR's own. Against `main`, 18 of the 32 gated series
+change. In `release`, `core-jit` grows by 1,904 B stripped
+file / 1,616 B stripped `.text`, `core-aot` grows by 32 B
+stripped `.text` only, and `component`, `core`, `core-nosimd`,
+`wasi` and `wasi-threads` each grow by 16 B / 16 B (the
+`ExecuteContext` stack-floor field in shared code). In
+`release-size`, `core-jit` grows by 896 B / 688 B, `core-aot`
+shrinks by 128 B / 80 B, and `wasi` grows by 16 B stripped
+`.text` only. Against the first PR #293 re-baseline, the
+increment attributable to the P1 fix alone is: `release`
+`core-jit` +752 B / +640 B, `core-aot` +560 B / +480 B, and
++16 B / +16 B on `component`, `core`, `core-nosimd`, `wasi`
+and `wasi-threads`; `release-size` `core-jit` +624 B / +448 B,
+`core-aot` +320 B / +224 B, `wasi` +16 B stripped `.text`.
+Against the original #164 baseline, the largest cumulative
+growth remains the `release` `component` stripped file series,
+unchanged at +9.59% (2,433,656 B to 2,667,136 B). The baseline
+was re-measured on the branch and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
