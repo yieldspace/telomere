@@ -1,12 +1,15 @@
 //! WASI 0.2.6-targeting host provider for telomere's Component Model runtime.
 //!
 //! This crate targets the bundled WASI 0.2.6 WIT packages and registers their
-//! `cli`, `io`, `clocks`, `random`, `filesystem`, and `sockets` bindings in a
-//! component linker. Function-level coverage is intentionally narrower than
-//! the bundled WIT surface; consult the support matrix for coverage details,
-//! including the read-only filesystem contract (mutating `wasi:filesystem`
-//! functions are not registered, so guests importing them fail at link time;
-//! see `docs/core/filesystem-scope.md`) and currently unimplemented sockets.
+//! `cli`, `io`, `clocks`, `random`, and `filesystem` bindings in a component
+//! linker. The `sockets` bindings are generated but deliberately not
+//! registered by this provider: a component that imports a `wasi:sockets`
+//! interface fails at link time instead of trapping on first use (see
+//! `docs/core/sockets-scope.md`). Function-level coverage is intentionally
+//! narrower than the bundled WIT surface; consult the support matrix for
+//! coverage details, including the read-only filesystem contract (mutating
+//! `wasi:filesystem` functions are not registered, so guests importing them
+//! fail at link time; see `docs/core/filesystem-scope.md`).
 //!
 //! Process-derived settings - arguments, environment, preopened directories,
 //! and standard I/O inheritance - are configured through [`WasiState`]. The

@@ -109,7 +109,7 @@ above. The committed fixture `examples/wasi-preview1-stock-hello.wasm`
 - **(c) Adapter path.** Rejected for now. The canonical preview1 adapter
   component itself imports the WASI 0.2 filesystem and sockets interfaces;
   telomere's filesystem provider is partial and read-only (#134) and its
-  sockets are trapping stubs
+  sockets are excluded from the default provider world
   ([#135](https://github.com/yieldspace/telomere/issues/135)), so the
   adapter would move the gap rather than close it, at the cost of
   vendoring an external binary artifact with its own provenance. Revisit

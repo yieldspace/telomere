@@ -683,3 +683,75 @@ async fn run_stdout_drop(bytes: Vec<u8>) {
     );
     assert_eq!(state.stdout(), b"hello from a dropped stream\n");
 }
+
+fn compile_sockets_component() -> Vec<u8> {
+    wat::parse_str(
+        r#"
+(component
+  (type $instance-network
+    (instance
+      (export "network" (type $network (sub resource)))
+      (export "instance-network" (func (result (own $network))))
+    )
+  )
+  (import "wasi:sockets/instance-network@0.2.6" (instance $instance-network-instance (type $instance-network)))
+  (alias export $instance-network-instance "network" (type $network))
+  (alias export $instance-network-instance "instance-network" (func $instance-network))
+
+  (core func $instance-network-lower (canon lower (func $instance-network)))
+  (core module $caller
+    (import "" "instance-network" (func $instance-network (result i32)))
+    (func (export "call") (result i32)
+      (call $instance-network)
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "instance-network" (func $instance-network-lower))
+      ))
+    )
+  )
+  (func (export "call") (result (own $network))
+    (canon lift (core func $caller "call"))
+  )
+)
+"#,
+    )
+    .expect("sockets component wat must parse")
+}
+
+async fn run_sockets_link_failure(
+    add: fn(&mut ComponentLinker, WasiState) -> Result<(), telomere_component::ComponentError>,
+) {
+    // The default provider world excludes wasi:sockets (docs/core/sockets-scope.md,
+    // #135): a component importing a sockets interface must fail when the
+    // runtime resolves its imports during instantiation, with an error naming
+    // the unresolved import, not link successfully and trap on first use.
+    let bytes = compile_sockets_component();
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+
+    let mut linker = ComponentLinker::new();
+    add(&mut linker, build_state()).expect("wasi linker registration should succeed");
+
+    let store = telomere::Store::new();
+    let error = match engine.instantiate(&program, &store, &linker).await {
+        Ok(_) => panic!("sockets-importing component must not instantiate"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(error, telomere_component::ComponentError::Unsupported(ref message) if message.contains("wasi:sockets/instance-network@0.2.6")),
+        "expected an unsupported-import error naming the unresolved sockets import, got {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn wasi_linker_sync_rejects_sockets_imports() {
+    run_sockets_link_failure(add_to_linker_sync).await;
+}
+
+#[tokio::test]
+async fn wasi_linker_async_rejects_sockets_imports() {
+    run_sockets_link_failure(add_to_linker_async).await;
+}

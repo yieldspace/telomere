@@ -189,19 +189,22 @@ blocks: helper methods and async duplicates are excluded.
 | `wasi:random/random` | 2 / 2 | Secure random bytes and random values. |
 | `wasi:random/insecure` | 2 / 2 | Insecure random bytes and random values. |
 | `wasi:random/insecure-seed` | 1 / 1 | Insecure seed. |
-| `wasi:sockets/instance-network` | 0 / 1 | Registered; the generated binding's default trap handles every method. |
-| `wasi:sockets/network` | 0 / 1 | Registered; the generated binding's default trap handles every method. |
-| `wasi:sockets/udp` | 0 / 18 | Registered; the generated binding's default trap handles every method. |
-| `wasi:sockets/udp-create-socket` | 0 / 1 | Registered; the generated binding's default trap handles every method. |
-| `wasi:sockets/tcp` | 0 / 28 | Registered; the generated binding's default trap handles every method. |
-| `wasi:sockets/tcp-create-socket` | 0 / 1 | Registered; the generated binding's default trap handles every method. |
-| `wasi:sockets/ip-name-lookup` | 0 / 3 | Registered; the generated binding's default trap handles every method. |
+| `wasi:sockets/instance-network` | 0 / 1 | Not registered by the default provider; components that use the import fail during instantiation ([sockets scope record](core/sockets-scope.md)). |
+| `wasi:sockets/network` | 0 / 1 | Not registered by the default provider; components that use the import fail during instantiation ([sockets scope record](core/sockets-scope.md)). |
+| `wasi:sockets/udp` | 0 / 18 | Not registered by the default provider; components that use the import fail during instantiation ([sockets scope record](core/sockets-scope.md)). |
+| `wasi:sockets/udp-create-socket` | 0 / 1 | Not registered by the default provider; components that use the import fail during instantiation ([sockets scope record](core/sockets-scope.md)). |
+| `wasi:sockets/tcp` | 0 / 28 | Not registered by the default provider; components that use the import fail during instantiation ([sockets scope record](core/sockets-scope.md)). |
+| `wasi:sockets/tcp-create-socket` | 0 / 1 | Not registered by the default provider; components that use the import fail during instantiation ([sockets scope record](core/sockets-scope.md)). |
+| `wasi:sockets/ip-name-lookup` | 0 / 3 | Not registered by the default provider; components that use the import fail during instantiation ([sockets scope record](core/sockets-scope.md)). |
 
 The [bundled WIT][wasi-wit] is the source of the denominators; the
 [provider modules][wasi-provider] are the source of the synchronous-method
-numerators. The [sockets provider][wasi-sockets] explicitly registers every
-socket interface but implements empty `Host`/`HostAsync` traits, which is why
-the table says *registered* rather than *not linked*.
+numerators. The sockets interfaces are not registered by the default
+provider at all: until the decision recorded in the
+[sockets scope record](core/sockets-scope.md) (#135) they were registered
+with empty `Host`/`HostAsync` traits, so every call trapped at runtime;
+now a component that uses a sockets import fails during instantiation
+with an error naming the interface, like `wasi:clocks/timezone` above.
 
 ### Preview1 CLI runner
 
@@ -292,7 +295,6 @@ cargo test -p telomere --release --no-default-features --test wast
 [wasi-version]: https://github.com/yieldspace/telomere/blob/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component-wasi/src/lib.rs#L16-L31
 [wasi-wit]: https://github.com/yieldspace/telomere/tree/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component-wasi/wit
 [wasi-provider]: https://github.com/yieldspace/telomere/tree/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component-wasi/src/provider
-[wasi-sockets]: https://github.com/yieldspace/telomere/blob/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/crates/telomere-component-wasi/src/provider/sockets.rs#L11-L44
 [preview1]: https://github.com/yieldspace/telomere/blob/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/src/core_wasi_preview1.rs#L338-L405
 [minimal-ci]: https://github.com/yieldspace/telomere/blob/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba/.github/workflows/ci.yaml#L52-L91
 [source-commit]: https://github.com/yieldspace/telomere/commit/2e46c7114ab0b2b4abc98ce4e40b2be95278e8ba
