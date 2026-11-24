@@ -356,17 +356,14 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #289: workflow_dispatch runs 45285608348 and
-45285626265 against the PR branch at head
-`309336fe34702b554195d9dfdc08adf7863ddddb` (branch commits
-`36fb96d`, embedder-configurable resource limits via LimitsConfig
-(#126), `457b209`, enforce the total-page ceiling on host-side
-memory growth, `e38f6ee`, preflight the aggregate memory
-minimum before allocating, and `309336f`, preflight table limits
-before allocating and claim initial pages atomically; and merge
-commit `f77c527` bringing in
-`main` at `20e7e94`), and pull-request run 45285593690, which built
-the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
+against the code of PR #290: workflow_dispatch runs 45308598282 and
+45308607305 against the PR branch at head
+`208dcba57d4aeb59a6ae4294effaa6b9a7bfb425` (branch commit
+`208dcba`, keep the interpreter stop target on ExecuteContext, not
+a thread local (#190); the branch is based directly on `main` at
+`b39b116`, which had not moved since the branch was cut, so no
+merge commit was needed), and pull-request run 45306829128, which
+built the same tree (`ubuntu-24.04`, Rust 1.96.0). Every run
 produced byte-identical sizes: for all sixteen profile/configuration
 rows, the raw file size, the `.text` size, the stripped file size, and
 the stripped `.text` size each have a run-to-run spread of **0 B**
@@ -376,21 +373,21 @@ table below (stripped file / stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,586,336 | 1,200,279 |
-| `release` | `component` | 2,667,136 | 2,115,575 |
-| `release` | `wasi` | 3,011,136 | 2,375,703 |
-| `release` | `core-nosimd` | 1,395,584 | 1,055,447 |
-| `release` | `core-jit` | 2,135,344 | 1,644,743 |
-| `release` | `core-aot` | 1,616,608 | 1,220,759 |
-| `release` | `wasi-threads` | 3,226,592 | 2,542,855 |
+| `release` | `core` | 1,586,320 | 1,200,263 |
+| `release` | `component` | 2,667,120 | 2,115,559 |
+| `release` | `wasi` | 3,011,120 | 2,375,687 |
+| `release` | `core-nosimd` | 1,395,568 | 1,055,431 |
+| `release` | `core-jit` | 2,125,104 | 1,634,503 |
+| `release` | `core-aot` | 1,632,144 | 1,233,271 |
+| `release` | `wasi-threads` | 3,226,576 | 2,542,839 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,110,632 | 783,447 |
-| `release-size` | `component` | 1,672,280 | 1,234,279 |
-| `release-size` | `wasi` | 1,868,264 | 1,366,103 |
-| `release-size` | `core-nosimd` | 995,856 | 703,927 |
-| `release-size` | `core-jit` | 1,552,192 | 1,106,743 |
-| `release-size` | `core-aot` | 1,130,480 | 795,367 |
-| `release-size` | `wasi-threads` | 2,010,568 | 1,460,407 |
+| `release-size` | `core` | 1,110,712 | 783,527 |
+| `release-size` | `component` | 1,672,344 | 1,234,343 |
+| `release-size` | `wasi` | 1,868,328 | 1,366,151 |
+| `release-size` | `core-nosimd` | 995,920 | 703,991 |
+| `release-size` | `core-jit` | 1,533,920 | 1,088,519 |
+| `release-size` | `core-aot` | 1,150,048 | 808,967 |
+| `release-size` | `wasi-threads` | 2,010,632 | 1,460,471 |
 
 #### Re-baseline history
 
@@ -1314,6 +1311,39 @@ remains the `release` `component` stripped file series, now
 at +9.59% (2,433,656 B to 2,667,136 B). The baseline was
 re-measured on the branch and updated as recorded above,
 following the procedure below.
+
+PR #290 (#190, the `jit` feature tax: compiling the `jit` feature
+slowed the interpreter even when the JIT never ran) moves the JIT
+interpreter stop target out of the `JIT_INTERPRETER_STOP_AT`
+thread-local into a new trailing field of `ExecuteContext`
+(`jit_stop_pc`). `JitInterpreterStopGuard` now saves and restores
+that field through a slot pointer, keeping the nesting semantics,
+and the per-dispatch check in the dispatch helper and the
+return/branch handlers compares the current pc against the ctx
+field in a single equality. On Darwin the thread-local read went
+through a TLV thunk call on every dispatch; the field read removes
+that call. The branch is based directly on current `main`
+(`b39b116`), which had not moved since the branch was cut, so the
+pull-request run already built the final tree and no merge commit
+was needed. Attribution was isolated by measuring current `main`
+alone (workflow_dispatch run 45308616450, gate success), which
+reproduces the previous baseline exactly on all 32 gated series,
+so every delta below is this PR's own. 28 of the 32 gated series
+change; the `baseline` configuration, which links no telomere
+code, is byte-identical in both profiles. In `release`, the
+non-JIT library configurations shrink by 16 B (stripped file and
+stripped `.text` alike), `core-jit` shrinks by 10,240 B, and
+`core-aot` grows by 15,536 B stripped file / 12,512 B stripped
+`.text`. In `release-size`, `core`, `component`, `wasi`,
+`core-nosimd` and `wasi-threads` grow by 64..80 B stripped file
+(48..80 B stripped `.text`), `core-jit` shrinks by 18,272 B
+stripped file / 18,224 B stripped `.text`, and `core-aot` grows
+by 19,568 B / 13,600 B. Against the original #164 baseline, the
+largest cumulative growth remains the `release` `component`
+stripped file series, at +9.59% (2,433,656 B to 2,667,120 B),
+unchanged in rounded terms. The baseline was re-measured on the
+branch and updated as recorded above, following the procedure
+below.
 
 ### Threshold derivation
 

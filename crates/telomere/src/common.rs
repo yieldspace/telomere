@@ -1388,6 +1388,26 @@ pub struct ExecuteContext<'a> {
     // the dead_code lint cannot see that use in non-JIT builds.
     #[allow(dead_code)]
     pub(crate) jit_trap_pc: *const Instr,
+    /// #190: the interpreter stop target owned by the innermost active JIT
+    /// continuation bridge, or null when no bridge owns this execution.
+    ///
+    /// When native code needs the interpreter to run until a specific pc
+    /// (a call continuation), the bridge records that pc here and the
+    /// per-dispatch check in `call_code` compares each tail pc against it.
+    /// The target used to live in a thread local, but reading a thread
+    /// local on every dispatch taxes the interpreter even when the JIT is
+    /// never enabled -- a TLV thunk call per dispatch on Darwin, an
+    /// `%fs`-relative load plus compare on Linux -- for every embedder
+    /// that merely compiles the `jit` feature in. The context pointer is
+    /// already live in a register in every handler, so the check is now a
+    /// single load and compare against this field. The bridge guard
+    /// (`JitInterpreterStopGuard`) saves and restores the previous value
+    /// so nested bridges keep their nesting semantics. Appended at the
+    /// end of the struct for the same `offset_of!` reason as `jit_trap_pc`.
+    // Read and written only by the JIT bridge paths (feature `aot-load`);
+    // the dead_code lint cannot see that use in non-JIT builds.
+    #[allow(dead_code)]
+    pub(crate) jit_stop_pc: *const Instr,
 }
 
 /// Flat `(base, committed_len)` view of the active frame's default local
