@@ -120,10 +120,52 @@ impl OutputTarget {
     }
 }
 
+/// Test double for a stdin source whose writer stays open (a terminal or a
+/// pipe): each queued chunk is delivered by a single `read`, truncated to
+/// the caller's buffer with the remainder kept for the next read, and once
+/// the queue is drained a further read reports `WouldBlock` instead of EOF,
+/// so a host function that keeps reading after a short read fails loudly
+/// instead of silently observing end-of-input.
+#[cfg(test)]
+#[derive(Debug)]
+struct ChunkedStdin {
+    chunks: std::collections::VecDeque<Vec<u8>>,
+    reads: usize,
+}
+
+#[cfg(test)]
+impl ChunkedStdin {
+    fn new(chunks: Vec<Vec<u8>>) -> Self {
+        Self {
+            chunks: chunks.into(),
+            reads: 0,
+        }
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.reads += 1;
+        let Some(front) = self.chunks.front_mut() else {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "chunked stdin drained: writer still open",
+            ));
+        };
+        let count = front.len().min(buf.len());
+        buf[..count].copy_from_slice(&front[..count]);
+        front.drain(..count);
+        if front.is_empty() {
+            self.chunks.pop_front();
+        }
+        Ok(count)
+    }
+}
+
 #[derive(Debug, Clone)]
 enum InputSource {
     Inherit,
     Buffer(Arc<Mutex<io::Cursor<Vec<u8>>>>),
+    #[cfg(test)]
+    Chunked(Arc<Mutex<ChunkedStdin>>),
 }
 
 impl InputSource {
@@ -134,6 +176,8 @@ impl InputSource {
                 .lock()
                 .expect("captured stdin buffer poisoned")
                 .read(buf),
+            #[cfg(test)]
+            Self::Chunked(stdin) => stdin.lock().expect("chunked stdin poisoned").read(buf),
         }
     }
 }
@@ -902,6 +946,14 @@ fn host_fd_read(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
                 write_guest_bytes(memory, dest, &chunk[..read])?;
                 filled += read as u32;
                 total = total.checked_add(read as u32).ok_or(ERRNO_FAULT)?;
+                if read < want {
+                    // Short read: the source delivered everything it
+                    // currently has (one terminal line, or a pipe chunk
+                    // whose writer is still open). Return the accumulated
+                    // count instead of blocking on another read to fill
+                    // this iovec, and do not touch later iovecs.
+                    break 'iovs;
+                }
             }
         }
         let memory = ctx.caller_memory().ok_or(ERRNO_FAULT)?;
@@ -1092,6 +1144,37 @@ mod tests {
         telomere::run_module_function(&instance, &store, export, &ResultValue::new(vec![]))
             .await
             .unwrap()
+    }
+
+    async fn invoke_export_with_chunked_stdin(
+        module: Module,
+        export: &str,
+        chunks: Vec<Vec<u8>>,
+    ) -> (ResultValue, Arc<Mutex<ChunkedStdin>>) {
+        let stdin = Arc::new(Mutex::new(ChunkedStdin::new(chunks)));
+        let mut state = Box::new(CoreWasiPreview1State::with_environ(
+            Path::new("guest.wasm"),
+            &[],
+            StdioMode::Capture(CapturedStdio::default()),
+            Vec::new(),
+        ));
+        state.stdin = InputSource::Chunked(stdin.clone());
+        let store = Store::new_with_state(unsafe {
+            StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State)
+        });
+        let mut registry = Registry::new();
+        let host = instantiate_raw_native_module(build_preview1_native_module(), &store, &registry)
+            .await
+            .unwrap();
+        registry.register(PREVIEW1_MODULE, host);
+        let instance = telomere::instantiate(module, &store, &registry)
+            .await
+            .unwrap();
+        let result =
+            telomere::run_module_function(&instance, &store, export, &ResultValue::new(vec![]))
+                .await
+                .unwrap();
+        (result, stdin)
     }
 
     fn expect_single_i32(result: &ResultValue) -> i32 {
@@ -1804,6 +1887,173 @@ mod tests {
         .await;
 
         assert_eq!(expect_single_i32(&result), 0);
+    }
+
+    #[tokio::test]
+    async fn preview1_runner_fd_read_returns_short_read_without_rereading() {
+        // The chunked source holds one 2-byte chunk and reports WouldBlock
+        // (not EOF) if read again, modelling a pipe whose writer stays
+        // open. fd_read must return the 2 available bytes after exactly
+        // one source read instead of blocking to fill the 4-byte iovec,
+        // and must not touch the second iovec after the short read.
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                i32.const 0
+                i32.const 64
+                i32.store
+                i32.const 4
+                i32.const 4
+                i32.store
+                i32.const 8
+                i32.const 128
+                i32.store
+                i32.const 12
+                i32.const 4
+                i32.store
+                i32.const 0
+                i32.const 0
+                i32.const 2
+                i32.const 16
+                call $fd_read
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 2
+                i32.ne
+                if
+                  i32.const 2
+                  return
+                end
+                i32.const 64
+                i32.load8_u
+                i32.const 97
+                i32.ne
+                if
+                  i32.const 3
+                  return
+                end
+                i32.const 65
+                i32.load8_u
+                i32.const 98
+                i32.ne
+                if
+                  i32.const 4
+                  return
+                end
+                i32.const 128
+                i32.load8_u
+                if
+                  i32.const 5
+                  return
+                end
+                i32.const 0))
+            "#,
+        );
+        let (result, stdin) =
+            invoke_export_with_chunked_stdin(module, "check", vec![b"ab".to_vec()]).await;
+
+        assert_eq!(expect_single_i32(&result), 0);
+        assert_eq!(stdin.lock().expect("chunked stdin poisoned").reads, 1);
+    }
+
+    #[tokio::test]
+    async fn preview1_runner_fd_read_continues_after_full_reads() {
+        // A chunk larger than the iovec is delivered across two calls: the
+        // first read fills the iovec exactly, the second returns the
+        // remainder as a short read without a third, blocking read.
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                i32.const 0
+                i32.const 64
+                i32.store
+                i32.const 4
+                i32.const 4
+                i32.store
+                i32.const 0
+                i32.const 0
+                i32.const 1
+                i32.const 16
+                call $fd_read
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 4
+                i32.ne
+                if
+                  i32.const 2
+                  return
+                end
+                i32.const 64
+                i32.load8_u
+                i32.const 97
+                i32.ne
+                if
+                  i32.const 3
+                  return
+                end
+                i32.const 67
+                i32.load8_u
+                i32.const 100
+                i32.ne
+                if
+                  i32.const 4
+                  return
+                end
+                i32.const 0
+                i32.const 0
+                i32.const 1
+                i32.const 16
+                call $fd_read
+                if
+                  i32.const 5
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 2
+                i32.ne
+                if
+                  i32.const 6
+                  return
+                end
+                i32.const 64
+                i32.load8_u
+                i32.const 101
+                i32.ne
+                if
+                  i32.const 7
+                  return
+                end
+                i32.const 65
+                i32.load8_u
+                i32.const 102
+                i32.ne
+                if
+                  i32.const 8
+                  return
+                end
+                i32.const 0))
+            "#,
+        );
+        let (result, stdin) =
+            invoke_export_with_chunked_stdin(module, "check", vec![b"abcdef".to_vec()]).await;
+
+        assert_eq!(expect_single_i32(&result), 0);
+        assert_eq!(stdin.lock().expect("chunked stdin poisoned").reads, 2);
     }
 
     #[tokio::test]

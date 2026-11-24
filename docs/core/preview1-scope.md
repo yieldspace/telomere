@@ -43,7 +43,10 @@ Full preview1 compatibility is explicitly not the goal.
   `--no-inherit-env` suppresses inheritance.
 - **`fd_read`** reads fd 0 (stdin) only. Fds 1 and 2 are write-only and any
   other descriptor is unknown; both cases return `ERRNO_BADF`, as does fd 0
-  after `fd_close`. End of input is success with `nread = 0`.
+  after `fd_close`. End of input is success with `nread = 0`. Reads have
+  ordinary partial-read semantics: a short read from the source is returned
+  as-is instead of blocking to fill the guest's iovecs, so interactive
+  stdin and request/response pipes cannot deadlock against the runner.
 - **`random_get`** fills from OS entropy via `getrandom`, the same source
   the component WASI random provider uses.
 - **Everything else** about the original runner is unchanged: argv handling,
@@ -89,7 +92,8 @@ above. The committed fixture `examples/wasi-preview1-stock-hello.wasm`
   legacy ABI.
 - **The cost asymmetry is measured, not assumed.** The four added functions
   mirror existing code (`environ_*` share the argv string-table helpers;
-  `fd_read` mirrors `fd_write`'s iovec walk; `random_get` reuses the
+  `fd_read` mirrors `fd_write`'s iovec walk (with partial-read rather
+  than fill semantics); `random_get` reuses the
   workspace's `getrandom`). The filesystem family mirrors nothing.
 
 ## Alternatives considered
