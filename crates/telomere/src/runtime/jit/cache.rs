@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
 };
@@ -26,6 +26,18 @@ use telomere_jit_codegen::code_memory::{CodeArena, ExecutableCode};
 #[derive(Default)]
 pub(crate) struct StoreJitCache {
     inner: Mutex<StoreJitCacheInner>,
+    /// Monotonic tick source for LRU recency stamps.
+    ///
+    /// #191: recency used to be refreshed by locking `inner` on every
+    /// native-to-native call (`touch_compiled`). The stamp now lives on
+    /// [`CompiledFunction`] as an atomic and this clock lives outside the
+    /// mutex, so the direct call path can refresh recency with one
+    /// `fetch_add` and a sampled store instead of a lock + hash lookup.
+    /// The clock is only ever advanced by this store's own execution and
+    /// cache maintenance (a store executes under its runtime lock), and
+    /// the stamps are recency hints, so `Relaxed` ordering is enough: a
+    /// stale read can only make eviction marginally less precise.
+    clock: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -45,12 +57,10 @@ struct StoreJitCacheInner {
     disabled: HashSet<ObjectRef>,
     arena: CodeArena,
     used_bytes: usize,
-    clock: u64,
 }
 
 struct CachedFunction {
     tiers: CompiledTiers,
-    last_used: u64,
 }
 
 struct CompiledTiers {
@@ -74,6 +84,13 @@ pub(crate) struct CompiledFunction {
     /// decoded-stream pc index of the instruction that emitted trap
     /// site `site`.
     trap_sites: Box<[u32]>,
+    /// LRU recency stamp, in [`StoreJitCache`] clock ticks.
+    ///
+    /// #191: this lives on the compiled function itself (not behind the
+    /// cache mutex) so the direct native call path can refresh it
+    /// without locking. It is a recency hint only; see
+    /// [`StoreJitCache::note_direct_call`].
+    last_used: AtomicU64,
 }
 
 impl StoreJitCache {
@@ -85,13 +102,35 @@ impl StoreJitCache {
     /// `jit` feature, through [`StoreJitCache::get_or_compile`]), and a miss
     /// simply means the function has no native code in this store.
     pub(crate) fn get_cached(&self, funcaddr: ObjectRef) -> Option<Arc<CompiledFunction>> {
-        let mut inner = self.inner.lock();
-        inner.clock = inner.clock.wrapping_add(1);
-        let clock = inner.clock;
-        let cached = inner.compiled.get_mut(&funcaddr)?;
+        let clock = self.next_tick();
+        let inner = self.inner.lock();
+        let cached = inner.compiled.get(&funcaddr)?;
         profile::count(Counter::CompileHit);
-        cached.last_used = clock;
-        Some(cached.tiers.active().clone())
+        let active = cached.tiers.active().clone();
+        active.note_used(clock);
+        Some(active)
+    }
+
+    fn next_tick(&self) -> u64 {
+        self.clock.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+    }
+
+    /// #191: recency refresh for the direct native-to-native call path.
+    ///
+    /// The caller already holds the `Arc<CompiledFunction>` it is about
+    /// to execute (obtained by upgrading the per-store slot in
+    /// `StoreInner`), so keeping the code alive never depended on this
+    /// stamp; the stamp only steers eviction. To keep the hot path at
+    /// one atomic read-modify-write, the store clock advances on every
+    /// direct call but the callee's stamp is rewritten only once it is
+    /// at least `DIRECT_CALL_TOUCH_INTERVAL` ticks stale, which bounds
+    /// stamp stores to one per interval per function while keeping
+    /// eviction order accurate to within that many calls.
+    pub(crate) fn note_direct_call(&self, compiled: &CompiledFunction) {
+        let clock = self.next_tick();
+        if clock.wrapping_sub(compiled.last_used()) >= DIRECT_CALL_TOUCH_INTERVAL {
+            compiled.note_used(clock);
+        }
     }
 
     #[cfg(feature = "jit")]
@@ -169,9 +208,8 @@ impl StoreJitCache {
             return VMResult::Unimplemented;
         }
 
+        let clock = self.next_tick();
         let mut inner = self.inner.lock();
-        inner.clock = inner.clock.wrapping_add(1);
-        let clock = inner.clock;
         if inner.disabled.contains(&funcaddr) {
             profile::count(Counter::CompileRejectDisabledAfterEmit);
             trace_compile_reject(
@@ -182,10 +220,11 @@ impl StoreJitCache {
             );
             return VMResult::Unimplemented;
         }
-        if let Some(cached) = inner.compiled.get_mut(&funcaddr) {
+        if let Some(cached) = inner.compiled.get(&funcaddr) {
             profile::count(Counter::CompileHit);
-            cached.last_used = clock;
-            return VMResult::Success(cached.tiers.active().clone());
+            let active = cached.tiers.active().clone();
+            active.note_used(clock);
+            return VMResult::Success(active);
         }
         inner.evict_until(max_bytes.saturating_sub(resident_len));
         let compiled =
@@ -201,32 +240,41 @@ impl StoreJitCache {
             };
         profile::count(Counter::CompileAccepted);
         profile::add(Counter::CompileBytes, emitted.code.len() as u64);
+        compiled.note_used(clock);
         inner.used_bytes = inner.used_bytes.saturating_add(compiled.resident_bytes());
         inner.compiled.insert(
             funcaddr,
             CachedFunction {
                 tiers: CompiledTiers::baseline(compiled.clone()),
-                last_used: clock,
             },
         );
         VMResult::Success(compiled)
     }
 
+    /// Identity + recency check for the interpreter-side entry path
+    /// (`enter_current_frame_raw`): returns `true` when the cache still
+    /// holds exactly this compiled function as the active tier for
+    /// `funcaddr`, refreshing its recency stamp.
+    ///
+    /// #191: native-to-native calls no longer come through here (they
+    /// use [`StoreJitCache::note_direct_call`] on the `Arc` they already
+    /// hold); this remains for entries that start from the interpreter,
+    /// where the per-frame slot may name code the cache has since
+    /// evicted or replaced.
     pub(crate) fn touch_compiled(
         &self,
         funcaddr: ObjectRef,
         compiled: &Arc<CompiledFunction>,
     ) -> bool {
-        let mut inner = self.inner.lock();
-        inner.clock = inner.clock.wrapping_add(1);
-        let clock = inner.clock;
-        let Some(cached) = inner.compiled.get_mut(&funcaddr) else {
+        let clock = self.next_tick();
+        let inner = self.inner.lock();
+        let Some(cached) = inner.compiled.get(&funcaddr) else {
             return false;
         };
         if !Arc::ptr_eq(cached.tiers.active(), compiled) {
             return false;
         }
-        cached.last_used = clock;
+        compiled.note_used(clock);
         true
     }
 
@@ -290,7 +338,7 @@ impl StoreJitCacheInner {
             let Some((&funcaddr, _)) = self
                 .compiled
                 .iter()
-                .min_by_key(|(_, cached)| cached.last_used)
+                .min_by_key(|(_, cached)| cached.tiers.active().last_used())
             else {
                 break;
             };
@@ -349,6 +397,12 @@ impl CompiledTiers {
     }
 }
 
+/// #191: direct-call recency stamps are refreshed at most once per
+/// this many store-clock ticks per function. The clock advances once
+/// per direct call (and once per cache slow-path operation), so a
+/// function's eviction rank is accurate to within this many calls.
+const DIRECT_CALL_TOUCH_INTERVAL: u64 = 32;
+
 impl CompiledFunction {
     fn from_bytes(bytes: &[u8], trap_sites: Vec<u32>, arena: &CodeArena) -> Result<Self, ()> {
         let code = arena.allocate(bytes).map_err(|_| ())?;
@@ -358,11 +412,22 @@ impl CompiledFunction {
             code_size: code.len(),
             _code: code,
             trap_sites: trap_sites.into_boxed_slice(),
+            last_used: AtomicU64::new(0),
         })
     }
 
     pub(crate) fn entry(&self) -> JitEntry {
         self.entry
+    }
+
+    /// Records a use at cache-clock tick `tick`. Recency is a hint for
+    /// eviction only, so a plain `Relaxed` store is enough.
+    fn note_used(&self, tick: u64) {
+        self.last_used.store(tick, Ordering::Relaxed);
+    }
+
+    fn last_used(&self) -> u64 {
+        self.last_used.load(Ordering::Relaxed)
     }
 
     fn code_size(&self) -> usize {
@@ -418,7 +483,6 @@ mod tests {
                 func,
                 CachedFunction {
                     tiers: CompiledTiers::baseline(compiled.clone()),
-                    last_used: 0,
                 },
             );
         }
@@ -428,9 +492,8 @@ mod tests {
             .expect("installed function must be consultable");
         assert!(Arc::ptr_eq(&hit, &compiled));
 
-        let inner = cache.inner.lock();
         assert_eq!(
-            inner.compiled.get(&func).unwrap().last_used,
+            compiled.last_used(),
             2,
             "a consult refreshes eviction recency (one miss + one hit on the clock)"
         );
@@ -444,22 +507,22 @@ mod tests {
         let compiled_a = test_compiled(32);
         let compiled_b = test_compiled(32);
 
+        compiled_a.note_used(1);
+        compiled_b.note_used(2);
+        cache.clock.store(2, Ordering::Relaxed);
         {
             let mut inner = cache.inner.lock();
-            inner.clock = 2;
             inner.used_bytes = compiled_a.code_size() + compiled_b.code_size();
             inner.compiled.insert(
                 func_a,
                 CachedFunction {
                     tiers: CompiledTiers::baseline(compiled_a.clone()),
-                    last_used: 1,
                 },
             );
             inner.compiled.insert(
                 func_b,
                 CachedFunction {
                     tiers: CompiledTiers::baseline(compiled_b.clone()),
-                    last_used: 2,
                 },
             );
         }
@@ -472,7 +535,7 @@ mod tests {
 
         assert!(inner.compiled.contains_key(&func_a));
         assert!(!inner.compiled.contains_key(&func_b));
-        assert_eq!(inner.compiled.get(&func_a).unwrap().last_used, 3);
+        assert_eq!(compiled_a.last_used(), 3);
     }
 
     #[test]
@@ -482,23 +545,42 @@ mod tests {
         let current = test_compiled(32);
         let stale = test_compiled(32);
 
+        current.note_used(1);
+        cache.clock.store(1, Ordering::Relaxed);
         {
             let mut inner = cache.inner.lock();
-            inner.clock = 1;
             inner.used_bytes = current.code_size();
             inner.compiled.insert(
                 func,
                 CachedFunction {
-                    tiers: CompiledTiers::baseline(current),
-                    last_used: 1,
+                    tiers: CompiledTiers::baseline(current.clone()),
                 },
             );
         }
 
         assert!(!cache.touch_compiled(func, &stale));
 
-        let inner = cache.inner.lock();
-        assert_eq!(inner.compiled.get(&func).unwrap().last_used, 1);
+        assert_eq!(current.last_used(), 1);
+    }
+
+    #[test]
+    fn note_direct_call_refreshes_recency_without_the_cache_lock() {
+        let cache = StoreJitCache::default();
+        let compiled = test_compiled(32);
+
+        // The stamp starts at 0; the first direct call ticks the clock
+        // to 1, still within the sampling interval of stamp 0, so no
+        // store happens yet.
+        cache.note_direct_call(&compiled);
+        assert_eq!(compiled.last_used(), 0);
+
+        // Advancing the clock past the sampling interval makes the next
+        // direct call refresh the stamp to the current tick.
+        cache
+            .clock
+            .store(DIRECT_CALL_TOUCH_INTERVAL + 1, Ordering::Relaxed);
+        cache.note_direct_call(&compiled);
+        assert_eq!(compiled.last_used(), DIRECT_CALL_TOUCH_INTERVAL + 2);
     }
 
     fn test_compiled(code_size: usize) -> Arc<CompiledFunction> {
@@ -508,6 +590,7 @@ mod tests {
             code_size: code.len(),
             _code: code,
             trap_sites: Box::default(),
+            last_used: AtomicU64::new(0),
         })
     }
 

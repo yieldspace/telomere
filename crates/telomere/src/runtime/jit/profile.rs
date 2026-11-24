@@ -62,6 +62,8 @@ jit_profile_counters! {
     RuntimePopI32 => "runtime.pop_i32",
     RuntimeDirectCallHelper => "runtime.direct_call.helper",
     RuntimeDirectCallFast => "runtime.direct_call.fast",
+    RuntimeDirectNativeCall => "runtime.direct_native_call",
+    RuntimeEntryStackFallback => "runtime.entry_stack_fallback",
     RuntimeRejectedWasmCallFast => "runtime.rejected_wasm_call.fast",
     RuntimeIndirectCallHelper => "runtime.indirect_call.helper",
     RuntimeMemoryFill => "runtime.memory_fill",

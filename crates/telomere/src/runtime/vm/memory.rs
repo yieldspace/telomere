@@ -8095,6 +8095,7 @@ mod tests {
             budget_epoch: 0,
             jit_trap_pc: std::ptr::null(),
             jit_stop_pc: std::ptr::null(),
+            jit_native_stack_floor: 0,
         }
     }
 

@@ -67,6 +67,44 @@ closed if `--jit` is requested on an unsupported build or target.
   side-exit into the interpreter in the middle of the same function.
 - Store-local native code cache entries are bounded by
   `--jit-code-cache-mib` and evicted by least-recently-used policy.
+- Native-to-native calls are direct (#191). The call helper still runs the
+  ordinary frame preparation (which charges the callee's frame reservation
+  against the value-stack byte limit), then resolves the callee through the
+  store's entry table — one weak slot per function in `StoreInner` — and
+  invokes the compiled entry point itself, holding the upgraded `Arc`
+  across the call. There is no per-call cache lock and no per-call LRU
+  touch under a mutex: recency stamps live on the compiled function as
+  atomics and are refreshed by the call path with a sampled store (the
+  store clock advances per direct call; a function's stamp is rewritten
+  at most once per 32 ticks). Eviction only drops the cache's own `Arc`,
+  so code an in-flight call is executing stays alive until that call
+  returns. The table itself needs no lock: slots are read through
+  `&StoreInner` and written only under `&mut StoreInner` (install and
+  rejection), under the store's one-execution-at-a-time discipline;
+  the only state the call path mutates cross-thread is the recency
+  stamp, a `Relaxed` atomic whose staleness can only make eviction
+  marginally less precise, never incorrect.
+- Native entry depth has no separate counter (#191). Every native entry
+  runs on a frame reserved through the same value-stack accounting that
+  bounds interpreter recursion, so deep native recursion traps as
+  `StackOverflow` at the store's `limits.value_stack_bytes` bound. Each
+  native level also spends real host stack (roughly 0.5 KiB for the
+  minimal self-recursive frame), which the reservation does not charge,
+  so the entry boundaries additionally compare the current stack pointer
+  against a floor derived from the executing thread's OS stack bounds
+  plus a 256 KiB reserve. When the remaining host stack runs low the
+  entry is declined and the frame runs in the interpreter instead, whose
+  dispatch is flat: at the default 128 KiB limit the minimal
+  self-recursive frame reaches ~3.2k nested entries and traps cleanly
+  even on a 1 MiB host stack, while on roomy stacks the value-stack
+  bound remains the binding limit. Embedders that raise
+  `value_stack_bytes` raise the achievable native depth with it, up to
+  what the host stack can actually hold.
+- Metering stays insertable on the call path (#171/#191): a per-call fuel
+  charge, if one is ever added, belongs in the call helper's frame
+  preparation step — the one runtime crossing every native-to-native call
+  still makes. Metered code's loop-header checkpoints are emitted inside
+  each function and are unaffected by how the function was entered.
 
 The component runtime remains relation-driven and interpreter-backed at the
 component layer. Embedded core modules can still use the core runtime beneath
