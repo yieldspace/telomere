@@ -356,14 +356,14 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #298: workflow_dispatch runs 45359403134 and
-45359413144 against the PR branch at head
-`62e3b88d11f1f1d6eb3032a8500b4562c3bfaad2` (branch commit
-`a83777e`, make `wasi:filesystem` read-only by contract (#134),
-plus merge commit
-`d6e6aa8` bringing in current `main` at `6d29650` (PR #297),
-and fix commit `62e3b88`, is-same-object filesystem identity),
-and pull-request run 45359097175, which built the same tree
+against the code of PR #300: workflow_dispatch runs 45398465490 and
+45398481840 against the PR branch at head
+`3421c442138fb8dc2a8a41ee06db11e3f6f67bb9` (branch commit
+`3ca9974`, quarantine benchmark-shaped recognizers behind a runtime
+flag (#188), on current `main` at `93581e8` (PR #298), plus fix
+commit `3421c44`, moving the vm-profile corpus workloads out of
+`docs/` into `tools/vm-profile/`),
+and pull-request run 45398441987, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). Every run produced
 byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
@@ -375,21 +375,21 @@ stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,586,784 | 1,200,727 |
-| `release` | `component` | 2,667,344 | 2,115,783 |
-| `release` | `wasi` | 2,894,928 | 2,290,231 |
-| `release` | `core-nosimd` | 1,395,728 | 1,055,591 |
-| `release` | `core-jit` | 2,127,456 | 1,636,567 |
-| `release` | `core-aot` | 1,632,592 | 1,233,751 |
-| `release` | `wasi-threads` | 3,110,416 | 2,457,399 |
+| `release` | `core` | 1,592,904 | 1,205,495 |
+| `release` | `component` | 2,673,416 | 2,120,503 |
+| `release` | `wasi` | 2,900,984 | 2,294,951 |
+| `release` | `core-nosimd` | 1,401,864 | 1,060,359 |
+| `release` | `core-jit` | 2,131,928 | 1,639,975 |
+| `release` | `core-aot` | 1,639,272 | 1,239,063 |
+| `release` | `wasi-threads` | 3,116,600 | 2,462,263 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,110,664 | 783,511 |
-| `release-size` | `component` | 1,672,440 | 1,234,439 |
-| `release-size` | `wasi` | 1,793,688 | 1,316,215 |
-| `release-size` | `core-nosimd` | 995,872 | 703,959 |
-| `release-size` | `core-jit` | 1,534,768 | 1,089,175 |
-| `release-size` | `core-aot` | 1,149,888 | 808,871 |
-| `release-size` | `wasi-threads` | 1,935,976 | 1,410,503 |
+| `release-size` | `core` | 1,115,560 | 787,111 |
+| `release-size` | `component` | 1,677,000 | 1,237,703 |
+| `release-size` | `wasi` | 1,798,248 | 1,319,479 |
+| `release-size` | `core-nosimd` | 1,000,800 | 707,591 |
+| `release-size` | `core-jit` | 1,538,080 | 1,091,575 |
+| `release-size` | `core-aot` | 1,154,640 | 812,375 |
+| `release-size` | `wasi-threads` | 1,940,824 | 1,414,119 |
 
 #### Re-baseline history
 
@@ -1490,6 +1490,47 @@ unchanged. Against the original #164 baseline, the
 largest cumulative growth is unchanged: the `release`
 `component` stripped file series at +9.60% (2,433,656 B
 to 2,667,344 B). The baseline was re-measured on the
+branch and updated as recorded above, following the
+procedure below.
+
+PR #300 (#188, superinstruction selection) quarantines the
+benchmark-shaped recognizers behind a runtime flag:
+`RuntimeConfig.recognizers` (`RecognizerConfig`,
+`benchmark_shaped` default false, CLI
+`--benchmark-recognizers`) gates a reconnect pass
+(`apply_benchmark_shaped_recognizers`) in instantiate.rs
+that reclassifies kernel-op starts, masked-wrapper and
+low7-guard shapes, and call quickenings only when the flag
+is on. The recognizers had no production callers since
+PR #110, so the default keeps current behaviour. The
+`list_crc` quickening is deliberately not referenced:
+referencing its handlers resurrects about 60 KB of
+dead-code-eliminated `.text` for a quickening that can
+never fire. A Codex P1 fix on top moves the two executable
+vm-profile corpus workloads (`json_agg.rs`,
+`text_index.rs`) out of `docs/benchmarks/vm-profile/`
+into `tools/vm-profile/` — `AGENTS.md` prohibits
+executable measurement code under `docs/` — a pure rename
+that changes no gated size. Attribution was isolated by
+measuring current `main` alone (workflow_dispatch run
+45398496895, gate success), which reproduces the previous
+baseline exactly on all 32 gated series, so every delta
+below is this PR's own. 28 of the 32 gated series change;
+the `baseline` configuration, which links no telomere
+code, is byte-identical in both profiles. In `release`,
+every library configuration grows — stripped file
++4,472 B in `core-jit` to +6,680 B in `core-aot`, stripped
+`.text` +3,408 B to +5,312 B (the reconnect pass, the
+resurrected masked-CRC and low7 handler pairs, and the
+instantiate closure, per the symbol decomposition in the
+PR record). In `release-size` the growth is smaller:
+stripped file +3,312 B to +4,928 B, stripped `.text`
++2,400 B to +3,632 B. Against the original #164 baseline,
+the largest cumulative growth is now the `release`
+`core-nosimd` stripped file series at +9.91%
+(1,275,448 B to 1,401,864 B), overtaking the `release`
+`component` stripped file series at +9.85% (2,433,656 B
+to 2,673,416 B). The baseline was re-measured on the
 branch and updated as recorded above, following the
 procedure below.
 
