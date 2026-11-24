@@ -34,7 +34,6 @@ use crate::{
 #[cfg(feature = "aot-load")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-
 #[cfg(feature = "aot-load")]
 pub use abi::JitNativeExit;
 #[cfg(feature = "aot-load")]
