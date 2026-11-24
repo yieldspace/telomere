@@ -309,6 +309,25 @@ SHAPE_OVERRIDES: dict[str, tuple] = {
     "op_br_table": ("variadic", 2),
 }
 
+# Fused tail handlers whose fallthrough `call_next(tail_code, N, ctx)`
+# advance is a skip distance over retained source instructions, not an
+# operand count, so the advance-based derivation cannot separate the
+# two. Their operand counts are the ground truth of their emitters in
+# `parser/core/optimizer/pipeline/encode.rs` (the operand `vec!` built
+# by `fuse_local_base_load_tee_load8_branch_tail` has 7 entries, the one
+# built by `fuse_local_add_set_load8_eqz_branch_tail` has 8), and their
+# handlers read exactly slots 0..=6 / 0..=7, the last of which is the
+# branch target (`jump_addr` at `tail_code.add(6)` / `.add(7)`); the
+# fallthrough advances 11 / 14 additionally skip the retained source
+# ops the fusion was built from.
+SHAPE_OVERRIDES_WITH_JUMP: dict[str, tuple] = {
+    "op_i32_load_local_base_tee4_i32_load8_u_tee4_br_if": (("exact", 7), True),
+    "op_local_get4_i32_const_add_set4_i32_load8_u_local_base_tee4_i32_eqz_br_if": (
+        ("exact", 8),
+        True,
+    ),
+}
+
 # Canonical control handlers whose operands are jump targets even
 # though the target is read through a helper in some of them.
 CANONICAL_BRANCH_OPS = {"op_br", "op_br_if", "op_else", "op_if", "op_br_table", "op_return"}
@@ -477,6 +496,29 @@ class ShapeDeriver:
                 return self._indexed_pick(callee, args[callee_pos] == "true", depth + 1)
         return None
 
+    def _uses_jump(self, name: str, seen: frozenset = frozenset()) -> bool:
+        """Whether `name` (or any helper it delegates to, transitively)
+        reads a `jump_addr` operand. Kept independent of shape
+        resolution: a layout-driven helper such as
+        `i32_load8_u_update_br_if_ptr_at` has no derivable shape of its
+        own (its offsets arrive as struct fields), so `resolve` returns
+        None for it, but it still forwards a jump target through
+        `memory_br_if_ptr`; jump-target usage must propagate through it
+        regardless."""
+        if name in seen:
+            return False
+        seen = seen | {name}
+        if name in CANONICAL_BRANCH_OPS:
+            return True
+        if name in self.aliases and self._uses_jump(self.aliases[name], seen):
+            return True
+        body = self.bodies.get(name)
+        if body is None:
+            return False
+        if _body_info(body)["jump"]:
+            return True
+        return any(self._uses_jump(c, seen) for c in self._callees(body))
+
     def _const_call_pick(self, body: str, callee: str):
         """If `body` calls `callee::<...>(tail_code, ...)` with a bool
         literal in the INDEXED position, return the picked shape."""
@@ -506,6 +548,8 @@ class ShapeDeriver:
 
     def resolve(self, name: str, depth: int = 0, seen: frozenset = frozenset()):
         """Return ((kind, ...), jump) or None when underivable."""
+        if name in SHAPE_OVERRIDES_WITH_JUMP:
+            return SHAPE_OVERRIDES_WITH_JUMP[name]
         if name in SHAPE_OVERRIDES:
             return (SHAPE_OVERRIDES[name], name in CANONICAL_BRANCH_OPS)
         if name in seen or depth > 6:
@@ -516,15 +560,14 @@ class ShapeDeriver:
         body = self.bodies.get(name)
         if body is not None:
             info = _body_info(body)
-            jump = info["jump"] or name in CANONICAL_BRANCH_OPS
-            if not jump:
-                # A handler whose jump target is read by a helper it
-                # delegates to still carries JumpTarget operands.
-                for callee in self._callees(body):
-                    r = self.resolve(callee, depth + 1, seen)
-                    if r is not None and r[1]:
-                        jump = True
-                        break
+            jump = (
+                info["jump"]
+                or name in CANONICAL_BRANCH_OPS
+                or any(
+                    self._uses_jump(callee, seen)
+                    for callee in self._callees(body)
+                )
+            )
             lits = set(info["lits"])
             anyof = set(info["anyof"])
             var = info["var"]
@@ -562,6 +605,16 @@ class ShapeDeriver:
                     anyof.add((shape[1], shape[2]))
                 elif shape[0] == "variadic":
                     var = True
+            # A delegated shape is a floor, not the whole stream: the
+            # handler's own direct operand reads past the delegated
+            # prefix are its operands too (e.g. the guarded byte-load
+            # handler reads its final branch target at
+            # `tail_code.add(14)` itself, past the 14-operand prefix
+            # its cond helper derives).
+            if len(lits) == 1 and not anyof and not var and info["max_add"] >= 0:
+                lit = next(iter(lits))
+                if lit <= info["max_add"]:
+                    lits = {info["max_add"] + 1}
             if len(lits) == 1 and not anyof and not var:
                 return (("exact", next(iter(lits))), jump)
             if anyof and not lits and not var:
