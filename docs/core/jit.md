@@ -84,14 +84,22 @@ closed if `--jit` is requested on an unsupported build or target.
   the only state the call path mutates cross-thread is the recency
   stamp, a `Relaxed` atomic whose staleness can only make eviction
   marginally less precise, never incorrect.
-- Native entry depth has no separate cap (#191). Every native entry runs
-  on a frame reserved through the same value-stack accounting that bounds
-  interpreter recursion, so deep native recursion traps as `StackOverflow`
-  at the store's `limits.value_stack_bytes` bound. Embedders that raise
-  that limit raise the native depth bound with it and must size host
-  thread stacks accordingly: at the default 128 KiB limit the minimal
-  self-recursive frame reaches ~3.2k nested entries, measured to trap
-  cleanly on a 2 MiB host stack.
+- Native entry depth has no separate counter (#191). Every native entry
+  runs on a frame reserved through the same value-stack accounting that
+  bounds interpreter recursion, so deep native recursion traps as
+  `StackOverflow` at the store's `limits.value_stack_bytes` bound. Each
+  native level also spends real host stack (roughly 0.5 KiB for the
+  minimal self-recursive frame), which the reservation does not charge,
+  so the entry boundaries additionally compare the current stack pointer
+  against a floor derived from the executing thread's OS stack bounds
+  plus a 256 KiB reserve. When the remaining host stack runs low the
+  entry is declined and the frame runs in the interpreter instead, whose
+  dispatch is flat: at the default 128 KiB limit the minimal
+  self-recursive frame reaches ~3.2k nested entries and traps cleanly
+  even on a 1 MiB host stack, while on roomy stacks the value-stack
+  bound remains the binding limit. Embedders that raise
+  `value_stack_bytes` raise the achievable native depth with it, up to
+  what the host stack can actually hold.
 - Metering stays insertable on the call path (#171/#191): a per-call fuel
   charge, if one is ever added, belongs in the call helper's frame
   preparation step — the one runtime crossing every native-to-native call
