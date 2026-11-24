@@ -356,16 +356,15 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #293 after its Codex P1 fix: workflow_dispatch runs 45327945752 and
-45327956071 against the PR branch at head
-`1fa6db7889158ac6d1eb8abc1c9d573bf19378d7` (branch commit
-`f0015b9`, enter JIT callees directly on native-to-native calls
-(#191), plus merge commit `159796d` bringing in `main` at
-`41bca95` (PR #290), commit `de0de8f` bounding native entry by
-the host stack, and merge commit `1fa6db7` bringing in current
-`main` at `1b25df0` (PR #291)), and pull-request run
-45327889910, which built the same tree (`ubuntu-24.04`, Rust
-1.96.0). Every run produced byte-identical sizes: for all sixteen
+against the code of PR #294: workflow_dispatch runs 45334558431 and
+45334660340 against the PR branch at head
+`46931a9d03bccc58b8135269aaa612fd01d639c3` (branch commit
+`fe8e601`, fully initialize narrow operands so raw lowering
+reads no uninitialized bytes (#292), plus merge commit
+`46931a9` bringing in current `main` at `3922f93` (PR #293)),
+and pull-request run 45334543654, which built the same tree
+(`ubuntu-24.04`, Rust 1.96.0). Every run produced
+byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
 the stripped file size, and the stripped `.text` size each have a
 run-to-run spread of **0 B** across the three samples. The observed
@@ -375,21 +374,21 @@ stripped `.text`, in bytes).
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,586,336 | 1,200,279 |
-| `release` | `component` | 2,667,136 | 2,115,575 |
-| `release` | `wasi` | 3,011,136 | 2,375,703 |
-| `release` | `core-nosimd` | 1,395,584 | 1,055,447 |
-| `release` | `core-jit` | 2,127,008 | 1,636,119 |
-| `release` | `core-aot` | 1,632,144 | 1,233,303 |
-| `release` | `wasi-threads` | 3,226,592 | 2,542,855 |
+| `release` | `core` | 1,586,784 | 1,200,727 |
+| `release` | `component` | 2,667,344 | 2,115,783 |
+| `release` | `wasi` | 3,011,344 | 2,375,911 |
+| `release` | `core-nosimd` | 1,395,728 | 1,055,591 |
+| `release` | `core-jit` | 2,127,456 | 1,636,567 |
+| `release` | `core-aot` | 1,632,592 | 1,233,751 |
+| `release` | `wasi-threads` | 3,226,816 | 2,543,079 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,110,712 | 783,527 |
-| `release-size` | `component` | 1,672,344 | 1,234,343 |
-| `release-size` | `wasi` | 1,868,328 | 1,366,167 |
-| `release-size` | `core-nosimd` | 995,920 | 703,991 |
-| `release-size` | `core-jit` | 1,534,816 | 1,089,207 |
-| `release-size` | `core-aot` | 1,149,920 | 808,887 |
-| `release-size` | `wasi-threads` | 2,010,632 | 1,460,471 |
+| `release-size` | `core` | 1,110,664 | 783,511 |
+| `release-size` | `component` | 1,672,440 | 1,234,439 |
+| `release-size` | `wasi` | 1,868,424 | 1,366,263 |
+| `release-size` | `core-nosimd` | 995,872 | 703,959 |
+| `release-size` | `core-jit` | 1,534,768 | 1,089,175 |
+| `release-size` | `core-aot` | 1,149,888 | 808,871 |
+| `release-size` | `wasi-threads` | 2,010,696 | 1,460,535 |
 
 #### Re-baseline history
 
@@ -1420,6 +1419,38 @@ growth remains the `release` `component` stripped file series,
 unchanged at +9.59% (2,433,656 B to 2,667,136 B). The baseline
 was re-measured on the branch and updated as recorded above,
 following the procedure below.
+
+PR #294 was re-baselined after the merge of current `main`
+(`3922f93`, PR #293; merge commit `46931a9`). The PR fixes a
+Miri-found uninitialized read in the optimizer pipeline: the
+`Operand` union's narrow fields leave the high four bytes of
+the raw encoding uninitialized in union literals, and the raw
+lowering (`lower_operand`) reads all eight bytes, so building
+the `[u8; 8]` value was undefined behaviour. The fix adds
+canonical constructors on `Operand` (`from_i32`, `from_u32`,
+`from_f32`, `from_jump_addr`, `from_drop_size`,
+`from_local_addr`, `from_select`), each zeroing the tail, and
+replaces 78 narrow union literals across the parser and the
+pipeline `raw_*` helpers with them. Attribution was isolated
+by measuring current `main` alone (workflow_dispatch run
+45334673188, gate success), which reproduces the pre-#292
+baseline exactly on all 32 gated series, so every delta below
+is this PR's own. Against `main`, 28 of the 32 gated series
+change; the `baseline` configuration is unchanged. In
+`release` every changed series grows by exactly its stripped
+`.text` delta (pure code growth, no data change): `core`,
+`core-aot` and `core-jit` each grow by 448 B stripped file /
+448 B stripped `.text`, `component` and `wasi` by 208 B /
+208 B, `wasi-threads` by 224 B / 224 B, and `core-nosimd` by
+144 B / 144 B. In `release-size` the deltas are small and
+mixed: `component` grows by 96 B / 96 B, `wasi` by 96 B /
+96 B, `wasi-threads` by 64 B / 64 B, `core` shrinks by 48 B /
+16 B, `core-jit` by 48 B / 32 B, `core-nosimd` by 48 B / 32 B,
+and `core-aot` by 32 B / 16 B. Against the original #164
+baseline, the largest cumulative growth is the `release`
+`component` stripped file series at +9.60% (2,433,656 B to
+2,667,344 B). The baseline was re-measured on the branch and
+updated as recorded above, following the procedure below.
 
 ### Threshold derivation
 

@@ -952,7 +952,7 @@ fn same_raw_operand(lhs: &LoweredOperand, rhs: &LoweredOperand) -> bool {
 }
 
 fn raw_u32_operand(value: u32) -> LoweredOperand {
-    LoweredOperand::Raw(unsafe { Operand { u32: value }.encoded })
+    LoweredOperand::Raw(unsafe { Operand::from_u32(value).encoded })
 }
 
 fn coalesce_local_set_get(block: &mut super::ir::CanonBlock, pair_cursors: &[usize]) -> usize {
@@ -1410,7 +1410,7 @@ fn raw_i64(operand: Option<&LoweredOperand>) -> Option<i64> {
 }
 
 fn raw_i32_operand(value: i32) -> LoweredOperand {
-    LoweredOperand::Raw(unsafe { Operand { i32: value }.encoded })
+    LoweredOperand::Raw(unsafe { Operand::from_i32(value).encoded })
 }
 
 fn raw_i64_operand(value: i64) -> LoweredOperand {
