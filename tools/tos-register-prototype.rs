@@ -12,9 +12,16 @@
 //      at lowering time — encoded here by choosing, for each position, the
 //      handler variant compiled for that state, exactly as a real lowering
 //      pass that knows the abstract stack depth would.)
-// B also has a shim op: a non-converted handler that only understands the
-// memory stack. Entering it spills TOS, leaving it reloads TOS — the
-// boundary cost the study must bound.
+// B also has a shim op: a non-converted, stack-only operation that only
+// understands the memory stack. The operation itself sits behind a genuine
+// two-argument boundary (`stack_only_opaque`, pc + ctx, no TOS argument,
+// #[inline(never)] and called through an opaque fn pointer), so it must
+// load both operands from memory and store its result back to memory.
+// Entering it spills TOS, leaving it reloads TOS from memory — the
+// boundary cost the study must bound. (An earlier version implemented the
+// operation inside the three-argument shim handler; LLVM then kept the
+// operand/result in %edx and eliminated the reload, so that version did
+// not measure a stack-only boundary at all. See the study doc §3/§4.)
 //
 // Handlers are #[inline(never)] fn items (telomere's handler-identity
 // contract) and dispatch is the last expression, so release codegen must
@@ -296,14 +303,27 @@ unsafe fn b_br(pc: *const InstrB, ctx: &mut Ctx, _tos: u64) -> u32 {
 unsafe fn b_drop(pc: *const InstrB, ctx: &mut Ctx, _tos: u64) -> u32 {
     next_b!(pc, ctx, 0)
 }
-// Shim boundary: spill TOS, run the stack-only op, reload TOS.
+// The stack-only operation, in the unconverted two-argument handler shape:
+// it receives only (pc, ctx) — no TOS register — so both operands must come
+// from the byte stack in memory and the result must go back to memory.
+// `#[inline(never)]`, and the shim below calls it through an opaque
+// (black-boxed) fn pointer, so LLVM cannot see through the boundary, keep
+// the spilled value in %edx, or eliminate the caller's reload.
+type OpStackOnly = unsafe fn(*const u8, &mut Ctx);
 #[inline(never)]
-unsafe fn b_shim_opaque(pc: *const InstrB, ctx: &mut Ctx, tos: u64) -> u32 {
-    ctx.stack.push_u32(tos as u32); // spill
+unsafe fn stack_only_opaque(_pc: *const u8, ctx: &mut Ctx) {
     let rhs = ctx.stack.pop_u32();
     let lhs = ctx.stack.pop_u32();
     ctx.stack.push_u32(lhs ^ (rhs.wrapping_mul(0x9e37_79b1)));
-    let new_tos = ctx.stack.pop_u32(); // reload
+}
+// Shim boundary: spill TOS to memory, cross the two-argument boundary to
+// the stack-only op, reload TOS from memory.
+#[inline(never)]
+unsafe fn b_shim_opaque(pc: *const InstrB, ctx: &mut Ctx, tos: u64) -> u32 {
+    ctx.stack.push_u32(tos as u32); // spill: store TOS into the byte stack
+    let op: OpStackOnly = std::hint::black_box(stack_only_opaque as OpStackOnly);
+    op(pc.cast::<u8>(), ctx); // two-argument boundary: (pc, ctx) only
+    let new_tos = ctx.stack.pop_u32(); // reload: load the result from memory
     next_b!(pc, ctx, new_tos as u64)
 }
 #[inline(never)]

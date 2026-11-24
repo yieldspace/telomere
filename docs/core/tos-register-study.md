@@ -9,7 +9,7 @@ common.rs:974) to a three-argument form.
 
 **Decision: NO-GO.** Do not migrate the dispatch signature. The prototype
 below shows the mechanism works and is fast on *unfused* produce–consume
-code (1.9–2.1× on a handler-only model), but the interpreter that exists
+code (1.85–1.95× on a handler-only model), but the interpreter that exists
 today is not that model: superinstruction fusion already captures a larger
 share of the same traffic (2.5× on the same loop shape, measured), the
 remaining per-dispatch costs are ones TOS cannot remove, and the migration
@@ -39,9 +39,11 @@ expectation that it would not help.
   constraint wins by virtue of the no-go; had the answer been go, the
   signature change would have had to be coordinated against it first.
 - No change to default builds. There is no cfg: the prototype is a
-  standalone file ([`tos-register-prototype.rs`](tos-register-prototype.rs),
-  not part of any crate target) and may be deleted now that the decision
-  is recorded.
+  standalone file (`tools/tos-register-prototype.rs`, not part of any
+  crate target — `tools/` is where this repository keeps standalone
+  measurement harnesses, per the root `AGENTS.md`, which prohibits
+  executable measurement code under `docs/`) and may be deleted now that
+  the decision is recorded.
 
 ## 1. Method
 
@@ -72,9 +74,18 @@ numbers is a published baseline):
      variants (dead-TOS: value simply becomes TOS; live-TOS: spill first)
      — exactly the variant split a real lowering would need.
    - **Shim** — B additionally contains a non-converted, stack-only op.
-     Entering it spills TOS and leaving it reloads TOS, once per loop
-     iteration in the shim workload: the worst-case boundary-crossing
-     shape the issue asks to bound.
+     The operation sits behind a genuine two-argument boundary: a
+     `#[inline(never)]` function taking only (pc, ctx) — no TOS argument —
+     called through an opaque fn pointer, so it must load both operands
+     from memory and store its result back (§4 verifies this in the
+     generated code). Entering it spills TOS to memory and leaving it
+     reloads TOS from memory, once per loop iteration in the shim
+     workload: the worst-case boundary-crossing shape the issue asks to
+     bound. (The first version of this prototype implemented the operation
+     inside the three-argument shim handler; LLVM kept the operand and
+     result in `%edx` and eliminated the reload, so it measured no
+     boundary at all. The shim numbers below are the re-measurement with
+     the genuine boundary, and they supersede the first version's.)
    A and B run identical programs and must agree: the check mode verifies
    both against independent expectations, including the same results the
    telomere benches assert (`scalar_local_loop(1024) = 523776`,
@@ -85,7 +96,7 @@ numbers is a published baseline):
 Reproduce the prototype:
 
 ```shell
-rustc -O -C codegen-units=1 -o /tmp/tos_proto docs/core/tos-register-prototype.rs
+rustc -O -C codegen-units=1 -o /tmp/tos_proto tools/tos-register-prototype.rs
 /tmp/tos_proto check   # correctness, A == B == expected
 /tmp/tos_proto bench   # paired A/B timing rounds
 ```
@@ -108,7 +119,7 @@ call- and setup-dominated, a cost class TOS does not address either.
 Two facts frame everything below:
 
 - The unfused real interpreter costs 28.7 ns/iteration where the
-  prototype's unfused A costs 17.0 ns/iteration on the same loop shape.
+  prototype's unfused A costs 18.2 ns/iteration on the same loop shape.
   The difference is per-dispatch work the prototype does not model and
   TOS does not remove: the `ctx.cont = tail_code` store on every dispatch
   (load-bearing for trap capture, #185 — dropping it measured ~+5%
@@ -127,22 +138,31 @@ iteration.
 
 | Workload | A (stack) | B (TOS register) | B speedup |
 | --- | --- | --- | --- |
-| scalar_loop | 340.2 µs (17.0 ns/iter) | 180.7 µs (9.0 ns/iter) | **1.88×** |
-| scalar_loop_shim | 346.1 µs | 186.9 µs | **1.85×** |
-| fib_body | 49.84 ms | 23.62 ms | **2.11×** |
+| scalar_loop | 364.0 µs (18.2 ns/iter) | 196.4 µs (9.8 ns/iter) | **1.85×** |
+| scalar_loop_shim | 359.8 µs | 266.1 µs | **1.35×** |
+| fib_body | 49.98 ms | 25.59 ms | **1.95×** |
 
 Reading:
 
 - On unfused produce–consume code the mechanism is real and large:
   roughly half the handler-only cost is the memory round-trip.
-- The shim downside is **bounded and small**: forcing a spill+reload
-  every iteration costs B only ~3% (186.9 vs 180.7 µs median), because a
-  spill is one store and the reload folds into the consumer. Boundary
-  cost is therefore *not* the reason for the no-go — a migration would
-  not fall off a cliff on mixed code.
+- The shim downside is **material, not negligible** — this corrects the
+  study's first measurement, whose in-handler shim never crossed a real
+  boundary (see §1). With the stack-only operation behind a genuine
+  two-argument boundary, crossing it every iteration costs B ~36%
+  (266.1 vs 196.4 µs median, +3.5 ns/iter): the spill store, the call
+  into stack-only code (which loads both operands from memory and
+  stores its result back), the reload load, and the loss of the pure
+  tail-jump form for that one dispatch. Even so, B does not fall off a
+  cliff on mixed code: on the shim workload itself B is still **1.35×**
+  faster than A, because A's stack round-trips remain in every other
+  handler. Boundary cost is therefore a real tax on any incremental
+  migration — mixed code pays it at every crossing — but it is not by
+  itself the reason for the no-go; the no-go rests on the fusion
+  comparison below and in §2, which does not involve the shim at all.
 - But B's absolute number cannot be credited to the real interpreter.
-  Crediting B's full prototype delta (8.0 ns/iter) against the real
-  *unfused* cost gives ≈20.7 ns/iter — still **1.8× slower than today's
+  Crediting B's full prototype delta (8.4 ns/iter) against the real
+  *unfused* cost gives ≈20.3 ns/iter — still **1.8× slower than today's
   fused default (11.4 ns/iter)**. Against the fused default itself the
   delta is not additive at all: fused handlers have already deleted most
   of the loads/stores B exists to delete.
@@ -170,6 +190,31 @@ result straight from `%edx`. Contrast `a_add` under the current contract:
 load rhs, then `add %edx,-0x8(...)` — a read-modify-write *store* back to
 the stack — plus the top update. The shim's spill is a single
 `mov %edx,(%rax,%rcx,1)`.
+
+The genuine stack-only boundary (the §3 shim, re-measured) disassembles
+as a real spill / call / reload sequence — contrast the first version,
+where `b_shim_opaque` computed `imul $0x9e3779b1,%edx,%edx` directly on
+the TOS register and no reload load existed at all:
+
+```asm
+<b_shim_opaque>:                            ; fn(pc, ctx, tos: u64)
+    mov    %edx,(%rax,%rcx,1)               ; spill: TOS store to the byte stack
+    call   *(%rsp)                          ; opaque fn-ptr call across the
+                                            ; two-argument boundary
+    mov    -0x4(%rax,%rcx,1),%edx           ; reload: TOS load from memory
+
+<stack_only_opaque>:                        ; fn(pc, ctx) — no TOS argument
+    imul   $0x9e3779b1,-0x4(%rax,%rcx,1),%edi  ; rhs loaded from memory
+    xor    %edi,-0x8(%rax,%rcx,1)           ; lhs from memory, result stored
+                                            ; back to memory; %edx unused
+```
+
+The stack-only side never touches `%edx`: both operands come from
+memory and the result returns to memory, and the converted side can
+only recover it with the reload load after the call. (The shim's own
+outgoing dispatch is a call-and-return rather than a pure tail jump —
+it must regain control after the boundary call to perform the reload —
+and that cost is included in the §3 shim numbers.)
 
 So the ABI fear in the issue does not materialize on this target: extra
 register *arguments* do not disturb the return classification, and the
@@ -202,9 +247,11 @@ dispatch-contract CI gate the issue depends on.)
   state from the stack (`StablePc`, trap capture), and the host return
   paths read results out of stack memory
   (`Stack::function_return_in_place`, common/stack.rs:1246; callers in
-  host.rs:298,330). None of this is impossible — §3 shows spilling is
-  cheap — but each site is a correctness cliff if missed, and the
-  failure mode is a silently wrong value, not a trap.
+  host.rs:298,330). None of this is impossible — a spill itself is a
+  single store, though §3's genuine-boundary measurement shows that
+  actually crossing into stack-only code and back is not free (~36% on
+  a per-iteration crossing) — but each site is a correctness cliff if
+  missed, and the failure mode is a silently wrong value, not a trap.
 - The #114 loop-dispatch fallback mirrors the dispatch contract, so it
   either migrates too (double maintenance of the contract) or becomes a
   second, divergent contract.
@@ -214,7 +261,7 @@ dispatch-contract CI gate the issue depends on.)
 **NO-GO for the signature migration.** The expected win on the code the
 interpreter actually runs — fused families plus boundary traffic, on top
 of per-dispatch costs TOS cannot touch — is a fraction of the
-prototype's unfused 1.9–2.1×, and §2's arithmetic bounds it below what
+prototype's unfused 1.85–1.95×, and §2's arithmetic bounds it below what
 fusion already delivers on the same shapes, at a small multiple of the
 effort. The migration is the largest structural change available short of
 a new tier; the measured return does not clear that bar.
