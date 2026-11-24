@@ -8,8 +8,8 @@ use crate::{
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
         FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
         ImportSection, Instance, InstanceData, InstanceHandle, Instr, Limits, LocalReference,
-        MemIdx, ModuleInstance, ModuleNames, NativeModule, ObjectRef, StablePc, Stack, StoreInner,
-        TableIdx, TypeIdx, TypeSection,
+        MaterializedFunction, MemIdx, ModuleInstance, ModuleNames, NativeModule, ObjectRef,
+        StablePc, Stack, StoreInner, TableIdx, TypeIdx, TypeSection,
     },
     host::{AsyncHostFn, AsyncHostModule, HostFn, HostModule},
     runtime::{
@@ -20,7 +20,6 @@ use crate::{
 };
 use std::sync::Arc;
 
-#[cfg(test)]
 use crate::common::{decode_local_binop32_kind, LocalBinop32Op, LocalFastRhsShape};
 
 pub(crate) fn init_global(
@@ -893,6 +892,30 @@ pub async fn instantiate(
             );
             materialized_local_wasm_funcs.push((func_addr, materialized));
         }
+        if store.runtime_config().recognizers.benchmark_shaped {
+            let recognizer_slots: Vec<u32> = materialized_local_wasm_funcs
+                .iter()
+                .map(|(func_addr, _)| runtime.call_recipe_slot_for_func(*func_addr))
+                .collect();
+            let recognizer_first_ops: Vec<Option<crate::common::Op>> =
+                materialized_local_wasm_funcs
+                    .iter()
+                    .map(|(func_addr, _)| match &runtime.get_func(*func_addr).body {
+                        RuntimeFunctionBody::Wasm { lowered, .. } => {
+                            lowered.code.first().map(|lowered_op| lowered_op.op)
+                        }
+                        RuntimeFunctionBody::Host(_)
+                        | RuntimeFunctionBody::AsyncHost(_)
+                        | RuntimeFunctionBody::PublicHost(_)
+                        | RuntimeFunctionBody::PublicAsyncHost(_) => None,
+                    })
+                    .collect();
+            apply_benchmark_shaped_recognizers(
+                &mut materialized_local_wasm_funcs,
+                &recognizer_slots,
+                &recognizer_first_ops,
+            );
+        }
         for (func_addr, materialized) in materialized_local_wasm_funcs {
             let func = runtime.get_func_mut(func_addr);
             let RuntimeFunctionBody::Wasm { code, op_lens, .. } = &mut func.body else {
@@ -1637,7 +1660,6 @@ pub(crate) fn link_async_host_function_with_export_name_impl(
     link_async_host_function_with_function_idx_impl(addr, func_idx, f, store)
 }
 
-#[cfg(test)]
 fn rewrite_direct_calls_for_slots(
     instrs: &mut [Instr],
     op_lens: &[u16],
@@ -1699,7 +1721,6 @@ fn rewrite_direct_wasm_calls_for_jit(
     debug_assert_eq!(cursor, instrs.len());
 }
 
-#[cfg(test)]
 #[derive(Clone, Copy)]
 struct Crc16UpdateMaskedWrapperShape {
     data_local: u32,
@@ -1707,7 +1728,6 @@ struct Crc16UpdateMaskedWrapperShape {
     return_addr: usize,
 }
 
-#[cfg(test)]
 fn crc16_update_masked_wrapper_shape(
     instrs: &[Instr],
     op_lens: &[u16],
@@ -1755,7 +1775,6 @@ fn crc16_update_masked_wrapper_shape(
     })
 }
 
-#[cfg(test)]
 fn materialized_starts_with_cached_u16_low7_guard(instrs: &[Instr], op_lens: &[u16]) -> bool {
     const EXPECTED_LENS: [u16; 5] = [5, 3, 2, 4, 2];
 
@@ -1815,7 +1834,6 @@ fn materialized_starts_with_cached_u16_low7_guard(instrs: &[Instr], op_lens: &[u
         && return_rhs == 0x7f
 }
 
-#[cfg(test)]
 fn rewrite_crc16_update_masked_wrapper(instrs: &mut [Instr], op_lens: &[u16]) {
     let Some(shape) = crc16_update_masked_wrapper_shape(instrs, op_lens) else {
         return;
@@ -1839,6 +1857,108 @@ fn rewrite_crc16_update_masked_wrapper(instrs: &mut [Instr], op_lens: &[u16]) {
             jump_addr: u32::try_from(shape.return_addr).expect("return address exceeds u32::MAX"),
         },
     };
+}
+
+/// Reconnects the quarantined benchmark-shaped recognizers (#188) for one
+/// instance's materialized functions.
+///
+/// This pass is only called when the store's
+/// [`RecognizerConfig`](crate::RecognizerConfig) opts in; production stores
+/// never run it. It mirrors the wiring that was live before the baseline JIT
+/// landed: calls to functions whose lowered stream starts with a benchmark
+/// kernel op are quickened to the matching specialized call handler, calls to
+/// functions matching the masked CRC wrapper or cached-u16 guard shapes are
+/// quickened likewise, and wrapper bodies are rewritten onto the masked
+/// kernel. Every specialized handler re-validates its target shape at call
+/// time and falls back to the generic call path, so a stale classification
+/// can only cost the quickening, never correctness.
+///
+/// `recipe_slots` and `lowered_first_ops` are parallel to
+/// `materialized_local_wasm_funcs`: each entry is that function's call
+/// recipe slot and the first op of its lowered stream, if any.
+///
+/// The four whole-function rewrites below this pass
+/// (`rewrite_list_crc_summary_function` and siblings) are deliberately not
+/// reconnected: they never had a production call site, and the kernel ops
+/// they produced are no longer emitted by the optimizer, so the call
+/// quickening above is inert for them until a producer exists again. The
+/// list-CRC call quickening is excluded for a second, measured reason: its
+/// kernel and call handlers are currently dead-code-eliminated, and merely
+/// referencing them from this pass resurrects about 60 KB of `.text` into
+/// embedder builds (measured with `tools/measure-embedder-footprint.py`)
+/// for a quickening that can never fire while the kernel has no producer.
+fn apply_benchmark_shaped_recognizers(
+    materialized_local_wasm_funcs: &mut [(ObjectRef, MaterializedFunction)],
+    recipe_slots: &[u32],
+    lowered_first_ops: &[Option<crate::common::Op>],
+) {
+    debug_assert_eq!(materialized_local_wasm_funcs.len(), recipe_slots.len());
+    debug_assert_eq!(materialized_local_wasm_funcs.len(), lowered_first_ops.len());
+    let mut numeric_transition_slots = Vec::new();
+    let mut crc16_update_slots = Vec::new();
+    for (index, first_op) in lowered_first_ops.iter().enumerate() {
+        let Some(first_op) = first_op else {
+            continue;
+        };
+        let slot = recipe_slots[index];
+        if std::ptr::fn_addr_eq(
+            *first_op,
+            vm::op_i32_numeric_token_state_transition as crate::common::Op,
+        ) {
+            numeric_transition_slots.push(slot);
+        } else if std::ptr::fn_addr_eq(*first_op, vm::op_i32_crc16_update16 as crate::common::Op) {
+            crc16_update_slots.push(slot);
+        }
+    }
+    for (_, materialized) in materialized_local_wasm_funcs.iter_mut() {
+        rewrite_direct_calls_for_slots(
+            &mut materialized.instrs,
+            &materialized.op_lens,
+            &numeric_transition_slots,
+            vm::op_call_i32_numeric_token_state_transition as crate::common::Op,
+        );
+        rewrite_direct_calls_for_slots(
+            &mut materialized.instrs,
+            &materialized.op_lens,
+            &crc16_update_slots,
+            vm::op_call_i32_crc16_update16 as crate::common::Op,
+        );
+    }
+
+    // The masked-wrapper shape is only visible after calls to CRC targets
+    // have been quickened, so classify these two shapes in a second round.
+    let mut masked_wrapper_slots = Vec::new();
+    let mut low7_guard_slots = Vec::new();
+    for (index, (_, materialized)) in materialized_local_wasm_funcs.iter().enumerate() {
+        let slot = recipe_slots[index];
+        if crc16_update_masked_wrapper_shape(&materialized.instrs, &materialized.op_lens).is_some()
+        {
+            masked_wrapper_slots.push(slot);
+        }
+        if materialized_starts_with_cached_u16_low7_guard(
+            &materialized.instrs,
+            &materialized.op_lens,
+        ) {
+            low7_guard_slots.push(slot);
+        }
+    }
+    for (_, materialized) in materialized_local_wasm_funcs.iter_mut() {
+        rewrite_direct_calls_for_slots(
+            &mut materialized.instrs,
+            &materialized.op_lens,
+            &masked_wrapper_slots,
+            vm::op_call_i32_crc16_update16_masked as crate::common::Op,
+        );
+        rewrite_direct_calls_for_slots(
+            &mut materialized.instrs,
+            &materialized.op_lens,
+            &low7_guard_slots,
+            vm::op_call_cached_u16_low7_guard as crate::common::Op,
+        );
+    }
+    for (_, materialized) in materialized_local_wasm_funcs.iter_mut() {
+        rewrite_crc16_update_masked_wrapper(&mut materialized.instrs, &materialized.op_lens);
+    }
 }
 
 #[allow(dead_code)]
@@ -2529,6 +2649,189 @@ mod tests {
             unsafe { instrs[0].op },
             vm::op_call as crate::common::Op
         ));
+    }
+
+    #[test]
+    fn benchmark_recognizer_pass_quickens_calls_and_rewrites_wrapper() {
+        let call_instrs = |slot: u32| {
+            vec![
+                Instr { op: vm::op_call },
+                Instr {
+                    operand: crate::common::Operand {
+                        call_recipe_ref: crate::common::CallRecipeRef::from_funcidx(0)
+                            .with_recipe_slot(slot),
+                    },
+                },
+            ]
+        };
+        let mut caller_instrs = Vec::new();
+        caller_instrs.extend(call_instrs(7));
+        caller_instrs.extend(call_instrs(9));
+        caller_instrs.extend(call_instrs(11));
+        caller_instrs.push(Instr { op: vm::op_end });
+
+        let (mut wrapper_instrs, wrapper_lens) = crc16_update_masked_wrapper_instrs(0, 4);
+        // The pass sees the wrapper before its CRC call is quickened.
+        wrapper_instrs[6] = Instr { op: vm::op_call };
+        let (low7_instrs, low7_lens) = cached_u16_low7_guard_instrs();
+
+        let mut funcs: Vec<(ObjectRef, MaterializedFunction)> = vec![
+            (
+                ObjectRef(1),
+                MaterializedFunction {
+                    instrs: caller_instrs,
+                    op_lens: vec![2, 2, 2, 1],
+                },
+            ),
+            (
+                ObjectRef(2),
+                MaterializedFunction {
+                    instrs: vec![Instr { op: vm::op_end }],
+                    op_lens: vec![1],
+                },
+            ),
+            (
+                ObjectRef(3),
+                MaterializedFunction {
+                    instrs: wrapper_instrs,
+                    op_lens: wrapper_lens,
+                },
+            ),
+            (
+                ObjectRef(4),
+                MaterializedFunction {
+                    instrs: low7_instrs,
+                    op_lens: low7_lens,
+                },
+            ),
+        ];
+        let recipe_slots = vec![3, 7, 9, 11];
+        let lowered_first_ops: Vec<Option<crate::common::Op>> = vec![
+            None,
+            Some(vm::op_i32_crc16_update16 as crate::common::Op),
+            None,
+            None,
+        ];
+
+        apply_benchmark_shaped_recognizers(&mut funcs, &recipe_slots, &lowered_first_ops);
+
+        let caller = &funcs[0].1;
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { caller.instrs[0].op },
+            vm::op_call_i32_crc16_update16 as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { caller.instrs[2].op },
+            vm::op_call_i32_crc16_update16_masked as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { caller.instrs[4].op },
+            vm::op_call_cached_u16_low7_guard as crate::common::Op
+        ));
+
+        let wrapper = &funcs[2].1;
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { wrapper.instrs[0].op },
+            vm::op_i32_crc16_update16_masked as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn benchmark_recognizer_pass_leaves_unmatched_calls_alone() {
+        let mut funcs: Vec<(ObjectRef, MaterializedFunction)> = vec![(
+            ObjectRef(1),
+            MaterializedFunction {
+                instrs: vec![
+                    Instr { op: vm::op_call },
+                    Instr {
+                        operand: crate::common::Operand {
+                            call_recipe_ref: crate::common::CallRecipeRef::from_funcidx(0)
+                                .with_recipe_slot(5),
+                        },
+                    },
+                    Instr { op: vm::op_end },
+                ],
+                op_lens: vec![2, 1],
+            },
+        )];
+        apply_benchmark_shaped_recognizers(&mut funcs, &[3], &[None]);
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { funcs[0].1.instrs[0].op },
+            vm::op_call as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn benchmark_recognizers_default_off_and_opt_in_preserves_results() {
+        // Guest recursion costs host stack per call cycle in dev builds
+        // (see call_threading.rs), so run on an explicit-stack thread.
+        std::thread::Builder::new()
+            .name("benchmark-recognizers-test".to_string())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("building a runtime for the recognizer test");
+                runtime.block_on(benchmark_recognizers_preserves_results_body());
+            })
+            .expect("spawning the recognizer test thread")
+            .join()
+            .expect("the recognizer test thread must not panic");
+    }
+
+    async fn benchmark_recognizers_preserves_results_body() {
+        assert!(!crate::RecognizerConfig::default().benchmark_shaped);
+        let wat_src = r#"
+            (module
+              (func $fib (export "fib") (param i32) (result i32)
+                (if (result i32) (i32.lt_s (local.get 0) (i32.const 2))
+                  (then (local.get 0))
+                  (else
+                    (i32.add
+                      (call $fib (i32.sub (local.get 0) (i32.const 1)))
+                      (call $fib (i32.sub (local.get 0) (i32.const 2)))))))
+              (func (export "sum") (param i32) (result i32)
+                (local $acc i32)
+                (block $done
+                  (loop $loop
+                    (br_if $done (i32.eqz (local.get 0)))
+                    (local.set $acc (i32.add (local.get $acc) (local.get 0)))
+                    (local.set 0 (i32.sub (local.get 0) (i32.const 1)))
+                    (br $loop)))
+                (local.get $acc)))
+        "#;
+        for benchmark_shaped in [false, true] {
+            let module = parse_wat_for_test(wat_src);
+            let mut runtime_config = crate::RuntimeConfig::default();
+            runtime_config.recognizers.benchmark_shaped = benchmark_shaped;
+            let store = Store::new_with_runtime_config(runtime_config);
+            let registry = Registry::new();
+            let VMResult::Success(instance) = instantiate(module, &store, &registry).await else {
+                panic!("module must instantiate");
+            };
+            let args = crate::ResultValue::new(vec![crate::WasmValue::I32(20)]);
+            let VMResult::Success(result) =
+                crate::run_module_function(&instance, &store, "fib", &args).await
+            else {
+                panic!("fib must run");
+            };
+            assert_eq!(
+                result.iter().collect::<Vec<_>>(),
+                vec![&crate::WasmValue::I32(6765)]
+            );
+            let args = crate::ResultValue::new(vec![crate::WasmValue::I32(100)]);
+            let VMResult::Success(result) =
+                crate::run_module_function(&instance, &store, "sum", &args).await
+            else {
+                panic!("sum must run");
+            };
+            assert_eq!(
+                result.iter().collect::<Vec<_>>(),
+                vec![&crate::WasmValue::I32(5050)]
+            );
+        }
     }
 
     #[cfg(feature = "aot-load")]

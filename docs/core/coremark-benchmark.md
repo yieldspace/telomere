@@ -70,6 +70,34 @@ The lesson is narrow but important: ancestry proves code was present, not that
 it executed. These historical data must not be used to claim that a recognizer
 or one-off rewrite was measured.
 
+## Recognizer quarantine record (#188, 2026-11-24)
+
+This is a quarantine A/B record, not a baseline: it is not produced by the
+baseline harness, is not written as JSON under `baseline/`, and must not be
+quoted as a current CoreMark score. It exists so the recognizer flag added
+by #188 has both of its settings measured on the record.
+
+Setting: one release `telomere-cli` binary (default features, Rust 1.96.0,
+fleur-du-lapin, x86_64), `ulimit -s 524288`, `taskset -c 3`, six alternating
+pairs with reversal plus an adjacent A/A pair. Artifact: the
+`wasm3.github.io` `coremark.wasm`, sha256 `5acb1c0e…` (the pin in
+`tools/baseline/artifacts.json` is `e71e3582…`; the mismatch predates this
+record). Every run printed "Correct operation validated".
+
+| Arm | Iterations/Sec | Median |
+| --- | --- | --- |
+| OFF, OFF (A/A) | 1559, 1559 | — |
+| Recognizers OFF (default) | 1594, 1582, 1581, 1527, 1573, 1595 | 1581.5 |
+| Recognizers ON (`--benchmark-recognizers`) | 1590, 1591, 1548, 1590, 1577, 1614 | 1590 |
+
+Paired contrasts: −0.25%, +0.57%, −2.09%, +4.13%, +0.25%, +1.19%
+(median +0.41%) — parity within noise. A `vm-profile` run with recognizers
+ON counted 3,912,772 `op_call` dispatches and zero specialized call
+handlers: the reconnected quickening fires nowhere on this module, because
+the kernel ops have no producer and the two materialized-stream matchers
+were shaped against the pre-#110 lowering. The full record is in
+[`superinstruction-selection.md`](./superinstruction-selection.md).
+
 ## Historical (superseded) record — 2026-05-19
 
 ### Scope

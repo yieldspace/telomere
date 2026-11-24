@@ -1,0 +1,22 @@
+[telomere-vm-profile] total_instrs=42294938 elapsed_ms=6357.936 top_k=16 layout_stability_phases=2
+[telomere-vm-profile] family=op_call count=28196620 elapsed_ms=4238.623 share_pct=66.67
+[telomere-vm-profile] family=op_local_get4 count=14098317 elapsed_ms=2119.313 share_pct=33.33
+[telomere-vm-profile] family=op_local_get4_local_get4 count=1 elapsed_ms=0.000 share_pct=0.00
+[telomere-vm-profile] pair=op_local_get4=>op_call count=14098312 layout_span=3 groups=Locals=>Call
+[telomere-vm-profile] pair=op_call=>op_local_get4 count=14098312 layout_span=3 groups=Call=>Locals
+[telomere-vm-profile] pair=op_call=>op_call count=14098308 layout_span=0 groups=Call=>Call
+[telomere-vm-profile] pair=op_local_get4=>op_local_get4 count=3 layout_span=0 groups=Locals=>Locals
+[telomere-vm-profile] pair=op_local_get4_local_get4=>op_local_get4 count=1 layout_span=0 groups=Locals=>Locals
+[telomere-vm-profile] pair=op_local_get4=>op_local_get4_local_get4 count=1 layout_span=0 groups=Locals=>Locals
+[telomere-vm-profile] triple=op_call=>op_local_get4=>op_call count=14098308 layout_span=3 groups=Call=>Locals=>Call
+[telomere-vm-profile] triple=op_local_get4=>op_call=>op_local_get4 count=8713236 layout_span=3 groups=Locals=>Call=>Locals
+[telomere-vm-profile] triple=op_call=>op_call=>op_call count=8713232 layout_span=0 groups=Call=>Call=>Call
+[telomere-vm-profile] triple=op_local_get4=>op_call=>op_call count=5385076 layout_span=3 groups=Locals=>Call=>Call
+[telomere-vm-profile] triple=op_call=>op_call=>op_local_get4 count=5385076 layout_span=3 groups=Call=>Call=>Locals
+[telomere-vm-profile] triple=op_local_get4=>op_local_get4=>op_call count=3 layout_span=3 groups=Locals=>Locals=>Call
+[telomere-vm-profile] triple=op_call=>op_local_get4=>op_local_get4 count=3 layout_span=3 groups=Call=>Locals=>Locals
+[telomere-vm-profile] triple=op_local_get4=>op_local_get4_local_get4=>op_local_get4 count=1 layout_span=0 groups=Locals=>Locals=>Locals
+[telomere-vm-profile] triple=op_call=>op_local_get4=>op_local_get4_local_get4 count=1 layout_span=3 groups=Call=>Locals=>Locals
+[telomere-vm-profile] family_group=local/control top_k=16 stats=[op_local_get4:count=14098317,op_local_get4_local_get4:count=1] pairs=[op_local_get4=>op_call:count=14098312,layout_span=3,op_local_get4=>op_local_get4:count=3,layout_span=0,op_local_get4_local_get4=>op_local_get4:count=1,layout_span=0,op_local_get4=>op_local_get4_local_get4:count=1,layout_span=0] triples=[op_local_get4=>op_call=>op_local_get4:count=8713236,layout_span=3,op_local_get4=>op_call=>op_call:count=5385076,layout_span=3,op_local_get4=>op_local_get4=>op_call:count=3,layout_span=3,op_local_get4=>op_local_get4_local_get4=>op_local_get4:count=1,layout_span=0]
+[telomere-vm-profile] family_group=memory top_k=16 stats=[] pairs=[] triples=[]
+[telomere-vm-profile] family_group=call/select top_k=16 stats=[op_call:count=28196620] pairs=[op_call=>op_local_get4:count=14098312,layout_span=3,op_call=>op_call:count=14098308,layout_span=0] triples=[op_call=>op_local_get4=>op_call:count=14098308,layout_span=3,op_call=>op_call=>op_call:count=8713232,layout_span=0,op_call=>op_call=>op_local_get4:count=5385076,layout_span=3,op_call=>op_local_get4=>op_local_get4:count=3,layout_span=3,op_call=>op_local_get4=>op_local_get4_local_get4:count=1,layout_span=3]

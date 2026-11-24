@@ -322,6 +322,7 @@ pub(crate) fn is_preview1_command_module(module: &Module) -> bool {
             .any(|export| export.0 == START_EXPORT && matches!(export.1, ExportDesc::Func(_)))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run(
     module: Module,
     path: &Path,
@@ -330,6 +331,7 @@ pub(crate) async fn run(
     stdio: StdioMode,
     jit: bool,
     jit_code_cache_mib: u32,
+    benchmark_recognizers: bool,
 ) -> anyhow::Result<ExitCode> {
     validate_preview1_module(&module)?;
     if jit && !telomere::jit_supported() {
@@ -345,6 +347,7 @@ pub(crate) async fn run(
     let mut runtime_config = RuntimeConfig::default();
     runtime_config.jit = JitConfig { enabled: jit };
     runtime_config.limits.max_code_cache_bytes = jit_code_cache_mib.saturating_mul(1024 * 1024);
+    runtime_config.recognizers.benchmark_shaped = benchmark_recognizers;
     let store = Store::new_with_state_and_runtime_config(state_ptr, runtime_config);
     let mut registry = Registry::new();
     let host = vm_result_to_anyhow(
@@ -1221,6 +1224,7 @@ mod tests {
             StdioMode::Capture(captured.clone()),
             false,
             4,
+            false,
         )
         .await
         .expect("preview1 run should succeed");
