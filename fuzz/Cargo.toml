@@ -15,7 +15,7 @@ members = ["."]
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
-telomere = { path = "../crates/telomere" }
+telomere = { path = "../crates/telomere", features = ["aot-load"] }
 telomere-component = { path = "../crates/telomere-component", features = ["fuzzing"] }
 
 [profile.dev]
