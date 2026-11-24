@@ -356,13 +356,14 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-24, the `Embedder footprint` workflow was run three times
-against the code of PR #294: workflow_dispatch runs 45334558431 and
-45334660340 against the PR branch at head
-`46931a9d03bccc58b8135269aaa612fd01d639c3` (branch commit
-`fe8e601`, fully initialize narrow operands so raw lowering
-reads no uninitialized bytes (#292), plus merge commit
-`46931a9` bringing in current `main` at `3922f93` (PR #293)),
-and pull-request run 45334543654, which built the same tree
+against the code of PR #298: workflow_dispatch runs 45359403134 and
+45359413144 against the PR branch at head
+`62e3b88d11f1f1d6eb3032a8500b4562c3bfaad2` (branch commit
+`a83777e`, make `wasi:filesystem` read-only by contract (#134),
+plus merge commit
+`d6e6aa8` bringing in current `main` at `6d29650` (PR #297),
+and fix commit `62e3b88`, is-same-object filesystem identity),
+and pull-request run 45359097175, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). Every run produced
 byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
@@ -376,19 +377,19 @@ stripped `.text`, in bytes).
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,586,784 | 1,200,727 |
 | `release` | `component` | 2,667,344 | 2,115,783 |
-| `release` | `wasi` | 3,011,344 | 2,375,911 |
+| `release` | `wasi` | 2,894,928 | 2,290,231 |
 | `release` | `core-nosimd` | 1,395,728 | 1,055,591 |
 | `release` | `core-jit` | 2,127,456 | 1,636,567 |
 | `release` | `core-aot` | 1,632,592 | 1,233,751 |
-| `release` | `wasi-threads` | 3,226,816 | 2,543,079 |
+| `release` | `wasi-threads` | 3,110,416 | 2,457,399 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,110,664 | 783,511 |
 | `release-size` | `component` | 1,672,440 | 1,234,439 |
-| `release-size` | `wasi` | 1,868,424 | 1,366,263 |
+| `release-size` | `wasi` | 1,793,688 | 1,316,215 |
 | `release-size` | `core-nosimd` | 995,872 | 703,959 |
 | `release-size` | `core-jit` | 1,534,768 | 1,089,175 |
 | `release-size` | `core-aot` | 1,149,888 | 808,871 |
-| `release-size` | `wasi-threads` | 2,010,696 | 1,460,535 |
+| `release-size` | `wasi-threads` | 1,935,976 | 1,410,503 |
 
 #### Re-baseline history
 
@@ -1451,6 +1452,46 @@ baseline, the largest cumulative growth is the `release`
 `component` stripped file series at +9.60% (2,433,656 B to
 2,667,344 B). The baseline was re-measured on the branch and
 updated as recorded above, following the procedure below.
+
+PR #298 was re-baselined after the merge of current `main`
+(`6d29650`, PR #297; merge commit `d6e6aa8`). The PR makes
+`wasi:filesystem` read-only by contract: a new bindgen
+`exclude` option omits named functions from the generated
+`add_to_linker`, the twelve mutating filesystem functions
+are excluded from registration, the remaining seven
+non-mutating functions are implemented, and `open-at`
+rejects mutate-directory opens, so the registered surface
+(17 of 29 functions) is fully implemented and write imports
+fail at instantiation instead of trapping mid-call. A Codex
+P2 fix on top makes `is-same-object` compare filesystem
+identity from `fs::metadata` ((device, inode) on Unix)
+instead of canonical path strings, so hard links to one
+file compare as the same object. Attribution was isolated
+by measuring current `main` alone (workflow_dispatch run
+45359420790, gate success). Unlike previous rounds, that
+control does not reproduce the checked-in baseline on the
+eight `wasi` and `wasi-threads` gated series: PR #297
+(#135, `wasi:sockets` stub removal) landed on `main` after
+the PR #294 re-baseline and shrank those series itself,
+and the gate only fails on growth, so no re-baseline was
+taken then. This update absorbs both parts, split by the
+control measurement. PR #297's part: in `release`, `wasi`
+and `wasi-threads` each shrink by 96,960 B stripped file /
+71,424 B stripped `.text`; in `release-size`, `wasi`
+shrinks by 62,448 B / 41,952 B and `wasi-threads` by
+62,448 B / 41,936 B. This PR's own part: 8 of the 32 gated
+series change, all in `wasi` and `wasi-threads` and all
+shrinking — in `release`, `wasi` shrinks by 19,456 B /
+14,256 B and `wasi-threads` by 19,440 B / 14,256 B; in
+`release-size`, `wasi` shrinks by 12,288 B / 8,096 B and
+`wasi-threads` by 12,272 B / 8,096 B. Every other gated
+series, including the `baseline` configuration, is
+unchanged. Against the original #164 baseline, the
+largest cumulative growth is unchanged: the `release`
+`component` stripped file series at +9.60% (2,433,656 B
+to 2,667,344 B). The baseline was re-measured on the
+branch and updated as recorded above, following the
+procedure below.
 
 ### Threshold derivation
 
