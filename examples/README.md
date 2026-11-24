@@ -9,6 +9,7 @@ was written down.
 | `add.wasm` | core Wasm export call | Compiled from Rust; no source kept in-tree. |
 | `component-add.wasm` | WASI-free Component Model export call | `component-add.wat` |
 | `wasi-preview1-hello.wasm` | WASI preview1 command module | `wasi-preview1-hello.wat` |
+| `wasi-preview1-stock-hello.wasm` | WASI preview1 command module | `wasi-preview1-stock-hello.rs` (stock `wasm32-wasip1`) |
 | `wasi-component-args.wasm` | WASI 0.2 component command | `wasi-component-args.wat` |
 
 ## Standalone minimal embedder
@@ -57,6 +58,42 @@ cargo run -- examples/wasi-preview1-hello.wasm -- $(python3 -c "print(' '.join('
 
 ```text
     1002
+```
+
+Stock `wasm32-wasip1` command module - a plain Rust binary, not WAT. It
+prints its argv, reports one environment variable, seeds a `HashMap`, and
+reports how many bytes it read from stdin:
+
+```shell
+printf abc | cargo run --release -- examples/wasi-preview1-stock-hello.wasm -- one
+```
+
+```text
+stock wasip1 hello
+argc=2
+arg=wasi-preview1-stock-hello.wasm
+arg=one
+fixture-env=<unset>
+hashmap=42
+stdin-len=3
+```
+
+The guest environment is the host process environment, as with the
+`component` subcommand; `--env KEY=VALUE` and `--no-inherit-env` apply to
+the preview1 path too:
+
+```shell
+printf abc | TELOMERE_PREVIEW1_FIXTURE=present cargo run --release -- examples/wasi-preview1-stock-hello.wasm -- one
+```
+
+```text
+stock wasip1 hello
+argc=2
+arg=wasi-preview1-stock-hello.wasm
+arg=one
+fixture-env=present
+hashmap=42
+stdin-len=3
 ```
 
 WASI 0.2 component command. This one reports its result through the process
@@ -112,15 +149,38 @@ wasm-tools parse examples/wasi-component-stdout.wat -o examples/wasi-component-s
 wasm-tools validate --features all examples/wasi-component-stdout.wasm
 ```
 
-They are committed as `.wat` sources rather than generated from Rust because of
-the toolchain gap described next.
+The stock fixture is the one exception: it is a real `wasm32-wasip1`
+binary, rebuilt with the workspace toolchain once the target is installed:
+
+```shell
+rustup target add wasm32-wasip1
+rustc --edition 2021 --target wasm32-wasip1 -O -C strip=symbols examples/wasi-preview1-stock-hello.rs -o examples/wasi-preview1-stock-hello.wasm
+```
+
+The remaining fixtures are committed as `.wat` sources rather than generated
+from Rust because of the toolchain gap described next.
 
 ## Why these fixtures use WAT sources
 
-### The preview1 sample cannot come from `wasm32-wasip1`
+### The preview1 WAT sample predates stock `wasm32-wasip1` support
 
 A plain `fn main()` built for `wasm32-wasip1` imports `environ_get` and
-`environ_sizes_get`, which the CLI's preview1 runner does not implement:
+`environ_sizes_get`, which the CLI's preview1 runner originally did not
+implement, so the first preview1 fixture had to be hand-written WAT. The
+runner now implements those plus `fd_read` and `random_get` (#137), and
+`wasi-preview1-stock-hello.wasm` is the stock-binary fixture that proves
+it. The implemented host functions are `args_sizes_get`, `args_get`,
+`clock_time_get`, `environ_sizes_get`, `environ_get`, `fd_close`,
+`fd_fdstat_get`, `fd_read`, `fd_seek`, `fd_write`, `proc_exit`, and
+`random_get` (see `src/core_wasi_preview1.rs` and
+`docs/core/preview1-scope.md`). `wasi-preview1-hello.wat` stays inside the
+original subset.
+
+The preview1 filesystem functions remain unimplemented by decision. A
+stock program that opens files - for example one calling
+`std::fs::read_to_string` - imports `fd_prestat_get`,
+`fd_prestat_dir_name`, `path_open`, and `fd_filestat_get` and fails closed
+before it runs:
 
 ```shell
 cargo build --release --target wasm32-wasip1     # in a scratch crate
@@ -128,13 +188,8 @@ target/release/telomere-cli path/to/guest.wasm
 ```
 
 ```text
-unsupported `wasi_snapshot_preview1` imports: environ_get, environ_sizes_get
+unsupported `wasi_snapshot_preview1` imports: fd_filestat_get, fd_prestat_dir_name, fd_prestat_get, path_open (the preview1 runner implements a scoped subset of preview1; see docs/core/preview1-scope.md)
 ```
-
-The implemented host functions are `args_sizes_get`, `args_get`,
-`clock_time_get`, `fd_close`, `fd_fdstat_get`, `fd_seek`, `fd_write`, and
-`proc_exit` (see `src/core_wasi_preview1.rs`). `wasi-preview1-hello.wat` stays
-inside that set.
 
 ### The component sample could not come from `wasm32-wasip2`
 

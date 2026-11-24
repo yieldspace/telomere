@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context};
 use std::{
     ffi::OsStr,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::Path,
     process::ExitCode,
     sync::{
@@ -45,6 +45,10 @@ const FD_STDIN_BIT: u32 = 1 << 0;
 const FD_STDOUT_BIT: u32 = 1 << 1;
 const FD_STDERR_BIT: u32 = 1 << 2;
 const OPEN_STDIO_MASK: u32 = FD_STDIN_BIT | FD_STDOUT_BIT | FD_STDERR_BIT;
+/// Staging buffer size for `fd_read` and `random_get`, so a guest-controlled
+/// iovec or buffer length never sizes a host allocation directly.
+const IO_CHUNK_SIZE: usize = 8192;
+
 const RAW_MEM: MemArg = MemArg {
     align: 0,
     offset: 0,
@@ -53,11 +57,20 @@ const RAW_MEM: MemArg = MemArg {
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CapturedStdio {
+    stdin: Arc<Mutex<io::Cursor<Vec<u8>>>>,
     stdout: Arc<Mutex<Vec<u8>>>,
     stderr: Arc<Mutex<Vec<u8>>>,
 }
 
 impl CapturedStdio {
+    #[cfg(test)]
+    pub(crate) fn with_stdin(stdin: Vec<u8>) -> Self {
+        Self {
+            stdin: Arc::new(Mutex::new(io::Cursor::new(stdin))),
+            ..Self::default()
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn stdout(&self) -> Vec<u8> {
         self.stdout.lock().expect("stdout buffer poisoned").clone()
@@ -107,6 +120,68 @@ impl OutputTarget {
     }
 }
 
+/// Test double for a stdin source whose writer stays open (a terminal or a
+/// pipe): each queued chunk is delivered by a single `read`, truncated to
+/// the caller's buffer with the remainder kept for the next read, and once
+/// the queue is drained a further read reports `WouldBlock` instead of EOF,
+/// so a host function that keeps reading after a short read fails loudly
+/// instead of silently observing end-of-input.
+#[cfg(test)]
+#[derive(Debug)]
+struct ChunkedStdin {
+    chunks: std::collections::VecDeque<Vec<u8>>,
+    reads: usize,
+}
+
+#[cfg(test)]
+impl ChunkedStdin {
+    fn new(chunks: Vec<Vec<u8>>) -> Self {
+        Self {
+            chunks: chunks.into(),
+            reads: 0,
+        }
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.reads += 1;
+        let Some(front) = self.chunks.front_mut() else {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "chunked stdin drained: writer still open",
+            ));
+        };
+        let count = front.len().min(buf.len());
+        buf[..count].copy_from_slice(&front[..count]);
+        front.drain(..count);
+        if front.is_empty() {
+            self.chunks.pop_front();
+        }
+        Ok(count)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum InputSource {
+    Inherit,
+    Buffer(Arc<Mutex<io::Cursor<Vec<u8>>>>),
+    #[cfg(test)]
+    Chunked(Arc<Mutex<ChunkedStdin>>),
+}
+
+impl InputSource {
+    fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Inherit => io::stdin().lock().read(buf),
+            Self::Buffer(cursor) => cursor
+                .lock()
+                .expect("captured stdin buffer poisoned")
+                .read(buf),
+            #[cfg(test)]
+            Self::Chunked(stdin) => stdin.lock().expect("chunked stdin poisoned").read(buf),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct StdioDescriptor {
     output: Option<OutputTarget>,
@@ -115,6 +190,8 @@ struct StdioDescriptor {
 
 struct CoreWasiPreview1State {
     args: Vec<Vec<u8>>,
+    environ: Vec<Vec<u8>>,
+    stdin: InputSource,
     stdout: OutputTarget,
     stderr: OutputTarget,
     open_fds: AtomicU32,
@@ -138,14 +215,19 @@ unsafe fn proc_exit_wait_for_effects(
 const PROC_EXIT_PROGRAM: [Instr; 1] = [Instr::from_op(proc_exit_wait_for_effects)];
 
 impl CoreWasiPreview1State {
-    fn new(path: &Path, args: &[String], stdio: StdioMode) -> Self {
+    fn with_environ(path: &Path, args: &[String], stdio: StdioMode, environ: Vec<Vec<u8>>) -> Self {
         let args = guest_args(path, args)
             .into_iter()
             .map(encode_nul_terminated)
             .collect();
-        let (stdout, stderr) = match stdio {
-            StdioMode::Inherit => (OutputTarget::Stdout, OutputTarget::Stderr),
+        let (stdin, stdout, stderr) = match stdio {
+            StdioMode::Inherit => (
+                InputSource::Inherit,
+                OutputTarget::Stdout,
+                OutputTarget::Stderr,
+            ),
             StdioMode::Capture(captured) => (
+                InputSource::Buffer(captured.stdin.clone()),
                 OutputTarget::Capture(captured.stdout.clone()),
                 OutputTarget::Capture(captured.stderr.clone()),
             ),
@@ -153,6 +235,8 @@ impl CoreWasiPreview1State {
 
         Self {
             args,
+            environ,
+            stdin,
             stdout,
             stderr,
             open_fds: AtomicU32::new(OPEN_STDIO_MASK),
@@ -242,6 +326,7 @@ pub(crate) async fn run(
     module: Module,
     path: &Path,
     guest_argv: &[String],
+    environ: Vec<Vec<u8>>,
     stdio: StdioMode,
     jit: bool,
     jit_code_cache_mib: u32,
@@ -253,7 +338,9 @@ pub(crate) async fn run(
         );
     }
 
-    let state = Box::new(CoreWasiPreview1State::new(path, guest_argv, stdio));
+    let state = Box::new(CoreWasiPreview1State::with_environ(
+        path, guest_argv, stdio, environ,
+    ));
     let state_ptr = unsafe { StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State) };
     let mut runtime_config = RuntimeConfig::default();
     runtime_config.jit = JitConfig { enabled: jit };
@@ -321,7 +408,7 @@ fn validate_preview1_module(module: &Module) -> anyhow::Result<()> {
     if !unsupported.is_empty() {
         unsupported.sort();
         bail!(
-            "unsupported `{PREVIEW1_MODULE}` imports: {}",
+            "unsupported `{PREVIEW1_MODULE}` imports: {} (the preview1 runner implements a scoped subset of preview1; see docs/core/preview1-scope.md)",
             unsupported.join(", ")
         );
     }
@@ -348,6 +435,16 @@ fn build_preview1_native_module() -> NativeModule {
                 fp: host_args_get,
             },
             HostFunctionDefinition {
+                name: Some("environ_sizes_get".to_owned()),
+                signature: expected_signature("environ_sizes_get").unwrap(),
+                fp: host_environ_sizes_get,
+            },
+            HostFunctionDefinition {
+                name: Some("environ_get".to_owned()),
+                signature: expected_signature("environ_get").unwrap(),
+                fp: host_environ_get,
+            },
+            HostFunctionDefinition {
                 name: Some("clock_time_get".to_owned()),
                 signature: expected_signature("clock_time_get").unwrap(),
                 fp: host_clock_time_get,
@@ -368,9 +465,19 @@ fn build_preview1_native_module() -> NativeModule {
                 fp: host_fd_seek,
             },
             HostFunctionDefinition {
+                name: Some("fd_read".to_owned()),
+                signature: expected_signature("fd_read").unwrap(),
+                fp: host_fd_read,
+            },
+            HostFunctionDefinition {
                 name: Some("fd_write".to_owned()),
                 signature: expected_signature("fd_write").unwrap(),
                 fp: host_fd_write,
+            },
+            HostFunctionDefinition {
+                name: Some("random_get".to_owned()),
+                signature: expected_signature("random_get").unwrap(),
+                fp: host_random_get,
             },
             HostFunctionDefinition {
                 name: Some("proc_exit".to_owned()),
@@ -400,6 +507,13 @@ fn expected_signature(name: &str) -> Option<FuncType> {
         ),
         "fd_write" => FuncType::new(i32x4, i32x1.clone()),
         "proc_exit" => FuncType::new(vec![ValType::I32], vec![]),
+        "environ_sizes_get" => FuncType::new(vec![ValType::I32, ValType::I32], i32x1.clone()),
+        "environ_get" => FuncType::new(vec![ValType::I32, ValType::I32], i32x1.clone()),
+        "fd_read" => FuncType::new(
+            vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+            i32x1.clone(),
+        ),
+        "random_get" => FuncType::new(vec![ValType::I32, ValType::I32], i32x1),
         _ => return None,
     })
 }
@@ -417,6 +531,66 @@ fn guest_args(path: &Path, args: &[String]) -> Vec<String> {
         .map(str::to_owned)
         .unwrap_or_else(|| path.display().to_string());
     std::iter::once(arg0).chain(args.iter().cloned()).collect()
+}
+
+/// Collect the guest environment for a preview1 command module, mirroring
+/// the component subcommand's semantics: the host process environment is
+/// inherited unless `inherit` is false, and each `KEY=VALUE` spec then
+/// replaces or adds one entry. Entries are returned in preview1 wire form
+/// (`KEY=VALUE` bytes with a trailing NUL).
+pub(crate) fn collect_guest_environ(
+    inherit: bool,
+    specs: &[String],
+) -> anyhow::Result<Vec<Vec<u8>>> {
+    let mut entries: Vec<Vec<u8>> = Vec::new();
+    if inherit {
+        for (key, value) in std::env::vars_os() {
+            let mut entry = os_str_bytes(&key);
+            entry.push(b'=');
+            entry.extend_from_slice(&os_str_bytes(&value));
+            entries.push(entry);
+        }
+    }
+    for spec in specs {
+        let (key, value) = spec
+            .split_once('=')
+            .ok_or_else(|| anyhow!("invalid --env `{spec}`: expected KEY=VALUE"))?;
+        if key.is_empty() {
+            bail!("invalid --env `{spec}`: key must not be empty");
+        }
+        let mut entry = key.as_bytes().to_vec();
+        entry.push(b'=');
+        entry.extend_from_slice(value.as_bytes());
+        if let Some(existing) = entries
+            .iter_mut()
+            .find(|entry| environ_entry_key(entry) == key.as_bytes())
+        {
+            *existing = entry;
+        } else {
+            entries.push(entry);
+        }
+    }
+    Ok(entries
+        .into_iter()
+        .map(|mut entry| {
+            entry.push(0);
+            entry
+        })
+        .collect())
+}
+
+fn environ_entry_key(entry: &[u8]) -> &[u8] {
+    entry.split(|byte| *byte == b'=').next().unwrap_or(entry)
+}
+
+#[cfg(unix)]
+fn os_str_bytes(value: &OsStr) -> Vec<u8> {
+    std::os::unix::ffi::OsStrExt::as_bytes(value).to_vec()
+}
+
+#[cfg(not(unix))]
+fn os_str_bytes(value: &OsStr) -> Vec<u8> {
+    value.to_string_lossy().into_owned().into_bytes()
 }
 
 fn preview1_state(store: &Store) -> &CoreWasiPreview1State {
@@ -631,16 +805,47 @@ fn host_clock_time_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     return_errno(ctx, errno)
 }
 
+/// Write the (count, total byte size) pair for a preview1 string table
+/// (argv or environ) at the two guest pointers.
+fn string_table_sizes(
+    memory: &mut Memory,
+    entries: &[Vec<u8>],
+    count_ptr: u32,
+    buf_size_ptr: u32,
+) -> Result<(), u32> {
+    let count = entries.len() as u32;
+    let buf_size = entries.iter().map(|entry| entry.len() as u32).sum::<u32>();
+    write_guest_u32(memory, count_ptr, count)?;
+    write_guest_u32(memory, buf_size_ptr, buf_size)
+}
+
+/// Write a preview1 string table (argv or environ): a pointer array at
+/// `table_ptr` addressing the NUL-terminated entries laid out from `buf_ptr`.
+fn write_string_table(
+    memory: &mut Memory,
+    entries: &[Vec<u8>],
+    table_ptr: u32,
+    buf_ptr: u32,
+) -> Result<(), u32> {
+    let mut cursor = buf_ptr;
+    for (index, entry) in entries.iter().enumerate() {
+        let entry_ptr = table_ptr
+            .checked_add((index as u32) * 4)
+            .ok_or(ERRNO_FAULT)?;
+        write_guest_u32(memory, entry_ptr, cursor)?;
+        write_guest_bytes(memory, cursor, entry)?;
+        cursor = cursor.checked_add(entry.len() as u32).ok_or(ERRNO_FAULT)?;
+    }
+    Ok(())
+}
+
 fn host_args_sizes_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let state = preview1_state(ctx.store);
     let argc_ptr = local_u32(ctx, 0);
     let argv_buf_size_ptr = local_u32(ctx, 4);
 
     let errno = if let Some(memory) = ctx.caller_memory() {
-        let argc = state.args.len() as u32;
-        let argv_buf_size = state.args.iter().map(|arg| arg.len() as u32).sum::<u32>();
-        write_guest_u32(memory, argc_ptr, argc)
-            .and_then(|_| write_guest_u32(memory, argv_buf_size_ptr, argv_buf_size))
+        string_table_sizes(memory, &state.args, argc_ptr, argv_buf_size_ptr)
             .map(|_| ERRNO_SUCCESS)
             .unwrap_or_else(|errno| errno)
     } else {
@@ -656,25 +861,106 @@ fn host_args_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let argv_buf_ptr = local_u32(ctx, 4);
 
     let errno = if let Some(memory) = ctx.caller_memory() {
-        let mut cursor = argv_buf_ptr;
-        state
-            .args
-            .iter()
-            .enumerate()
-            .try_for_each(|(index, arg)| {
-                let entry_ptr = argv_ptr
-                    .checked_add((index as u32) * 4)
-                    .ok_or(ERRNO_FAULT)?;
-                write_guest_u32(memory, entry_ptr, cursor)?;
-                write_guest_bytes(memory, cursor, arg)?;
-                cursor = cursor.checked_add(arg.len() as u32).ok_or(ERRNO_FAULT)?;
-                Ok(())
-            })
+        write_string_table(memory, &state.args, argv_ptr, argv_buf_ptr)
             .map(|_| ERRNO_SUCCESS)
             .unwrap_or_else(|errno| errno)
     } else {
         ERRNO_FAULT
     };
+
+    return_errno(ctx, errno)
+}
+
+fn host_environ_sizes_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let state = preview1_state(ctx.store);
+    let count_ptr = local_u32(ctx, 0);
+    let buf_size_ptr = local_u32(ctx, 4);
+
+    let errno = if let Some(memory) = ctx.caller_memory() {
+        string_table_sizes(memory, &state.environ, count_ptr, buf_size_ptr)
+            .map(|_| ERRNO_SUCCESS)
+            .unwrap_or_else(|errno| errno)
+    } else {
+        ERRNO_FAULT
+    };
+
+    return_errno(ctx, errno)
+}
+
+fn host_environ_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let state = preview1_state(ctx.store);
+    let environ_ptr = local_u32(ctx, 0);
+    let environ_buf_ptr = local_u32(ctx, 4);
+
+    let errno = if let Some(memory) = ctx.caller_memory() {
+        write_string_table(memory, &state.environ, environ_ptr, environ_buf_ptr)
+            .map(|_| ERRNO_SUCCESS)
+            .unwrap_or_else(|errno| errno)
+    } else {
+        ERRNO_FAULT
+    };
+
+    return_errno(ctx, errno)
+}
+
+fn host_fd_read(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let state = preview1_state(ctx.store);
+    let fd = local_u32(ctx, 0);
+    let iovs_ptr = local_u32(ctx, 4);
+    let iovs_len = local_u32(ctx, 8);
+    let nread_ptr = local_u32(ctx, 12);
+
+    // Only stdin is readable in this runner: fds 1 and 2 are write-only and
+    // every other descriptor is unknown (descriptor_for_fd also reports
+    // BADF once fd 0 has been closed). See docs/core/preview1-scope.md.
+    if fd != 0 || state.descriptor_for_fd(fd).is_err() {
+        return return_errno(ctx, ERRNO_BADF);
+    }
+
+    let mut total = 0u32;
+    let errno = (|| -> Result<u32, u32> {
+        let mut chunk = [0u8; IO_CHUNK_SIZE];
+        'iovs: for index in 0..iovs_len {
+            let base = iovs_ptr
+                .checked_add(index.checked_mul(8).ok_or(ERRNO_FAULT)?)
+                .ok_or(ERRNO_FAULT)?;
+            let (ptr, len) = {
+                let memory = ctx.caller_memory().ok_or(ERRNO_FAULT)?;
+                (
+                    read_guest_u32(memory, base)?,
+                    read_guest_u32(memory, base + 4)?,
+                )
+            };
+            let mut filled = 0u32;
+            while filled < len {
+                let want = usize::try_from(len - filled)
+                    .map_err(|_| ERRNO_FAULT)?
+                    .min(IO_CHUNK_SIZE);
+                let read = state.stdin.read(&mut chunk[..want]).map_err(|_| ERRNO_IO)?;
+                if read == 0 {
+                    // EOF: stop filling this and any later iovecs.
+                    break 'iovs;
+                }
+                let dest = ptr.checked_add(filled).ok_or(ERRNO_FAULT)?;
+                let memory = ctx.caller_memory().ok_or(ERRNO_FAULT)?;
+                write_guest_bytes(memory, dest, &chunk[..read])?;
+                filled += read as u32;
+                total = total.checked_add(read as u32).ok_or(ERRNO_FAULT)?;
+                if read < want {
+                    // Short read: the source delivered everything it
+                    // currently has (one terminal line, or a pipe chunk
+                    // whose writer is still open). Return the accumulated
+                    // count instead of blocking on another read to fill
+                    // this iovec, and do not touch later iovecs.
+                    break 'iovs;
+                }
+            }
+        }
+        let memory = ctx.caller_memory().ok_or(ERRNO_FAULT)?;
+        write_guest_u32(memory, nread_ptr, total)?;
+        Ok(ERRNO_SUCCESS)
+    })()
+    .unwrap_or_else(|errno| errno);
 
     return_errno(ctx, errno)
 }
@@ -766,6 +1052,32 @@ fn host_fd_seek(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     return_errno(ctx, errno)
 }
 
+fn host_random_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let buf_ptr = local_u32(ctx, 0);
+    let buf_len = local_u32(ctx, 4);
+
+    // OS entropy via getrandom, the same source the component WASI random
+    // provider uses (crates/telomere-component-wasi/src/provider/random.rs).
+    let errno = (|| -> Result<u32, u32> {
+        let mut chunk = [0u8; IO_CHUNK_SIZE];
+        let mut filled = 0u32;
+        while filled < buf_len {
+            let want = usize::try_from(buf_len - filled)
+                .map_err(|_| ERRNO_FAULT)?
+                .min(IO_CHUNK_SIZE);
+            getrandom::fill(&mut chunk[..want]).map_err(|_| ERRNO_IO)?;
+            let dest = buf_ptr.checked_add(filled).ok_or(ERRNO_FAULT)?;
+            let memory = ctx.caller_memory().ok_or(ERRNO_FAULT)?;
+            write_guest_bytes(memory, dest, &chunk[..want])?;
+            filled += want as u32;
+        }
+        Ok(ERRNO_SUCCESS)
+    })()
+    .unwrap_or_else(|errno| errno);
+
+    return_errno(ctx, errno)
+}
+
 fn host_proc_exit(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let exit_code = local_u32(ctx, 0);
     preview1_state(ctx.store).set_exit_code(exit_code);
@@ -795,10 +1107,28 @@ mod tests {
     }
 
     async fn invoke_export(module: Module, export: &str, guest_args: &[String]) -> ResultValue {
-        let state = Box::new(CoreWasiPreview1State::new(
-            Path::new("guest.wasm"),
+        invoke_export_with_stdio(
+            module,
+            export,
             guest_args,
             StdioMode::Capture(CapturedStdio::default()),
+            Vec::new(),
+        )
+        .await
+    }
+
+    async fn invoke_export_with_stdio(
+        module: Module,
+        export: &str,
+        guest_args: &[String],
+        stdio: StdioMode,
+        environ: Vec<Vec<u8>>,
+    ) -> ResultValue {
+        let state = Box::new(CoreWasiPreview1State::with_environ(
+            Path::new("guest.wasm"),
+            guest_args,
+            stdio,
+            environ,
         ));
         let store = Store::new_with_state(unsafe {
             StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State)
@@ -814,6 +1144,37 @@ mod tests {
         telomere::run_module_function(&instance, &store, export, &ResultValue::new(vec![]))
             .await
             .unwrap()
+    }
+
+    async fn invoke_export_with_chunked_stdin(
+        module: Module,
+        export: &str,
+        chunks: Vec<Vec<u8>>,
+    ) -> (ResultValue, Arc<Mutex<ChunkedStdin>>) {
+        let stdin = Arc::new(Mutex::new(ChunkedStdin::new(chunks)));
+        let mut state = Box::new(CoreWasiPreview1State::with_environ(
+            Path::new("guest.wasm"),
+            &[],
+            StdioMode::Capture(CapturedStdio::default()),
+            Vec::new(),
+        ));
+        state.stdin = InputSource::Chunked(stdin.clone());
+        let store = Store::new_with_state(unsafe {
+            StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State)
+        });
+        let mut registry = Registry::new();
+        let host = instantiate_raw_native_module(build_preview1_native_module(), &store, &registry)
+            .await
+            .unwrap();
+        registry.register(PREVIEW1_MODULE, host);
+        let instance = telomere::instantiate(module, &store, &registry)
+            .await
+            .unwrap();
+        let result =
+            telomere::run_module_function(&instance, &store, export, &ResultValue::new(vec![]))
+                .await
+                .unwrap();
+        (result, stdin)
     }
 
     fn expect_single_i32(result: &ResultValue) -> i32 {
@@ -856,6 +1217,7 @@ mod tests {
             module,
             Path::new("guest.wasm"),
             &[],
+            Vec::new(),
             StdioMode::Capture(captured.clone()),
             false,
             4,
@@ -1323,5 +1685,445 @@ mod tests {
         );
         let result = invoke_export(module, "check", &[]).await;
         assert_eq!(expect_single_i32(&result), 0);
+    }
+    #[tokio::test]
+    async fn preview1_runner_populates_environ() {
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "environ_sizes_get" (func $sizes (param i32 i32) (result i32)))
+              (import "wasi_snapshot_preview1" "environ_get" (func $get (param i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                i32.const 0
+                i32.const 4
+                call $sizes
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 0
+                i32.load
+                i32.const 2
+                i32.ne
+                if
+                  i32.const 2
+                  return
+                end
+                i32.const 4
+                i32.load
+                i32.const 10
+                i32.ne
+                if
+                  i32.const 3
+                  return
+                end
+                i32.const 16
+                i32.const 64
+                call $get
+                if
+                  i32.const 4
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 64
+                i32.ne
+                if
+                  i32.const 5
+                  return
+                end
+                i32.const 20
+                i32.load
+                i32.const 68
+                i32.ne
+                if
+                  i32.const 6
+                  return
+                end
+                i32.const 64
+                i32.load8_u
+                i32.const 65
+                i32.ne
+                if
+                  i32.const 7
+                  return
+                end
+                i32.const 65
+                i32.load8_u
+                i32.const 61
+                i32.ne
+                if
+                  i32.const 8
+                  return
+                end
+                i32.const 68
+                i32.load8_u
+                i32.const 66
+                i32.ne
+                if
+                  i32.const 9
+                  return
+                end
+                i32.const 0))
+            "#,
+        );
+        let environ = vec![b"A=1\0".to_vec(), b"B=two\0".to_vec()];
+        let result = invoke_export_with_stdio(
+            module,
+            "check",
+            &[],
+            StdioMode::Capture(CapturedStdio::default()),
+            environ,
+        )
+        .await;
+
+        assert_eq!(expect_single_i32(&result), 0);
+    }
+
+    #[tokio::test]
+    async fn preview1_runner_reads_stdin_until_eof() {
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_close" (func $fd_close (param i32) (result i32)))
+              (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                i32.const 0
+                i32.const 64
+                i32.store
+                i32.const 4
+                i32.const 8
+                i32.store
+                i32.const 0
+                i32.const 0
+                i32.const 1
+                i32.const 16
+                call $fd_read
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 3
+                i32.ne
+                if
+                  i32.const 2
+                  return
+                end
+                i32.const 64
+                i32.load8_u
+                i32.const 97
+                i32.ne
+                if
+                  i32.const 3
+                  return
+                end
+                i32.const 66
+                i32.load8_u
+                i32.const 99
+                i32.ne
+                if
+                  i32.const 4
+                  return
+                end
+                i32.const 0
+                i32.const 0
+                i32.const 1
+                i32.const 16
+                call $fd_read
+                if
+                  i32.const 5
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 0
+                i32.ne
+                if
+                  i32.const 6
+                  return
+                end
+                i32.const 1
+                i32.const 0
+                i32.const 1
+                i32.const 16
+                call $fd_read
+                i32.const 8
+                i32.ne
+                if
+                  i32.const 7
+                  return
+                end
+                i32.const 0
+                call $fd_close
+                if
+                  i32.const 8
+                  return
+                end
+                i32.const 0
+                i32.const 0
+                i32.const 1
+                i32.const 16
+                call $fd_read
+                i32.const 8
+                i32.ne
+                if
+                  i32.const 9
+                  return
+                end
+                i32.const 0))
+            "#,
+        );
+        let result = invoke_export_with_stdio(
+            module,
+            "check",
+            &[],
+            StdioMode::Capture(CapturedStdio::with_stdin(b"abc".to_vec())),
+            Vec::new(),
+        )
+        .await;
+
+        assert_eq!(expect_single_i32(&result), 0);
+    }
+
+    #[tokio::test]
+    async fn preview1_runner_fd_read_returns_short_read_without_rereading() {
+        // The chunked source holds one 2-byte chunk and reports WouldBlock
+        // (not EOF) if read again, modelling a pipe whose writer stays
+        // open. fd_read must return the 2 available bytes after exactly
+        // one source read instead of blocking to fill the 4-byte iovec,
+        // and must not touch the second iovec after the short read.
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                i32.const 0
+                i32.const 64
+                i32.store
+                i32.const 4
+                i32.const 4
+                i32.store
+                i32.const 8
+                i32.const 128
+                i32.store
+                i32.const 12
+                i32.const 4
+                i32.store
+                i32.const 0
+                i32.const 0
+                i32.const 2
+                i32.const 16
+                call $fd_read
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 2
+                i32.ne
+                if
+                  i32.const 2
+                  return
+                end
+                i32.const 64
+                i32.load8_u
+                i32.const 97
+                i32.ne
+                if
+                  i32.const 3
+                  return
+                end
+                i32.const 65
+                i32.load8_u
+                i32.const 98
+                i32.ne
+                if
+                  i32.const 4
+                  return
+                end
+                i32.const 128
+                i32.load8_u
+                if
+                  i32.const 5
+                  return
+                end
+                i32.const 0))
+            "#,
+        );
+        let (result, stdin) =
+            invoke_export_with_chunked_stdin(module, "check", vec![b"ab".to_vec()]).await;
+
+        assert_eq!(expect_single_i32(&result), 0);
+        assert_eq!(stdin.lock().expect("chunked stdin poisoned").reads, 1);
+    }
+
+    #[tokio::test]
+    async fn preview1_runner_fd_read_continues_after_full_reads() {
+        // A chunk larger than the iovec is delivered across two calls: the
+        // first read fills the iovec exactly, the second returns the
+        // remainder as a short read without a third, blocking read.
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                i32.const 0
+                i32.const 64
+                i32.store
+                i32.const 4
+                i32.const 4
+                i32.store
+                i32.const 0
+                i32.const 0
+                i32.const 1
+                i32.const 16
+                call $fd_read
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 4
+                i32.ne
+                if
+                  i32.const 2
+                  return
+                end
+                i32.const 64
+                i32.load8_u
+                i32.const 97
+                i32.ne
+                if
+                  i32.const 3
+                  return
+                end
+                i32.const 67
+                i32.load8_u
+                i32.const 100
+                i32.ne
+                if
+                  i32.const 4
+                  return
+                end
+                i32.const 0
+                i32.const 0
+                i32.const 1
+                i32.const 16
+                call $fd_read
+                if
+                  i32.const 5
+                  return
+                end
+                i32.const 16
+                i32.load
+                i32.const 2
+                i32.ne
+                if
+                  i32.const 6
+                  return
+                end
+                i32.const 64
+                i32.load8_u
+                i32.const 101
+                i32.ne
+                if
+                  i32.const 7
+                  return
+                end
+                i32.const 65
+                i32.load8_u
+                i32.const 102
+                i32.ne
+                if
+                  i32.const 8
+                  return
+                end
+                i32.const 0))
+            "#,
+        );
+        let (result, stdin) =
+            invoke_export_with_chunked_stdin(module, "check", vec![b"abcdef".to_vec()]).await;
+
+        assert_eq!(expect_single_i32(&result), 0);
+        assert_eq!(stdin.lock().expect("chunked stdin poisoned").reads, 2);
+    }
+
+    #[tokio::test]
+    async fn preview1_runner_random_get_fills_guest_buffer() {
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "random_get" (func $random_get (param i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                (local $i i32)
+                (local $first i32)
+                i32.const 0
+                i32.const 32
+                call $random_get
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 0
+                i32.load8_u
+                local.set $first
+                i32.const 1
+                local.set $i
+                block $done
+                  loop $loop
+                    local.get $i
+                    i32.const 32
+                    i32.ge_u
+                    br_if $done
+                    local.get $i
+                    i32.load8_u
+                    local.get $first
+                    i32.ne
+                    if
+                      i32.const 0
+                      return
+                    end
+                    local.get $i
+                    i32.const 1
+                    i32.add
+                    local.set $i
+                    br $loop
+                  end
+                end
+                i32.const 2))
+            "#,
+        );
+        let result = invoke_export(module, "check", &[]).await;
+
+        // A buffer of 32 identical bytes means the fill did not happen;
+        // real entropy produces that with probability around 2^-248.
+        assert_eq!(expect_single_i32(&result), 0);
+    }
+
+    #[test]
+    fn preview1_validation_still_rejects_filesystem_imports() {
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "fd_prestat_get" (func (param i32 i32) (result i32)))
+              (import "wasi_snapshot_preview1" "path_open" (func (param i32 i32 i32 i64 i64 i32 i32) (result i32)))
+              (func (export "_start")))
+            "#,
+        );
+
+        let error = validate_preview1_module(&module)
+            .expect_err("filesystem imports must stay fail-closed");
+        let message = error.to_string();
+        assert!(message.contains("fd_prestat_get"), "{message}");
+        assert!(message.contains("path_open"), "{message}");
     }
 }
