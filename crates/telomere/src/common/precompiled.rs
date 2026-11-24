@@ -1131,12 +1131,10 @@ fn validate_lowered(lowered: &LoweredFunction, shape: &ModuleShape) -> Result<()
             }
             op_labels.insert(label);
         }
-        if is_branch_op(&op.op) {
-            if op.operands.len() != 1 || !branch_operand_ok(&op.operands[0]) {
-                return Err(PrecompiledError::Corrupt(
-                    "branch op must carry exactly one in-range branch operand",
-                ));
-            }
+        if is_branch_op(&op.op) && (op.operands.len() != 1 || !branch_operand_ok(&op.operands[0])) {
+            return Err(PrecompiledError::Corrupt(
+                "branch op must carry exactly one in-range branch operand",
+            ));
         }
         if is_br_table(&op.op)
             && (op.operands.is_empty() || !op.operands.iter().all(branch_operand_ok))
