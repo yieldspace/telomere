@@ -115,6 +115,48 @@ the `decode_precompiled_module` fuzz target and by the rejection test
 matrix in `crates/telomere/tests/precompiled_codec.rs` (every prefix
 truncation, every header byte flip, seeded random corruption).
 
+## Per-op operand-shape validation
+
+Beyond cross-reference ranges, every decoded op is validated against a
+per-op operand-shape table before materialization (#301). The table is
+part of the generated op registry: `tools/gen-op-registry.py` derives
+each handler's shape from its own implementation — its dispatch
+advance (`call_next(tail_code, N, ctx)`, continuation offsets, the
+`br_if_ptr` / `br_table_target_ptr` continuation helpers, layout
+structs of fused branch handlers, and the `INDEXED` const-generic
+variants of memory helpers) — so the table is generated, never
+maintained by hand, and regeneration fails closed when a handler's
+shape cannot be derived. The shape is also folded into the op-table
+hash, so it is part of the artifact fingerprint.
+
+The enforced contract is:
+
+- **Count.** An op's operand count must equal its handler's shape:
+  `Exact(n)` for the fixed-count majority, `AnyOf(a, b)` for a handler
+  whose `INDEXED` addressing variant carries one extra operand (the
+  current handler set instantiates each such variant as its own
+  `Exact` handler, so `AnyOf` is exercised only if a variant is ever
+  registered directly), and
+  `Variadic(min)` for ops whose count is encoded in the operand stream
+  itself (branch tables, skip/run fusions), which must carry at least
+  `min` operands. Canonical branch ops and `br_table` keep their
+  stricter dedicated checks on top of this.
+- **Kind.** A `JumpTarget` operand may appear only on a handler that
+  interprets an operand as a jump target (derived from `jump_addr`
+  operand reads in the handler and its helpers). A `CallRecipeRef`
+  operand may appear only as the first operand of a direct-call
+  handler — the only position the optimizer's lowering ever produces
+  one. `Raw` and `ConstPoolRef` are interchangeable for shape
+  purposes: both materialize to the same 8-byte operand (a const-pool
+  ref is the pooled encoding of a raw operand), and const-pool refs
+  are range-checked against the function's pool.
+
+Violations are rejected with the typed `PrecompiledError::Corrupt`
+error, never a panic. Unit tests in `common::precompiled` pin the
+shapes of representative handlers of every class (zero-operand,
+const-pool, call-recipe, branch, SIMD lane, variadic, `AnyOf`) and
+assert that every registered handler has a shape entry.
+
 ## Conformance enforcement
 
 `tests/common/mod.rs` routes every module the wast harness instantiates
