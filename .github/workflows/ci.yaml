@@ -155,6 +155,12 @@ jobs:
       - name: Test fn-pointer identity checker
         run: python3 tools/test_check_fn_identity.py
 
+      - name: Check execution-state placement
+        run: python3 tools/check-execution-state.py
+
+      - name: Test execution-state checker
+        run: python3 tools/test_check_execution_state.py
+
       - name: Test embedder size gate checker
         run: python3 tools/test_check_embedder_size.py
 

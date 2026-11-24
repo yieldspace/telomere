@@ -1341,6 +1341,21 @@ impl ConstExpr {
 pub const PAGE_SIZE: usize = 64 * 1024;
 pub const PAGE_SIZE_MAX: usize = (4_u64 * 1024 * 1024 * 1024 / PAGE_SIZE as u64) as usize;
 
+/// Per-execution state for one interpreter/JIT execution (#213).
+///
+/// This struct is the only home for state that is read or written during
+/// execution -- above all anything read per dispatch. The context pointer
+/// is already live in a register in every handler, so a field check is a
+/// single load and compare that keeps the tail-call dispatch form; a
+/// thread-local read per dispatch is a thunk call on Darwin and was
+/// measured at up to a 2x interpreter slowdown when the `jit` feature was
+/// merely compiled in (#190). Thread-locals remain in use only for state
+/// that must be reachable from a boundary this context does not cross
+/// (host-function re-entry, thread-exit hooks), and process-global
+/// configuration is not per-execution state. The full rule, the
+/// classification of every existing mechanism, and the measurements are
+/// recorded in `docs/core/execution-state.md`; the placement is guarded
+/// mechanically by `tools/check-execution-state.py`.
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     // Read by JIT-generated code via offset_of!; the Rust dead_code lint cannot see that use.
