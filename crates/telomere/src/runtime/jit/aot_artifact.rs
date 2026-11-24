@@ -70,9 +70,9 @@
 
 use std::collections::HashMap;
 
-use crate::common::precompiled::{deserialize_module, PrecompiledError};
 #[cfg(feature = "jit")]
 use crate::common::precompiled::serialize_module;
+use crate::common::precompiled::{deserialize_module, PrecompiledError};
 use crate::common::sha256::sha256;
 use crate::common::store::FunctionBody;
 use crate::common::FunctionBody as ModuleFunctionBody;
