@@ -27,6 +27,8 @@ telomere::MeteringConfig | always
 telomere::MeteringHandle | always
 telomere::Module | always
 telomere::PendingOp | always
+telomere::PrecompiledError | always
+telomere::PrecompiledTimings | always
 telomere::ProposalFeature | always
 telomere::Registry | always
 telomere::ResultValue | always
@@ -107,11 +109,14 @@ telomere::component_support::runtime::aliasing | always
 telomere::component_support::runtime::instantiate | always
 telomere::component_support::runtime::run_core_export_sync_reentrant | always
 telomere::component_support::runtime::run_module_function | always
+telomere::deserialize_module | always
+telomere::deserialize_module_timed | always
 telomere::diagnostics | always
 telomere::get_global | always
 telomere::instantiate | always
 telomere::instantiate_native_async_module | always
 telomere::instantiate_native_module | always
+telomere::is_precompiled_module | always
 telomere::jit_supported | always
 telomere::link_async_host_function_with_export_name | always
 telomere::link_async_host_function_with_function_idx | always
@@ -120,6 +125,8 @@ telomere::link_host_function_with_function_idx | always
 telomere::measure_switches | cfg(feature = "measure-switches")
 telomere::run_module_function | always
 telomere::run_module_function_with_driver | always
+telomere::serialize_module | always
+telomere::serialize_module_timed | always
 telomere::special_function_return | cfg(feature = "unstable-internals")
 telomere::unstable_internals | cfg(feature = "unstable-internals")
 telomere::unstable_internals::AsyncHostFunction | cfg(feature = "unstable-internals")

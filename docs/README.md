@@ -30,6 +30,7 @@ the body for the details.
 | [core/execution-state.md](core/execution-state.md) | Current | Execution state placement rule: per-execution state lives in `ExecuteContext`, the classification of every existing mechanism, and the JIT bridge stop signal's owner (#213). |
 | [core/c-abi.md](core/c-abi.md) | Current | C ABI decision record: v1 integration is Rust-only, the measured platform assumptions (std, Unix `mmap`, Unix-only JIT), and the re-entry conditions for a future C surface (#146). |
 | [core/filesystem-scope.md](core/filesystem-scope.md) | Current | Filesystem scope contract: `wasi:filesystem` is read-only, the completed non-mutating surface, the mutating functions withheld at link time, and the re-entry conditions for write support (#134). |
+| [core/precompiled-modules.md](core/precompiled-modules.md) | Current | Precompiled-module codec contract: exact-build fingerprint pinning with no cross-version stability promise, the stable op-ID registry, the total decoder posture, and the wast round-trip enforcement lane (#196). |
 | [support-matrix.md](support-matrix.md) | Current | Core proposal, Component Model canonical ABI, and WASI 0.2.6 support boundaries with source-backed coverage counts. |
 | [core/optimizer.md](core/optimizer.md) | Current | The canonical optimizer pipeline and runtime boundary. |
 | [core/metering.md](core/metering.md) | Current | Store-scoped fuel, accounting, and cancellation across the interpreter and the JIT. |
@@ -63,6 +64,7 @@ resolution in `ComponentProgram`.
 | --- | --- | --- |
 | [benchmarks/footprint.md](benchmarks/footprint.md) | Local measurement | Measured `telomere-cli` binary size, peak RSS, and cold start, plus the reproduction script and the list of unmeasured targets. |
 | [benchmarks/performance.md](benchmarks/performance.md) | CI gate | The performance-regression gate (#212): gated workloads and cells, observed CI variance, ceilings, and the deliberate re-baseline procedure. |
+| [benchmarks/precompiled-codec.md](benchmarks/precompiled-codec.md) | Local measurement | Parse-vs-deserialize cold-start measurements for the precompiled-module codec: whole-process CLI pair and aggregate phase times over the spec corpus, with artifact-size ratios (#196). |
 | [core/interpreter-baseline.md](core/interpreter-baseline.md) | Current methodology | Reproducible interpreter-baseline procedure and raw-record update rules. |
 | [core/coremark-benchmark.md](core/coremark-benchmark.md) | Historical (superseded) | Retained CoreMark provenance; not a current baseline. |
 

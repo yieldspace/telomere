@@ -127,6 +127,112 @@ fn replays_parse_core_module_corpus() {
     );
 }
 
+const PRECOMPILED_TARGET: &str = "decode_precompiled_module";
+
+/// Corpus generation and replay for the precompiled-module decoder
+/// (#196): every corpus module that parses is serialized, the artifact
+/// is emitted as a fuzz seed when `TELOMERE_FUZZ_CORPUS_OUT` is set,
+/// and deserialization of the artifact must succeed.
+#[test]
+fn generates_and_replays_precompiled_corpus() {
+    let output_root = corpus_output_root();
+    let repository_root = repository_root();
+    let roots = testsuite_roots(&repository_root);
+    let mut files = collect_wast_files(&roots[0]);
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "expected at least one .wast file in the corpus source suites"
+    );
+
+    let mut report = Report {
+        source_files: files.len(),
+        ..Report::default()
+    };
+    let mut corpus = BTreeMap::new();
+    for path in files {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(_) => {
+                report.skip("source_read");
+                continue;
+            }
+        };
+        let buffer = match ParseBuffer::new(&text) {
+            Ok(buffer) => buffer,
+            Err(_) => {
+                report.skip("wast_parse");
+                continue;
+            }
+        };
+        let mut wast = match wast::parser::parse::<Wast<'_>>(&buffer) {
+            Ok(wast) => wast,
+            Err(_) => {
+                report.skip("wast_parse");
+                continue;
+            }
+        };
+        extract_directives(&mut wast.directives, &mut corpus, &mut report);
+    }
+
+    let output_dir = output_root.map(|root| {
+        let output_dir = root.join(PRECOMPILED_TARGET);
+        fs::create_dir_all(&output_dir).unwrap_or_else(|error| {
+            panic!(
+                "failed to create fuzz corpus output directory {}: {error}",
+                output_dir.display()
+            )
+        });
+        output_dir
+    });
+
+    let mut round_tripped = 0usize;
+    let mut unparsed = 0usize;
+    for (_hash, bytes) in corpus {
+        let artifact = std::thread::Builder::new()
+            .stack_size(REPLAY_STACK_BYTES)
+            .spawn(move || {
+                let mut reader = telomere::IoReadBinaryReader::from(&bytes[..]);
+                let mut parser = telomere::WasmParser::new(&mut reader);
+                parser
+                    .parse_module()
+                    .ok()
+                    .map(|module| telomere::serialize_module(&module))
+            })
+            .expect("spawning a precompiled corpus thread")
+            .join()
+            .expect("precompiled corpus generation must not panic");
+        match artifact {
+            None => unparsed += 1,
+            Some(Err(error)) => {
+                panic!("a parsed corpus module must serialize: {error}");
+            }
+            Some(Ok(artifact)) => {
+                match telomere::deserialize_module(&artifact) {
+                    Ok(_) => {}
+                    Err(error) => {
+                        panic!("a serialized corpus module must deserialize: {error}");
+                    }
+                }
+                if let Some(output_dir) = &output_dir {
+                    if emit_corpus_case(output_dir, &sha256_hex(&artifact), &artifact) {
+                        report.emitted += 1;
+                    } else {
+                        report.existing += 1;
+                    }
+                }
+                round_tripped += 1;
+            }
+        }
+    }
+
+    println!(
+        "fuzz corpus replay target={PRECOMPILED_TARGET} round_tripped={round_tripped} unparsed={unparsed} emitted={} existing={}",
+        report.emitted, report.existing,
+    );
+    assert!(round_tripped > 0, "no corpus module round-tripped");
+}
+
 fn corpus_output_root() -> Option<PathBuf> {
     let path = std::env::var_os("TELOMERE_FUZZ_CORPUS_OUT")?;
     let path = PathBuf::from(path);

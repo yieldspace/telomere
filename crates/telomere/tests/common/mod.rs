@@ -17,6 +17,78 @@ use wast::{
 #[cfg(feature = "jit")]
 static WAST_JIT_COMPILED_FUNCTIONS: AtomicUsize = AtomicUsize::new(0);
 
+/// Number of wast modules that went through the precompiled codec
+/// round-trip (#196) in this harness process.
+static WAST_PRECOMPILED_ROUND_TRIPPED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether the wast harness should route every parsed module through
+/// the precompiled codec (#196): parse -> serialize -> deserialize ->
+/// instantiate, so the whole corpus runs on restored modules.
+fn wast_precompiled_enabled() -> bool {
+    std::env::var_os("TELOMERE_WAST_PRECOMPILED").is_some()
+}
+
+fn wast_precompiled_required() -> bool {
+    std::env::var_os("TELOMERE_WAST_PRECOMPILED_REQUIRE_ACCEPT").is_some()
+}
+
+/// Round-trips one parsed module through the precompiled codec when
+/// `TELOMERE_WAST_PRECOMPILED` is set. With
+/// `TELOMERE_WAST_PRECOMPILED_REQUIRE_ACCEPT` set, any codec failure is
+/// a hard test failure; without it, a failure keeps the parsed module
+/// (the codec is then only exercised opportunistically).
+fn precompiled_round_trip(m: telomere::Module) -> telomere::Module {
+    if !wast_precompiled_enabled() {
+        return m;
+    }
+    let required = wast_precompiled_required();
+    let bytes = match telomere::serialize_module(&m) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            assert!(
+                !required,
+                "TELOMERE_WAST_PRECOMPILED_REQUIRE_ACCEPT: serialize failed: {err}"
+            );
+            return m;
+        }
+    };
+    match telomere::deserialize_module(&bytes) {
+        Ok(restored) => {
+            WAST_PRECOMPILED_ROUND_TRIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            restored
+        }
+        Err(err) => {
+            assert!(
+                !required,
+                "TELOMERE_WAST_PRECOMPILED_REQUIRE_ACCEPT: deserialize failed: {err}"
+            );
+            m
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn reset_wast_precompiled_round_tripped() {
+    WAST_PRECOMPILED_ROUND_TRIPPED.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[allow(dead_code)]
+pub fn assert_wast_precompiled_round_tripped() {
+    if wast_precompiled_required() {
+        assert!(
+            wast_precompiled_enabled(),
+            "TELOMERE_WAST_PRECOMPILED_REQUIRE_ACCEPT requires TELOMERE_WAST_PRECOMPILED=1"
+        );
+        let round_tripped =
+            WAST_PRECOMPILED_ROUND_TRIPPED.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            round_tripped > 0,
+            "TELOMERE_WAST_PRECOMPILED_REQUIRE_ACCEPT completed the wast suite without round-tripping any module"
+        );
+    }
+}
+
 pub struct SpecDivergence {
     pub module_sha256: &'static str,
     pub why: &'static str,
@@ -207,7 +279,7 @@ pub async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> I
     let mut reader = IoReadBinaryReader::from(&source[..]);
     let mut parser = WasmParser::new(&mut reader);
 
-    let m = parser.parse_module().unwrap();
+    let m = precompiled_round_trip(parser.parse_module().unwrap());
 
     instantiate(m, store, registry).await.unwrap()
 }
@@ -442,6 +514,7 @@ async fn run_wast_with_spec_divergences_in_context(
                         panic!("{:?} {:?}", span.linecol_in(text), v);
                     }
                 };
+                let m = precompiled_round_trip(m);
                 tracing::trace!("instantiating parsed module");
                 let inst = instantiate(m, store, registry).await.unwrap();
                 if let Some(name) = name {
@@ -799,7 +872,7 @@ async fn run_wast_with_spec_divergences_in_context(
                     let source = v.encode().unwrap();
                     let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                     let mut parser = telomere::WasmParser::new(&mut reader);
-                    let m = parser.parse_module().unwrap();
+                    let m = precompiled_round_trip(parser.parse_module().unwrap());
                     let result = instantiate(m, store, registry).await;
                     assert_trap_message(message, &result, span, text);
                 }
@@ -842,7 +915,7 @@ async fn run_wast_with_spec_divergences_in_context(
                 if let Ok(source) = module.encode() {
                     let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                     let mut parser = telomere::WasmParser::new(&mut reader);
-                    let module = parser.parse_module().unwrap();
+                    let module = precompiled_round_trip(parser.parse_module().unwrap());
 
                     // TODO: test error message
                     assert!(

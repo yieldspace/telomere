@@ -8,8 +8,13 @@
 
 use anyhow::Context;
 use clap::Parser;
-use cli::{Cli, Command, CoreCommand};
-use std::{ffi::OsString, fs, path::Path, process::ExitCode};
+use cli::{Cli, Command, CompileCommand, CoreCommand};
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 use telomere::{JitConfig, ResultValue, RuntimeConfig, WasmValue};
 
 mod cli;
@@ -36,6 +41,7 @@ async fn try_main() -> anyhow::Result<ExitCode> {
 
     match args.command {
         Some(Command::Component(command)) => return component_cli::run(command).await,
+        Some(Command::Compile(command)) => return compile_module(command),
         #[cfg(feature = "measure-switches")]
         Some(Command::MeasureSwitchesProbe) => {
             println!(r#"{{"state":"{}"}}"#, optimizer_switch.as_str());
@@ -96,12 +102,65 @@ fn parse_module_from_path(path: &Path) -> anyhow::Result<telomere::Module> {
     let bytes = fs::read(path)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("failed to read module `{}`", path.display()))?;
+    // Precompiled artifacts (#196) are detected by magic and restored
+    // directly; anything else goes through the wasm parser.
+    if telomere::is_precompiled_module(&bytes) {
+        return telomere::deserialize_module(&bytes)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("failed to load precompiled module `{}`", path.display()));
+    }
     let mut reader = telomere::IoReadBinaryReader::from(&bytes[..]);
     let mut parser = telomere::WasmParser::new(&mut reader);
     parser
         .parse_module()
         .map_err(anyhow::Error::from)
         .with_context(|| format!("failed to parse module `{}`", path.display()))
+}
+
+/// Implements `telomere-cli compile MODULE [-o OUTPUT]`: parse a core
+/// module and write its precompiled artifact (#196), printing the
+/// per-phase serialize timings.
+fn compile_module(command: CompileCommand) -> anyhow::Result<ExitCode> {
+    let bytes = fs::read(&command.name)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("failed to read module `{}`", command.name.display()))?;
+    if telomere::is_precompiled_module(&bytes) {
+        anyhow::bail!(
+            "`{}` is already a precompiled artifact",
+            command.name.display()
+        );
+    }
+    let mut reader = telomere::IoReadBinaryReader::from(&bytes[..]);
+    let mut parser = telomere::WasmParser::new(&mut reader);
+    let module = parser
+        .parse_module()
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("failed to parse module `{}`", command.name.display()))?;
+
+    let mut timings = telomere::PrecompiledTimings::default();
+    let artifact = telomere::serialize_module_timed(&module, Some(&mut timings))
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("failed to serialize module `{}`", command.name.display()))?;
+
+    let output = command.output.clone().unwrap_or_else(|| {
+        let mut path = command.name.clone().into_os_string();
+        path.push(".tpre");
+        PathBuf::from(path)
+    });
+    fs::write(&output, &artifact)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("failed to write artifact `{}`", output.display()))?;
+    println!(
+        "compiled {} ({} bytes) -> {} ({} bytes) in {:.2} ms (sections {:.2} ms, functions {:.2} ms)",
+        command.name.display(),
+        bytes.len(),
+        output.display(),
+        artifact.len(),
+        timings.total.as_secs_f64() * 1e3,
+        timings.sections.as_secs_f64() * 1e3,
+        timings.functions.as_secs_f64() * 1e3,
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 fn should_run_wasi(command: &CoreCommand, module: &telomere::Module) -> bool {

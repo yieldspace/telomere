@@ -52,6 +52,18 @@ jobs:
       - name: Test wast in the debug profile
         run: cargo test --verbose -p telomere --test wast
 
+      # Guards the #196 precompiled-module codec: the whole wast corpus
+      # must round-trip through serialize -> deserialize and still pass,
+      # enforced fail-closed (any codec failure fails the suite).
+      - name: Check op registry is fresh
+        run: python3 tools/gen-op-registry.py --check
+
+      - name: Test wast with the precompiled round-trip
+        env:
+          TELOMERE_WAST_PRECOMPILED: "1"
+          TELOMERE_WAST_PRECOMPILED_REQUIRE_ACCEPT: "1"
+        run: cargo test --verbose -p telomere --test wast
+
   minimal-embedder:
     name: Standalone minimal embedder
     runs-on: ubuntu-latest

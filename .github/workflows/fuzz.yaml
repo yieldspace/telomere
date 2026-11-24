@@ -24,6 +24,7 @@ jobs:
         target:
           - parse_core_module
           - decode_component
+          - decode_precompiled_module
           - canon_lift_args
 
     steps:
@@ -53,7 +54,7 @@ jobs:
         env:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
-          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
+          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
             cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
             cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
@@ -107,6 +108,7 @@ jobs:
         target:
           - parse_core_module
           - decode_component
+          - decode_precompiled_module
           - canon_lift_args
 
     steps:
@@ -134,7 +136,7 @@ jobs:
         env:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
-          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
+          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
             cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
             cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture
@@ -182,6 +184,7 @@ jobs:
         target:
           - parse_core_module
           - decode_component
+          - decode_precompiled_module
           - canon_lift_args
 
     steps:
@@ -209,7 +212,7 @@ jobs:
         env:
           TELOMERE_FUZZ_CORPUS_OUT: ${{ github.workspace }}/fuzz/corpus
         run: |
-          if [ "${{ matrix.target }}" = "parse_core_module" ]; then
+          if [ "${{ matrix.target }}" = "parse_core_module" ] || [ "${{ matrix.target }}" = "decode_precompiled_module" ]; then
             cargo +1.96.0 test -p telomere --test fuzz_corpus_replay --release -- --nocapture
           else
             cargo +1.96.0 test -p telomere-component --test fuzz_corpus_replay --release -- --nocapture

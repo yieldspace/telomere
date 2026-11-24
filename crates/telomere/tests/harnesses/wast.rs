@@ -12,7 +12,8 @@ use tokio::runtime::Builder;
 #[path = "../common/mod.rs"]
 mod common;
 use common::{
-    assert_wast_jit_compiled_functions, reset_wast_jit_compiled_functions, run_wast,
+    assert_wast_jit_compiled_functions, assert_wast_precompiled_round_tripped,
+    reset_wast_jit_compiled_functions, reset_wast_precompiled_round_tripped, run_wast,
     run_wast_with_spec_divergences, SpecDivergence,
 };
 
@@ -132,10 +133,12 @@ fn run_suite() -> ExitCode {
     let mut args = Arguments::from_args();
     args.test_threads.get_or_insert(1);
     reset_wast_jit_compiled_functions();
+    reset_wast_precompiled_round_tripped();
     let tests = collect_trials();
     let conclusion = libtest_mimic::run(&args, tests);
     if !conclusion.has_failed() {
         assert_wast_jit_compiled_functions();
+        assert_wast_precompiled_round_tripped();
     }
     conclusion.exit_code()
 }
