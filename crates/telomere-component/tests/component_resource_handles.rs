@@ -1048,3 +1048,245 @@ async fn borrow_through_second_import_of_same_instance() {
         .expect("dtor-count should succeed");
     assert_eq!(count, vec![ComponentValue::U32(1)]);
 }
+
+// Regression tests for the second Codex review round on PR #349 (#335):
+// handles the embedder supplies directly as arguments of a public call
+// live in the host namespace, exactly like handles returned from lowered
+// host calls, and must be registered at the public call boundary before
+// the boundary validation judges them; and a `resource.drop` naming a
+// host handle whose index collides with an unrelated local entry must
+// still reach the host-resource fallback.
+
+/// An exported function accepts a `borrow` of a host resource and
+/// forwards it to an imported host function. The embedder supplies the
+/// borrow directly through `ComponentInstance::call`; the handle never
+/// entered guest code through a lowered call, so only the public
+/// boundary can register it (Codex review on PR #349).
+#[tokio::test]
+async fn host_supplied_borrow_argument_forwards_to_host_function() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "H" (type (sub resource)))
+      (export "use" (func (param "r" (borrow 0))))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "H" (type $H))
+  (alias export $host "use" (func $use))
+  (core func $use' (canon lower (func $use)))
+  (core module $M
+    (import "" "use" (func $use (param i32)))
+    (func (export "fwd") (param $h i32) (call $use (local.get $h)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "use" (func $use'))
+  ))))
+  (func (export "fwd") (param "r" (borrow $H)) (canon lift (core func $m "fwd")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seen_by_host = Rc::clone(&seen);
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("use", move |_store, args| {
+        seen_by_host.borrow_mut().extend_from_slice(args);
+        Ok(vec![])
+    });
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    instance
+        .call(&store, "fwd", &[ComponentValue::Borrow(77)])
+        .await
+        .expect("forwarding a host-supplied borrow to a host function should succeed");
+    assert_eq!(
+        *seen.borrow(),
+        vec![ComponentValue::Borrow(77)],
+        "the host callback should run with the supplied borrow"
+    );
+}
+
+/// The `own` counterpart: an embedder-supplied `own` handle the guest
+/// simply returns upward must validate on the way out, like a handle a
+/// lowered host call produced (Codex review on PR #349).
+#[tokio::test]
+async fn host_supplied_own_argument_passes_through_lift() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "H" (type (sub resource)))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "H" (type $H))
+  (core module $M
+    (func (export "id") (param $h i32) (result i32) (local.get $h))
+  )
+  (core instance $m (instantiate $M))
+  (func (export "id") (param "r" (own $H)) (result (own $H)) (canon lift (core func $m "id")))
+)
+"#,
+    );
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", telomere_component::ComponentLinkerInstance::new());
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "id", &[ComponentValue::Own(77)])
+        .await
+        .expect("returning a host-supplied own handle through lift should succeed");
+    assert_eq!(result, vec![ComponentValue::Own(77)]);
+}
+
+/// A borrow supplied by the embedder is lent for the duration of that
+/// call only: a handle index the guest stashes and forwards during a
+/// later call is unknown again, exactly like a guest-invented index.
+#[tokio::test]
+async fn host_supplied_borrow_does_not_outlive_the_call() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "H" (type (sub resource)))
+      (export "use" (func (param "r" (borrow 0))))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "H" (type $H))
+  (alias export $host "use" (func $use))
+  (core func $use' (canon lower (func $use)))
+  (core module $M
+    (import "" "use" (func $use (param i32)))
+    (global $stash (mut i32) (i32.const 0))
+    (func (export "stash") (param $h i32) (global.set $stash (local.get $h)))
+    (func (export "use-stashed") (call $use (global.get $stash)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "use" (func $use'))
+  ))))
+  (func (export "stash") (param "r" (borrow $H)) (canon lift (core func $m "stash")))
+  (func (export "use-stashed") (canon lift (core func $m "use-stashed")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("use", |_store, _args| Ok(vec![]));
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    instance
+        .call(&store, "stash", &[ComponentValue::Borrow(77)])
+        .await
+        .expect("the call carrying the borrow should succeed");
+    let result = instance.call(&store, "use-stashed", &[]).await;
+    expect_call_trap_text(result, "unknown handle index 77", "use-stashed");
+}
+
+/// A local resource and a host-provided resource can carry the same
+/// index in their separate namespaces. Dropping the host handle through
+/// `canon resource.drop` must run the registered host destructor even
+/// though this instance's table holds an unrelated local entry at that
+/// index (Codex review on PR #349; the drop counterpart of
+/// `host_handle_colliding_with_local_index_passes_through_lift`).
+#[tokio::test]
+async fn host_resource_drop_wins_over_colliding_local_entry() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "thing" (type (sub resource)))
+      (export "make" (func (result (own 0))))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "thing" (type $thing))
+  (alias export $host "make" (func $make))
+  (type $L (resource (rep i32)))
+  (canon resource.new $L (core func $L.resource.new))
+  (core func $make' (canon lower (func $make)))
+  (core func $drop-thing (canon resource.drop $thing))
+  (core module $M
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "make" (func $make (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "run") (result i32)
+      ;; a local resource takes this instance's table index 1
+      (drop (call $new (i32.const 7)))
+      ;; the host-provided handle is also 1, in the SharedState namespace;
+      ;; dropping it must run the host destructor, not trap on the local entry
+      (call $drop (call $make))
+      (i32.const 44))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "new" (func $L.resource.new))
+    (export "make" (func $make'))
+    (export "drop" (func $drop-thing))
+  ))))
+  (func (export "run") (result s32) (canon lift (core func $m "run")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("make", |_store, _args| Ok(vec![ComponentValue::Own(1)]));
+    let dropped = Rc::new(RefCell::new(Vec::new()));
+    let dropped_by_host = Rc::clone(&dropped);
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+    linker.register_import_resource_drop("host", "thing", move |_store, handle| {
+        dropped_by_host.borrow_mut().push(handle);
+        Ok(())
+    });
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("dropping the host handle should succeed despite the colliding local entry");
+    assert_eq!(result, vec![ComponentValue::S32(44)]);
+    assert_eq!(
+        *dropped.borrow(),
+        vec![1],
+        "the host destructor should run exactly once, with the host handle"
+    );
+}

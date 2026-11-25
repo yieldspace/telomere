@@ -233,21 +233,25 @@ impl HostBinding {
                         Ok(Vec::new())
                     }
                     Err(error) => {
-                        // The index names a live entry of this instance's
-                        // own table under a different resource type:
-                        // `drop_resource`'s wrong-type trap stands, and the
-                        // host-provided path below (for indices this table
-                        // does not hold at all) must not run.
-                        if handles.borrow().contains_handle(handle) {
-                            return Err(error);
-                        }
-                        // Not a locally created resource. If this is a
-                        // tracked host-provided handle with a registered
-                        // destructor, release it through the host; a double
-                        // drop or a handle that was never issued is not
-                        // tracked and traps with the same error as a local
-                        // one.
-                        if shared.drop_host_resource(store, *resource, handle)? {
+                        // The local drop released nothing. When this
+                        // table holds the index for the declared resource
+                        // itself, the failure is about that local entry
+                        // (for example an owned resource that is still
+                        // borrowed) and `drop_resource`'s trap stands.
+                        // Otherwise the index may name a host-provided
+                        // handle colliding with an unrelated local entry
+                        // — the local and host allocators both start at
+                        // 1 — so try the host-provided path: if this is
+                        // a tracked host handle with a registered
+                        // destructor, release it through the host. A
+                        // double drop or a handle that was never issued
+                        // is not tracked and traps with the same error as
+                        // a local one.
+                        let names_local_entry =
+                            handles.borrow().resource_of(handle) == Some(*resource);
+                        if !names_local_entry
+                            && shared.drop_host_resource(store, *resource, handle)?
+                        {
                             Ok(Vec::new())
                         } else {
                             Err(error)
@@ -318,12 +322,6 @@ impl HandleTable {
             },
         );
         handle
-    }
-
-    /// Whether `handle` names a live entry of this table (of any
-    /// resource type).
-    pub(super) fn contains_handle(&self, handle: u32) -> bool {
-        self.entries.contains_key(&handle)
     }
 
     /// The resource identity the entry for `handle` was keyed under,
@@ -445,6 +443,34 @@ impl SharedState {
             .borrow()
             .values()
             .any(|handles| handles.contains(&handle))
+    }
+
+    /// Records a handle the embedder lent to guest code as an argument
+    /// of a public call. Registrations are counted: nested public
+    /// calls may lend the same index, and each registration is
+    /// released when its call returns.
+    pub(super) fn track_host_borrow(&self, handle: u32) {
+        *self.host_borrows.borrow_mut().entry(handle).or_default() += 1;
+    }
+
+    /// Releases one registration made by
+    /// [`SharedState::track_host_borrow`].
+    pub(super) fn release_host_borrow(&self, handle: u32) {
+        let mut borrows = self.host_borrows.borrow_mut();
+        if let Some(count) = borrows.get_mut(&handle) {
+            *count -= 1;
+            if *count == 0 {
+                borrows.remove(&handle);
+            }
+        }
+    }
+
+    /// Whether `handle` is a live host-provided handle in either
+    /// namespace: owned by the guest (entered through a lowered call
+    /// or as an `own` argument of a public call), or lent for the
+    /// duration of a public call as a `borrow` argument.
+    pub(super) fn tracks_host_handle(&self, handle: u32) -> bool {
+        self.tracks_host_resource(handle) || self.host_borrows.borrow().contains_key(&handle)
     }
 
     /// Removes a live host-provided handle, returning whether it was live.

@@ -438,6 +438,10 @@ fn collect_defined_handle_leaves(
 /// pass-through; any other index the table does not hold is the
 /// canonical `unknown handle index N` trap, and an index held for a
 /// different resource type is the canonical wrong-type trap.
+/// Host-provided handles enter `SharedState` either as results of
+/// lowered calls or as arguments of a public call, which the public
+/// entry point registers before the call runs
+/// (`register_host_argument_handles`).
 ///
 /// Two shapes make an index held under a *different* identity than
 /// the declared type legitimate, because a bare index does not say
@@ -473,7 +477,7 @@ fn check_boundary_handle(
     match table.resource_of(handle) {
         Some(entry_resource) if entry_resource == resource => Ok(()),
         Some(entry_resource) => {
-            if shared.tracks_host_resource(handle)
+            if shared.tracks_host_handle(handle)
                 || (!resource_is_local_definition(entry_resource)
                     && !resource_is_local_definition(resource))
             {
@@ -483,7 +487,7 @@ fn check_boundary_handle(
             }
         }
         None => {
-            if shared.tracks_host_resource(handle) {
+            if shared.tracks_host_handle(handle) {
                 Ok(())
             } else {
                 Err(ComponentError::Trap(format!(
@@ -548,6 +552,41 @@ pub(super) fn validate_lowered_borrow_args(
         }
     }
     Ok(())
+}
+
+/// Registers the handle leaves of a public call's arguments in
+/// `SharedState` before the call runs. Handles an embedder passes
+/// directly to a public call live in the host namespace, like handles
+/// returned from lowered host calls, but no lowered call ever sees
+/// them, so the boundary validation would judge them unknown. `own`
+/// leaves are recorded as host-provided handles the guest now owns,
+/// exactly like lowered-call results (`track_host_owned_results`);
+/// `borrow` leaves are registered for the duration of this call only,
+/// and the caller releases them when the call returns (the returned
+/// indices). Indices a guest invents never pass through this boundary
+/// and stay unregistered, so the validation keeps trapping them.
+pub(super) fn register_host_argument_handles(
+    func_type: &FuncType,
+    args: &[ComponentValue],
+    program: &ComponentProgram,
+    shared: &SharedState,
+) -> Vec<u32> {
+    let mut borrows = Vec::new();
+    for (value, ty) in args.iter().zip(func_type.params.iter()) {
+        let mut leaves = Vec::new();
+        collect_handle_leaves(ty, value, program, &mut leaves);
+        for (type_id, handle, is_own) in leaves {
+            if is_own {
+                if let Ok(resource) = runtime_resource_id(program, shared, type_id) {
+                    shared.track_host_resource_handle(resource, handle);
+                }
+            } else {
+                shared.track_host_borrow(handle);
+                borrows.push(handle);
+            }
+        }
+    }
+    borrows
 }
 
 /// Transfers resource handles in `values` between two component
