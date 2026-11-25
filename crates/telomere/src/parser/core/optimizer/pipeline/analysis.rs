@@ -536,7 +536,7 @@ fn find_pre_candidate(
     None
 }
 
-fn compute_coalescible_local_pairs(func: &CanonFunc) -> Vec<Vec<usize>> {
+pub(crate) fn compute_coalescible_local_pairs(func: &CanonFunc) -> Vec<Vec<usize>> {
     func.blocks
         .iter()
         .map(|block| {

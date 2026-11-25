@@ -57,11 +57,14 @@ pub(crate) fn run(
     for (block, sites) in func.blocks.iter_mut().zip(&analysis.gvn_sites) {
         cached_exprs += cache_redundant_local_exprs(block, locals, sites);
     }
-    for (block, pair_cursors) in func
-        .blocks
-        .iter_mut()
-        .zip(&analysis.coalescible_local_pairs)
-    {
+    // Caching rewrites the instruction sequence of each block (it inserts
+    // temp tees and replaces repeated expressions with temp gets), so the
+    // pair cursors from the pre-cache analysis no longer describe the
+    // blocks. Recompute the pairs from the rewritten blocks so every
+    // cursor is validated against the instruction sequence it is
+    // applied to.
+    let coalescible_local_pairs = analysis::compute_coalescible_local_pairs(&func);
+    for (block, pair_cursors) in func.blocks.iter_mut().zip(&coalescible_local_pairs) {
         coalesced_slots += coalesce_local_set_get(block, pair_cursors);
     }
     let mut buffered_memory_roots = 0usize;
