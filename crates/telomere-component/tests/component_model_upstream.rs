@@ -78,15 +78,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          self-checking guest traps at line 169",
     ),
     (
-        "values/realloc.wast",
-        "blocked by issue #322 (the result of realloc is not \
-         bounds-checked: line 110 does not trap, and lines 66, 108, 123 \
-         trap with a different error than the spec text), and a \
-         canonical lowering defect: lowering an empty list does not \
-         call realloc with (0, 0, align, 0) as the spec requires, so \
-         the guest traps at line 39",
-    ),
-    (
         "values/variants.wast",
         "blocked by a canonical-ABI validation defect: variant/enum \
          discriminants are not validated when lowering, so invalid \

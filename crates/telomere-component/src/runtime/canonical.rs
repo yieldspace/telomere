@@ -65,20 +65,20 @@ pub(super) fn lower_component_args(
             ComponentError::Runtime("canonical option `realloc` is required".to_owned())
         })?;
         let layout = value_area_layout(&func_type.params, program)?;
-        let ptr = if layout.size == 0 {
-            0
-        } else {
-            call_realloc(
-                realloc,
-                store,
-                &memory,
-                0,
-                0,
-                layout.align as i32,
-                layout.size as i32,
-                "indirect canonical parameter area",
-            )? as u32
-        };
+        // Canonical ABI `lower_flat_values` allocates the indirect area by
+        // calling realloc unconditionally, with no zero-size shortcut. The
+        // returned pointer is validated (alignment and bounds) inside
+        // `call_realloc`.
+        let ptr = call_realloc(
+            realloc,
+            store,
+            &memory,
+            0,
+            0,
+            layout.align as i32,
+            layout.size as i32,
+            "indirect canonical parameter area",
+        )? as u32;
         for ((value, ty), offset) in args
             .iter()
             .zip(func_type.params.iter())
@@ -1890,23 +1890,23 @@ fn lower_list_value(
     let elem_align = elem_abi.align.max(1);
     let stride = align_to(elem_abi.size, elem_align);
     let total_len = stride.saturating_mul(values.len() as u32);
-    let ptr = if total_len == 0 {
-        0
-    } else {
-        let memory = options.memory.clone().ok_or_else(|| {
-            ComponentError::Runtime("canonical option `memory` is required".to_owned())
-        })?;
-        call_realloc(
-            realloc,
-            store,
-            &memory,
-            0,
-            0,
-            elem_align as i32,
-            total_len as i32,
-            "canonical list",
-        )? as u32
-    };
+    // Canonical ABI `lower_list` calls realloc unconditionally: even an
+    // empty list allocates with (0, 0, align, 0) and uses the returned
+    // pointer, so there is no zero-size shortcut here. The returned pointer
+    // is validated (alignment and bounds) inside `call_realloc`.
+    let memory = options.memory.clone().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    let ptr = call_realloc(
+        realloc,
+        store,
+        &memory,
+        0,
+        0,
+        elem_align as i32,
+        total_len as i32,
+        "canonical list",
+    )? as u32;
     for (index, value) in values.iter().enumerate() {
         write_value_to_memory(
             value,
