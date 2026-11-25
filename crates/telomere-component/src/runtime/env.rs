@@ -190,7 +190,7 @@ fn register_host_resource_drops(
 
 /// Materialise everything the component of `instance` defines, in the
 /// environment of `instance` itself: its core instances, and the component
-/// instances it defines.
+/// instances it defines, in definition order across both kinds.
 ///
 /// Core instances must be created with the environment that carries the
 /// component instance's instantiation arguments: resolving them from the
@@ -198,29 +198,37 @@ fn register_host_resource_drops(
 /// argument, so a nested component whose core instances depend on supplied
 /// funcs, instances, or core modules failed to instantiate (#316).
 ///
-/// The defined component instances are resolved eagerly for the same
-/// reason instantiation itself is eager in the component model: creating
-/// an instance must materialise the core instances it defines — running
-/// any core start functions — even when none of its exports are ever
+/// The defined instances are resolved eagerly for the same reason
+/// instantiation itself is eager in the component model: creating an
+/// instance must materialise the core instances it defines — running any
+/// core start functions — even when none of its exports are ever
 /// referenced. Leaving them to on-demand resolution in `resolve_instance`
 /// would silently skip those start functions (and any instantiation
 /// errors) for explicitly instantiated but otherwise unused instances.
-/// Resolving a defined instance recurses through `resolve_instance`,
-/// which calls this function for the new instance, so the whole defined
-/// subtree is materialised. This is called for the root instance from
-/// `instantiate_sync` and for every other instance from
-/// `RuntimeEnv::resolve_instance`, the single place where component
+/// The order matters, not just eagerness: a core start function observes
+/// the effects of every instance created before it, so materialising in
+/// any order other than definition order (for example, all core
+/// instances before all component instances) is observable to the guest
+/// (#333). Resolving a defined instance recurses through
+/// `resolve_instance`, which calls this function for the new instance,
+/// so the whole defined subtree is materialised. This is called for the
+/// root instance from `instantiate_sync` and for every other instance
+/// from `RuntimeEnv::resolve_instance`, the single place where component
 /// instances are created.
 fn materialize_component_instances(
     instance: &RuntimeComponentInstance,
     store: &Store,
 ) -> Result<(), ComponentError> {
     if let RuntimeComponentSource::Component(component) = &instance.source {
-        for idx in &component.core_instances {
-            instance.env.resolve_core_instance(*idx, store)?;
-        }
-        for idx in &component.instances {
-            instance.env.resolve_instance(*idx, store)?;
+        for def in &component.defined_instances {
+            match def {
+                DefinedInstance::Core(idx) => {
+                    instance.env.resolve_core_instance(*idx, store)?;
+                }
+                DefinedInstance::Component(idx) => {
+                    instance.env.resolve_instance(*idx, store)?;
+                }
+            }
         }
     }
     Ok(())
@@ -303,6 +311,7 @@ impl RuntimeEnv {
             parent,
             imports,
             shared,
+            handles: Rc::new(RefCell::new(HandleTable::default())),
             caches: Rc::new(RuntimeCaches::default()),
         }
     }
@@ -725,7 +734,7 @@ impl RuntimeEnv {
                     resource,
                     destructor,
                     signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
-                    shared: self.shared.clone(),
+                    handles: self.handles.clone(),
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceDrop { type_id })) => {
@@ -734,6 +743,7 @@ impl RuntimeEnv {
                     resource,
                     signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
                     shared: self.shared.clone(),
+                    handles: self.handles.clone(),
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceRep { type_id })) => {
@@ -741,7 +751,7 @@ impl RuntimeEnv {
                 RuntimeCoreFunc::Host(Rc::new(HostBinding::ResourceRep {
                     resource,
                     signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
-                    shared: self.shared.clone(),
+                    handles: self.handles.clone(),
                 }))
             }
             Some(CoreRelation::FromCoreExport(instance_idx, name)) => {
@@ -856,6 +866,10 @@ impl RuntimeEnv {
             parent: self.parent.clone(),
             imports: self.imports.clone(),
             shared: self.shared.clone(),
+            // A component definition's env names the enclosing instance's
+            // scope, so it shares that instance's handle table; each new
+            // instance env built by `RuntimeEnv::new` starts a fresh one.
+            handles: self.handles.clone(),
             // Cached component defs own cloned envs, so sharing this Rc can
             // make a cache retain itself through RuntimeComponentDef.
             caches: Rc::new(self.clone_caches_detached()),
@@ -1328,8 +1342,7 @@ mod tests {
         Component {
             imports: HashMap::new(),
             exports: HashMap::new(),
-            core_instances: Vec::new(),
-            instances: Vec::new(),
+            defined_instances: Vec::new(),
         }
     }
 

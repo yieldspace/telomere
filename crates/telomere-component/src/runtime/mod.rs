@@ -1,8 +1,8 @@
 use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
 use crate::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
-    CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
-    InstanceImport, Relation, ResourceId, TypeId, Value,
+    CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, DefinedInstance, Func,
+    GlobalIdx, Instance, InstanceImport, Relation, ResourceId, TypeId, Value,
 };
 use crate::linker::{ComponentLinkerInstance, LinkerBinding, ResourceDropFn};
 use crate::support::common::InstanceHandle;
@@ -12,7 +12,7 @@ use crate::support::common::{
 use crate::support::{aliasing, Module, Registry, ResultValue, Store, VMResult as CoreVMResult};
 use crate::support::{instantiate_native_module, HostContext, HostFnDefinition, HostModule};
 use crate::{ComponentError, ComponentInstance, ComponentLinker, ComponentProgram, ComponentValue};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::pin;
@@ -23,6 +23,12 @@ use std::thread::{self, Thread};
 
 thread_local! {
     static HOST_BINDINGS: RefCell<HashMap<(u32, u32), Rc<HostBinding>>> = RefCell::new(HashMap::new());
+    /// The trap a host binding raised while servicing a core call, kept
+    /// across the core boundary so the component-level error retains the
+    /// original cause. Written by `component_host_trampoline` and consumed
+    /// by `vm_result_to_component_error`; see those functions for the
+    /// contract.
+    static PENDING_HOST_TRAP: RefCell<Option<ComponentError>> = const { RefCell::new(None) };
 }
 
 /// Drives `future` to completion on the current thread.
@@ -108,6 +114,7 @@ struct RuntimeEnv {
     parent: Option<Rc<RuntimeEnv>>,
     imports: HashMap<String, RuntimeImport>,
     shared: Rc<SharedState>,
+    handles: Rc<RefCell<HandleTable>>,
     caches: Rc<RuntimeCaches>,
 }
 
@@ -126,8 +133,6 @@ struct RuntimeCaches {
 
 #[derive(Default)]
 struct SharedState {
-    next_resource_handle: Cell<u32>,
-    resources: RefCell<HashMap<ResourceId, HashMap<u32, ResourceRecord>>>,
     generic_resources: RefCell<HashMap<TypeId, ResourceId>>,
     /// Destructors the host registered for imported resource types, keyed by
     /// the resource type's identity in the guest program. Populated once at
@@ -151,6 +156,35 @@ struct SharedState {
 struct ResourceRecord {
     rep: i32,
     destructor: Option<RuntimeCoreFunc>,
+}
+
+/// One component instance's resource handle table (#317).
+///
+/// The canonical ABI gives every component instance a single handle
+/// table shared by all of its resource types: indices allocate
+/// sequentially from 1, and an index freed by `resource.drop` is reused
+/// by the next allocation before any fresh index is handed out (LIFO).
+/// Each entry remembers its resource type, so a handle of one type
+/// cannot be used through another type's canon ops.
+struct HandleTable {
+    entries: HashMap<u32, HandleEntry>,
+    free_list: Vec<u32>,
+    next_index: u32,
+}
+
+impl Default for HandleTable {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            free_list: Vec::new(),
+            next_index: 1,
+        }
+    }
+}
+
+struct HandleEntry {
+    resource: ResourceId,
+    record: ResourceRecord,
 }
 
 #[derive(Clone)]
@@ -202,17 +236,18 @@ enum HostBinding {
         resource: ResourceId,
         destructor: Option<RuntimeCoreFunc>,
         signature: CoreFuncType,
-        shared: Rc<SharedState>,
+        handles: Rc<RefCell<HandleTable>>,
     },
     ResourceDrop {
         resource: ResourceId,
         signature: CoreFuncType,
         shared: Rc<SharedState>,
+        handles: Rc<RefCell<HandleTable>>,
     },
     ResourceRep {
         resource: ResourceId,
         signature: CoreFuncType,
-        shared: Rc<SharedState>,
+        handles: Rc<RefCell<HandleTable>>,
     },
 }
 

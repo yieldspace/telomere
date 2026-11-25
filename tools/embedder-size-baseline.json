@@ -1,21 +1,21 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #338 (branch fix/313-unused-import-link-check at head b71ce46530121b02463c760fa346843b18e74126 \u2014 the #313 change (check every declared import at instantiation, used or not; commit 8ac78cf) merged with current main 726fdd964b5b6c5dd264397d8616154cb7a9b242 (PR #337); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45541235250, 45541244272 and 45541252709 against the branch and pull-request run 45541235451, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "b71ce46530121b02463c760fa346843b18e74126",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #340 (branch fix/312-unaligned-canon-load at head 72c02cd7d00953f47df43bf706a4b8e0c75479f4 \u2014 the #312 change (canonical ABI loads and stores trap on unaligned pointers, and the canon-lower trampoline preserves the trap cause instead of flattening it to unreachable) merged with current main bf8de4597b16df23cfb6f5a8b10e71d47faae429 (PRs #326, #336, #337, #338, #339, #341, #343 and #346), with the conflict in canonical.rs resolved by keeping #312's validate_pointer_alignment alongside #322's centralised validate_realloc_result and two test assertions updated to the preserved trap cause; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45565413189, 45565424892 and 45565437460 against the branch and pull-request run 45565338789, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "72c02cd7d00953f47df43bf706a4b8e0c75479f4",
     "date": "2026-11-25",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45541235250,
-      45541244272,
-      45541252709
+      45565413189,
+      45565424892,
+      45565437460
     ],
     "cross_check_run_ids": [
-      45541235451
+      45565338789
     ],
-    "derivation": "Re-baseline for PR #338 (#313, check every declared import at instantiation, used or not). Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45541261935, 45541270512 and 45541278948 on main at 726fdd964b5b6c5dd264397d8616154cb7a9b242; all three runs pass the gate). The main control reproduces the checked-in baseline exactly on all 32 gated series, so no part of the gate failure is main-side staleness. This PR's own delta against the main control is confined to the three configurations that link telomere-component (component, wasi, wasi-threads): in release, stripped file +2,560 B in component and wasi and +2,544 B in wasi-threads, stripped .text +2,096 B in each; in release-size, stripped file +2,048 B / stripped .text +1,840 B in component, and +1,648 B / +1,440 B in wasi and wasi-threads. Every other configuration is byte-identical to main in both profiles. The change itself is confined to telomere-component's runtime (check_imports_satisfied in runtime/env.rs, called from the two component-instance creation sites so a declared import that nothing references is still link-checked at instantiation); the core library is untouched. Against the checked-in baseline the gate therefore tripped on 12 of the 32 gated series. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +9.96% (2,433,656 B to 2,675,928 B); the release core-nosimd stripped file series is unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was 0 B for every gated series across the three branch samples and across the three main samples."
+    "derivation": "Second re-baseline for PR #340 (#312, canonical ABI loads and stores trap on unaligned pointers, and the canon-lower trampoline preserves the trap cause instead of flattening it to unreachable). After the first re-baseline, PRs #341 (#317, per-instance resource handle tables), #343 (#322, bounds-checked canonical realloc results) and #346 (#333, defined instances materialised in definition order) landed on main, so the branch merged current main again (merge commits 825f42f and 72c02cd, main at bf8de4597b16df23cfb6f5a8b10e71d47faae429) and its CI run on the merged tree tripped the gate again. The merge conflicted in crates/telomere-component/src/runtime/canonical.rs, where #312 added validate_pointer_alignment next to the helper #322 replaced: the resolution keeps #312's validate_pointer_alignment and #322's centralised validate_realloc_result (both function bodies byte-identical to their respective sources), and drops the superseded validate_realloc_pointer_alignment, whose call sites all moved into call_realloc. Two test assertions written against the flattened trampoline behaviour were updated to the preserved trap cause #312 establishes (the latin1+utf16 out-of-bounds shrink test in component_canonical_abi.rs now pins the \u2018realloc return: beyond end of memory\u2019 message, and the sibling-handle drop test in component_resource_handles.rs now pins the \u2018resource handle 1 is invalid\u2019 message); both tests still require the trap. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45565216579, 45565225662 and 45565239398 on main at bf8de4597b16df23cfb6f5a8b10e71d47faae429; all three runs pass the gate against main's checked-in baseline). Against this branch's previously checked-in baseline, the main control is byte-identical on 20 of the 32 gated series; on the 12 series of the three configurations that link telomere-component, main measures above that baseline in release (stripped file +1,264 B in component and +1,184 B in wasi and wasi-threads; stripped .text +1,104 B in component and +1,024 B in wasi and wasi-threads) from the #317/#322/#333 code that landed after the baseline snapshot, and below it in release-size (stripped file \u22122,384/\u22122,512/\u22122,528 B and stripped .text \u22122,256/\u22122,368/\u22122,384 B in component/wasi/wasi-threads). This PR's own delta against the main control is confined to the same 12 series: in release, stripped file +1,520 B and stripped .text +224 B in each of component, wasi and wasi-threads; in release-size, stripped file +1,312 B and stripped .text +1,008 B in each. Every other configuration is byte-identical to main in both profiles. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +10.01% (2,433,656 B to 2,677,280 B), up from +9.90% because the intervening main growth is now reflected in the baseline; the release core-nosimd stripped file series stays at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -41,22 +41,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2675928,
-          "threshold": 2675928
+          "baseline": 2677280,
+          "threshold": 2677280
         },
         "stripped_text_bytes": {
-          "baseline": 2122279,
-          "threshold": 2122279
+          "baseline": 2121511,
+          "threshold": 2121511
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2903488,
-          "threshold": 2903488
+          "baseline": 2904760,
+          "threshold": 2904760
         },
         "stripped_text_bytes": {
-          "baseline": 2296727,
-          "threshold": 2296727
+          "baseline": 2295879,
+          "threshold": 2295879
         }
       },
       "core-nosimd": {
@@ -71,12 +71,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2130712,
-          "threshold": 2130712
+          "baseline": 2131288,
+          "threshold": 2131288
         },
         "stripped_text_bytes": {
-          "baseline": 1638487,
-          "threshold": 1638487
+          "baseline": 1638871,
+          "threshold": 1638871
         }
       },
       "core-aot": {
@@ -91,12 +91,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3119176,
-          "threshold": 3119176
+          "baseline": 3120480,
+          "threshold": 3120480
         },
         "stripped_text_bytes": {
-          "baseline": 2464039,
-          "threshold": 2464039
+          "baseline": 2463191,
+          "threshold": 2463191
         }
       }
     },
@@ -123,22 +123,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1679192,
-          "threshold": 1679192
+          "baseline": 1677848,
+          "threshold": 1677848
         },
         "stripped_text_bytes": {
-          "baseline": 1239671,
-          "threshold": 1239671
+          "baseline": 1237943,
+          "threshold": 1237943
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1799992,
-          "threshold": 1799992
+          "baseline": 1799064,
+          "threshold": 1799064
         },
         "stripped_text_bytes": {
-          "baseline": 1321015,
-          "threshold": 1321015
+          "baseline": 1319719,
+          "threshold": 1319719
         }
       },
       "core-nosimd": {
@@ -153,12 +153,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1538464,
-          "threshold": 1538464
+          "baseline": 1538400,
+          "threshold": 1538400
         },
         "stripped_text_bytes": {
-          "baseline": 1091783,
-          "threshold": 1091783
+          "baseline": 1091895,
+          "threshold": 1091895
         }
       },
       "core-aot": {
@@ -173,12 +173,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1942696,
-          "threshold": 1942696
+          "baseline": 1941784,
+          "threshold": 1941784
         },
         "stripped_text_bytes": {
-          "baseline": 1415719,
-          "threshold": 1415719
+          "baseline": 1414423,
+          "threshold": 1414423
         }
       }
     }

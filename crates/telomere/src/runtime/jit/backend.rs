@@ -1,5 +1,11 @@
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod aarch64_macos;
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"),
+    all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64")
+))]
+mod lowering;
 mod ops;
 #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
 mod riscv64;
@@ -7,6 +13,12 @@ mod riscv64;
 mod x86_64;
 
 use super::emit_env::{AotEmitEnv, Emission, EmitEnv, JitEmitEnv, ModuleFacts, Reloc, RelocKind};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use telomere_jit_codegen::arch::aarch64::A64BaselineMasm;
+#[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
+use telomere_jit_codegen::arch::riscv64::Riscv64BaselineMasm;
+#[cfg(all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"))]
+use telomere_jit_codegen::arch::x86_64::X64BaselineMasm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmitBaselineError {
@@ -96,7 +108,7 @@ fn emit_baseline_plan<E: EmitEnv>(
     env: E,
     plan: &ops::BaselinePlan,
 ) -> Result<Emission, ()> {
-    aarch64_macos::emit_baseline_function(funcaddr, code, op_lens, env, plan)
+    lowering::emit_baseline_function::<E, A64BaselineMasm>(funcaddr, code, op_lens, env, plan)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
@@ -107,7 +119,7 @@ fn emit_baseline_plan<E: EmitEnv>(
     env: E,
     plan: &ops::BaselinePlan,
 ) -> Result<Emission, ()> {
-    riscv64::emit_baseline_function(funcaddr, code, op_lens, env, plan)
+    lowering::emit_baseline_function::<E, Riscv64BaselineMasm>(funcaddr, code, op_lens, env, plan)
 }
 
 #[cfg(all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"))]
@@ -118,7 +130,7 @@ fn emit_baseline_plan<E: EmitEnv>(
     env: E,
     plan: &ops::BaselinePlan,
 ) -> Result<Emission, ()> {
-    x86_64::emit_baseline_function(funcaddr, code, op_lens, env, plan)
+    lowering::emit_baseline_function::<E, X64BaselineMasm>(funcaddr, code, op_lens, env, plan)
 }
 
 #[cfg(not(any(
@@ -139,19 +151,19 @@ fn emit_baseline_plan<E: EmitEnv>(
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[allow(dead_code)]
 fn patch_relocation_site(bytes: &mut [u8], reloc: Reloc, value: u64) -> Result<(), ()> {
-    aarch64_macos::patch_relocation_site(bytes, reloc, value)
+    lowering::patch_relocation_site::<A64BaselineMasm>(bytes, reloc, value)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
 #[allow(dead_code)]
 fn patch_relocation_site(bytes: &mut [u8], reloc: Reloc, value: u64) -> Result<(), ()> {
-    riscv64::patch_relocation_site(bytes, reloc, value)
+    lowering::patch_relocation_site::<Riscv64BaselineMasm>(bytes, reloc, value)
 }
 
 #[cfg(all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"))]
 #[allow(dead_code)]
 fn patch_relocation_site(bytes: &mut [u8], reloc: Reloc, value: u64) -> Result<(), ()> {
-    x86_64::patch_relocation_site(bytes, reloc, value)
+    lowering::patch_relocation_site::<X64BaselineMasm>(bytes, reloc, value)
 }
 
 #[cfg(not(any(

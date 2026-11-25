@@ -1,5 +1,8 @@
 use crate::masm::{AsmError, AsmResult};
 
+use crate::masm::BaselineMasm;
+pub use crate::masm::{BranchKind, Cond};
+
 mod enc {
     pub(super) const B: u32 = 0x1400_0000;
     pub(super) const B_COND: u32 = 0x5400_0000;
@@ -146,56 +149,32 @@ pub enum XOrZr {
     Zr,
 }
 
-#[repr(u32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cond {
-    Eq = 0,
-    Ne = 1,
-    Hs = 2,
-    Lo = 3,
-    Hi = 8,
-    Ls = 9,
-    Ge = 10,
-    Lt = 11,
-    Gt = 12,
-    Le = 13,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BranchKind {
-    B,
-    BCond(Cond),
-    CbnzX(u8),
-    CbnzW(u8),
-    CbzW(u8),
-}
-
-impl Cond {
-    pub const fn inverted(self) -> Self {
-        match self {
-            Self::Eq => Self::Ne,
-            Self::Ne => Self::Eq,
-            Self::Lo => Self::Hs,
-            Self::Hs => Self::Lo,
-            Self::Hi => Self::Ls,
-            Self::Ls => Self::Hi,
-            Self::Lt => Self::Ge,
-            Self::Ge => Self::Lt,
-            Self::Gt => Self::Le,
-            Self::Le => Self::Gt,
-        }
-    }
-}
-
 impl BranchKind {
     pub fn placeholder(self) -> AsmResult<u32> {
         Ok(match self {
             Self::B => enc::B,
-            Self::BCond(cond) => enc::B_COND | cond as u32,
+            Self::BCond(cond) => enc::B_COND | cond_code(cond),
             Self::CbnzX(rt) => enc::CBNZ_X | Reg5::new(rt)?.bits(),
             Self::CbnzW(rt) => enc::CBNZ_W | Reg5::new(rt)?.bits(),
             Self::CbzW(rt) => enc::CBZ_W | Reg5::new(rt)?.bits(),
         })
+    }
+}
+
+/// The aarch64 condition-field encoding of a semantic [`Cond`]
+/// (the values the removed per-module `Cond` discriminants carried).
+fn cond_code(cond: Cond) -> u32 {
+    match cond {
+        Cond::Eq => 0,
+        Cond::Ne => 1,
+        Cond::Hs => 2,
+        Cond::Lo => 3,
+        Cond::Hi => 8,
+        Cond::Ls => 9,
+        Cond::Ge => 10,
+        Cond::Lt => 11,
+        Cond::Gt => 12,
+        Cond::Le => 13,
     }
 }
 
@@ -216,7 +195,7 @@ pub fn patch_branch(bytes: &mut [u8], at: usize, target: usize, kind: BranchKind
             if !(-(1 << 18)..(1 << 18)).contains(&words) {
                 return Err(AsmError::BranchOutOfRange);
             }
-            enc::B_COND | (((words as i32 as u32) & 0x7ffff) << 5) | cond as u32
+            enc::B_COND | (((words as i32 as u32) & 0x7ffff) << 5) | cond_code(cond)
         }
         BranchKind::CbnzX(rt) => {
             if !(-(1 << 18)..(1 << 18)).contains(&words) {
@@ -603,13 +582,17 @@ impl A64Masm {
     }
 
     pub fn cset_w(&mut self, rd: WReg, cond: Cond) {
-        let inverted = cond.inverted() as u32;
+        let inverted = cond_code(cond.inverted());
         self.insn(enc::CSET_W | (31 << 16) | (inverted << 12) | (31 << 5) | rd.bits());
     }
 
     pub fn csel_w(&mut self, rd: WReg, rn: WReg, rm: WReg, cond: Cond) {
         self.insn(
-            enc::CSEL_W | (rm.bits() << 16) | ((cond as u32) << 12) | (rn.bits() << 5) | rd.bits(),
+            enc::CSEL_W
+                | (rm.bits() << 16)
+                | ((cond_code(cond)) << 12)
+                | (rn.bits() << 5)
+                | rd.bits(),
         );
     }
 
@@ -1260,36 +1243,44 @@ impl A64BaselineMasm {
         self.inner.fsqrt_d(Self::v(vd), Self::v(vn));
     }
 
-    pub fn frintn_s(&mut self, vd: u8, vn: u8) {
+    pub fn frintn_s(&mut self, vd: u8, vn: u8) -> AsmResult {
         self.inner.frintn_s(Self::v(vd), Self::v(vn));
+        Ok(())
     }
 
-    pub fn frintn_d(&mut self, vd: u8, vn: u8) {
+    pub fn frintn_d(&mut self, vd: u8, vn: u8) -> AsmResult {
         self.inner.frintn_d(Self::v(vd), Self::v(vn));
+        Ok(())
     }
 
-    pub fn frintp_s(&mut self, vd: u8, vn: u8) {
+    pub fn frintp_s(&mut self, vd: u8, vn: u8) -> AsmResult {
         self.inner.frintp_s(Self::v(vd), Self::v(vn));
+        Ok(())
     }
 
-    pub fn frintp_d(&mut self, vd: u8, vn: u8) {
+    pub fn frintp_d(&mut self, vd: u8, vn: u8) -> AsmResult {
         self.inner.frintp_d(Self::v(vd), Self::v(vn));
+        Ok(())
     }
 
-    pub fn frintm_s(&mut self, vd: u8, vn: u8) {
+    pub fn frintm_s(&mut self, vd: u8, vn: u8) -> AsmResult {
         self.inner.frintm_s(Self::v(vd), Self::v(vn));
+        Ok(())
     }
 
-    pub fn frintm_d(&mut self, vd: u8, vn: u8) {
+    pub fn frintm_d(&mut self, vd: u8, vn: u8) -> AsmResult {
         self.inner.frintm_d(Self::v(vd), Self::v(vn));
+        Ok(())
     }
 
-    pub fn frintz_s(&mut self, vd: u8, vn: u8) {
+    pub fn frintz_s(&mut self, vd: u8, vn: u8) -> AsmResult {
         self.inner.frintz_s(Self::v(vd), Self::v(vn));
+        Ok(())
     }
 
-    pub fn frintz_d(&mut self, vd: u8, vn: u8) {
+    pub fn frintz_d(&mut self, vd: u8, vn: u8) -> AsmResult {
         self.inner.frintz_d(Self::v(vd), Self::v(vn));
+        Ok(())
     }
 
     pub fn cvtf_d_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
@@ -1435,6 +1426,8 @@ impl A64BaselineMasm {
     }
 }
 
+crate::impl_baseline_masm!(A64BaselineMasm);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1466,9 +1459,37 @@ mod tests {
 
     #[test]
     fn patches_cond_branch_forward() {
-        let mut bytes = (enc::B_COND | Cond::Eq as u32).to_le_bytes();
+        let mut bytes = (enc::B_COND | cond_code(Cond::Eq)).to_le_bytes();
         patch_branch(&mut bytes, 0, 8, BranchKind::BCond(Cond::Eq)).expect("patch");
-        let expected = enc::B_COND | (2 << 5) | Cond::Eq as u32;
+        let expected = enc::B_COND | (2 << 5) | cond_code(Cond::Eq);
         assert_eq!(u32::from_le_bytes(bytes), expected);
+    }
+
+    #[test]
+    fn emits_cset_w_encoding_for_all_conditions() {
+        // Regression test: CSET encodes the *inverted* condition in the
+        // AArch64 condition field. The shared `Cond` discriminants are
+        // semantic, not the hardware codes, so the field must come from
+        // `cond_code`. The expected fields below are the architectural
+        // codes of each inverted condition (Eq<->Ne, Hs<->Lo, Hi<->Ls,
+        // Ge<->Lt, Gt<->Le).
+        let cases = [
+            (Cond::Eq, 1),
+            (Cond::Ne, 0),
+            (Cond::Hs, 3),
+            (Cond::Lo, 2),
+            (Cond::Hi, 9),
+            (Cond::Ls, 8),
+            (Cond::Ge, 11),
+            (Cond::Lt, 10),
+            (Cond::Gt, 13),
+            (Cond::Le, 12),
+        ];
+        for (cond, field) in cases {
+            let mut asm = A64Masm::with_capacity(4);
+            asm.cset_w(WReg::new_unchecked(0), cond);
+            let expected = enc::CSET_W | (31 << 16) | (field << 12) | (31 << 5);
+            assert_eq!(asm.into_bytes(), expected.to_le_bytes(), "cond {cond:?}");
+        }
     }
 }

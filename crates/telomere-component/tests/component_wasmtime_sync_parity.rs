@@ -26,14 +26,17 @@ fn host_roundtrip_component(
       (param $old_ptr i32) (param $old_len i32) (param $align i32) (param $new_len i32)
       (result i32)
       (local $ptr i32)
-      (local.set $ptr (global.get $bump))
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
       (global.set $bump (i32.add (local.get $ptr) (local.get $new_len)))
       (local.get $ptr)
     )
   )
   (core instance $libc (instantiate $libc))
   (core func $host-lower
-    (canon lower (func $host) (memory $libc "memory") (realloc (func $libc "realloc")))
+    (canon lower (func $host) (memory (core memory $libc "memory")) (realloc (core func $libc "realloc")))
   )
   (core module $forward
     (import "" "host" (func $host {host_sig}))
@@ -51,7 +54,7 @@ fn host_roundtrip_component(
     )
   )
   (func (export "run") (type $t)
-    (canon lift (core func $forward "run") (memory $libc "memory") (realloc (func $libc "realloc")))
+    (canon lift (core func $forward "run") (memory (core memory $libc "memory")) (realloc (core func $libc "realloc")))
   )
 )
 "#,
@@ -177,7 +180,10 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
       (param $old_ptr i32) (param $old_len i32) (param $align i32) (param $new_len i32)
       (result i32)
       (local $ptr i32)
-      (local.set $ptr (global.get $bump))
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
       (global.set $bump (i32.add (local.get $ptr) (local.get $new_len)))
       (local.get $ptr)
     )
@@ -193,7 +199,7 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
   )
   (core instance $i (instantiate $m))
   (func (export "run") (param "value" $value) (result $value)
-    (canon lift (core func $i "run") (memory $i "memory") (realloc (func $i "realloc")))
+    (canon lift (core func $i "run") (memory (core memory $i "memory")) (realloc (core func $i "realloc")))
   )
 )
 "#;
@@ -239,7 +245,10 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
       (param $old_ptr i32) (param $old_len i32) (param $align i32) (param $new_len i32)
       (result i32)
       (local $ptr i32)
-      (local.set $ptr (global.get $bump))
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
       (global.set $bump (i32.add (local.get $ptr) (local.get $new_len)))
       (local.get $ptr)
     )
@@ -257,7 +266,7 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
   )
   (core instance $i (instantiate $m))
   (func (export "run") (param "value" $value) (result $value)
-    (canon lift (core func $i "run") (memory $i "memory") (realloc (func $i "realloc")))
+    (canon lift (core func $i "run") (memory (core memory $i "memory")) (realloc (core func $i "realloc")))
   )
 )
 "#;
@@ -353,7 +362,10 @@ async fn component_dynamic_values_support_indirect_parameter_areas() {
       (param $old_ptr i32) (param $old_len i32) (param $align i32) (param $new_len i32)
       (result i32)
       (local $ptr i32)
-      (local.set $ptr (global.get $bump))
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
       (global.set $bump (i32.add (local.get $ptr) (local.get $new_len)))
       (local.get $ptr)
     )
@@ -363,7 +375,7 @@ async fn component_dynamic_values_support_indirect_parameter_areas() {
   )
   (core instance $i (instantiate $m))
   (func (export "run") (param "value" $value) (result $value)
-    (canon lift (core func $i "run") (memory $i "memory") (realloc (func $i "realloc")))
+    (canon lift (core func $i "run") (memory (core memory $i "memory")) (realloc (core func $i "realloc")))
   )
 )
 "#,
