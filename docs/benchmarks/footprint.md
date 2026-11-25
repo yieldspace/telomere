@@ -563,16 +563,18 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-25, the `Embedder footprint` workflow was run four
-times against the code of PR #353: workflow_dispatch runs
-45591081391, 45591092701 and 45591107329 against the PR branch at
-head `0dd39b5425c11aafdfdb5ac28d0b87087e15ca4b` (the #318 change —
-split extern-name encodings (name prefix `0x02`) decode and
-extern names are validated against the package-name grammar —
-merged with current `main` at `d5af7b8` (PRs #348, #351 and
-#350)), and pull-request run 45591075501, which
+times against the code of PR #357: workflow_dispatch runs
+45598730533, 45598745727 and 45598759671 against the PR branch at
+head `daf55480a32bd26e89c499644a2044cbc425cd64` (the #320 change —
+resource type validation: structural type roots may carry handles
+to abstract resources that are part of the surface, `(sub
+resource)` export ascriptions mint fresh resource identities, and
+own/borrow mismatches report the specific reason — merged with
+current `main` at `b20ed79` (PR #353)), and pull-request run
+45598638176, which
 built the same tree (`ubuntu-24.04`, Rust 1.96.0). A three-run
-control against unmodified `main` at `d5af7b8` (workflow_dispatch
-runs 45591120085, 45591130821 and 45591141591) isolates the
+control against unmodified `main` at `b20ed79` (workflow_dispatch
+runs 45598772332, 45598789232 and 45598803018) isolates the
 attribution recorded in the re-baseline history below. Every run
 produced byte-identical sizes for its tree: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
@@ -589,20 +591,20 @@ measured byte-identical to the checked-in baseline.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,701,856 | 2,143,383 |
-| `release` | `wasi` | 2,929,352 | 2,317,751 |
+| `release` | `component` | 2,704,688 | 2,145,927 |
+| `release` | `wasi` | 2,932,168 | 2,320,295 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,145,056 | 2,485,063 |
+| `release` | `wasi-threads` | 3,147,872 | 2,487,607 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,692,920 | 1,250,711 |
-| `release-size` | `wasi` | 1,814,136 | 1,332,487 |
+| `release-size` | `component` | 1,694,552 | 1,252,071 |
+| `release-size` | `wasi` | 1,815,784 | 1,333,847 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,956,840 | 1,427,191 |
+| `release-size` | `wasi-threads` | 1,958,504 | 1,428,551 |
 
 #### Re-baseline history
 
@@ -2214,6 +2216,41 @@ measurements. Against the original #164 baseline, the
 largest cumulative growth is now the `release` `component`
 stripped file series at +11.02% (2,433,656 B to 2,701,856 B),
 up from +10.29%; the `release` `core-nosimd` stripped file
+series is unchanged at +9.83% (1,275,448 B to 1,400,840 B).
+The baseline was re-measured on the branch and updated as
+recorded above, following the procedure below.
+
+PR #357 (#320, resource type validation: structural type
+roots may carry handles to abstract resources that are part
+of the surface, `(sub resource)` export ascriptions mint
+fresh resource identities per instantiation, and own/borrow
+mismatches report the specific expected/found reason) merged
+current `main` into its branch first (merge commit
+`daf5548`, `main` at
+`b20ed79513bbb12f6e4447158fd4028808ac129b` — PR #353 (#318)
+on top of the `d5af7b8e004daff28d1735657155d3df5802d8a3`
+`main` the branch was based on); the merge was conflict-free,
+and its CI run on the merged tree tripped the gate on the
+twelve series of the three configurations that link
+`telomere-component`. Attribution was isolated by measuring
+current `main` alone three times (workflow_dispatch runs
+45598772332, 45598789232 and 45598803018 on `main` at
+`b20ed79513bbb12f6e4447158fd4028808ac129b`; all three runs
+pass the gate against `main`'s checked-in baseline). Against
+the checked-in baseline, the main control is byte-identical
+on all 32 gated series. This PR's own delta against the main
+control is confined to the same 12 series: in `release`,
+stripped file +2,832 B (`component`), +2,816 B (`wasi`) and
++2,816 B (`wasi-threads`) and stripped `.text` +2,544 B in
+each; in `release-size`, stripped file +1,632 B / +1,648 B
+/ +1,664 B and stripped `.text` +1,360 B in each. Every
+other configuration is byte-identical to `main` in both
+profiles. All twelve series exceed the checked-in
+baseline, so those twelve are re-baselined, to the branch
+measurements. Against the original #164 baseline, the
+largest cumulative growth is now the `release` `component`
+stripped file series at +11.14% (2,433,656 B to 2,704,688 B),
+up from +11.02%; the `release` `core-nosimd` stripped file
 series is unchanged at +9.83% (1,275,448 B to 1,400,840 B).
 The baseline was re-measured on the branch and updated as
 recorded above, following the procedure below.
