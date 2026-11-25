@@ -143,6 +143,14 @@ struct SharedState {
     /// before invoking the registered destructor; a handle that is absent
     /// (never seen or already dropped) traps, per the canonical ABI.
     host_resources: RefCell<HashMap<ResourceId, std::collections::HashSet<u32>>>,
+    /// Handles of host-provided resources lent to guest code as
+    /// arguments of a public call, by index, with the number of live
+    /// registrations. A borrow is valid only for the duration of the
+    /// call that carried it, so the public entry point registers the
+    /// indices before the call and releases them when it returns;
+    /// unlike `host_resources`, a borrowed handle is never released
+    /// through `canon resource.drop`.
+    host_borrows: RefCell<HashMap<u32, usize>>,
     /// Opened component-bundle AoT artifacts (#201), keyed by core
     /// module index, for the instantiation that owns this state.
     /// `None` for ordinary (non-bundle) instantiation; defined core

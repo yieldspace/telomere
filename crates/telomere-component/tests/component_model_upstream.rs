@@ -74,14 +74,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          pre-existing failure unrelated to handle tables)",
     ),
     (
-        "resources/handle-table.wast",
-        "blocked by issue #335: canonical handle operations do not \
-         validate indices, so unknown, already-dropped, zero, and \
-         wrong-type handles reach the guest or silently succeed \
-         instead of trapping `unknown handle index` (lines 200-212, \
-         260, 292, 321, 323)",
-    ),
-    (
         "binary/binary.wast",
         "malformed binaries are accepted: truncated sections and \
          invalid UTF-8 names decode successfully, and core-layer decode \
