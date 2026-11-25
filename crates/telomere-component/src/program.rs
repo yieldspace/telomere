@@ -189,6 +189,7 @@ mod tests {
                 imports: HashMap::new(),
                 exports: HashMap::new(),
                 core_instances: Vec::new(),
+                instances: Vec::new(),
             },
             types: vec![first.clone(), second.clone()].into_boxed_slice(),
             component_store: HashMap::new(),

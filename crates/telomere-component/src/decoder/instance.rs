@@ -259,6 +259,7 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
         imports: Default::default(),
         exports: component_exports,
         core_instances: Default::default(),
+        instances: Default::default(),
     };
     let component_gid = ctx
         .state

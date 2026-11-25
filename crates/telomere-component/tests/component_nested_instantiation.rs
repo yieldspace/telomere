@@ -101,3 +101,118 @@ async fn nested_instantiation_core_module_argument_is_instantiated() {
     .await;
     assert_eq!(result, vec![ComponentValue::U32(99)]);
 }
+
+/// An explicitly instantiated nested component must be materialised at
+/// instantiation time even when none of its exports are referenced: the
+/// instantiation of a component runs the start functions of the core
+/// instances it defines. Here the nested component's core module start
+/// traps, so instantiating the root must fail with that trap. Before the
+/// fix, `resolve_instance` was only reached on demand, so the nested
+/// instance was never created and the root instantiated successfully.
+#[tokio::test]
+async fn explicitly_instantiated_nested_component_materializes_core_instances() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $m (func $s unreachable) (start $s))
+    (core instance (instantiate $m)))
+  (instance (instantiate $C)))
+"#,
+    );
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let store = telomere::Store::new();
+    let linker = ComponentLinker::new();
+    let err = match engine.instantiate(&program, &store, &linker).await {
+        Ok(_) => panic!("instantiation must surface the nested start trap"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(
+            err,
+            telomere_component::ComponentError::Trap(_)
+                | telomere_component::ComponentError::GuestTrap { .. }
+        ),
+        "expected a trap error, got: {err:?}"
+    );
+}
+
+/// The eager walk recurses: an instance defined inside an explicitly
+/// instantiated component is itself instantiated, so a trapping start two
+/// levels down also fails the root instantiation.
+#[tokio::test]
+async fn eagerly_instantiated_grandchild_component_materializes_core_instances() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $B
+    (core module $m (func $s unreachable) (start $s))
+    (core instance (instantiate $m)))
+  (component $A
+    (instance (instantiate $B)))
+  (instance (instantiate $A)))
+"#,
+    );
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let store = telomere::Store::new();
+    let linker = ComponentLinker::new();
+    let err = match engine.instantiate(&program, &store, &linker).await {
+        Ok(_) => panic!("instantiation must surface the grandchild start trap"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(
+            err,
+            telomere_component::ComponentError::Trap(_)
+                | telomere_component::ComponentError::GuestTrap { .. }
+        ),
+        "expected a trap error, got: {err:?}"
+    );
+}
+
+/// Positive control: an explicitly instantiated nested component whose
+/// core start does not trap instantiates fine even when unreferenced.
+#[tokio::test]
+async fn explicitly_instantiated_nested_component_with_benign_start_succeeds() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $m (func $s) (start $s))
+    (core instance (instantiate $m)))
+  (instance (instantiate $C)))
+"#,
+    );
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let store = telomere::Store::new();
+    let linker = ComponentLinker::new();
+    engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+}
+
+/// Boundary: a component that is only *defined* — never instantiated —
+/// must not be materialised, so its trapping start stays dormant.
+#[tokio::test]
+async fn defined_but_uninstantiated_component_is_not_materialized() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $m (func $s unreachable) (start $s))
+    (core instance (instantiate $m))))
+"#,
+    );
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let store = telomere::Store::new();
+    let linker = ComponentLinker::new();
+    engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+}

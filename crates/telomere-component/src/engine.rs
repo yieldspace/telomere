@@ -96,7 +96,7 @@ impl ComponentEngine {
         crate::decoder::parse_component(&mut reader, &mut state, &mut validator)?;
 
         let scope = state.scope();
-        let root = scope.make_component(&state.core_instance_store);
+        let root = scope.make_component(&state.core_instance_store, &state.instance_store);
 
         let mut imports = Vec::with_capacity(scope.imports.len());
         let mut callable_imports = Vec::new();

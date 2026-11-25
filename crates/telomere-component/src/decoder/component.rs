@@ -101,7 +101,7 @@ fn _parse_component(
                 let component = ctx
                     .state
                     .scope()
-                    .make_component(&ctx.state.core_instance_store);
+                    .make_component(&ctx.state.core_instance_store, &ctx.state.instance_store);
 
                 ctx.validator.pop_scope();
                 ctx.state.pop_scope();
