@@ -1,21 +1,21 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #315 (branch fix/201-component-bundles at head 9bdd30033dfbff2eece920ed0e22fa9ae04b22a6 \u2014 the #201 change (component bundles: hash-keyed AoT artifacts for the core modules embedded in a component; commits aa60653, 9e1c649 and 6ffbfd8) merged with current main b868802f3ae377dccc28d54ba73560bb5e55bd79 (PR #329); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45534017783, 45534029382 and 45534039628 against the branch and pull-request run 45533984355, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "9bdd30033dfbff2eece920ed0e22fa9ae04b22a6",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #339 (branch fix/192-shared-lowering at head ea36972ab1c5b87625228f1d48248593e8bade4e \u2014 the #192 change (the three baseline JIT backends merged into one shared lowering over a per-target BaselineMasm trait, plus the Codex P1 fix mapping the inverted condition through cond_code in AArch64 cset_w; commits 8b94d2e, 8b34d6c, 54553ad, 97bba04 and ea36972) merged with current main 726fdd964b5b6c5dd264397d8616154cb7a9b242 (PRs #329 and #337); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45545862796, 45545874933 and 45546994821 against the branch and pull-request run 45545862499, which built the same tree; the four samples agree on every core-jit value, and the recorded values are the medians across the samples",
+    "commit": "ea36972ab1c5b87625228f1d48248593e8bade4e",
     "date": "2026-11-25",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45534017783,
-      45534029382,
-      45534039628
+      45545862796,
+      45545874933,
+      45546994821
     ],
     "cross_check_run_ids": [
-      45533984355
+      45545862499
     ],
-    "derivation": "Re-baseline for PR #315 (#201, component bundles: hash-keyed AoT artifacts for the core modules embedded in a component). Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45534050177, 45534060121 and 45534068404 on main at b868802f3ae377dccc28d54ba73560bb5e55bd79; all three runs pass the gate). The main control reproduces the checked-in baseline exactly on all 32 gated series, so no part of the gate failure is main-side staleness. This PR's own delta against the main control is confined to the three configurations that link telomere-component (component, wasi, wasi-threads): in release, stripped file +1,456 B and stripped .text +1,248 B in each; in release-size, stripped file +192 B / stripped .text +144 B in component and wasi-threads, and +208 B / +160 B in wasi. Every other configuration is byte-identical to main in both profiles. The bundle implementation proper (bundle.rs, the substitution decode session, the instantiate-time install path) is gated behind telomere-component's aot-bundle feature, which the minimal embedder does not enable, so the linked delta is the code-layout effect of the PR's component-layer changes on those configurations; the core library is untouched. The delta covers the whole PR, including the Codex follow-ups on it: the bundle load harness moved to benches/, the checked length arithmetic in the bundle reader, and the alias-identity resolution in runtime/env.rs (a core instance instantiated through an alias export of a nested component's module now resolves to the module's definition index before the artifact lookup). Against the checked-in baseline the gate therefore tripped on 12 of the 32 gated series. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +9.85% (2,433,656 B to 2,673,368 B), overtaking the release core-nosimd stripped file series at +9.83% (1,275,448 B to 1,400,840 B), which this PR does not change. The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Run-to-run spread was 0 B for every gated series across the three branch samples and across the three main samples."
+    "derivation": "Re-baseline for PR #339 (#192, the three baseline JIT backends (x86_64, aarch64, riscv64) merged into one shared lowering generic over a per-target BaselineMasm trait; the branch also carries the Codex P1 fix for that lowering: AArch64 cset_w emitted the inverted condition from the shared semantic Cond discriminant instead of the target encoding, fixed by mapping through cond_code). Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45541261935, 45541270512 and 45541278948 on main at 726fdd964b5b6c5dd264397d8616154cb7a9b242; all three runs pass the gate). The main control reproduces the checked-in baseline exactly on all 32 gated series, so no part of the gate failure is main-side staleness. This PR's own delta against the main control is confined to core-jit, the only embedder configuration that links the JIT backends: in release, stripped file +576 B and stripped .text +384 B; in release-size, stripped file -64 B and stripped .text +112 B. Every other configuration is byte-identical to main in both profiles in the three workflow_dispatch samples. The pull-request run (45545862499), which built the same tree, measured the three component configurations (component, wasi, wasi-threads) 848 to 2,344 B lower than every other sample; no part of this PR touches the component layer, and the three dispatch samples agree with the main control byte-for-byte on those series, so the recorded values for them are the medians across the four branch samples, which equal the main control. Run-to-run spread across the four branch samples was 0 B for the core-jit series and for the 16 series of the baseline, core, core-nosimd and core-aot configurations, and across the three main samples it was 0 B for every gated series. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series at +9.85% (2,433,656 B to 2,673,368 B), which this PR does not change; the release core-nosimd stripped file series stays at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -71,12 +71,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2130712,
-          "threshold": 2130712
+          "baseline": 2131288,
+          "threshold": 2131288
         },
         "stripped_text_bytes": {
-          "baseline": 1638487,
-          "threshold": 1638487
+          "baseline": 1638871,
+          "threshold": 1638871
         }
       },
       "core-aot": {
@@ -153,12 +153,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1538464,
-          "threshold": 1538464
+          "baseline": 1538400,
+          "threshold": 1538400
         },
         "stripped_text_bytes": {
-          "baseline": 1091783,
-          "threshold": 1091783
+          "baseline": 1091895,
+          "threshold": 1091895
         }
       },
       "core-aot": {

@@ -562,23 +562,29 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-25, the `Embedder footprint` workflow was run three times
-against the code of PR #315: workflow_dispatch runs 45534017783,
-45534029382 and 45534039628 against the PR branch at head
-`9bdd30033dfbff2eece920ed0e22fa9ae04b22a6` (the #201 change —
-component bundles: hash-keyed AoT artifacts for the core modules
-embedded in a component, including the alias-identity fix in
-commit `6ffbfd8` — merged with current `main` at `b868802`
-(PR #329)),
-and pull-request run 45533984355, which built the same tree
+On 2026-11-25, the `Embedder footprint` workflow was run four times
+against the code of PR #339: workflow_dispatch runs 45545862796,
+45545874933 and 45546994821 against the PR branch at head
+`ea36972ab1c5b87625228f1d48248593e8bade4e` (the #192 change —
+the three baseline JIT backends (x86_64, aarch64, riscv64) merged
+into one shared lowering generic over a per-target `BaselineMasm`
+trait, plus the Codex P1 fix mapping the inverted condition
+through `cond_code` in AArch64 `cset_w` — merged with current
+`main` at `726fdd9`
+(PRs #329 and #337)),
+and pull-request run 45545862499, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). A three-run control against
-unmodified `main` at `b868802` (workflow_dispatch runs
-45534050177, 45534060121 and 45534068404) isolates the
-attribution recorded in the re-baseline history below. Every run produced
-byte-identical sizes: for all sixteen
-profile/configuration rows, the raw file size, the `.text` size,
-the stripped file size, and the stripped `.text` size each have a
-run-to-run spread of **0 B** across the samples. The observed
+unmodified `main` at `726fdd9` (workflow_dispatch runs
+45541261935, 45541270512 and 45541278948) isolates the
+attribution recorded in the re-baseline history below. The
+`core-jit` series and the sixteen series of the `baseline`,
+`core`, `core-nosimd` and `core-aot` configurations have a
+run-to-run spread of **0 B** across the four branch samples; the
+twelve series of the component configurations (`component`,
+`wasi`, `wasi-threads`) show one low outlier in the pull-request
+run (848–2,344 B below the other three samples, which are
+byte-identical to the main control), so the table below records
+the medians across the samples. The observed
 values are the baselines in the table below (stripped file /
 stripped `.text`, in bytes).
 
@@ -589,7 +595,7 @@ stripped `.text`, in bytes).
 | `release` | `component` | 2,673,368 | 2,120,183 |
 | `release` | `wasi` | 2,900,928 | 2,294,631 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
-| `release` | `core-jit` | 2,130,712 | 1,638,487 |
+| `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
 | `release` | `wasi-threads` | 3,116,632 | 2,461,943 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
@@ -597,7 +603,7 @@ stripped `.text`, in bytes).
 | `release-size` | `component` | 1,677,144 | 1,237,831 |
 | `release-size` | `wasi` | 1,798,344 | 1,319,575 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
-| `release-size` | `core-jit` | 1,538,464 | 1,091,783 |
+| `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
 | `release-size` | `wasi-threads` | 1,941,048 | 1,414,279 |
 
@@ -1913,6 +1919,42 @@ of silently running interpreted). Against the original
 `core-nosimd` stripped file series at +9.83% (1,275,448 B
 to 1,400,840 B), which this PR does not change. The
 baseline was re-measured on the branch and updated as
+recorded above, following the procedure below.
+
+PR #339 (#192, the three baseline JIT backends merged into one
+shared lowering over a per-target `BaselineMasm` trait) merged
+current `main` into its branch first; its CI run on the merged
+tree then tripped the gate on the `core-jit` series. The branch
+also carries the Codex P1 fix for the shared lowering (AArch64
+`cset_w` emitted the inverted condition code from the shared
+semantic `Cond` discriminant instead of the target encoding;
+fixed by mapping through `cond_code`, with an encoder unit test
+pinning the CSET condition field for all ten conditions).
+Attribution was isolated by measuring current `main` alone
+three times (workflow_dispatch runs 45541261935, 45541270512
+and 45541278948 on `main` at
+`726fdd964b5b6c5dd264397d8616154cb7a9b242`; all three runs
+pass the gate). The main control reproduces the checked-in
+baseline exactly on all 32 gated series, so no part of the
+gate failure is main-side staleness. This PR's own delta
+against the main control is confined to `core-jit`, the only
+embedder configuration that links the JIT backends: in
+`release`, stripped file +576 B and stripped `.text` +384 B;
+in `release-size`, stripped file -64 B and stripped `.text`
++112 B. Every other configuration is byte-identical to `main`
+in both profiles in the three workflow_dispatch samples
+(45545862796, 45545874933 and 45546994821). The pull-request
+run (45545862499), which built the same tree, measured the
+three component configurations 848–2,344 B lower than every
+other sample; no part of this PR touches the component layer,
+and the three dispatch samples agree with the main control
+byte-for-byte on those series, so the recorded baselines for
+them are the medians across the four branch samples, which
+equal the main control values. Against the original
+#164 baseline, the largest cumulative growth remains the
+`release` `component` stripped file series at +9.85%
+(2,433,656 B to 2,673,368 B), which this PR does not change.
+The baseline was re-measured on the branch and updated as
 recorded above, following the procedure below.
 
 ### Threshold derivation
