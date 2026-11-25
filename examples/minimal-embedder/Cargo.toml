@@ -45,3 +45,7 @@ required-features = ["component"]
 name = "embed-wasi"
 path = "src/bin/wasi.rs"
 required-features = ["wasi"]
+
+[[bin]]
+name = "embed-instances"
+path = "src/bin/instances.rs"
