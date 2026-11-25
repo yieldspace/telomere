@@ -6,10 +6,30 @@ pub trait StrongUnique<T> {
     fn weak_eq(&self, other: &T) -> bool;
 }
 
+/// Attributes carried by the split extern-name encoding (name prefix
+/// 0x02): the `implements`, `version-suffix` and `external-id` options.
+///
+/// The attributes are not part of the name itself: name uniqueness and
+/// `with`-argument matching use only the base name, and the attributes
+/// do not participate in type checking. The `version-suffix` is instead
+/// folded, at decode time, into the resolved version of the interface
+/// name it applies to (the name itself, or `implements` when present).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct ExternNameAttributes {
+    /// The interface the instance is stated to implement, with its
+    /// version already resolved against the `version-suffix`.
+    pub implements: Option<InterfaceName>,
+    /// The raw `version-suffix` option, before resolution.
+    pub version_suffix: Option<String>,
+    /// The raw `external-id` option.
+    pub external_id: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExportName {
     pub parsed: ParsedExportName,
     pub original: String,
+    pub attributes: ExternNameAttributes,
 }
 
 impl ExportName {
@@ -17,6 +37,7 @@ impl ExportName {
         Self {
             original: original.into(),
             parsed,
+            attributes: ExternNameAttributes::default(),
         }
     }
 }
@@ -43,7 +64,10 @@ pub enum ParsedExportName {
 
 impl StrongUnique<Self> for ExportName {
     fn weak_eq(&self, other: &Self) -> bool {
-        self.parsed.weak_eq(&other.parsed)
+        // Name uniqueness is keyed on the raw base name: the split
+        // encoding's attributes never relax it, so two names with the
+        // same base string conflict even if their attributes differ.
+        self.original == other.original || self.parsed.weak_eq(&other.parsed)
     }
 }
 
@@ -80,6 +104,7 @@ impl ParsedExportName {
 pub struct ImportName {
     pub original: String,
     pub parsed: ParsedImportName,
+    pub attributes: ExternNameAttributes,
 }
 
 impl ImportName {
@@ -87,13 +112,17 @@ impl ImportName {
         Self {
             original: original.into(),
             parsed,
+            attributes: ExternNameAttributes::default(),
         }
     }
 }
 
 impl StrongUnique<Self> for ImportName {
     fn weak_eq(&self, other: &Self) -> bool {
-        self.parsed.weak_eq(&other.parsed)
+        // Name uniqueness is keyed on the raw base name: the split
+        // encoding's attributes never relax it, so two names with the
+        // same base string conflict even if their attributes differ.
+        self.original == other.original || self.parsed.weak_eq(&other.parsed)
     }
 }
 
