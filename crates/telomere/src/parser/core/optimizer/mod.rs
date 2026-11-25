@@ -2775,6 +2775,58 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_coalesces_pair_shifted_by_cache_rewrite() {
+        // Regression for #344: the repeated `local.get $x; local.get $q;
+        // f64.mul` subexpression is cached by the GVN pass, which inserts a
+        // temp tee ahead of the `local.set $r; local.get $r` pair and shifts
+        // the pair's position. The coalescing pairs used to come from the
+        // pre-cache analysis, so the transform applied the stale cursor to
+        // the rewritten block and panicked with "analysis emitted an
+        // invalid coalescing pair".
+        let func = function_at(
+            r#"
+            (module
+              (func (export "calculate") (result f64)
+                (local $x f64) (local $r f64) (local $q f64) (local $z f64)
+                f64.const 156.25
+                local.set $x
+                f64.const 208.333333334
+                local.set $r
+                f64.const 1.77951304201
+                local.set $q
+                local.get $r
+                f64.neg
+                local.get $x
+                f64.mul
+                local.get $x
+                local.get $q
+                f64.mul
+                local.get $r
+                f64.sub
+                f64.div
+                local.set $r
+                local.get $r
+                f64.neg
+                local.get $x
+                f64.mul
+                local.get $x
+                local.get $q
+                f64.mul
+                local.get $r
+                f64.sub
+                f64.div
+                local.set $z
+                local.get $z))
+            "#,
+            0,
+        );
+        // One tee is the cache pass's temp tee for the repeated
+        // subexpression; the other is the coalesced set/get pair, which
+        // must still be found at its shifted position.
+        assert_eq!(count_op(&func, vm::op_local_tee8 as crate::common::Op), 2);
+    }
+
+    #[test]
     fn optimizer_selects_local_cmp64_br_if_family() {
         let func = function_at(
             r#"
