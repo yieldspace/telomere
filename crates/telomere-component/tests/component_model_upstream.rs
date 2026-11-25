@@ -56,14 +56,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          Non-goals); the string/list cases before them pass",
     ),
     (
-        "values/numerics.wast",
-        "blocked by a canonical-ABI validation defect: `char` arguments \
-         are not validated when lowering, so invalid code points \
-         (surrogates, values above U+10FFFF) reach the guest, which \
-         traps `unreachable`, instead of the canonical `invalid char \
-         bit pattern` trap (lines 193, 195, 197)",
-    ),
-    (
         "resources/borrows.wast",
         "blocked by issue #334: dropping an owned resource that is \
          currently borrowed is not rejected (line 161: the expected \
@@ -95,22 +87,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          wrong-type handles reach the guest or silently succeed \
          instead of trapping `unknown handle index` (lines 200-212, \
          260, 292, 321, 323)",
-    ),
-    (
-        "validation/attributes.wast",
-        "the split extern-name encoding used for `implements` \
-         annotations (name prefix 0x02) is not supported by the decoder",
-    ),
-    (
-        "validation/version-suffix.wast",
-        "the split extern-name encoding used for `version-suffix` \
-         annotations (name prefix 0x02) is not supported by the decoder",
-    ),
-    (
-        "validation/extern-names.wast",
-        "malformed extern names are not rejected: the package-name \
-         grammar (expected `/` after package name, trailing characters) \
-         is not validated",
     ),
     (
         "binary/binary.wast",
