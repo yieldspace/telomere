@@ -86,4 +86,4 @@
     "\00asm" "\0d\00\01\00"   ;; component header
     "\0c\04\01\79\0a\80"   ;; value section (truncated)
   )
-  "failed to fill whole buffer")
+  "unexpected end-of-file")
