@@ -38,8 +38,9 @@ telomere-component = { path = ".", features = ["fuzzing"] }
 name = "telomere_component_bench"
 harness = false
 
-[[example]]
+[[bench]]
 name = "component_bundle_load"
+harness = false
 required-features = ["aot-bundle"]
 
 [features]

@@ -27,8 +27,8 @@
 //! thread. Run with:
 //!
 //! ```sh
-//! cargo run --release -p telomere-component --features aot-bundle \
-//!     --example component_bundle_load
+//! cargo bench -p telomere-component --features aot-bundle \
+//!     --bench component_bundle_load
 //! ```
 
 use std::time::{Duration, Instant};

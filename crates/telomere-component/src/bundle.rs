@@ -459,14 +459,22 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, len: usize) -> Result<&'a [u8], BundleError> {
+        // The length comes from the (untrusted) bundle bytes, so the
+        // end offset must be computed with checked arithmetic: an
+        // unchecked `pos + len` overflows and panics in builds with
+        // overflow checks instead of surfacing a typed error.
+        let end = self.pos.checked_add(len).ok_or(BundleError::Truncated {
+            offset: self.pos,
+            needed: len,
+        })?;
         let slice = self
             .bytes
-            .get(self.pos..self.pos + len)
+            .get(self.pos..end)
             .ok_or(BundleError::Truncated {
                 offset: self.pos,
                 needed: len,
             })?;
-        self.pos += len;
+        self.pos = end;
         Ok(slice)
     }
 
@@ -959,5 +967,22 @@ mod tests {
         assert!(!is_component_bundle(b"TELOBND2rest"));
         assert!(!is_component_bundle(b"TELO"));
         assert!(!is_component_bundle(b""));
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn envelope_rejects_overflowing_blob_length() {
+        // A crafted bundle whose component blob length is u64::MAX:
+        // computing the slice end must not overflow (in builds with
+        // overflow checks this panicked before the checked-add fix)
+        // and must surface a typed error from envelope parsing,
+        // before any signature posture is applied.
+        let mut bytes = BUNDLE_MAGIC.to_vec();
+        bytes.extend_from_slice(&BUNDLE_FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            parse_bundle_envelope(&bytes),
+            Err(BundleError::Truncated { .. })
+        ));
     }
 }

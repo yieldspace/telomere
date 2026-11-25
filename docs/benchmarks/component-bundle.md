@@ -2,11 +2,11 @@
 
 Local measurement for #201 (component bundles), taken on
 fleur-du-lapin (Ryzen 9 5900X, release profile) with
-`crates/telomere-component/examples/component_bundle_load.rs`:
+`crates/telomere-component/benches/component_bundle_load.rs`:
 
 ```sh
-cargo run --release -p telomere-component --features aot-bundle \
-    --example component_bundle_load
+cargo bench -p telomere-component --features aot-bundle \
+    --bench component_bundle_load
 ```
 
 ## Method
