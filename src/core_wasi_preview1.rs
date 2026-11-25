@@ -332,11 +332,17 @@ pub(crate) async fn run(
     jit: bool,
     jit_code_cache_mib: u32,
     benchmark_recognizers: bool,
+    aot: Option<crate::LoadedAotArtifact>,
 ) -> anyhow::Result<ExitCode> {
     validate_preview1_module(&module)?;
     if jit && !telomere::jit_supported() {
         bail!(
             "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux-gnu riscv64gc"
+        );
+    }
+    if aot.is_some() && !telomere::jit_supported() {
+        bail!(
+            "running an AoT artifact requires native execution on a supported target: macOS arm64, macOS/Linux x86_64, or Linux-gnu riscv64gc"
         );
     }
 
@@ -345,7 +351,9 @@ pub(crate) async fn run(
     ));
     let state_ptr = unsafe { StoreState::from_ptr(state.as_ref() as *const CoreWasiPreview1State) };
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.jit = JitConfig { enabled: jit };
+    runtime_config.jit = JitConfig {
+        enabled: jit || aot.is_some(),
+    };
     runtime_config.limits.max_code_cache_bytes = jit_code_cache_mib.saturating_mul(1024 * 1024);
     runtime_config.recognizers.benchmark_shaped = benchmark_recognizers;
     let store = Store::new_with_state_and_runtime_config(state_ptr, runtime_config);
@@ -359,6 +367,9 @@ pub(crate) async fn run(
         telomere::instantiate(module, &store, &registry).await,
         format!("failed to instantiate `{}`", path.display()),
     )?;
+    if let Some(artifact) = &aot {
+        crate::install_loaded_aot_artifact(&store, &instance, artifact)?;
+    }
 
     let start_result = telomere::component_support::runtime::run_core_export_sync_reentrant(
         &instance,
@@ -1225,6 +1236,7 @@ mod tests {
             false,
             4,
             false,
+            None,
         )
         .await
         .expect("preview1 run should succeed");

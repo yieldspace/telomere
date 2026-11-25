@@ -260,7 +260,15 @@ impl Riscv64BaselineMasm {
                 .expect("ra spill fits");
             self.store_mem64(SP, FRAME_SIZE - 16, S0)
                 .expect("s0 spill fits");
-            self.addi(S0, SP, FRAME_SIZE).expect("frame fits");
+            // The virtual-register slots hang below S0 (slot_disp is
+            // negative), so the slot base must sit below the saved
+            // RA/S0 pair at the top of the frame. Anchoring S0 at
+            // FRAME_SIZE put slot 0 on the RA spill (FRAME_SIZE - 8)
+            // and slot 1 on the S0 spill (FRAME_SIZE - 16): the entry
+            // argument spill then overwrote the saved return address,
+            // and the epilogue returned to whatever value the body
+            // last left in slot 0 (#161).
+            self.addi(S0, SP, FRAME_SIZE - 16).expect("frame fits");
             for (slot, reg) in [A0, A1, A2, A3, A4, A5, A6, A7].into_iter().enumerate() {
                 self.store_slot64(slot as u8, reg)
                     .expect("entry argument slot fits");
@@ -500,14 +508,21 @@ impl Riscv64BaselineMasm {
     }
 
     pub fn cset_w(&mut self, rd: u8, cond: Cond) {
-        let cmp = self.last_cmp.take().expect("cset follows cmp");
+        let cmp = self.last_cmp.expect("cset follows cmp");
         self.emit_cmp_bool(T0, cmp, cond)
             .expect("comparison operands fit");
         self.store_slot32(rd, T0).expect("virtual register fits");
     }
 
     pub fn csel_w(&mut self, rd: u8, rn: u8, rm: u8, cond: Cond) {
-        let cmp = self.last_cmp.take().expect("csel follows cmp");
+        // The deferred compare is not consumed by materialising it:
+        // it describes the most recent compare until another compare
+        // replaces it, mirroring hardware flags on the other backends.
+        // cset and conditional branches read it the same way, so a
+        // single compare may feed several conditional operations — a
+        // multi-lane select emits one compare followed by one csel
+        // per lane.
+        let cmp = self.last_cmp.expect("csel follows cmp");
         self.emit_cmp_bool(T0, cmp, cond)
             .expect("comparison operands fit");
         self.load_slot32(T1, rn).expect("virtual register fits");
@@ -879,7 +894,12 @@ impl Riscv64BaselineMasm {
             return;
         }
         let low = ((value << 52) >> 52) as i32;
-        let high = (value - i64::from(low)) >> 12;
+        // Wrapping on purpose (#328): for values near i64::MAX the
+        // sign-extended low chunk is negative, so the plain subtraction
+        // overflows (a debug-build panic). The wrapped result is what
+        // the emitted addi/slli sequence needs — the final addi wraps
+        // in hardware and lands on the requested value.
+        let high = value.wrapping_sub(i64::from(low)) >> 12;
         self.li(rd, high);
         self.slli(rd, rd, 12);
         if low != 0 {
@@ -898,7 +918,7 @@ impl Riscv64BaselineMasm {
         for chunk in &mut chunks {
             let low = ((rest << 52) >> 52) as i32;
             *chunk = low;
-            rest = (rest - i64::from(low)) >> 12;
+            rest = rest.wrapping_sub(i64::from(low)) >> 12;
         }
         debug_assert_eq!(rest, 0, "six 12-bit chunks cover any i64");
         self.addi(rd, ZERO, chunks[5]).expect("top li chunk fits");
@@ -921,7 +941,7 @@ impl Riscv64BaselineMasm {
         for chunk in &mut chunks {
             let low = ((rest << 52) >> 52) as i32;
             *chunk = low;
-            rest = (rest - i64::from(low)) >> 12;
+            rest = rest.wrapping_sub(i64::from(low)) >> 12;
         }
         debug_assert_eq!(rest, 0, "three 12-bit chunks cover a sign-extended i32");
         self.addi(rd, ZERO, chunks[2]).expect("top li chunk fits");
@@ -1008,7 +1028,14 @@ impl Riscv64BaselineMasm {
     }
 
     fn binop(&mut self, rd: u8, rn: u8, rm: u8, width: Width, funct3: u32, funct7: u32) {
+        // RISC-V has no 32-bit forms of AND/OR/XOR: OP-32 with funct3
+        // 4/6/7 and funct7 0 is an unassigned encoding that raises an
+        // illegal-instruction fault on hardware, not just under
+        // emulation (#161). The W32 slot loads zero-extend, so the
+        // 64-bit form computes the same low 32 bits and store_slot32
+        // discards the rest.
         let opcode = match width {
+            Width::W32 if funct7 == 0 && matches!(funct3, 4 | 6 | 7) => 0x33,
             Width::W32 => 0x3b,
             Width::X64 => 0x33,
         };
@@ -1404,6 +1431,89 @@ mod tests {
     use super::*;
 
     #[test]
+    fn csel_and_cset_reuse_one_compare() {
+        // Regression test for #309: materialising the deferred compare
+        // must not consume it. A multi-lane select emits one compare
+        // followed by one csel per lane; the second csel used to panic
+        // with "csel follows cmp".
+        let mut asm = Riscv64BaselineMasm::with_capacity(256);
+        asm.cmp_w_imm(0, 0).unwrap();
+        asm.csel_w(1, 1, 2, Cond::Ne);
+        asm.csel_w(2, 1, 2, Cond::Ne);
+        asm.cset_w(3, Cond::Ne);
+        assert!(!asm.into_bytes().is_empty());
+    }
+
+    /// Tiny interpreter for the two instruction forms `li` / `li_reloc` /
+    /// `li_reloc32` emit (addi and slli into a single register), used to
+    /// check that a materialised immediate equals the requested value.
+    fn eval_li_sequence(bytes: &[u8], rd: u8) -> i64 {
+        let mut regs = [0i64; 32];
+        for word in bytes.chunks_exact(4) {
+            let insn = u32::from_le_bytes(word.try_into().unwrap());
+            assert_eq!(insn & 0x7f, 0x13, "li sequences only use OP-IMM");
+            let dest = ((insn >> 7) & 0x1f) as usize;
+            let rs1 = ((insn >> 15) & 0x1f) as usize;
+            let imm = i64::from((insn as i32) >> 20);
+            match (insn >> 12) & 0x7 {
+                0 => regs[dest] = regs[rs1].wrapping_add(imm),
+                1 => regs[dest] = regs[rs1] << ((insn >> 20) & 0x3f),
+                funct3 => panic!("unexpected funct3 {funct3} in li sequence"),
+            }
+        }
+        regs[usize::from(rd)]
+    }
+
+    #[test]
+    fn li_handles_immediates_near_i64_max() {
+        // Regression test for #328: the 12-bit chunk decomposition
+        // computed `value - low` with plain subtraction. When the
+        // sign-extended low chunk is negative and the value is near
+        // i64::MAX, that subtraction overflows and panics in debug
+        // builds (release builds wrapped and produced the right code).
+        for value in [
+            i64::MAX,
+            i64::MAX - 1,
+            i64::MIN,
+            i64::from(i32::MAX),
+            i64::from(i32::MIN),
+            -1,
+            0,
+            2047,
+            2048,
+            -2048,
+            -2049,
+            1 << 62,
+            -(1 << 62),
+            0x1234_5678_9abc_def0u64 as i64,
+        ] {
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li({value})"
+            );
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li_reloc(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li_reloc({value})"
+            );
+        }
+        for value in [i64::from(i32::MAX), i64::from(i32::MIN), -1, 0, 2047, -2048] {
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li_reloc32(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li_reloc32({value})"
+            );
+        }
+    }
+
+    #[test]
     fn patches_jal_forward() {
         let mut bytes = encode_jal(ZERO, 0).unwrap().to_le_bytes().to_vec();
         patch_branch(&mut bytes, 0, 16, BranchKind::B).unwrap();
@@ -1515,5 +1625,83 @@ mod tests {
         assert!(!bytes.windows(4).any(|window| {
             u32::from_le_bytes(window.try_into().unwrap()) == encode_i(0x13, 5, T1, T1, 32).unwrap()
         }));
+    }
+
+    #[test]
+    fn prologue_slots_do_not_overlap_saved_registers() {
+        // #161: the slot base used to be anchored at the frame top,
+        // putting slot 0 on the RA spill and slot 1 on the S0 spill.
+        // The entry argument spill then overwrote the saved return
+        // address, and the epilogue returned to whatever value the
+        // function body last left in slot 0.
+        let mut asm = Riscv64BaselineMasm::with_capacity(256);
+        asm.stp_pre(29, 30);
+        let bytes = asm.into_bytes();
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect();
+
+        // Recover the slot base from the addi that loads S0 from SP.
+        let slot_base = words
+            .iter()
+            .filter(|&&w| {
+                w & 0x7f == 0x13
+                    && (w >> 7) & 0x1f == u32::from(S0)
+                    && (w >> 15) & 0x1f == u32::from(SP)
+                    && (w >> 12) & 0x7 == 0
+            })
+            .map(|&w| i64::from((w as i32) >> 20))
+            .next()
+            .expect("prologue sets the slot base from SP");
+
+        // Effective frame offsets (from the new SP) of every 64-bit
+        // store the prologue emits, split by base register.
+        let mut saved_offsets = Vec::new();
+        let mut slot_offsets = Vec::new();
+        for &w in &words {
+            if w & 0x7f != 0x23 || (w >> 12) & 0x7 != 3 {
+                continue; // not an sd
+            }
+            let base = (w >> 15) & 0x1f;
+            let imm = (((w as i32) >> 25) << 5) | ((w >> 7) & 0x1f) as i32;
+            if base == u32::from(SP) {
+                saved_offsets.push(i64::from(imm));
+            } else if base == u32::from(S0) {
+                slot_offsets.push(slot_base + i64::from(imm));
+            }
+        }
+        assert_eq!(saved_offsets.len(), 2, "prologue spills RA and S0");
+        assert_eq!(slot_offsets.len(), 8, "prologue spills eight arguments");
+        for slot in &slot_offsets {
+            assert!(
+                !saved_offsets.contains(slot),
+                "slot at frame offset {slot} overlaps a saved-register spill {saved_offsets:?}"
+            );
+            assert!((0..i64::from(FRAME_SIZE)).contains(slot));
+        }
+    }
+
+    #[test]
+    fn emits_bitwise_w_with_64_bit_forms() {
+        // #161: and_w/orr_w/eor_w must not emit the unassigned OP-32
+        // encodings (funct3 4/6/7, funct7 0); the 64-bit forms are
+        // used instead.
+        let emit: [fn(&mut Riscv64BaselineMasm, u8, u8, u8); 3] = [
+            Riscv64BaselineMasm::and_w,
+            Riscv64BaselineMasm::orr_w,
+            Riscv64BaselineMasm::eor_w,
+        ];
+        for (emit, funct3) in emit.into_iter().zip([7, 6, 4]) {
+            let mut asm = Riscv64BaselineMasm::with_capacity(64);
+            emit(&mut asm, 2, 0, 1);
+            let bytes = asm.into_bytes();
+            assert!(bytes
+                .windows(4)
+                .any(|window| { window == encode_r(0x33, funct3, 0, T0, T0, T1).to_le_bytes() }));
+            assert!(!bytes
+                .windows(4)
+                .any(|window| { window == encode_r(0x3b, funct3, 0, T0, T0, T1).to_le_bytes() }));
+        }
     }
 }

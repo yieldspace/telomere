@@ -62,14 +62,15 @@ fn _parse_component(
             }
             ComponentSection::CoreModule => {
                 let mut sized_reader = ctx.reader.take(section_size as usize);
-                let mut core_module = WasmParser::new(&mut sized_reader);
-                let module = core_module.parse_module()?;
+                let module = parse_core_module_section(ctx.state, &mut sized_reader)?;
                 validate_core_module_contract(&module)?;
                 let ty = CoreModuleType::from(&module);
                 let idx = ctx
                     .state
                     .core_module_store
                     .register(CoreRelation::Defined(CoreModule { module }));
+                #[cfg(feature = "aot-bundle")]
+                ctx.state.bind_core_module_substitution(idx);
                 ctx.state.scope_mut().core_modules.register(idx);
                 ctx.validator.scope_mut().core_modules.add(ty);
             }
@@ -98,7 +99,10 @@ fn _parse_component(
                     _parse_component(&mut ctx, depth + 1)?;
                 }
                 let component_ty = ctx.validator.make_component();
-                let component = ctx.state.scope().make_component();
+                let component = ctx
+                    .state
+                    .scope()
+                    .make_component(&ctx.state.core_instance_store, &ctx.state.instance_store);
 
                 ctx.validator.pop_scope();
                 ctx.state.pop_scope();
@@ -157,6 +161,28 @@ fn _parse_component(
         }
     }
     Ok(())
+}
+
+/// Parses one CoreModule section's bytes into a core module.
+///
+/// When a component bundle substitution session is active on the
+/// parse state (#201), the section is consumed without parsing and
+/// the bundle artifact's deserialized module is returned instead;
+/// the caller records the substitution against the registered index
+/// via `bind_core_module_substitution`. Without a session this is
+/// exactly the plain parse.
+fn parse_core_module_section(
+    state: &mut ParseState,
+    sized_reader: &mut impl BinaryReader,
+) -> ParseResult<crate::support::Module> {
+    #[cfg(feature = "aot-bundle")]
+    if let Some(module) = state.substitute_core_module(sized_reader)? {
+        return Ok(module);
+    }
+    #[cfg(not(feature = "aot-bundle"))]
+    let _ = state;
+    let mut core_module = WasmParser::new(sized_reader);
+    Ok(core_module.parse_module()?)
 }
 
 fn validate_core_module_contract(module: &crate::support::Module) -> ParseResult<()> {

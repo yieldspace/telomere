@@ -240,6 +240,7 @@ impl StoreJitCache {
             };
         profile::count(Counter::CompileAccepted);
         profile::add(Counter::CompileBytes, emitted.code.len() as u64);
+        crate::common::frontend_phases::note_function_emitted();
         compiled.note_used(clock);
         inner.used_bytes = inner.used_bytes.saturating_add(compiled.resident_bytes());
         inner.compiled.insert(

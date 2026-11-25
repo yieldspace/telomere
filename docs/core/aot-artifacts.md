@@ -29,6 +29,41 @@ The public API is `build_aot_artifact` (producer, `jit` feature),
 `open_aot_artifact` (loader), and `install_aot_artifact` (cache
 installation), all in the `telomere` crate root.
 
+## CLI surface (#199)
+
+`telomere-cli` (built with `--features jit`) is the offline
+producer and the reference loader:
+
+- `telomere-cli compile --aot MODULE [-o OUTPUT]` writes an AoT
+  artifact (default output: the module path with `.taot`
+  appended). Compilation only ever parses the module — it never
+  instantiates it, so guest code (including the start function)
+  never runs at compile time; a test pins this with a module whose
+  start function traps.
+- `--sign-key <path>` signs the artifact; the environment variable
+  `TELOMERE_SIGN_KEY` names the same kind of file when the flag is
+  absent. Key handling stays in the CLI layer: the file's bytes are
+  an HMAC-SHA256 key (the same file verifies, so this is a
+  developer/CI scheme, not a distribution scheme), and the stored
+  key id is derived from the key material. Without a key the
+  artifact is **unsigned — an explicitly opted-in developer mode**:
+  the producer prints that it did so, and loaders refuse the
+  artifact by default.
+- Running an artifact (`telomere-cli MODULE.taot ...`, in both the
+  export-call and preview1-command forms) opens it under the
+  fail-closed loader: a signed artifact requires
+  `--verify-key <path>` naming its key, and an unsigned one
+  requires `--trust-unverified-artifact`. Loading an artifact
+  enables native execution for that run, since installed blobs are
+  only entered under it.
+- `telomere-cli compile --check ARTIFACT` validates an existing
+  artifact against the running build (fingerprint, envelope, and —
+  with `--verify-key` — signature) and reports the typed rejection
+  reason for a stale or corrupt one. Checking never installs or
+  executes anything.
+- `compile` rejects component binaries with a pointer to the core
+  workflow; component bundles are a separate issue.
+
 ## Trust boundary
 
 A native artifact is arbitrary code execution once its bytes are
@@ -146,7 +181,18 @@ here rather than silently assumed.
   every wast-corpus module through build → open → instantiate →
   install in the test harness, with native execution enabled so
   the installed code is actually entered; CI runs it fail-closed
-  in the debug-wast job (same pass list as the JIT lane).
+  in the debug-wast job and in the `jit-native-test` matrix
+  (macOS arm64 + Linux x86_64, same pass list as the JIT lane).
+  The harness also asserts, via the thread-local front-end phase
+  counters (`telomere::frontend_phase_counters`, #199), that
+  opening an artifact deserializes exactly one module and moves
+  neither the parse nor the optimize counter, and that installing
+  one emits nothing on demand — so the lane cannot silently pass
+  by re-running the front-end.
+- `tests/cli_compile.rs` in the CLI package covers the producer
+  and load path end to end (examples-corpus equivalence, signing
+  and trust refusals, `--check`, the never-executes-guest-code
+  probe) and runs in the same CI matrix.
 - `crates/telomere/tests/aot_artifact.rs` covers the tamper matrix,
   fingerprint mismatch, unsigned refusal, two-instance patching,
   and cache atomicity.

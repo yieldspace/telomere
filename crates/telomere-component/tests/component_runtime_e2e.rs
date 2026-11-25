@@ -244,6 +244,10 @@ async fn component_runtime_nested_component_instantiation_succeeds() {
   )
   (import "b" (component (type 0)))
   (component
+    (type (func (result u32)))
+    (import "x" (func (type 0)))
+  )
+  (component
     (type
       (component
         (type (func (result u32)))
@@ -252,7 +256,7 @@ async fn component_runtime_nested_component_instantiation_succeeds() {
     )
     (import "a" (component (type 0)))
   )
-  (instance (instantiate 1 (with "a" (component 0))))
+  (instance (instantiate 2 (with "a" (component 1))))
 )
 "#,
     );

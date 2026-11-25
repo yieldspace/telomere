@@ -1110,6 +1110,7 @@ dependencies = [
  "clap",
  "getrandom",
  "libc",
+ "sha2",
  "telomere",
  "telomere-component",
  "telomere-component-wasi",

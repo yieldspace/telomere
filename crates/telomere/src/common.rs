@@ -1,3 +1,7 @@
+/// Front-end phase counters (#199): thread-local counts of parse,
+/// optimize, deserialize, and on-demand emit work, used to prove
+/// artifact load paths skip the front-end phases they replace.
+pub(crate) mod frontend_phases;
 /// Store-scoped guest execution metering.
 #[warn(missing_docs)]
 mod metering;
@@ -8,6 +12,7 @@ pub(crate) mod op_registry;
 /// Precompiled core-module codec (#196): stable op IDs and
 /// `LoweredFunction` serialization with exact-build fingerprinting.
 pub(crate) mod precompiled;
+pub use frontend_phases::{frontend_phase_counters, FrontendPhaseCounters};
 #[cfg(feature = "aot-load")]
 pub(crate) mod sha256;
 pub use metering::{InterruptReason, MeteringConfig, MeteringHandle};

@@ -32,6 +32,21 @@ pub struct Cli {
     #[arg(long = "jit-code-cache-mib", value_name = "MIB", default_value_t = 4)]
     pub jit_code_cache_mib: u32,
 
+    /// Verify a signed AoT artifact against the key in this file
+    /// (HMAC-SHA256, #199). Required to run an artifact produced by
+    /// `compile --aot --sign-key`; the artifact's key id must match
+    /// the id derived from this file.
+    #[arg(long = "verify-key", value_name = "PATH")]
+    pub verify_key: Option<PathBuf>,
+
+    /// Run an unsigned AoT artifact without any verification
+    /// (#199). This is an explicit developer-mode opt-in: an
+    /// unsigned artifact is arbitrary native code supplied by
+    /// whoever wrote the file, so never pass this for artifacts
+    /// from an untrusted source.
+    #[arg(long = "trust-unverified-artifact", default_value_t = false)]
+    pub trust_unverified_artifact: bool,
+
     /// Reconnect the quarantined benchmark-shaped recognizers (#188).
     ///
     /// Measurement/evaluation only: the instantiate-time rewrites shaped
@@ -77,15 +92,49 @@ pub enum Command {
 
 #[derive(Args, Debug, Clone)]
 pub struct CompileCommand {
-    /// Path to the core Wasm module to compile.
+    /// Path to the core Wasm module to compile, or the artifact to
+    /// validate when `--check` is passed.
     #[arg(value_name = "MODULE")]
     pub name: PathBuf,
 
-    /// Where to write the precompiled artifact.
+    /// Where to write the artifact.
     ///
-    /// Defaults to the module path with `.tpre` appended.
+    /// Defaults to the module path with `.tpre` appended (`.taot`
+    /// for `--aot`).
     #[arg(long = "output", short = 'o', value_name = "OUTPUT")]
     pub output: Option<PathBuf>,
+
+    /// Emit an AoT artifact (signed native-code bundle, #198)
+    /// instead of a precompiled module (#196).
+    ///
+    /// Requires a build with `--features jit`. The artifact's
+    /// native code is pinned to the exact build that produced it.
+    #[arg(long = "aot", default_value_t = false)]
+    pub aot: bool,
+
+    /// Sign the AoT artifact with the key in this file
+    /// (HMAC-SHA256, #199). The environment variable
+    /// `TELOMERE_SIGN_KEY` names the same kind of file when the
+    /// flag is absent. Without a key the artifact is unsigned,
+    /// which loaders refuse unless explicitly trusted.
+    #[arg(long = "sign-key", value_name = "PATH")]
+    pub sign_key: Option<PathBuf>,
+
+    /// Verify a signed artifact being `--check`ed against the key
+    /// in this file (HMAC-SHA256, #199).
+    #[arg(long = "verify-key", value_name = "PATH")]
+    pub verify_key: Option<PathBuf>,
+
+    /// Validate an existing artifact against this build instead of
+    /// compiling: exit status is success when the artifact matches
+    /// this build, failure with the typed rejection reason
+    /// otherwise. Nothing is executed or installed.
+    #[arg(
+        long = "check",
+        default_value_t = false,
+        conflicts_with_all = ["output", "aot", "sign_key"]
+    )]
+    pub check: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -125,6 +174,8 @@ pub struct CoreCommand {
     pub benchmark_recognizers: bool,
     pub env: Vec<String>,
     pub no_inherit_env: bool,
+    pub verify_key: Option<PathBuf>,
+    pub trust_unverified_artifact: bool,
 }
 
 impl Cli {
@@ -143,6 +194,8 @@ impl Cli {
             benchmark_recognizers: self.benchmark_recognizers,
             env: self.env.clone(),
             no_inherit_env: self.no_inherit_env,
+            verify_key: self.verify_key.clone(),
+            trust_unverified_artifact: self.trust_unverified_artifact,
         })
     }
 }
@@ -225,6 +278,8 @@ mod tests {
                 benchmark_recognizers: false,
                 env: Vec::new(),
                 no_inherit_env: false,
+                verify_key: None,
+                trust_unverified_artifact: false,
             }
         );
     }
@@ -288,6 +343,8 @@ mod tests {
                 benchmark_recognizers: false,
                 env: Vec::new(),
                 no_inherit_env: false,
+                verify_key: None,
+                trust_unverified_artifact: false,
             }
         );
     }
@@ -315,5 +372,82 @@ mod tests {
         assert_eq!(component.env, vec!["FOO=BAR"]);
         assert_eq!(component.preopens, vec![".:sandbox"]);
         assert_eq!(component.args, vec!["one", "-flag"]);
+    }
+
+    #[test]
+    fn parses_compile_aot_with_sign_key() {
+        let cli = Cli::try_parse_from([
+            "telomere-cli",
+            "compile",
+            "module.wasm",
+            "--aot",
+            "--sign-key",
+            "key.bin",
+            "-o",
+            "module.taot",
+        ])
+        .expect("compile --aot invocation should parse");
+
+        let Some(Command::Compile(compile)) = cli.command else {
+            panic!("compile subcommand should be selected");
+        };
+        assert_eq!(compile.name, PathBuf::from("module.wasm"));
+        assert!(compile.aot);
+        assert!(!compile.check);
+        assert_eq!(compile.sign_key, Some(PathBuf::from("key.bin")));
+        assert_eq!(compile.output, Some(PathBuf::from("module.taot")));
+    }
+
+    #[test]
+    fn parses_compile_check_with_verify_key() {
+        let cli = Cli::try_parse_from([
+            "telomere-cli",
+            "compile",
+            "--check",
+            "module.taot",
+            "--verify-key",
+            "key.bin",
+        ])
+        .expect("compile --check invocation should parse");
+
+        let Some(Command::Compile(compile)) = cli.command else {
+            panic!("compile subcommand should be selected");
+        };
+        assert!(compile.check);
+        assert_eq!(compile.name, PathBuf::from("module.taot"));
+        assert_eq!(compile.verify_key, Some(PathBuf::from("key.bin")));
+    }
+
+    #[test]
+    fn compile_check_conflicts_with_output() {
+        let error = Cli::try_parse_from([
+            "telomere-cli",
+            "compile",
+            "--check",
+            "module.taot",
+            "-o",
+            "elsewhere.taot",
+        ])
+        .expect_err("--check must not accept an output path");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn parses_core_artifact_load_policy_flags() {
+        let raw = vec![
+            OsString::from("telomere-cli"),
+            OsString::from("--verify-key"),
+            OsString::from("key.bin"),
+            OsString::from("--trust-unverified-artifact"),
+            OsString::from("module.taot"),
+            OsString::from("main"),
+            OsString::from("1"),
+        ];
+        let cli = Cli::try_parse_from(raw.clone()).expect("artifact invocation should parse");
+        let core = cli.core_command(&raw).expect("core command should build");
+
+        assert_eq!(core.verify_key, Some(PathBuf::from("key.bin")));
+        assert!(core.trust_unverified_artifact);
+        assert_eq!(core.name, PathBuf::from("module.taot"));
     }
 }

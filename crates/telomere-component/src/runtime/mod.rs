@@ -1,5 +1,4 @@
 use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
-use crate::ir::AnyGlobalIdx;
 use crate::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
     CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
@@ -139,6 +138,13 @@ struct SharedState {
     /// before invoking the registered destructor; a handle that is absent
     /// (never seen or already dropped) traps, per the canonical ABI.
     host_resources: RefCell<HashMap<ResourceId, std::collections::HashSet<u32>>>,
+    /// Opened component-bundle AoT artifacts (#201), keyed by core
+    /// module index, for the instantiation that owns this state.
+    /// `None` for ordinary (non-bundle) instantiation; defined core
+    /// instances created from a keyed module get their artifact
+    /// installed right after creation.
+    #[cfg(feature = "aot-bundle")]
+    aot_artifacts: Option<std::rc::Rc<crate::bundle::BundleArtifactSet>>,
 }
 
 #[derive(Clone)]
@@ -218,6 +224,8 @@ mod host;
 pub(crate) mod name_match;
 
 pub use env::instantiate;
+#[cfg(feature = "aot-bundle")]
+pub use env::instantiate_with_artifacts;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub use fuzz_api::{
