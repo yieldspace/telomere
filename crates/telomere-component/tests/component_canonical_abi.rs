@@ -1363,7 +1363,7 @@ fn fixed_realloc_component(realloc_result: i32, param_ty: &str) -> String {
     (func (export "f") (param i32 i32)))
   (core instance $m (instantiate $M))
   (func (export "f") (param "a" {param_ty})
-    (canon lift (core func $m "f") (memory $m "mem") (realloc (func $m "realloc")))))
+    (canon lift (core func $m "f") (memory (core memory $m "mem")) (realloc (core func $m "realloc")))))
 "#
     )
 }
@@ -1499,8 +1499,8 @@ fn oob_shrink_realloc_component() -> String {
   (core func $host-lower
     (canon lower (func $host)
       string-encoding=latin1+utf16
-      (memory $guest "memory")
-      (realloc (func $guest "realloc"))))
+      (memory (core memory $guest "memory"))
+      (realloc (core func $guest "realloc"))))
   (core module $caller
     (import "" "host" (func $host (param i32)))
     (func (export "run")
