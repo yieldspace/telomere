@@ -253,3 +253,47 @@ fn list_borrow_provided_for_list_own_import_reports_expected_own_found_borrow() 
         "expected own, found borrow",
     );
 }
+
+#[test]
+fn chained_sub_ascription_on_named_sub_ascribed_export_compiles() {
+    // Regression (Codex review of PR #357, round 2): a named sub-ascribed
+    // export must itself accept a further `(type (sub resource))`
+    // ascription. Round 1 registered the face as `Type::Generic(Sub)` in
+    // the type index space, but the export sub-ascription check only
+    // accepted `Type::Resource`, so this sequence failed with
+    // `export kind mismatch` even though it compiled before #320.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $face "r1" (type $r) (type (sub resource)))
+    (export "r2" (type $face) (type (sub resource)))))
+"#,
+    )
+    .expect("a sub ascription over a sub-ascribed export face must be accepted");
+}
+
+#[test]
+fn chained_sub_ascription_mints_identity_distinct_from_face() {
+    // Companion control: the chained ascription still mints a fresh
+    // identity, distinct from the face it ascribes (and from the
+    // underlying resource) -- it must not silently alias the face.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $face "r1" (type $r) (type (sub resource)))
+    (export "r2" (type $face) (type (sub resource))))
+  (instance $c (instantiate $C))
+  (alias export $c "r1" (type $r1))
+  (alias export $c "r2" (type $r2))
+  (component $eq
+    (import "a" (type $a (sub resource)))
+    (import "b" (type (eq $a))))
+  (instance (instantiate $eq (with "a" (type $r1)) (with "b" (type $r2)))))
+"#,
+        "resource types are not the same",
+    );
+}

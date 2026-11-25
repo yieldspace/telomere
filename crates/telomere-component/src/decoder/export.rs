@@ -91,7 +91,16 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                     crate::decoder::validator::ExportInfo::TypeEq(id)
                 }
                 Some(ExternDesc::Sub) => {
-                    if !ctx.validator.get_type(type_id)?.is_resource() {
+                    // The ascribed type may itself be an abstract
+                    // resource face minted by an earlier sub-ascribed
+                    // export and registered in the type index space
+                    // under its name; a chained ascription over it is
+                    // as valid as one over the concrete resource.
+                    if !ctx
+                        .validator
+                        .get_type(type_id)?
+                        .is_resource_or_face(ctx.validator)?
+                    {
                         Err(ComponentParseError::TypeMismatch(
                             "export kind mismatch".to_owned(),
                         ))?;

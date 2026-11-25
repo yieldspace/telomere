@@ -41,6 +41,25 @@ impl Type {
     pub fn is_resource(&self) -> bool {
         matches!(self, Type::Resource(_))
     }
+    /// Whether this type denotes a resource in the broad sense a
+    /// `(sub resource)` ascription accepts: a concrete resource, or an
+    /// abstract resource face -- a `sub resource`-bounded generic such as
+    /// the fresh identity minted by an earlier sub-ascribed export,
+    /// possibly behind an `eq` alias.
+    pub fn is_resource_or_face(&self, validator: &Validator) -> ParseResult<bool> {
+        Ok(match self {
+            Type::Resource(_) => true,
+            Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            }) => true,
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => validator.get_type(*inner)?.is_resource_or_face(validator)?,
+            _ => false,
+        })
+    }
     pub fn is_component(&self) -> bool {
         matches!(self, Type::Component(_))
     }
