@@ -761,3 +761,163 @@ fn eq_ascription_between_component_types_with_independent_sub_imports_is_valid()
     )
     .expect("independent abstract imports of two component types must alpha-match");
 }
+
+// ---------------------------------------------------------------------------
+// Codex round 5 (PR #357): two identity leaks around the round-4 walk and
+// the annotated-name validation.
+
+#[test]
+fn eq_ascription_between_component_types_reusing_one_instance_type_is_valid() {
+    // Alpha mappings belong to the comparison that established them:
+    // when a component type reuses one instance type for two exports,
+    // each nested instance comparison must alpha-rename independently.
+    // Here export "a" pairs $i1's inline abstract with $i2's, and
+    // export "b" pairs the same $i1 abstract with $i3's; both pairings
+    // are legitimate, so the ascription is valid (wasmparser accepts
+    // this component).
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $i1 (instance (export "x" (type (sub resource)))))
+    (type $i2 (instance (export "x" (type (sub resource)))))
+    (type $i3 (instance (export "x" (type (sub resource)))))
+    (type $ct1 (component
+      (export "a" (instance (type $i1)))
+      (export "b" (instance (type $i1)))))
+    (type $ct2 (component
+      (export "a" (instance (type $i2)))
+      (export "b" (instance (type $i3)))))
+    (export "c" (type $ct1) (type (eq $ct2)))))
+"#,
+    )
+    .expect("independent nested instance comparisons must alpha-rename independently");
+}
+
+#[test]
+fn constructor_of_other_resource_for_sub_ascribed_export_name_is_invalid() {
+    // The name "r" denotes the face minted from $r1; a constructor
+    // returning an own of the distinct resource $r2 does not construct
+    // that resource, even though the face's `Sub` bound would accept
+    // any resource by subtyping.
+    expect_invalid_with(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (type $r2 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $ctor (result (own $r2)) (canon lift (core func $i "mk")))
+  (export "r" (type $r1) (type (sub resource)))
+  (export "s" (type $r2))
+  (export "[constructor]r" (func $ctor)))
+"#,
+        "resource used in function does not have a name in this context",
+    );
+}
+
+#[test]
+fn method_of_other_resource_for_sub_ascribed_export_name_is_invalid() {
+    // Same mismatch through a method: the borrowed self type must be
+    // the resource the annotated name denotes.
+    expect_invalid_with(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (type $r2 (resource (rep i32)))
+  (core module $m
+    (func (export "use") (param i32)))
+  (core instance $i (instantiate $m))
+  (func $meth (param "self" (borrow $r2)) (canon lift (core func $i "use")))
+  (export "r" (type $r1) (type (sub resource)))
+  (export "s" (type $r2))
+  (export "[method]r.f" (func $meth)))
+"#,
+        "resource used in function does not have a name in this context",
+    );
+}
+
+#[test]
+fn constructor_of_underlying_resource_for_sub_ascribed_export_name_is_valid() {
+    // Positive control: inside the component, the face's resource is
+    // the underlying $r1, so a constructor returning `(own $r1)` does
+    // construct the resource exported as "r".
+    compile_component(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $ctor (result (own $r1)) (canon lift (core func $i "mk")))
+  (export "r" (type $r1) (type (sub resource)))
+  (export "[constructor]r" (func $ctor)))
+"#,
+    )
+    .expect("a constructor over the face's underlying resource must be accepted");
+}
+
+#[test]
+fn constructor_of_other_resource_for_chained_face_name_is_invalid() {
+    // Chained faces resolve to the same root: the name "q" denotes a
+    // face minted over the face of $r1, so a constructor over $r2 is
+    // just as much a mismatch as for the first face's name.
+    expect_invalid_with(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (type $r2 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $ctor (result (own $r2)) (canon lift (core func $i "mk")))
+  (export $face "r" (type $r1) (type (sub resource)))
+  (export "q" (type $face) (type (sub resource)))
+  (export "s" (type $r2))
+  (export "[constructor]q" (func $ctor)))
+"#,
+        "resource used in function does not have a name in this context",
+    );
+}
+
+#[test]
+fn constructor_of_root_resource_for_chained_face_name_is_valid() {
+    // Positive control for the chain: a constructor over $r1 itself
+    // constructs the resource behind both faces.
+    compile_component(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $ctor (result (own $r1)) (canon lift (core func $i "mk")))
+  (export $face "r" (type $r1) (type (sub resource)))
+  (export "q" (type $face) (type (sub resource)))
+  (export "[constructor]q" (func $ctor)))
+"#,
+    )
+    .expect("a constructor over the chained faces' root resource must be accepted");
+}
+
+#[test]
+fn plain_func_over_underlying_resource_of_sub_ascribed_export_is_valid() {
+    // The visibility side of the same registration change: a face
+    // export must leave its underlying resource visible at the
+    // surface, or no exported func could mention the resource the
+    // face denotes (this compiled before faces were registered).
+    compile_component(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $f (result (own $r1)) (canon lift (core func $i "mk")))
+  (export "r" (type $r1) (type (sub resource)))
+  (export "make" (func $f)))
+"#,
+    )
+    .expect("a plain exported func over the face's underlying resource must be accepted");
+}

@@ -123,6 +123,11 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                     let face_id = ctx
                         .validator
                         .new_type(Type::Generic(Generic::new(GenericBound::Sub)));
+                    // The metadata keeps the face, but checks that
+                    // assert identity with the exported resource, or
+                    // that need the resource the face denotes, must
+                    // still be able to reach the underlying type.
+                    ctx.validator.note_sub_ascribed_face(face_id, type_id);
                     sub_face_id = Some(face_id);
                     crate::decoder::validator::ExportInfo::TypeSub(face_id)
                 }

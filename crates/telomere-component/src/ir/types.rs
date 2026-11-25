@@ -196,7 +196,9 @@ impl Type {
 /// `bound_right` hold the generic identities declared inside the
 /// component/instance type values currently being descended into
 /// (per side), and `alpha` / `alpha_rev` record how those bound
-/// generics have been paired so far.
+/// generics have been paired within the comparisons that currently
+/// bind them (a pairing is dropped when a binder it mentions leaves
+/// scope, alongside the bound sets).
 struct ResourceIdentityCheck<'v> {
     validator: &'v Validator<'v>,
     bound_left: HashSet<usize>,
@@ -427,11 +429,24 @@ impl<'v> ResourceIdentityCheck<'v> {
     }
 
     fn restore_bounds(&mut self, (left, right): (Vec<usize>, Vec<usize>)) {
-        for id in left {
-            self.bound_left.remove(&id);
+        for id in &left {
+            self.bound_left.remove(id);
         }
-        for id in right {
-            self.bound_right.remove(&id);
+        for id in &right {
+            self.bound_right.remove(id);
+        }
+        // Alpha pairings belong to the binders that established them:
+        // a pairing mentioning a binder whose scope is being exited
+        // must not leak into later, independent comparisons, where
+        // the same binder may legitimately pair with a different
+        // counterpart. Pairings between binders that remain in scope
+        // persist, so a sharing pattern spanning nested values stays
+        // consistent for the rest of the enclosing comparison.
+        if !left.is_empty() || !right.is_empty() {
+            self.alpha
+                .retain(|l, r| !left.contains(l) && !right.contains(r));
+            self.alpha_rev
+                .retain(|r, l| !right.contains(r) && !left.contains(l));
         }
     }
 }

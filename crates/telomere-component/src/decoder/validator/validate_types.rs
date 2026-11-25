@@ -916,6 +916,16 @@ impl<'a> Validator<'a> {
         ) {
             visiting.leave(type_id);
             merge_type_ids(visible, &[type_id]);
+            // A `(sub resource)` export face denotes its underlying
+            // resource inside the component: wherever the face is
+            // visible, the resource it stands for counts as visible
+            // too, or surface types mentioning the underlying
+            // resource -- the shape every constructor and method of
+            // the exported resource takes -- could not be used at
+            // the surface at all.
+            if let Some(root) = self.sub_face_root(type_id) {
+                self.extend_visible_closure_into(root, visible, visiting)?;
+            }
             return Ok(());
         }
 

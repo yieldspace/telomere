@@ -33,6 +33,13 @@ pub struct Validator<'a> {
     scope_kinds: Vec<ScopeKind>,
     types: TypeArena,
     transform_generation: Cell<u32>,
+    /// For each `(sub resource)` type export, the fresh abstract
+    /// face it minted, mapped to the underlying type it was minted
+    /// from. The export metadata keeps the face -- that is the
+    /// identity consumers of the component see -- but validation
+    /// inside the component still needs the correspondence (see
+    /// [`Validator::sub_face_root`]).
+    sub_faces: HashMap<TypeId, TypeId>,
 }
 
 #[derive(Copy, Clone)]
@@ -85,6 +92,7 @@ impl<'a> Validator<'a> {
             scope_kinds: vec![ScopeKind::Concrete],
             types: TypeArena::default(),
             transform_generation: Cell::new(0),
+            sub_faces: HashMap::new(),
         }
     }
 
@@ -165,6 +173,48 @@ impl<'a> Validator<'a> {
 
     pub fn new_type(&mut self, ty: Type) -> TypeId {
         self.types.add(ty)
+    }
+
+    /// Record that `face` -- the fresh abstract identity minted by
+    /// a `(sub resource)` type export -- stands for `underlying`
+    /// inside the component that minted it.
+    pub fn note_sub_ascribed_face(&mut self, face: TypeId, underlying: TypeId) {
+        self.sub_faces.insert(face, underlying);
+    }
+
+    /// Resolve `id` through `Eq` aliases and `(sub resource)`
+    /// export faces to the resource identity it denotes inside
+    /// this component. Returns `Some(root)` when `id` is (or
+    /// aliases) such a face, with chained faces resolved to the
+    /// innermost underlying type; `None` when `id` does not
+    /// involve a face at all.
+    ///
+    /// The face itself is a `Sub`-bounded generic, so subtyping
+    /// against it accepts any resource; checks that assert
+    /// *identity* with the exported resource (the annotated-name
+    /// validation) and checks that need the denoted resource
+    /// itself (the surface visibility closure) must go through
+    /// this correspondence instead.
+    pub fn sub_face_root(&self, id: TypeId) -> Option<TypeId> {
+        let mut id = id;
+        let mut found = false;
+        loop {
+            while let Ok(Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            })) = self.get_type(id)
+            {
+                id = *inner;
+            }
+            match self.sub_faces.get(&id) {
+                Some(&underlying) => {
+                    found = true;
+                    id = underlying;
+                }
+                None => break,
+            }
+        }
+        found.then_some(id)
     }
 
     /// Whether `id` is visible from the scopes currently on the
