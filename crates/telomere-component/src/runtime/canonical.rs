@@ -65,24 +65,17 @@ pub(super) fn lower_component_args(
             ComponentError::Runtime("canonical option `realloc` is required".to_owned())
         })?;
         let layout = value_area_layout(&func_type.params, program)?;
-        let ptr = if layout.size == 0 {
-            0
-        } else {
-            let ptr = call_realloc(
-                realloc,
-                store,
-                0,
-                0,
-                layout.align as i32,
-                layout.size as i32,
-            )? as u32;
-            validate_realloc_pointer_alignment(
-                ptr,
-                layout.align,
-                "indirect canonical parameter area",
-            )?;
-            ptr
-        };
+        // Canonical ABI `lower_flat_values` allocates the indirect area by
+        // calling realloc unconditionally, with no zero-size shortcut.
+        let ptr = call_realloc(
+            realloc,
+            store,
+            0,
+            0,
+            layout.align as i32,
+            layout.size as i32,
+        )? as u32;
+        validate_realloc_pointer_alignment(ptr, layout.align, "indirect canonical parameter area")?;
         for ((value, ty), offset) in args
             .iter()
             .zip(func_type.params.iter())
@@ -1865,13 +1858,11 @@ fn lower_list_value(
     let elem_align = elem_abi.align.max(1);
     let stride = align_to(elem_abi.size, elem_align);
     let total_len = stride.saturating_mul(values.len() as u32);
-    let ptr = if total_len == 0 {
-        0
-    } else {
-        let ptr = call_realloc(realloc, store, 0, 0, elem_align as i32, total_len as i32)? as u32;
-        validate_realloc_pointer_alignment(ptr, elem_align, "canonical list")?;
-        ptr
-    };
+    // Canonical ABI `lower_list` calls realloc unconditionally: even an
+    // empty list allocates with (0, 0, align, 0) and uses the returned
+    // pointer, so there is no zero-size shortcut here.
+    let ptr = call_realloc(realloc, store, 0, 0, elem_align as i32, total_len as i32)? as u32;
+    validate_realloc_pointer_alignment(ptr, elem_align, "canonical list")?;
     for (index, value) in values.iter().enumerate() {
         write_value_to_memory(
             value,
