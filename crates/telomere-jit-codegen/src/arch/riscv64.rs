@@ -469,14 +469,21 @@ impl Riscv64BaselineMasm {
     }
 
     pub fn cset_w(&mut self, rd: u8, cond: Cond) {
-        let cmp = self.last_cmp.take().expect("cset follows cmp");
+        let cmp = self.last_cmp.expect("cset follows cmp");
         self.emit_cmp_bool(T0, cmp, cond)
             .expect("comparison operands fit");
         self.store_slot32(rd, T0).expect("virtual register fits");
     }
 
     pub fn csel_w(&mut self, rd: u8, rn: u8, rm: u8, cond: Cond) {
-        let cmp = self.last_cmp.take().expect("csel follows cmp");
+        // The deferred compare is not consumed by materialising it:
+        // it describes the most recent compare until another compare
+        // replaces it, mirroring hardware flags on the other backends.
+        // cset and conditional branches read it the same way, so a
+        // single compare may feed several conditional operations — a
+        // multi-lane select emits one compare followed by one csel
+        // per lane.
+        let cmp = self.last_cmp.expect("csel follows cmp");
         self.emit_cmp_bool(T0, cmp, cond)
             .expect("comparison operands fit");
         self.load_slot32(T1, rn).expect("virtual register fits");
@@ -848,7 +855,12 @@ impl Riscv64BaselineMasm {
             return;
         }
         let low = ((value << 52) >> 52) as i32;
-        let high = (value - i64::from(low)) >> 12;
+        // Wrapping on purpose (#328): for values near i64::MAX the
+        // sign-extended low chunk is negative, so the plain subtraction
+        // overflows (a debug-build panic). The wrapped result is what
+        // the emitted addi/slli sequence needs — the final addi wraps
+        // in hardware and lands on the requested value.
+        let high = value.wrapping_sub(i64::from(low)) >> 12;
         self.li(rd, high);
         self.slli(rd, rd, 12);
         if low != 0 {
@@ -867,7 +879,7 @@ impl Riscv64BaselineMasm {
         for chunk in &mut chunks {
             let low = ((rest << 52) >> 52) as i32;
             *chunk = low;
-            rest = (rest - i64::from(low)) >> 12;
+            rest = rest.wrapping_sub(i64::from(low)) >> 12;
         }
         debug_assert_eq!(rest, 0, "six 12-bit chunks cover any i64");
         self.addi(rd, ZERO, chunks[5]).expect("top li chunk fits");
@@ -890,7 +902,7 @@ impl Riscv64BaselineMasm {
         for chunk in &mut chunks {
             let low = ((rest << 52) >> 52) as i32;
             *chunk = low;
-            rest = (rest - i64::from(low)) >> 12;
+            rest = rest.wrapping_sub(i64::from(low)) >> 12;
         }
         debug_assert_eq!(rest, 0, "three 12-bit chunks cover a sign-extended i32");
         self.addi(rd, ZERO, chunks[2]).expect("top li chunk fits");
@@ -1380,6 +1392,89 @@ crate::impl_baseline_masm!(Riscv64BaselineMasm);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csel_and_cset_reuse_one_compare() {
+        // Regression test for #309: materialising the deferred compare
+        // must not consume it. A multi-lane select emits one compare
+        // followed by one csel per lane; the second csel used to panic
+        // with "csel follows cmp".
+        let mut asm = Riscv64BaselineMasm::with_capacity(256);
+        asm.cmp_w_imm(0, 0).unwrap();
+        asm.csel_w(1, 1, 2, Cond::Ne);
+        asm.csel_w(2, 1, 2, Cond::Ne);
+        asm.cset_w(3, Cond::Ne);
+        assert!(!asm.into_bytes().is_empty());
+    }
+
+    /// Tiny interpreter for the two instruction forms `li` / `li_reloc` /
+    /// `li_reloc32` emit (addi and slli into a single register), used to
+    /// check that a materialised immediate equals the requested value.
+    fn eval_li_sequence(bytes: &[u8], rd: u8) -> i64 {
+        let mut regs = [0i64; 32];
+        for word in bytes.chunks_exact(4) {
+            let insn = u32::from_le_bytes(word.try_into().unwrap());
+            assert_eq!(insn & 0x7f, 0x13, "li sequences only use OP-IMM");
+            let dest = ((insn >> 7) & 0x1f) as usize;
+            let rs1 = ((insn >> 15) & 0x1f) as usize;
+            let imm = i64::from((insn as i32) >> 20);
+            match (insn >> 12) & 0x7 {
+                0 => regs[dest] = regs[rs1].wrapping_add(imm),
+                1 => regs[dest] = regs[rs1] << ((insn >> 20) & 0x3f),
+                funct3 => panic!("unexpected funct3 {funct3} in li sequence"),
+            }
+        }
+        regs[usize::from(rd)]
+    }
+
+    #[test]
+    fn li_handles_immediates_near_i64_max() {
+        // Regression test for #328: the 12-bit chunk decomposition
+        // computed `value - low` with plain subtraction. When the
+        // sign-extended low chunk is negative and the value is near
+        // i64::MAX, that subtraction overflows and panics in debug
+        // builds (release builds wrapped and produced the right code).
+        for value in [
+            i64::MAX,
+            i64::MAX - 1,
+            i64::MIN,
+            i64::from(i32::MAX),
+            i64::from(i32::MIN),
+            -1,
+            0,
+            2047,
+            2048,
+            -2048,
+            -2049,
+            1 << 62,
+            -(1 << 62),
+            0x1234_5678_9abc_def0u64 as i64,
+        ] {
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li({value})"
+            );
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li_reloc(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li_reloc({value})"
+            );
+        }
+        for value in [i64::from(i32::MAX), i64::from(i32::MIN), -1, 0, 2047, -2048] {
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li_reloc32(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li_reloc32({value})"
+            );
+        }
+    }
 
     #[test]
     fn patches_jal_forward() {
