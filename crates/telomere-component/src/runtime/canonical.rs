@@ -1573,7 +1573,7 @@ fn read_variant_value_from_memory(
     let discriminant = read_variant_discriminant_from_memory(store, memory, ptr, cases.len())?;
     let case = cases
         .get(discriminant)
-        .ok_or_else(|| ComponentError::Trap("variant discriminant is out of bounds".to_owned()))?;
+        .ok_or_else(|| ComponentError::Trap("invalid variant discriminant".to_owned()))?;
     let (payload_offset, _) = variant_payload_offset_and_size(cases, program)?;
     let payload = if let Some(ty) = &case.ty {
         Some(Box::new(read_value_from_memory(
@@ -2000,7 +2000,7 @@ fn lift_variant_value(
     let case_index = cursor.next_i32()? as usize;
     let case = cases
         .get(case_index)
-        .ok_or_else(|| ComponentError::Trap("variant discriminant is out of bounds".to_owned()))?;
+        .ok_or_else(|| ComponentError::Trap("invalid variant discriminant".to_owned()))?;
     let payload_types = variant_payload_flat_types(cases, program)?;
     let raw_payload = payload_types
         .iter()
