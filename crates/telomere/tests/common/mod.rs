@@ -172,8 +172,30 @@ fn aot_prepare(m: telomere::Module) -> (telomere::Module, Option<WastAotArtifact
             return (m, None);
         }
     };
+    // #199: the load must come from the artifact front-end, not from
+    // re-running the wasm front-end. The phase counters are
+    // thread-local and this call is synchronous, so the delta is
+    // attributable to this open exactly: parsing and optimizing must
+    // not move, and exactly one module must be deserialized.
+    let phases_before = telomere::frontend_phase_counters();
     match telomere::open_aot_artifact(&bytes, Some(&key), telomere::AotLoadPolicy::default()) {
         Ok(opened) => {
+            if required {
+                let phases_after = telomere::frontend_phase_counters();
+                assert_eq!(
+                    phases_after.parsed_modules, phases_before.parsed_modules,
+                    "TELOMERE_WAST_AOT_REQUIRE_ACCEPT: opening an AoT artifact parsed a module"
+                );
+                assert_eq!(
+                    phases_after.optimized_functions, phases_before.optimized_functions,
+                    "TELOMERE_WAST_AOT_REQUIRE_ACCEPT: opening an AoT artifact optimized functions"
+                );
+                assert_eq!(
+                    phases_after.deserialized_modules,
+                    phases_before.deserialized_modules + 1,
+                    "TELOMERE_WAST_AOT_REQUIRE_ACCEPT: opening an AoT artifact must deserialize exactly one module"
+                );
+            }
             let module = opened.module().clone();
             (module, Some(opened))
         }
@@ -208,8 +230,18 @@ fn aot_install(store: &Store, instance: &InstanceHandle, artifact: Option<WastAo
     let Some(artifact) = artifact else {
         return;
     };
+    // #199: installing an artifact maps its pre-emitted blobs; it
+    // must never fall back to emitting functions on demand.
+    let phases_before = telomere::frontend_phase_counters();
     match telomere::install_aot_artifact(store, instance, &artifact) {
         Ok(report) => {
+            if wast_aot_required() {
+                let phases_after = telomere::frontend_phase_counters();
+                assert_eq!(
+                    phases_after.emitted_functions, phases_before.emitted_functions,
+                    "TELOMERE_WAST_AOT_REQUIRE_ACCEPT: installing an AoT artifact emitted functions on demand"
+                );
+            }
             WAST_AOT_INSTALLED.fetch_add(report.installed, Ordering::Relaxed);
         }
         Err(err) => {

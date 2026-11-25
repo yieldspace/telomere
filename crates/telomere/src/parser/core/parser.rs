@@ -984,7 +984,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 if functions.len() - imported_function_len != code_section.0.len() {
                     Err(WasmParserError::FunctionAndCodeSectionLengthMismatch)?
                 }
-                return Ok(Module {
+                let module = Module {
                     fts: type_section.unwrap_or_else(|| TypeSection(vec![])),
                     imports: import_section.unwrap_or_else(|| ImportSection(vec![])),
                     functions,
@@ -998,7 +998,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     data: data_section,
                     start,
                     name: name_section,
-                });
+                };
+                crate::common::frontend_phases::note_module_parsed();
+                return Ok(module);
             };
             let new_pos = SECTION_ORDER.iter().position(|x| *x == st);
             if let Some(new_pos) = new_pos {
