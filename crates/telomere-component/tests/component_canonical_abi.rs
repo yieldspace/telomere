@@ -749,13 +749,13 @@ async fn latin1_utf16_load_rejects_an_odd_pointer() {
         .expect_err("odd latin1+utf16 pointer must trap");
     // Canonical ABI `load_string_from_range` requires `ptr == align_to(ptr, 2)`:
     // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
+    // The trap is raised inside the canon-lower trampoline; the guest
+    // observes an `unreachable` trap, but the component-level error keeps
+    // the canonical cause.
     assert!(
         matches!(
             error,
-            ComponentError::GuestTrap {
-                kind: telomere::TrapKind::Unreachable,
-                ..
-            }
+            ComponentError::Trap(ref message) if message.contains("unaligned pointer")
         ),
         "unexpected error: {error}"
     );
@@ -783,13 +783,12 @@ async fn latin1_utf16_store_rejects_a_misaligned_realloc_result() {
         .expect_err("misaligned latin1+utf16 realloc result must trap");
     // Canonical ABI `store_string_to_latin1_or_utf16` checks `ptr == align_to(ptr, 2)`:
     // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
+    // As with the load side, the component-level error keeps the
+    // canonical cause even though the guest observes `unreachable`.
     assert!(
         matches!(
             error,
-            ComponentError::GuestTrap {
-                kind: telomere::TrapKind::Unreachable,
-                ..
-            }
+            ComponentError::Trap(ref message) if message.contains("not aligned")
         ),
         "unexpected error: {error}"
     );
@@ -1529,18 +1528,13 @@ async fn latin1_utf16_store_rejects_an_out_of_bounds_shrink_realloc_result() {
         .call(&store, "run", &[])
         .await
         .expect_err("out-of-bounds shrink realloc result must trap");
-    // Like the misaligned latin1+utf16 store above, a canonical-layer trap
-    // inside the canon-lower trampoline surfaces as an `unreachable` guest
-    // trap at this boundary; what #322 changes is that it traps at all
-    // (previously the out-of-bounds pointer was handed to the guest).
+    // A canonical-layer trap inside the canon-lower trampoline used to
+    // surface as an `unreachable` guest trap at this boundary; since #312
+    // the trampoline preserves the trap cause, so the bounds check's own
+    // message reaches the caller. What #322 changes is that it traps at
+    // all (previously the out-of-bounds pointer was handed to the guest).
     assert!(
-        matches!(
-            error,
-            ComponentError::GuestTrap {
-                kind: telomere::TrapKind::Unreachable,
-                ..
-            }
-        ),
+        matches!(&error, ComponentError::Trap(message) if message.contains("realloc return: beyond end of memory")),
         "unexpected error: {error}"
     );
 }
@@ -1569,5 +1563,133 @@ async fn direct_list_lowering_rejects_a_misaligned_realloc_result() {
     assert!(
         matches!(error, ComponentError::Trap(_)),
         "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn direct_empty_u8_list_lowering_still_calls_realloc_with_zero_size() {
+    let (store, instance) = instantiate(
+        &direct_list_component("(type $value (list u8))", false),
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    instance
+        .call(&store, "run", &[ComponentValue::List(Vec::new())])
+        .await
+        .expect("empty list lowering must succeed");
+
+    // Canonical ABI `lower_list` calls realloc unconditionally, so an empty
+    // list still allocates with (0, 0, align, 0) and the lowered pointer is
+    // whatever realloc returns:
+    // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
+    assert_eq!(
+        realloc_log(&instance, &store).await,
+        vec![ReallocCall {
+            old_ptr: 0,
+            old_len: 0,
+            align: 1,
+            new_len: 0,
+        }],
+        "lowering an empty list must call realloc exactly once with (0, 0, 1, 0)"
+    );
+    assert_eq!(
+        scalar_u32(&instance, &store, "captured-ptr", &[]).await,
+        BUMP_START,
+        "the pointer returned by realloc must be the lowered list pointer"
+    );
+    assert_eq!(
+        scalar_u32(&instance, &store, "captured-len", &[]).await,
+        0,
+        "the lowered list length must be zero"
+    );
+}
+
+#[tokio::test]
+async fn direct_empty_u32_list_lowering_still_calls_realloc_with_element_alignment() {
+    let (store, instance) = instantiate(
+        &direct_list_component("(type $value (list u32))", false),
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    instance
+        .call(&store, "run", &[ComponentValue::List(Vec::new())])
+        .await
+        .expect("empty list lowering must succeed");
+
+    // Canonical ABI `lower_list` passes the element alignment to realloc even
+    // when the allocation size is zero:
+    // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
+    assert_eq!(
+        realloc_log(&instance, &store).await,
+        vec![ReallocCall {
+            old_ptr: 0,
+            old_len: 0,
+            align: 4,
+            new_len: 0,
+        }],
+        "lowering an empty (list u32) must call realloc exactly once with (0, 0, 4, 0)"
+    );
+    assert_eq!(
+        scalar_u32(&instance, &store, "captured-ptr", &[]).await,
+        BUMP_START,
+        "the pointer returned by realloc must be the lowered list pointer"
+    );
+    assert_eq!(
+        scalar_u32(&instance, &store, "captured-len", &[]).await,
+        0,
+        "the lowered list length must be zero"
+    );
+}
+
+#[tokio::test]
+async fn indirect_empty_list_lowering_still_calls_realloc_with_zero_size() {
+    let mut args = vec![ComponentValue::List(Vec::new())];
+    args.extend((0..16).map(|index| ComponentValue::U32(0x90 + index)));
+    let (store, instance) = instantiate(
+        &indirect_list_component("(type $value (list u32))", &list_and_16_u32_params(), false),
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    instance
+        .call(&store, "run", &args)
+        .await
+        .expect("indirect empty list lowering must succeed");
+
+    let outer = scalar_u32(&instance, &store, "captured-ptr", &[]).await;
+    // Canonical ABI `lower_flat_values` allocates the 72-byte indirect area
+    // first; storing the empty list field then still calls realloc with
+    // (0, 0, align, 0) via `store_list_into_range`:
+    // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
+    assert_eq!(
+        realloc_log(&instance, &store).await,
+        vec![
+            ReallocCall {
+                old_ptr: 0,
+                old_len: 0,
+                align: 4,
+                new_len: 72,
+            },
+            ReallocCall {
+                old_ptr: 0,
+                old_len: 0,
+                align: 4,
+                new_len: 0,
+            },
+        ],
+        "the indirect area allocation must be followed by the empty list (0, 0, 4, 0) call"
+    );
+    assert_eq!(outer, BUMP_START, "outer area pointer");
+    assert_eq!(
+        scalar_u32(&instance, &store, "word-at", &[outer]).await,
+        BUMP_START + 72,
+        "the list pointer stored in the area must be the pointer realloc returned"
+    );
+    assert_eq!(
+        scalar_u32(&instance, &store, "word-at", &[outer + 4]).await,
+        0,
+        "the list length stored in the area must be zero"
     );
 }

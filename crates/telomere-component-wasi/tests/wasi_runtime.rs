@@ -677,6 +677,9 @@ async fn run_stdout_drop(bytes: Vec<u8>) {
         .call(&store, "write-after-drop", &[])
         .await
         .expect_err("writing through a dropped stdout handle should fail");
+    // The failure is a trap raised by the provider inside the canon-lower
+    // trampoline; the guest observes an `unreachable` trap, but the
+    // component-level error keeps the provider's cause.
     assert!(
         matches!(error, telomere_component::ComponentError::Trap(ref message) if message.contains("unknown handle index")),
         "write after drop should trap, got {error:?}"
