@@ -585,20 +585,20 @@ stripped `.text`, in bytes).
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,683,928 | 2,126,967 |
-| `release` | `wasi` | 2,911,408 | 2,301,335 |
+| `release` | `component` | 2,688,168 | 2,130,215 |
+| `release` | `wasi` | 2,915,648 | 2,304,583 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,127,112 | 2,468,647 |
+| `release` | `wasi-threads` | 3,131,352 | 2,471,895 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,682,464 | 1,241,575 |
-| `release-size` | `wasi` | 1,803,680 | 1,323,351 |
+| `release-size` | `component` | 1,685,608 | 1,243,655 |
+| `release-size` | `wasi` | 1,806,808 | 1,325,431 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,946,416 | 1,418,055 |
+| `release-size` | `wasi-threads` | 1,949,512 | 1,420,135 |
 
 #### Re-baseline history
 
@@ -2136,6 +2136,63 @@ the largest cumulative growth is now the `release`
 stripped file series is unchanged at +9.83% (1,275,448 B to
 1,400,840 B). The baseline was re-measured on the branch and
 updated as recorded above, following the procedure below.
+
+PR #349 (#335, canonical handle operations validate handle
+indices against the instance's handle table: `resource.rep` /
+`resource.drop` trap `unknown handle index N` for indices the
+table does not hold and the canonical wrong-type text for
+indices held for another resource type, and canon-lower borrow
+arguments and canon-lift result handles are validated at the
+component boundary) merged current `main` into its branch three
+times (merge commits `2ca257e`, `main` at
+`90f1437b1445b8523daa2f78eecb366de415ed11` (PR #340, #312);
+`6e9d168`, `main` at `4cdb5ae4ec7cb9e64252743ffb86588bd13b3468`
+(PR #348, #342); and `64af460`, `main` at
+`21edef0f0b147af7a43dcbec002673227ff8516d` (PR #351, #331));
+its CI runs on the merged trees tripped the gate on the PR's
+own change. The first merge conflicted only in test assertions,
+resolved by taking this branch's canonical trap texts. The
+second merge conflicted in the component runtime
+(`canonical.rs`, `env.rs`, `host.rs`, `mod.rs`), where #342's
+handle transfer and this branch's boundary validation overlap;
+the resolution is a union: the handle-leaf walker and boundary
+validation coexist with the transfer machinery in
+`canonical.rs`, `call_sync` validates the caller's borrow
+arguments against the caller's table before the transfer
+rewrites the indices into the callee's table, and `HandleTable`
+keeps both #335's `validate_handle` and #342's entry-transfer
+methods. The vendored-suite exclusion for
+`resources/handle-table.wast` was removed: with both #335 and
+#342 in the tree the file passes in full (suite ran=13,
+checked=320, all pass). One #342 test assertion was updated to
+the canonical text #335 now produces for a wrong-type drop
+(`handle index 2 used with the wrong type`); the test still
+requires the trap. Attribution was isolated by measuring
+current `main` alone three times (workflow_dispatch runs
+45582776999, 45582793584 and 45582813360 on `main` at
+`21edef0f0b147af7a43dcbec002673227ff8516d`; all three runs pass
+the gate against `main`'s checked-in baseline). Against the
+checked-in baseline, the main control is byte-identical on 12
+of the 16 measured series; on 4 series it measures uniformly
+slightly below that baseline (stripped file -32 B and stripped
+`.text` -32 B in `release`/`component`, -48 B / -32 B in
+`release`/`wasi` and `release`/`wasi-threads`, -16 B / +0 B in
+`release-size`/`wasi-threads`), because that baseline was
+snapshotted from PR #348's branch tree and the squash-merged
+`main` measures slightly smaller (the gate passes shrinkage,
+so the staleness was inert). This PR's own delta against the
+main control is confined to the 12 series of the three
+configurations that link `telomere-component`: in `release`,
+stripped file +4,272 B (`component`), +4,288 B (`wasi`) and
++4,288 B (`wasi-threads`) and stripped `.text` +3,280 B in
+each; in `release-size`, stripped file +3,144 B / +3,128 B /
++3,112 B and stripped `.text` +2,080 B in each. Every other
+configuration is byte-identical to `main` in both profiles.
+Against the original #164 baseline, the largest cumulative
+growth is now the `release` `component` stripped file series
+at +10.46% (2,433,656 B to 2,688,168 B), up from +10.29%. The
+baseline was re-measured on the branch and updated as recorded
+above, following the procedure below.
 
 ### Threshold derivation
 
