@@ -213,6 +213,8 @@ enum ResolvedCallable {
         func_type: FuncType,
         options: Box<RuntimeCanonicalOptions>,
         program: Rc<ComponentProgram>,
+        shared: Rc<SharedState>,
+        handles: Rc<RefCell<HandleTable>>,
     },
 }
 
@@ -225,6 +227,7 @@ enum HostBinding {
         program: Rc<ComponentProgram>,
         signature: CoreFuncType,
         shared: Rc<SharedState>,
+        handles: Rc<RefCell<HandleTable>>,
     },
     ResourceNew {
         resource: ResourceId,

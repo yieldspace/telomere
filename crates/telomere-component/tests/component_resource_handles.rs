@@ -399,3 +399,219 @@ async fn resource_destructor_may_drop_in_same_instance() {
         .expect("run should succeed");
     assert_eq!(result, vec![ComponentValue::U32(42)]);
 }
+
+// Regression tests for #335: canonical handle operations validate the
+// handle index against the instance's handle table. Unknown,
+// already-dropped, zero, and max indices trap with the canonical
+// `unknown handle index N` text, and using a handle through another
+// resource type's canon op traps with the canonical wrong-type text,
+// instead of reaching the guest or silently succeeding (upstream
+// `resources/handle-table.wast` lines 200-212, 260, 292, 321, 323).
+//
+// The canon ops below run inside core modules, so their traps cross the
+// core host trampoline; the trap *cause* text is preserved across that
+// boundary by the #312 trampoline fix (PR #340). Until that lands, the
+// in-core cases surface as a bare `unreachable` guest trap at the public
+// API; the assertions here pin the canonical text the runtime produces
+// once the cause is preserved (verified against an integrated tree).
+
+fn expect_call_trap_text(
+    result: Result<Vec<ComponentValue>, telomere_component::ComponentError>,
+    expected: &str,
+    context: &str,
+) {
+    let error = result.expect_err(context);
+    let text = format!("{error:?}");
+    assert!(
+        text.contains(expected),
+        "{context}: expected an error containing `{expected}`, got {text}"
+    );
+}
+
+/// The `$Traps` component of upstream `resources/handle-table.wast`:
+/// `resource.drop` / `resource.rep` of a never-allocated, already-dropped,
+/// zero, or max handle index must trap `unknown handle index N`.
+#[tokio::test]
+async fn canon_handle_ops_trap_on_unknown_handle_indices() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (canon resource.new $R (core func $R.resource.new))
+  (canon resource.drop $R (core func $R.resource.drop))
+  (canon resource.rep $R (core func $R.resource.rep))
+  (core module $M
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (import "" "rep" (func $rep (param i32) (result i32)))
+    (func (export "drop-never-allocated") (call $drop (i32.const 5)))
+    (func (export "rep-never-allocated") (drop (call $rep (i32.const 5))))
+    (func (export "double-drop")
+      (if (i32.ne (i32.const 1) (call $new (i32.const 100))) (then unreachable))
+      (call $drop (i32.const 1))
+      (call $drop (i32.const 1))
+    )
+    (func (export "drop-zero") (call $drop (i32.const 0)))
+    (func (export "drop-max") (call $drop (i32.const 0xffffffff)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "new" (func $R.resource.new))
+    (export "drop" (func $R.resource.drop))
+    (export "rep" (func $R.resource.rep))
+  ))))
+  (func (export "drop-never-allocated") (canon lift (core func $m "drop-never-allocated")))
+  (func (export "rep-never-allocated") (canon lift (core func $m "rep-never-allocated")))
+  (func (export "double-drop") (canon lift (core func $m "double-drop")))
+  (func (export "drop-zero") (canon lift (core func $m "drop-zero")))
+  (func (export "drop-max") (canon lift (core func $m "drop-max")))
+)
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    for (export, expected) in [
+        ("drop-never-allocated", "unknown handle index 5"),
+        ("rep-never-allocated", "unknown handle index 5"),
+        ("double-drop", "unknown handle index 1"),
+        ("drop-zero", "unknown handle index 0"),
+        ("drop-max", "unknown handle index 4294967295"),
+    ] {
+        let result = instance.call(&store, export, &[]).await;
+        expect_call_trap_text(result, expected, export);
+    }
+}
+
+/// The `$WrongType` component of upstream `resources/handle-table.wast`:
+/// two resource types share one table, but each entry remembers its type.
+/// Dropping an $R1 handle through $R2's `resource.drop`, and returning an
+/// $R1 handle from a function typed as returning `own $R2`, must both
+/// trap with the canonical wrong-type text.
+#[tokio::test]
+async fn canon_handle_ops_trap_on_wrong_type_handles() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $R1 (resource (rep i32)))
+  (type $R2 (resource (rep i32)))
+  (canon resource.new $R1 (core func $R1.resource.new))
+  (canon resource.drop $R2 (core func $R2.resource.drop))
+  (core module $M
+    (import "" "R1.new" (func $R1.new (param i32) (result i32)))
+    (import "" "R2.drop" (func $R2.drop (param i32)))
+    (func (export "drop-R1-as-R2")
+      (if (i32.ne (i32.const 1) (call $R1.new (i32.const 100))) (then unreachable))
+      (call $R2.drop (i32.const 1))
+    )
+    (func (export "return-R1-as-R2") (result i32)
+      (call $R1.new (i32.const 100))
+    )
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "R1.new" (func $R1.resource.new))
+    (export "R2.drop" (func $R2.resource.drop))
+  ))))
+  (export $R2' "R2" (type $R2))
+  (func (export "drop-R1-as-R2") (canon lift (core func $m "drop-R1-as-R2")))
+  (func (export "return-R1-as-R2") (result (own $R2')) (canon lift (core func $m "return-R1-as-R2")))
+)
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    const WRONG_TYPE: &str = "handle index 1 used with the wrong type, expected \
+        guest-defined resource but found a different guest-defined resource";
+    let result = instance.call(&store, "drop-R1-as-R2", &[]).await;
+    expect_call_trap_text(result, WRONG_TYPE, "drop-R1-as-R2");
+    let result = instance.call(&store, "return-R1-as-R2", &[]).await;
+    expect_call_trap_text(result, WRONG_TYPE, "return-R1-as-R2");
+}
+
+/// The middleman section of upstream `resources/handle-table.wast`
+/// (lines 186-212): after $D drops the handle it received, passing the
+/// same index to a lowered `consume` (own) is not reached in these cases;
+/// the pinned cases here are a `borrow` argument naming an index that
+/// was never valid in the caller's table, which must trap
+/// `unknown handle index 3` at the canon-lower boundary instead of
+/// reaching the callee, and a valid borrow of a live handle, which must
+/// keep working.
+#[tokio::test]
+async fn canon_lower_borrow_args_validate_handle_indices() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (type $R' (resource (rep i32)))
+    (export $R "R" (type $R'))
+    (canon resource.new $R' (core func $R.resource.new))
+    (canon resource.drop $R' (core func $R.resource.drop))
+    (core module $CM
+      (import "" "new" (func $new (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "make") (result i32) (call $new (i32.const 100)))
+      (func (export "consume") (param $h i32) (call $drop (local.get $h)))
+      (func (export "use") (param $rep i32))
+    )
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "new" (func $R.resource.new))
+      (export "drop" (func $R.resource.drop))
+    ))))
+    (func (export "make") (result (own $R)) (canon lift (core func $cm "make")))
+    (func (export "consume") (param "r" (own $R)) (canon lift (core func $cm "consume")))
+    (func (export "use") (param "r" (borrow $R)) (canon lift (core func $cm "use")))
+  )
+  (component $D
+    (import "c" (instance $c
+      (export "R" (type $R (sub resource)))
+      (export "make" (func (result (own $R))))
+      (export "consume" (func (param "r" (own $R))))
+      (export "use" (func (param "r" (borrow $R))))
+    ))
+    (alias export $c "R" (type $R))
+    (canon resource.drop $R (core func $R.resource.drop))
+    (canon lower (func $c "make") (core func $make'))
+    (canon lower (func $c "consume") (core func $consume'))
+    (canon lower (func $c "use") (core func $use'))
+    (core module $DM
+      (import "" "make" (func $make (result i32)))
+      (import "" "consume" (func $consume (param i32)))
+      (import "" "use" (func $use (param i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "own-use-after-drop")
+        (if (i32.ne (i32.const 1) (call $make)) (then unreachable))
+        (call $drop (i32.const 1))
+        (call $consume (i32.const 1))
+      )
+      (func (export "borrow-never-valid")
+        (call $use (i32.const 3))
+      )
+      (func (export "borrow-valid")
+        (if (i32.ne (i32.const 1) (call $make)) (then unreachable))
+        (call $use (i32.const 1))
+      )
+    )
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "make" (func $make'))
+      (export "consume" (func $consume'))
+      (export "use" (func $use'))
+      (export "drop" (func $R.resource.drop))
+    ))))
+    (func (export "own-use-after-drop") (canon lift (core func $dm "own-use-after-drop")))
+    (func (export "borrow-never-valid") (canon lift (core func $dm "borrow-never-valid")))
+    (func (export "borrow-valid") (canon lift (core func $dm "borrow-valid")))
+  )
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c" (instance $c))))
+  (func (export "own-use-after-drop") (alias export $d "own-use-after-drop"))
+  (func (export "borrow-never-valid") (alias export $d "borrow-never-valid"))
+  (func (export "borrow-valid") (alias export $d "borrow-valid"))
+)
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance.call(&store, "borrow-never-valid", &[]).await;
+    expect_call_trap_text(result, "unknown handle index 3", "borrow-never-valid");
+    let result = instance.call(&store, "own-use-after-drop", &[]).await;
+    expect_call_trap_text(result, "unknown handle index 1", "own-use-after-drop");
+    instance
+        .call(&store, "borrow-valid", &[])
+        .await
+        .expect("borrowing a live handle through canon lower should succeed");
+}

@@ -1,7 +1,8 @@
 use super::canonical::{
     component_value_to_direct_wasm, direct_wasm_to_component_value, lift_component_args,
     lift_component_results, lower_component_args, lower_component_results,
-    lowered_indirect_result_area, track_host_owned_results,
+    lowered_indirect_result_area, track_host_owned_results, validate_lifted_handle_results,
+    validate_lowered_borrow_args,
 };
 use super::*;
 
@@ -36,11 +37,14 @@ impl ResolvedCallable {
                 func_type,
                 options,
                 program,
+                shared,
+                handles,
             } => {
                 let core_args = lower_component_args(func_type, args, options, program, store)?;
                 let core_results = core.call_sync(store, &core_args)?;
                 let lifted =
                     lift_component_results(func_type, &core_results, options, program, store)?;
+                validate_lifted_handle_results(func_type, &lifted, program, shared, handles)?;
                 if let Some(post_return) = &options.post_return {
                     post_return.call_sync(store, &core_results)?;
                 }
@@ -89,10 +93,12 @@ impl HostBinding {
                 options,
                 program,
                 shared,
+                handles,
                 ..
             } => {
                 let result_area = lowered_indirect_result_area(func_type, args, program)?;
                 let component_args = lift_component_args(func_type, args, options, program, store)?;
+                validate_lowered_borrow_args(func_type, &component_args, program, shared, handles)?;
                 let results = callable.call_sync(store, &component_args)?;
                 track_host_owned_results(func_type, &results, program, shared);
                 lower_component_results(func_type, &results, options, program, store, result_area)
@@ -156,6 +162,14 @@ impl HostBinding {
                         Ok(Vec::new())
                     }
                     Err(error) => {
+                        // The index names a live entry of this instance's
+                        // own table under a different resource type:
+                        // `drop_resource`'s wrong-type trap stands, and the
+                        // host-provided path below (for indices this table
+                        // does not hold at all) must not run.
+                        if handles.borrow().contains_handle(handle) {
+                            return Err(error);
+                        }
                         // Not a locally created resource. If this is a
                         // tracked host-provided handle with a registered
                         // destructor, release it through the host; a double
@@ -222,6 +236,36 @@ impl HandleTable {
         handle
     }
 
+    /// Whether `handle` names a live entry of this table (of any
+    /// resource type).
+    pub(super) fn contains_handle(&self, handle: u32) -> bool {
+        self.entries.contains_key(&handle)
+    }
+
+    /// Validates a handle index against this table with the canonical
+    /// ABI's trap texts (#335): an index the table does not hold (never
+    /// allocated, already dropped, zero, or out of range) traps
+    /// `unknown handle index N`, and an index held for a different
+    /// resource type traps the canonical wrong-type text. Table entries
+    /// are all created by a component's `resource.new`, so the found
+    /// side of the wrong-type text is always a guest-defined resource.
+    pub(super) fn validate_handle(
+        &self,
+        resource: ResourceId,
+        handle: u32,
+    ) -> Result<(), ComponentError> {
+        match self.entries.get(&handle) {
+            Some(entry) if entry.resource == resource => Ok(()),
+            Some(_) => Err(ComponentError::Trap(format!(
+                "handle index {handle} used with the wrong type, expected \
+                 guest-defined resource but found a different guest-defined resource"
+            ))),
+            None => Err(ComponentError::Trap(format!(
+                "unknown handle index {handle}"
+            ))),
+        }
+    }
+
     /// Removes a handle from this instance's table and frees its index
     /// for LIFO reuse. A handle that this instance never allocated, that
     /// was already dropped, or that belongs to a different resource type
@@ -231,22 +275,18 @@ impl HandleTable {
         resource: ResourceId,
         handle: u32,
     ) -> Result<(i32, Option<RuntimeCoreFunc>), ComponentError> {
-        let invalid = || ComponentError::Trap(format!("resource handle {handle} is invalid"));
-        match self.entries.get(&handle) {
-            Some(entry) if entry.resource == resource => {}
-            _ => return Err(invalid()),
-        }
-        let entry = self.entries.remove(&handle).ok_or_else(invalid)?;
+        self.validate_handle(resource, handle)?;
+        let entry = self
+            .entries
+            .remove(&handle)
+            .expect("handle validated against this table above");
         self.free_list.push(handle);
         Ok((entry.record.rep, entry.record.destructor))
     }
 
     fn resource_rep(&self, resource: ResourceId, handle: u32) -> Result<i32, ComponentError> {
-        self.entries
-            .get(&handle)
-            .filter(|entry| entry.resource == resource)
-            .map(|entry| entry.record.rep)
-            .ok_or_else(|| ComponentError::Trap(format!("resource handle {handle} is invalid")))
+        self.validate_handle(resource, handle)?;
+        Ok(self.entries[&handle].record.rep)
     }
 }
 
@@ -271,6 +311,17 @@ impl SharedState {
 
     fn host_resource_drop(&self, resource: ResourceId) -> Option<ResourceDropFn> {
         self.host_resource_drops.borrow().get(&resource).cloned()
+    }
+
+    /// Whether `handle` is a live host-provided handle under any tracked
+    /// resource type. The declared type a handle was tracked under is not
+    /// necessarily the identity a later canon op names (see
+    /// `track_host_resource_handle`), so this lookup is by index alone.
+    pub(super) fn tracks_host_resource(&self, handle: u32) -> bool {
+        self.host_resources
+            .borrow()
+            .values()
+            .any(|handles| handles.contains(&handle))
     }
 
     /// Removes a live host-provided handle, returning whether it was live.

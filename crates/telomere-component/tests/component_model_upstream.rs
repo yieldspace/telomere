@@ -117,14 +117,11 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "resources/handle-table.wast",
-        "blocked by resource-handle defects (issue #317 family): \
-         handle index allocation/reuse order diverges from the spec, \
-         so the self-checking guest traps (lines 48, 105); \
-         additionally canonical handle operations do not validate \
-         indices, so unknown, already-dropped, zero, and wrong-type \
-         handles reach the guest or silently succeed instead of \
-         trapping `unknown handle index` (lines 200-212, 260, 292, \
-         321, 323)",
+        "blocked by issue #342: canonical lift/lower does not \
+         transfer resource handles into the consumer instance's \
+         table, so the cross-instance case at line 105 traps; the \
+         handle-index validation cases (lines 200-212, 260, 292, \
+         321, 323) are covered by issue #335",
     ),
     (
         "validation/attributes.wast",

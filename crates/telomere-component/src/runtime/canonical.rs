@@ -320,6 +320,184 @@ fn track_host_owned_defined(
     }
 }
 
+/// Collects the resource-handle leaves of a value that is crossing a
+/// canonical boundary, as `(declared type, handle index, is_own)`
+/// triples. The walk mirrors `track_host_owned_value`'s, except that
+/// `borrow` leaves are collected as well as `own` leaves.
+fn collect_handle_leaves(
+    ty: &ValType,
+    value: &ComponentValue,
+    program: &ComponentProgram,
+    leaves: &mut Vec<(TypeId, u32, bool)>,
+) {
+    let ValType::Type(type_id) = ty else {
+        return;
+    };
+    collect_defined_handle_leaves(*type_id, value, program, leaves);
+}
+
+fn collect_defined_handle_leaves(
+    type_id: TypeId,
+    value: &ComponentValue,
+    program: &ComponentProgram,
+    leaves: &mut Vec<(TypeId, u32, bool)>,
+) {
+    let Some(ty) = program.get_type(type_id) else {
+        return;
+    };
+    match ty {
+        Type::Resource(_) => {
+            if let ComponentValue::Own(handle) = value {
+                leaves.push((type_id, *handle, true));
+            }
+        }
+        Type::DefVal(def) => match def {
+            DefValType::Own(_) => {
+                if let ComponentValue::Own(handle) = value {
+                    leaves.push((type_id, *handle, true));
+                }
+            }
+            DefValType::Borrow(_) => {
+                if let ComponentValue::Borrow(handle) = value {
+                    leaves.push((type_id, *handle, false));
+                }
+            }
+            DefValType::Record(fields) => {
+                let values: Vec<&ComponentValue> = match value {
+                    ComponentValue::Tuple(values) if is_tuple_fields(fields) => {
+                        values.iter().collect()
+                    }
+                    ComponentValue::Record(entries) => {
+                        let mut values = Vec::with_capacity(fields.len());
+                        for field in fields {
+                            match entries.iter().find(|(name, _)| name == &field.label.0) {
+                                Some((_, field_value)) => values.push(field_value),
+                                None => return,
+                            }
+                        }
+                        values
+                    }
+                    _ => return,
+                };
+                for (field, field_value) in fields.iter().zip(values) {
+                    collect_handle_leaves(&field.ty, field_value, program, leaves);
+                }
+            }
+            DefValType::List(elem, _) => {
+                if let ComponentValue::List(items) = value {
+                    for item in items {
+                        collect_handle_leaves(elem, item, program, leaves);
+                    }
+                }
+            }
+            DefValType::Variant(cases) => {
+                let (case, payload) = match value {
+                    ComponentValue::Variant { case, value } => (case.as_str(), value.as_deref()),
+                    ComponentValue::Enum(case) => (case.as_str(), None),
+                    ComponentValue::Option(value) if is_option_cases(cases) => match value {
+                        Some(inner) => ("some", Some(inner.as_ref())),
+                        None => ("none", None),
+                    },
+                    ComponentValue::Result { ok, err } if is_result_cases(cases) => {
+                        match (ok, err) {
+                            (Some(inner), None) => ("ok", Some(inner.as_ref())),
+                            (None, Some(inner)) => ("err", Some(inner.as_ref())),
+                            _ => return,
+                        }
+                    }
+                    _ => return,
+                };
+                if let Some(payload) = payload {
+                    if let Some(case) = cases.iter().find(|c| c.label.0.as_str() == case) {
+                        if let Some(case_ty) = &case.ty {
+                            collect_handle_leaves(case_ty, payload, program, leaves);
+                        }
+                    }
+                }
+            }
+            DefValType::Primitive(_) | DefValType::Flags(_) => {}
+        },
+        Type::Generic(generic) => match generic.bound {
+            crate::ir::types::GenericBound::Eq(inner) => {
+                collect_defined_handle_leaves(inner, value, program, leaves)
+            }
+            crate::ir::types::GenericBound::Sub => {
+                if let ComponentValue::Own(handle) = value {
+                    leaves.push((type_id, *handle, true));
+                }
+            }
+        },
+        Type::Func(_) | Type::Component(_) | Type::Instance(_) => {}
+    }
+}
+
+/// Validates the handles in a canon-lifted function's results against
+/// the lifted instance's own handle table (#335). The core code behind a
+/// lift addresses that instance's table, so a result handle the table
+/// does not hold — or holds for a different resource type — is a
+/// canonical trap (`unknown handle index N` / the wrong-type text),
+/// not a value the caller may use.
+pub(super) fn validate_lifted_handle_results(
+    func_type: &FuncType,
+    results: &[ComponentValue],
+    program: &ComponentProgram,
+    shared: &SharedState,
+    handles: &RefCell<HandleTable>,
+) -> Result<(), ComponentError> {
+    let (Some(result_ty), Some(value)) = (&func_type.result, results.first()) else {
+        return Ok(());
+    };
+    let mut leaves = Vec::new();
+    collect_handle_leaves(result_ty, value, program, &mut leaves);
+    if leaves.is_empty() {
+        return Ok(());
+    }
+    let table = handles.borrow();
+    for (type_id, handle, _) in leaves {
+        let resource = runtime_resource_id(program, shared, type_id)?;
+        table.validate_handle(resource, handle)?;
+    }
+    Ok(())
+}
+
+/// Validates the `borrow` handles among a canon-lowered function's
+/// arguments against the caller's handle table (#335). A borrow names a
+/// handle the caller owns: an index its table holds for a different
+/// resource type traps the canonical wrong-type text, and an index no
+/// table holds traps `unknown handle index N` instead of reaching the
+/// callee. Host-provided handles are the one exception: they are
+/// tracked in `SharedState`, not in the caller's table, and a borrow of
+/// a live one is valid. `own` arguments are deliberately not checked
+/// here: moving ownership across the boundary is the handle-transfer
+/// mechanism (#342), which this validation must not pre-empt.
+pub(super) fn validate_lowered_borrow_args(
+    func_type: &FuncType,
+    args: &[ComponentValue],
+    program: &ComponentProgram,
+    shared: &SharedState,
+    handles: &RefCell<HandleTable>,
+) -> Result<(), ComponentError> {
+    for (value, ty) in args.iter().zip(func_type.params.iter()) {
+        let mut leaves = Vec::new();
+        collect_handle_leaves(ty, value, program, &mut leaves);
+        for (type_id, handle, is_own) in leaves {
+            if is_own {
+                continue;
+            }
+            let resource = runtime_resource_id(program, shared, type_id)?;
+            let table = handles.borrow();
+            if table.contains_handle(handle) {
+                table.validate_handle(resource, handle)?;
+            } else if !shared.tracks_host_resource(handle) {
+                return Err(ComponentError::Trap(format!(
+                    "unknown handle index {handle}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn lowered_indirect_result_area(
     func_type: &FuncType,
     args: &[WasmValue],
