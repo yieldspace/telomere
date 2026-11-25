@@ -235,17 +235,24 @@ fn handle_module(
 
     report.directives_checked += 1;
 
-    if let Some(id) = module.name() {
-        runtime
-            .definitions
-            .insert(id.name().to_owned(), program.clone());
+    let name = module.name().map(|id| id.name().to_owned());
+    if let Some(name) = &name {
+        runtime.definitions.insert(name.clone(), program.clone());
+        if !definition_only {
+            runtime.plain_names.insert(name.clone());
+        }
     }
+    // Every component directive, plain or definition-only, is the most
+    // recent definition for a later `(component instance ...)` with no
+    // module operand.
+    runtime.latest = Some(program.clone());
     if !definition_only {
         // A plain `(component ...)` becomes the current definition; it is
         // instantiated lazily when a runtime directive first needs an
         // instance, so compile/validate-only files never pay for (or fail
         // on) instantiation.
         runtime.pending = Some(program);
+        runtime.pending_name = name;
         runtime.current = None;
     }
 }
@@ -654,6 +661,10 @@ fn error_categories(input: &str) -> BTreeSet<&'static str> {
 // Instantiation is lazy: a `(component ...)` directive only compiles and
 // records the program. The instance is created when a runtime directive
 // first needs one, or eagerly by `(component instance $i $Definition)`.
+// A plain component's `$id` still names its instance (the reference
+// runner instantiates a plain component at declaration), so named
+// directives resolve it through the same lazy path; a
+// `(component definition ...)` name does not name an instance.
 
 struct RuntimeState {
     engine: ComponentEngine,
@@ -662,6 +673,12 @@ struct RuntimeState {
     /// Programs recorded under their `$id` by `(component $id ...)` and
     /// `(component definition $id ...)`.
     definitions: HashMap<String, ComponentProgram>,
+    /// Names declared by a plain `(component $id ...)` directive, as
+    /// opposed to `(component definition $id ...)`. A plain component is
+    /// instantiated by the reference runner when it is declared, so its
+    /// `$id` names an instance that `invoke`/`register` can resolve; a
+    /// definition-only name cannot be resolved as an instance.
+    plain_names: BTreeSet<String>,
     /// Instances recorded under their `$id` by `(component instance $id ...)`.
     instances: HashMap<String, ComponentInstance>,
     /// Instances named by `register`, kept for `(invoke $name ...)`
@@ -676,6 +693,16 @@ struct RuntimeState {
     /// The most recent non-definition component, awaiting lazy
     /// instantiation.
     pending: Option<ComponentProgram>,
+    /// The `$id` of the pending component when it was named, so the
+    /// instance created from it can be recorded under that name.
+    pending_name: Option<String>,
+    /// The program of the most recent component directive, plain or
+    /// definition-only. A `(component instance ...)` directive with no
+    /// module operand instantiates this definition; it is tracked
+    /// separately from `pending` because a definition-only component
+    /// never becomes the pending current component, and implicit
+    /// instantiation does not consume it.
+    latest: Option<ComponentProgram>,
 }
 
 impl RuntimeState {
@@ -685,10 +712,13 @@ impl RuntimeState {
             store: Store::new(),
             linker: ComponentLinker::new(),
             definitions: HashMap::new(),
+            plain_names: BTreeSet::new(),
             instances: HashMap::new(),
             registered: HashMap::new(),
             current: None,
             pending: None,
+            pending_name: None,
+            latest: None,
         }
     }
 
@@ -701,21 +731,73 @@ impl RuntimeState {
             .await
     }
 
+    /// Instantiates the pending component, recording the instance under
+    /// the pending component's `$id` when it was named. Does not touch
+    /// `current`; callers decide whether the new instance becomes the
+    /// current one.
+    async fn instantiate_pending(&mut self) -> Result<ComponentInstance, String> {
+        let program = self
+            .pending
+            .take()
+            .ok_or_else(|| "no component has been defined yet".to_owned())?;
+        let name = self.pending_name.take();
+        let instance = self
+            .instantiate(&program)
+            .await
+            .map_err(|error| format!("component instantiation failed: {error}"))?;
+        if let Some(name) = name {
+            self.instances.insert(name, instance.clone());
+        }
+        Ok(instance)
+    }
+
     /// Returns the current instance, instantiating the pending component
     /// first if necessary.
     async fn current_instance(&mut self) -> Result<ComponentInstance, String> {
         if let Some(instance) = &self.current {
             return Ok(instance.clone());
         }
+        let instance = self.instantiate_pending().await?;
+        self.current = Some(instance.clone());
+        Ok(instance)
+    }
+
+    /// Resolves an instance referenced by name. Instances created by
+    /// `(component instance $id ...)` and names recorded by `register`
+    /// win. A name declared by a plain `(component $id ...)` directive
+    /// also resolves: the reference runner instantiates a plain
+    /// component at declaration time, so the harness instantiates it on
+    /// first use and records the instance under that name. A
+    /// definition-only name does not name an instance and never
+    /// resolves here.
+    async fn named_instance(&mut self, name: &str) -> Result<ComponentInstance, String> {
+        if let Some(instance) = self
+            .instances
+            .get(name)
+            .or_else(|| self.registered.get(name))
+        {
+            return Ok(instance.clone());
+        }
+        if !self.plain_names.contains(name) {
+            return Err(format!("no instance named `${name}` has been created"));
+        }
+        if self.pending_name.as_deref() == Some(name) {
+            let instance = self.instantiate_pending().await?;
+            if self.current.is_none() {
+                self.current = Some(instance.clone());
+            }
+            return Ok(instance);
+        }
         let program = self
-            .pending
-            .take()
-            .ok_or_else(|| "no component has been defined yet".to_owned())?;
+            .definitions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no instance named `${name}` has been created"))?;
         let instance = self
             .instantiate(&program)
             .await
             .map_err(|error| format!("component instantiation failed: {error}"))?;
-        self.current = Some(instance.clone());
+        self.instances.insert(name.to_owned(), instance.clone());
         Ok(instance)
     }
 
@@ -726,14 +808,7 @@ impl RuntimeState {
         module: Option<wast::token::Id<'_>>,
     ) -> Result<ComponentInstance, String> {
         match module {
-            Some(id) => {
-                let name = id.name();
-                self.instances
-                    .get(name)
-                    .or_else(|| self.registered.get(name))
-                    .cloned()
-                    .ok_or_else(|| format!("no instance named `${name}` has been created"))
-            }
+            Some(id) => self.named_instance(id.name()).await,
             None => self.current_instance().await,
         }
     }
@@ -765,7 +840,12 @@ async fn handle_module_instance(
                 return;
             }
         },
-        None => match runtime.pending.take() {
+        // With no module operand, the directive instantiates the most
+        // recent component definition — plain or definition-only —
+        // tracked separately from the pending current component, and
+        // without consuming it, so repeated implicit instantiations
+        // reuse the same definition.
+        None => match runtime.latest.clone() {
             Some(program) => program,
             None => {
                 fail_at(
@@ -815,12 +895,7 @@ async fn handle_register(
     // directly would report "no instance to register" for the normal
     // define-then-register sequence.
     let resolved = match module {
-        Some(id) => runtime
-            .instances
-            .get(id.name())
-            .or_else(|| runtime.registered.get(id.name()))
-            .cloned()
-            .ok_or_else(|| format!("no instance named `${}` has been created", id.name())),
+        Some(id) => runtime.named_instance(id.name()).await,
         None => runtime.current_instance().await,
     };
     match resolved {

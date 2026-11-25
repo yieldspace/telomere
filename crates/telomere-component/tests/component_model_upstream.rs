@@ -713,3 +713,169 @@ async fn upstream_harness_codex_p2_regressions() {
     }
     println!("upstream_harness_codex_p2_regressions completed: all cases behaved as expected");
 }
+
+/// Regression coverage for the two Codex P2 findings raised on the
+/// re-review of PR #326 (head `daec3c5`), again in the shared harness:
+///
+/// 1. A plain `(component $C ...)` directive names an instance in the
+///    reference runner, so `(invoke $C ...)` and `(register "reg" $C)`
+///    must resolve it. The harness only recorded `$C` as a definition
+///    and searched `instances`/`registered` for named operands, so both
+///    directives failed with "no instance named `$C`". The instance is
+///    now created lazily on first use and recorded under `$C`. A
+///    definition-only name must still not resolve.
+/// 2. `(component instance $i)` with no module operand must instantiate
+///    the most recent component directive, including a
+///    `(component definition ...)` (which never becomes the pending
+///    current component), and must be repeatable instead of consuming
+///    the pending program with `take()`.
+///
+/// Each case runs through `run_component_testsuite_case` and asserts
+/// whether the harness records a failure for it.
+#[tokio::test]
+async fn upstream_harness_codex_p2_round2_regressions() {
+    // (name, wast, expect_failure_recorded)
+    let cases: &[(&str, &str, bool)] = &[
+        (
+            "named-invoke-after-plain-component",
+            r#"
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 42)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(assert_return (invoke $C "answer") (u32.const 42))
+"#,
+            false,
+        ),
+        (
+            "named-register-after-plain-component",
+            r#"
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 42)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(register "reg" $C)
+(assert_return (invoke $reg "answer") (u32.const 42))
+"#,
+            false,
+        ),
+        (
+            "named-invoke-of-earlier-plain-component",
+            r#"
+(component $A
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(component $B
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 2)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(assert_return (invoke $A "answer") (u32.const 1))
+(assert_return (invoke $B "answer") (u32.const 2))
+(assert_return (invoke "answer") (u32.const 2))
+"#,
+            false,
+        ),
+        (
+            "named-invoke-of-definition-only-must-fail",
+            r#"
+(component definition $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 42)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(assert_return (invoke $C "answer") (u32.const 42))
+"#,
+            true,
+        ),
+        (
+            "implicit-instance-after-definition",
+            r#"
+(component definition $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 42)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(component instance $i)
+(assert_return (invoke $i "answer") (u32.const 42))
+"#,
+            false,
+        ),
+        (
+            "implicit-instance-repeated-after-plain-component",
+            r#"
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 42)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(component instance $i)
+(component instance $j)
+(assert_return (invoke $i "answer") (u32.const 42))
+(assert_return (invoke $j "answer") (u32.const 42))
+"#,
+            false,
+        ),
+        (
+            "implicit-instance-repeated-after-definition",
+            r#"
+(component definition $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 42)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(component instance $i)
+(component instance $j)
+(assert_return (invoke $i "answer") (u32.const 42))
+(assert_return (invoke $j "answer") (u32.const 42))
+"#,
+            false,
+        ),
+        (
+            "implicit-instance-uses-latest-definition",
+            r#"
+(component $A
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(component definition $B
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 2)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(component instance $i)
+(assert_return (invoke $i "answer") (u32.const 2))
+"#,
+            false,
+        ),
+    ];
+
+    let mut problems = Vec::new();
+    for (name, text, expect_failure) in cases {
+        let path = PathBuf::from(format!("regressions-round2/{name}.wast"));
+        let report = common::component_model::run_component_testsuite_case(&path, text).await;
+        let recorded_failure = !report.failures.is_empty();
+        if recorded_failure != *expect_failure {
+            problems.push(format!(
+                "{name}: expected failure_recorded={expect_failure}, got {recorded_failure} \
+                 (checked={}, failures={:?})",
+                report.directives_checked, report.failures
+            ));
+        }
+    }
+
+    if !problems.is_empty() {
+        panic!(
+            "upstream_harness_codex_p2_round2_regressions failures\n\n{}",
+            problems.join("\n\n")
+        );
+    }
+    println!(
+        "upstream_harness_codex_p2_round2_regressions completed: all cases behaved as expected"
+    );
+}
