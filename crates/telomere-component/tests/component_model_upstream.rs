@@ -78,22 +78,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          self-checking guest traps at line 169",
     ),
     (
-        "values/alignment.wast",
-        "blocked by issue #312: canonical ABI loads do not trap on \
-         unaligned pointers, so the assert_trap cases (lines 26, 51, \
-         81, 110, 138, 170, 172, 204, 206) succeed instead of trapping",
-    ),
-    (
-        "values/realloc.wast",
-        "blocked by issue #322 (the result of realloc is not \
-         bounds-checked: line 110 does not trap, and lines 66, 108, 123 \
-         trap with a different error than the spec text), issue #312 \
-         (line 93: an unaligned pointer does not trap in the canonical \
-         layer), and a canonical lowering defect: lowering an empty \
-         list does not call realloc with (0, 0, align, 0) as the spec \
-         requires, so the guest traps at line 39",
-    ),
-    (
         "values/variants.wast",
         "the component at line 82 uses async canonical operations \
          (canon task.return, async lift/lower), a documented \
@@ -102,11 +86,8 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "linking/unit.wast",
-        "blocked by several known defects: nested component instances \
-         are instantiated lazily in resolution order rather than \
-         eagerly in definition order, so core start functions observe \
-         ticket ranks 2, 3, 1 instead of 1, 2, 3 (lines 645-647); \
-         resource handle indices and destructor counts are shared \
+        "blocked by several known defects: resource handle indices \
+         and destructor counts are shared \
          across instances instead of per-instance (issue #317; lines \
          724-729, 787-792, 863-866, 930-933, 994-997, 1020-1022); a \
          valid func import whose surface type is an unnamed generic \

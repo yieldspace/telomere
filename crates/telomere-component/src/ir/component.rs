@@ -10,23 +10,28 @@ use std::collections::HashMap;
 pub struct Component {
     pub(crate) imports: HashMap<ImportNameString, ComponentImport>,
     pub(crate) exports: HashMap<ExportNameString, ComponentExport>,
-    /// Global indices of the core instances *defined* in this component
-    /// (both the instantiate and inline-export forms), in definition order.
-    /// Aliased core instances are not listed: they are never materialised.
-    /// The runtime materialises these in the environment of each instance
-    /// of this component, so that `(with ...)` instantiation arguments are
-    /// honoured when the core instances are created (#316).
-    pub(crate) core_instances: Vec<GlobalIdx<CoreInstance>>,
-    /// Global indices of the component instances *defined* in this
-    /// component (the `(instance (instantiate ...))` form), in definition
-    /// order. Imported and aliased instances are not listed: imported
-    /// instances are supplied by the linker, and aliased instances share
-    /// the instance they alias. Instantiating a component instantiates
-    /// these eagerly — the runtime resolves each one when an instance of
-    /// this component is created, so the core instances they define are
-    /// materialised (running any core start functions) even when none of
-    /// their exports are ever referenced.
-    pub(crate) instances: Vec<GlobalIdx<Instance>>,
+    /// The core and component instances *defined* in this component
+    /// (the instantiate and inline-export forms of both kinds), in
+    /// definition order across both kinds. Imported and aliased
+    /// instances are not listed: imported instances are supplied by the
+    /// linker, aliased instances share the instance they alias, and
+    /// aliased core instances are never materialised. Instantiating a
+    /// component materialises these eagerly in this order — the runtime
+    /// resolves each one, in the environment of each instance of this
+    /// component, when that instance is created, so `(with ...)`
+    /// instantiation arguments are honoured (#316) and core start
+    /// functions observe the definition order of the instances whose
+    /// creation runs them (#333), even when none of their exports are
+    /// ever referenced.
+    pub(crate) defined_instances: Vec<DefinedInstance>,
+}
+
+/// A core or component instance defined in a [`Component`]; see
+/// [`Component::defined_instances`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DefinedInstance {
+    Core(GlobalIdx<CoreInstance>),
+    Component(GlobalIdx<Instance>),
 }
 
 #[derive(Debug, Clone)]

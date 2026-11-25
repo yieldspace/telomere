@@ -100,7 +100,7 @@ impl HostBinding {
             HostBinding::ResourceNew {
                 resource,
                 destructor,
-                shared,
+                handles,
                 ..
             } => {
                 let rep = match args.first() {
@@ -116,11 +116,17 @@ impl HostBinding {
                         ))
                     }
                 };
-                let handle = shared.alloc_resource(*resource, rep, destructor.clone());
+                let handle =
+                    handles
+                        .borrow_mut()
+                        .alloc_resource(*resource, rep, destructor.clone());
                 Ok(vec![WasmValue::I32(handle as i32)])
             }
             HostBinding::ResourceDrop {
-                resource, shared, ..
+                resource,
+                shared,
+                handles,
+                ..
             } => {
                 let handle = match args.first() {
                     Some(WasmValue::I32(v)) => *v as u32,
@@ -135,7 +141,13 @@ impl HostBinding {
                         ))
                     }
                 };
-                match shared.drop_resource(*resource, handle) {
+                // Take the entry out of the table first and let the
+                // borrow end here: the Ok arm invokes the resource's
+                // destructor and the Err arm runs a host-registered
+                // drop, and either may re-enter this instance's canon
+                // resource ops, which borrow the table again.
+                let dropped = handles.borrow_mut().drop_resource(*resource, handle);
+                match dropped {
                     Ok((rep, destructor)) => {
                         shared.forget_host_resource(handle);
                         if let Some(dtor) = destructor {
@@ -159,7 +171,7 @@ impl HostBinding {
                 }
             }
             HostBinding::ResourceRep {
-                resource, shared, ..
+                resource, handles, ..
             } => {
                 let handle = match args.first() {
                     Some(WasmValue::I32(v)) => *v as u32,
@@ -175,43 +187,70 @@ impl HostBinding {
                     }
                 };
                 Ok(vec![WasmValue::I32(
-                    shared.resource_rep(*resource, handle)?,
+                    handles.borrow().resource_rep(*resource, handle)?,
                 )])
             }
         }
     }
 }
 
-impl SharedState {
+impl HandleTable {
+    /// Allocates a handle in this instance's table: the most recently
+    /// freed index is reused first (LIFO); otherwise the next fresh
+    /// index in sequence from 1 is handed out.
     fn alloc_resource(
-        &self,
+        &mut self,
         resource: ResourceId,
         rep: i32,
         destructor: Option<RuntimeCoreFunc>,
     ) -> u32 {
-        let handle = self.next_resource_handle.get() + 1;
-        self.next_resource_handle.set(handle);
-        self.resources
-            .borrow_mut()
-            .entry(resource)
-            .or_default()
-            .insert(handle, ResourceRecord { rep, destructor });
+        let handle = match self.free_list.pop() {
+            Some(handle) => handle,
+            None => {
+                let handle = self.next_index;
+                self.next_index = self.next_index.wrapping_add(1);
+                handle
+            }
+        };
+        self.entries.insert(
+            handle,
+            HandleEntry {
+                resource,
+                record: ResourceRecord { rep, destructor },
+            },
+        );
         handle
     }
 
+    /// Removes a handle from this instance's table and frees its index
+    /// for LIFO reuse. A handle that this instance never allocated, that
+    /// was already dropped, or that belongs to a different resource type
+    /// is invalid here.
     fn drop_resource(
-        &self,
+        &mut self,
         resource: ResourceId,
         handle: u32,
     ) -> Result<(i32, Option<RuntimeCoreFunc>), ComponentError> {
-        self.resources
-            .borrow_mut()
-            .get_mut(&resource)
-            .and_then(|records| records.remove(&handle))
-            .map(|record| (record.rep, record.destructor))
-            .ok_or_else(|| ComponentError::Trap(format!("resource handle {handle} is invalid")))
+        let invalid = || ComponentError::Trap(format!("resource handle {handle} is invalid"));
+        match self.entries.get(&handle) {
+            Some(entry) if entry.resource == resource => {}
+            _ => return Err(invalid()),
+        }
+        let entry = self.entries.remove(&handle).ok_or_else(invalid)?;
+        self.free_list.push(handle);
+        Ok((entry.record.rep, entry.record.destructor))
     }
 
+    fn resource_rep(&self, resource: ResourceId, handle: u32) -> Result<i32, ComponentError> {
+        self.entries
+            .get(&handle)
+            .filter(|entry| entry.resource == resource)
+            .map(|entry| entry.record.rep)
+            .ok_or_else(|| ComponentError::Trap(format!("resource handle {handle} is invalid")))
+    }
+}
+
+impl SharedState {
     /// Records a handle that has entered guest code through a lowered call,
     /// under the resource type the producing function declared.
     ///
@@ -287,15 +326,6 @@ impl SharedState {
         let released = run_ready_future_sync(drop_fn(store, handle), "host resource drop")?;
         released?;
         Ok(true)
-    }
-
-    fn resource_rep(&self, resource: ResourceId, handle: u32) -> Result<i32, ComponentError> {
-        self.resources
-            .borrow()
-            .get(&resource)
-            .and_then(|records| records.get(&handle))
-            .map(|record| record.rep)
-            .ok_or_else(|| ComponentError::Trap(format!("resource handle {handle} is invalid")))
     }
 }
 
@@ -414,7 +444,23 @@ fn component_host_trampoline(cx: &mut HostContext) -> VMResult<Vec<WasmValue>> {
         // yields under the first-poll contract -- surfaces to the guest as
         // an `unreachable` trap. That is the documented behaviour for the
         // canon-lower path; component-level calls return the error itself.
-        Err(_) => VMResult::Unreachable,
+        // To keep that last part true when the failure is a trap (a
+        // canonical ABI trap, or a guest trap from a nested call), the
+        // error is also kept in `PENDING_HOST_TRAP`, and
+        // `vm_result_to_component_error` restores it when this execution's
+        // result is converted: the guest still observes only `unreachable`,
+        // but the component-level caller sees the original trap cause
+        // instead of a bare "trapped: unreachable". Non-trap failures are
+        // not kept; they keep surfacing as the plain `unreachable` trap.
+        Err(error) => {
+            if matches!(
+                error,
+                ComponentError::Trap(_) | ComponentError::GuestTrap { .. }
+            ) {
+                PENDING_HOST_TRAP.with(|pending| *pending.borrow_mut() = Some(error));
+            }
+            VMResult::Unreachable
+        }
     }
 }
 
@@ -486,10 +532,20 @@ pub(super) fn vm_result_to_component_error(
 ) -> ComponentError {
     match result {
         CoreVMResult::Success(_) => unreachable!(),
-        CoreVMResult::Unreachable => ComponentError::GuestTrap {
-            kind: telomere::TrapKind::Unreachable,
-            message: format!("{context} trapped: unreachable"),
-        },
+        CoreVMResult::Unreachable => {
+            // A trap a host binding raised while servicing this execution
+            // was kept by `component_host_trampoline`; restore it so the
+            // trap cause survives the core boundary. Every core execution's
+            // non-success result is converted exactly once, through this
+            // function, so a kept trap cannot outlive its own execution.
+            if let Some(error) = PENDING_HOST_TRAP.with(|pending| pending.borrow_mut().take()) {
+                return error;
+            }
+            ComponentError::GuestTrap {
+                kind: telomere::TrapKind::Unreachable,
+                message: format!("{context} trapped: unreachable"),
+            }
+        }
         CoreVMResult::StackOverflow => ComponentError::GuestTrap {
             kind: telomere::TrapKind::StackOverflow,
             message: format!("{context} trapped: stack overflow"),
