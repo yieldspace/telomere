@@ -1,7 +1,8 @@
 use super::canonical::{
     component_value_to_direct_wasm, direct_wasm_to_component_value, lift_component_args,
     lift_component_results, lower_component_args, lower_component_results,
-    lowered_indirect_result_area, track_host_owned_results,
+    lowered_indirect_result_area, retire_lent_handles, track_host_owned_results, transfer_handles,
+    HandleTransfer,
 };
 use super::*;
 
@@ -36,6 +37,7 @@ impl ResolvedCallable {
                 func_type,
                 options,
                 program,
+                ..
             } => {
                 let core_args = lower_component_args(func_type, args, options, program, store)?;
                 let core_results = core.call_sync(store, &core_args)?;
@@ -89,11 +91,80 @@ impl HostBinding {
                 options,
                 program,
                 shared,
+                handles,
                 ..
             } => {
                 let result_area = lowered_indirect_result_area(func_type, args, program)?;
-                let component_args = lift_component_args(func_type, args, options, program, store)?;
-                let results = callable.call_sync(store, &component_args)?;
+                let mut component_args =
+                    lift_component_args(func_type, args, options, program, store)?;
+                // When the callee is another component instance's lifted
+                // function, the call crosses a handle-table boundary:
+                // handles in the argument values are indices into this
+                // instance's table and must be transferred into the
+                // callee's, and result handles transferred back (#342).
+                // Host and raw-core callees own no table; their handles
+                // keep the pass-through treatment (host-provided handles
+                // are tracked in `SharedState` instead). A callee in the
+                // same instance shares this table and needs no transfer.
+                let boundary = match callable.as_ref() {
+                    ResolvedCallable::Lifted {
+                        func_type: callee_type,
+                        handles: callee_handles,
+                        ..
+                    } if !Rc::ptr_eq(handles, callee_handles) => {
+                        Some((callee_type, callee_handles))
+                    }
+                    _ => None,
+                };
+                let mut lent: Vec<u32> = Vec::new();
+                if let Some((callee_type, callee_handles)) = boundary {
+                    let mut transfer = HandleTransfer {
+                        program,
+                        shared,
+                        src: handles,
+                        dst: callee_handles,
+                        lent: Some(&mut lent),
+                        src_reps: false,
+                    };
+                    transfer_handles(
+                        &mut component_args,
+                        &func_type.params,
+                        &callee_type.params,
+                        &mut transfer,
+                    );
+                }
+                let mut results = match callable.call_sync(store, &component_args) {
+                    Ok(results) => results,
+                    Err(error) => {
+                        if let Some((_, callee_handles)) = boundary {
+                            retire_lent_handles(callee_handles, &lent);
+                        }
+                        return Err(error);
+                    }
+                };
+                if let Some((callee_type, callee_handles)) = boundary {
+                    if let (Some(result_ty), Some(callee_result_ty)) =
+                        (&func_type.result, &callee_type.result)
+                    {
+                        if let Some(result) = results.first_mut() {
+                            let mut transfer = HandleTransfer {
+                                program,
+                                shared,
+                                src: callee_handles,
+                                dst: handles,
+                                lent: None,
+                                src_reps: true,
+                            };
+                            transfer_handles(
+                                std::slice::from_mut(result),
+                                std::slice::from_ref(callee_result_ty),
+                                std::slice::from_ref(result_ty),
+                                &mut transfer,
+                            );
+                        }
+                    }
+                    retire_lent_handles(callee_handles, &lent);
+                }
                 track_host_owned_results(func_type, &results, program, shared);
                 lower_component_results(func_type, &results, options, program, store, result_area)
             }
@@ -204,6 +275,18 @@ impl HandleTable {
         rep: i32,
         destructor: Option<RuntimeCoreFunc>,
     ) -> u32 {
+        self.insert_entry(resource, ResourceRecord { rep, destructor }, false)
+    }
+
+    /// Inserts an entry under a fresh or LIFO-reused index and returns
+    /// the index. Used by `resource.new` and by the handle transfers at
+    /// component-call boundaries (#342).
+    pub(super) fn insert_entry(
+        &mut self,
+        resource: ResourceId,
+        record: ResourceRecord,
+        borrowed: bool,
+    ) -> u32 {
         let handle = match self.free_list.pop() {
             Some(handle) => handle,
             None => {
@@ -216,10 +299,37 @@ impl HandleTable {
             handle,
             HandleEntry {
                 resource,
-                record: ResourceRecord { rep, destructor },
+                record,
+                borrowed,
             },
         );
         handle
+    }
+
+    /// Removes the entry for `handle`, freeing its index for LIFO
+    /// reuse, and returns its record; `None` when this instance's table
+    /// holds no such handle. Ownership transfers at a call boundary use
+    /// this to move an entry between tables without destroying the
+    /// resource (#342).
+    pub(super) fn take_entry(&mut self, handle: u32) -> Option<ResourceRecord> {
+        let entry = self.entries.remove(&handle)?;
+        self.free_list.push(handle);
+        Some(entry.record)
+    }
+
+    /// Returns a copy of the record for `handle`, or `None` when this
+    /// instance's table holds no such handle.
+    pub(super) fn record_of(&self, handle: u32) -> Option<ResourceRecord> {
+        self.entries.get(&handle).map(|entry| entry.record.clone())
+    }
+
+    /// Removes the entry for `handle` if present, freeing its index.
+    /// Used to retire borrow entries registered for a single call
+    /// (#342); a borrow the callee already dropped is simply absent.
+    pub(super) fn remove_entry(&mut self, handle: u32) {
+        if self.entries.remove(&handle).is_some() {
+            self.free_list.push(handle);
+        }
     }
 
     /// Removes a handle from this instance's table and frees its index
@@ -238,7 +348,15 @@ impl HandleTable {
         }
         let entry = self.entries.remove(&handle).ok_or_else(invalid)?;
         self.free_list.push(handle);
-        Ok((entry.record.rep, entry.record.destructor))
+        // A borrowed entry only registers another instance's resource
+        // for the duration of a call: dropping it removes the
+        // registration and never runs the destructor (#342).
+        let destructor = if entry.borrowed {
+            None
+        } else {
+            entry.record.destructor
+        };
+        Ok((entry.record.rep, destructor))
     }
 
     fn resource_rep(&self, resource: ResourceId, handle: u32) -> Result<i32, ComponentError> {

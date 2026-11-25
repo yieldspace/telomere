@@ -1859,3 +1859,164 @@ async fn indirect_empty_list_lowering_still_calls_realloc_with_zero_size() {
         "the list length stored in the area must be zero"
     );
 }
+
+// Issue #331: canonical ABI `lift` must reject out-of-range variant/enum
+// discriminants with the canonical trap text `invalid variant discriminant`
+// (CanonicalABI.md `lift` for variant/enum), on both the flat and the
+// memory-backed paths.
+fn assert_invalid_variant_discriminant(error: &ComponentError) {
+    match error {
+        ComponentError::Trap(message) => assert!(
+            message.contains("invalid variant discriminant"),
+            "trap message must be the canonical `invalid variant discriminant`, got: {message}"
+        ),
+        other => panic!("expected a canonical discriminant trap, got: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn flat_variant_result_with_out_of_range_discriminant_traps_canonically() {
+    let (store, instance) = instantiate(
+        r#"
+(component
+  (type $v (variant (case "x")))
+  (export "v" (type $v))
+  (core module $M
+    (func (export "give") (result i32) (i32.const 1))
+    (func (export "give-ok") (result i32) (i32.const 0)))
+  (core instance $m (instantiate $M))
+  (func (export "give") (result $v) (canon lift (core func $m "give")))
+  (func (export "give-ok") (result $v) (canon lift (core func $m "give-ok"))))
+"#,
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let values = instance
+        .call(&store, "give-ok", &[])
+        .await
+        .expect("in-range discriminant must lift");
+    // A variant whose cases are all payloadless lifts to
+    // `ComponentValue::Enum` (the runtime's enum representation).
+    assert_eq!(values, vec![ComponentValue::Enum("x".to_owned())]);
+
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("discriminant 1 for a 1-case variant must trap");
+    assert_invalid_variant_discriminant(&error);
+}
+
+#[tokio::test]
+async fn flat_enum_result_with_out_of_range_discriminant_traps_canonically() {
+    let (store, instance) = instantiate(
+        r#"
+(component
+  (type $e (enum "a" "b"))
+  (export "e" (type $e))
+  (core module $M
+    (func (export "give") (result i32) (i32.const 2))
+    (func (export "give-ok") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M))
+  (func (export "give") (result $e) (canon lift (core func $m "give")))
+  (func (export "give-ok") (result $e) (canon lift (core func $m "give-ok"))))
+"#,
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let values = instance
+        .call(&store, "give-ok", &[])
+        .await
+        .expect("in-range discriminant must lift");
+    assert_eq!(values, vec![ComponentValue::Enum("b".to_owned())]);
+
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("discriminant 2 for a 2-case enum must trap");
+    assert_invalid_variant_discriminant(&error);
+}
+
+#[tokio::test]
+async fn memory_variant_result_with_out_of_range_discriminant_traps_canonically() {
+    // A variant with a string payload has more than one flat result slot, so
+    // the result crosses through memory: the discriminant byte at the result
+    // area is read by the memory-backed lift.
+    let (store, instance) = instantiate(
+        r#"
+(component
+  (type $v (variant (case "a" string) (case "b" u32)))
+  (export "v" (type $v))
+  (core module $M
+    (memory (export "mem") 1)
+    (func (export "give") (result i32)
+      (i32.store8 (i32.const 64) (i32.const 2))
+      (i32.store (i32.const 68) (i32.const 200))
+      (i32.store (i32.const 72) (i32.const 3))
+      (i32.const 64))
+    (func (export "give-ok") (result i32)
+      (i32.store8 (i32.const 64) (i32.const 1))
+      (i32.store (i32.const 68) (i32.const 42))
+      (i32.const 64)))
+  (core instance $m (instantiate $M))
+  (func (export "give") (result $v)
+    (canon lift (core func $m "give") (memory (core memory $m "mem"))))
+  (func (export "give-ok") (result $v)
+    (canon lift (core func $m "give-ok") (memory (core memory $m "mem")))))
+"#,
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let values = instance
+        .call(&store, "give-ok", &[])
+        .await
+        .expect("in-range discriminant must lift");
+    assert_eq!(
+        values,
+        vec![ComponentValue::Variant {
+            case: "b".to_owned(),
+            value: Some(Box::new(ComponentValue::U32(42))),
+        }]
+    );
+
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("discriminant 2 for a 2-case variant must trap");
+    assert_invalid_variant_discriminant(&error);
+}
+
+#[tokio::test]
+async fn list_of_variants_with_out_of_range_discriminant_traps_canonically() {
+    // Variants nested inside a list cross through memory element-by-element;
+    // the second element's discriminant (1) is out of range for a 1-case
+    // variant.
+    let (store, instance) = instantiate(
+        r#"
+(component
+  (type $v (variant (case "x")))
+  (export "v" (type $v))
+  (core module $M
+    (memory (export "mem") 1)
+    (func (export "give") (result i32)
+      (i32.store8 (i32.const 100) (i32.const 0))
+      (i32.store8 (i32.const 101) (i32.const 1))
+      (i32.store (i32.const 64) (i32.const 100))
+      (i32.store (i32.const 68) (i32.const 2))
+      (i32.const 64)))
+  (core instance $m (instantiate $M))
+  (func (export "give") (result (list $v))
+    (canon lift (core func $m "give") (memory (core memory $m "mem")))))
+"#,
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("out-of-range discriminant inside a list must trap");
+    assert_invalid_variant_discriminant(&error);
+}
