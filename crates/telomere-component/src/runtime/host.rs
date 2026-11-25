@@ -141,7 +141,13 @@ impl HostBinding {
                         ))
                     }
                 };
-                match handles.borrow_mut().drop_resource(*resource, handle) {
+                // Take the entry out of the table first and let the
+                // borrow end here: the Ok arm invokes the resource's
+                // destructor and the Err arm runs a host-registered
+                // drop, and either may re-enter this instance's canon
+                // resource ops, which borrow the table again.
+                let dropped = handles.borrow_mut().drop_resource(*resource, handle);
+                match dropped {
                     Ok((rep, destructor)) => {
                         shared.forget_host_resource(handle);
                         if let Some(dtor) = destructor {
