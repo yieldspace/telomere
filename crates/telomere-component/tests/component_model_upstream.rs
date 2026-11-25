@@ -63,14 +63,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          182-185",
     ),
     (
-        "linking/unit.wast",
-        "inline core instances exporting globals are not supported \
-         by the runtime (issue #324; lines 2010, 2043, with the \
-         knock-on invoke failures at lines 2011-2012). The line 799 \
-         func import rejection and the dependent count-1/count-2 \
-         failures at lines 863-866 (issues #321, #347) are fixed",
-    ),
-    (
         "binary/binary.wast",
         "malformed-binary strictness is fixed (#319: section sizes \
          are enforced and core decode reasons are preserved), but the \

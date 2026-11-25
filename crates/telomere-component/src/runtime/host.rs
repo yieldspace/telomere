@@ -898,12 +898,17 @@ pub(super) fn materialize_inline_core_instance(
                 registry.register(module_name.clone(), table.instance.clone());
                 triplets.push((module_name, table.export_name, export_name.clone()));
             }
-            CoreInstanceInlineExport::Global(_)
-            | CoreInstanceInlineExport::Type(_)
+            CoreInstanceInlineExport::Global(idx) => {
+                let global = env.resolve_core_global(*idx, store)?;
+                let module_name = format!("core-global-{}-{}", export_name, triplets.len());
+                registry.register(module_name.clone(), global.instance.clone());
+                triplets.push((module_name, global.export_name, export_name.clone()));
+            }
+            CoreInstanceInlineExport::Type(_)
             | CoreInstanceInlineExport::Instance(_)
             | CoreInstanceInlineExport::Module(_) => {
                 return Err(ComponentError::Unsupported(
-                    "runtime inline core instances only support func/memory/table exports"
+                    "runtime inline core instances only support func/memory/table/global exports"
                         .to_owned(),
                 ));
             }
