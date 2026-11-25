@@ -134,3 +134,42 @@ fn variant_over_the_limit_is_rejected() {
     // discriminant (1) + payload 268435455 = 2^28
     assert_too_big("(type (variant (case \"a\") (case \"b\" (list u8 268435455))))");
 }
+
+#[test]
+fn shared_reference_chains_stay_fast() {
+    // Regression (Codex P1 on PR #364): the alignment walk used to
+    // re-expand shared type references on every visit, so a chain of
+    // types whose two branches both reference the preceding type took
+    // exponential time to validate even though every type in the
+    // chain is small and valid (measured pre-fix in release mode:
+    // 24 variant definitions / 427 bytes took ~2.1 s, doubling with
+    // each added definition). Alignment is now memoised per type, so
+    // the same shapes are linear; the 40-deep variant chain is only
+    // feasible at all with the cache (2^40 uncached steps). The time
+    // bound is a loose backstop, not the primary assertion.
+    let mut variant = String::from("(type $v0 (variant (case \"x\" u8)))");
+    for k in 1..40 {
+        variant.push_str(&format!(
+            " (type $v{k} (variant (case \"l\" $v{}) (case \"r\" $v{})))",
+            k - 1,
+            k - 1
+        ));
+    }
+    // Record sizes double per level: depth 23 peaks at 2^23 bytes.
+    let mut record = String::from("(type $r0 (record (field \"a\" u8)))");
+    for k in 1..24 {
+        record.push_str(&format!(
+            " (type $r{k} (record (field \"l\" $r{}) (field \"r\" $r{})))",
+            k - 1,
+            k - 1
+        ));
+    }
+    let start = std::time::Instant::now();
+    assert_valid(&variant);
+    assert_valid(&record);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "shared-reference chains must validate in linear time, took {:?}",
+        start.elapsed()
+    );
+}

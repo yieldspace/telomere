@@ -499,6 +499,18 @@ impl<'a> Validator<'a> {
         type_id: TypeId,
         visiting: &mut VisitTracker,
     ) -> ParseResult<u64> {
+        // Memoised per type, like `compute_effective_type_size`: a
+        // type's alignment depends only on its definition, and shared
+        // references (e.g. both cases of a variant pointing at the
+        // preceding type) must not re-expand the same graph on every
+        // visit — with only the cycle tracker guarding the walk, a
+        // chain of such definitions took exponential time even though
+        // every type in it is small and valid. A re-entrant visit
+        // (recursive type) still contributes 1 and is not cached, so
+        // the cycle semantics are unchanged.
+        if let Some(alignment) = self.types.alignment(type_id) {
+            return Ok(alignment);
+        }
         if !visiting.enter(type_id) {
             return Ok(1);
         }
@@ -519,7 +531,9 @@ impl<'a> Validator<'a> {
             | Type::Instance(_) => Ok(1),
         };
         visiting.leave(type_id);
-        result
+        let alignment = result?;
+        self.types.set_alignment(type_id, alignment);
+        Ok(alignment)
     }
 
     fn compute_defval_alignment(
