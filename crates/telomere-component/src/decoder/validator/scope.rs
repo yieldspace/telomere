@@ -68,6 +68,10 @@ impl<R, T> CoreTypeStore<R, T> {
             .get(idx.get() as usize)
             .ok_or_else(|| crate::decoder::ComponentParseError::TypeIdxNotFound(idx.get()))
     }
+
+    pub fn len(&self) -> usize {
+        self.types.len()
+    }
 }
 #[derive(Debug)]
 pub enum ExportInfo {

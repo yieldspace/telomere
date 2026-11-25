@@ -23,8 +23,10 @@ pub fn _parse_instance_decl(
     };
     match b {
         0x00 => {
-            let (_, ty) = parse_core_type(ctx)?;
-            ctx.validator.scope_mut().core_types.add(ty);
+            let (_, types) = parse_core_type(ctx)?;
+            for ty in types {
+                ctx.validator.scope_mut().core_types.add(ty);
+            }
         }
         0x01 => {
             let t = parse_type(ctx, depth)?;

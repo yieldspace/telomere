@@ -39,17 +39,6 @@ fn parse_wasm_result_type(reader: &mut impl BinaryReader) -> SizedResult<ResultT
     Ok((len, ResultType(types)))
 }
 
-fn parse_wasm_functype(reader: &mut impl BinaryReader) -> SizedResult<WasmFuncType> {
-    let start = reader.read_count();
-    let signature = reader.read_exact_one()?;
-    if signature != 0x60 {
-        return Err(ComponentParseError::InvalidSignature(format!(
-            "invalid core functype signature: {signature}"
-        )));
-    }
-    parse_wasm_functype_body(reader, start)
-}
-
 fn parse_wasm_functype_body(
     reader: &mut impl BinaryReader,
     start: usize,
@@ -276,8 +265,23 @@ fn parse_core_module_type(
                 }
             }
             0x01 => {
-                let (_, ty) = parse_wasm_functype(ctx.reader)?;
-                local_types.push(LocalCoreType::Func(ty));
+                // A module type declarator contains a `core:rectype`
+                // in the plain Core WebAssembly encoding: a bare 0x50
+                // is a non-final `sub` here and a `core:moduletype`
+                // cannot be nested (design/mvp/Binary.md).
+                let base_len = local_types.len();
+                let resolve_existing = |idx: u32| {
+                    local_types.get(idx as usize).map(|ty| SuperTypeInfo {
+                        is_func: matches!(ty, LocalCoreType::Func(_)),
+                        is_final: None,
+                    })
+                };
+                let leading = ctx.reader.read_exact_one()?;
+                let (_, defined) =
+                    parse_core_rectype(ctx.reader, leading, base_len, &resolve_existing)?;
+                for defined in defined {
+                    local_types.push(LocalCoreType::Func(defined.func));
+                }
             }
             0x02 => {
                 parse_core_module_alias(ctx, &mut local_types)?;
@@ -305,16 +309,237 @@ fn parse_core_module_type(
     ))
 }
 
-pub fn parse_core_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<CoreType> {
-    let start = ctx.reader.read_count();
-    let ty = match ctx.reader.read_exact_one()? {
-        0x60 => CoreType::Func(parse_wasm_functype_body(ctx.reader, start)?.1),
-        0x50 => CoreType::Module(parse_core_module_type(ctx)?.1),
-        x => {
+/// A core subtype decoded from a `core:rectype`: the func type it
+/// defines and whether the definition is final.
+///
+/// `CoreType` does not record finality or supertypes — the component
+/// decoder's core type model is just the defined types themselves —
+/// but finality is still needed while a rectype is being decoded: a
+/// supertype index that names a type defined earlier by the same
+/// rectype must name a non-final one.
+struct DefinedCoreSubtype {
+    func: CoreFuncType,
+    is_final: bool,
+}
+
+/// What a supertype index in a `core:rectype` must resolve to.
+struct SuperTypeInfo {
+    /// Whether the referenced type is a func type. Func is the only
+    /// comptype kind this decoder models, so a supertype of any other
+    /// kind cannot be the supertype of a subtype decoded here.
+    is_func: bool,
+    /// Whether the referenced type is final, when known. Types defined
+    /// by earlier definitions do not record finality in `CoreType`, so
+    /// they report `None` and only the kind check applies to them.
+    is_final: Option<bool>,
+}
+
+/// Decodes a `core:comptype` whose leading byte has been read. Only
+/// the func comptype is modelled by this decoder; struct and array
+/// comptypes are rejected as unsupported, as they are in every other
+/// core type position here.
+fn parse_core_comptype(reader: &mut impl BinaryReader, leading: u8) -> SizedResult<CoreFuncType> {
+    let start = reader.read_count() - 1;
+    let func = match leading {
+        0x60 => parse_wasm_functype_body(reader, start)?.1,
+        0x5e | 0x5f => {
             return Err(ComponentParseError::Unsupported(format!(
-                "unsupported core type opcode: {x}"
+                "unsupported core comptype opcode: {leading}"
+            )));
+        }
+        x => {
+            return Err(ComponentParseError::InvalidType(format!(
+                "invalid leading byte (0x{x:x}) for core comptype"
             )));
         }
     };
-    Ok((ctx.reader.read_count() - start, ty))
+    Ok((reader.read_count() - start, func))
+}
+
+/// Decodes the body of a `core:subtype` after a `sub` (0x50) or
+/// `sub final` (0x4f) prefix: the supertype index vector and the
+/// comptype. Pushes the defined type onto `defined`.
+///
+/// Supertype indices below `base_len` name types that were already in
+/// the index space when the enclosing rectype started and are resolved
+/// through `resolve_existing`; indices at or above it name types
+/// defined earlier by the same rectype.
+fn parse_core_subtype_body(
+    reader: &mut impl BinaryReader,
+    is_final: bool,
+    base_len: usize,
+    defined: &mut Vec<DefinedCoreSubtype>,
+    resolve_existing: &dyn Fn(u32) -> Option<SuperTypeInfo>,
+) -> SizedResult<()> {
+    let start = reader.read_count();
+    let (_, supertypes) = parse_vec(reader, |v| v, parse_u32)?;
+    for idx in supertypes {
+        let info = if (idx as usize) < base_len {
+            resolve_existing(idx)
+        } else {
+            defined
+                .get(idx as usize - base_len)
+                .map(|defined| SuperTypeInfo {
+                    is_func: true,
+                    is_final: Some(defined.is_final),
+                })
+        }
+        .ok_or(ComponentParseError::TypeIdxNotFound(idx))?;
+        if !info.is_func {
+            return Err(ComponentParseError::InvalidType(format!(
+                "core subtype supertype {idx} is not a func type"
+            )));
+        }
+        if info.is_final == Some(true) {
+            return Err(ComponentParseError::InvalidType(format!(
+                "core subtype supertype {idx} is final"
+            )));
+        }
+    }
+    let leading = reader.read_exact_one()?;
+    let (_, func) = parse_core_comptype(reader, leading)?;
+    defined.push(DefinedCoreSubtype { func, is_final });
+    Ok((reader.read_count() - start, ()))
+}
+
+/// Decodes one `core:subtype` whose leading byte has been read,
+/// pushing the defined type onto `defined`.
+fn parse_core_subtype(
+    reader: &mut impl BinaryReader,
+    leading: u8,
+    base_len: usize,
+    defined: &mut Vec<DefinedCoreSubtype>,
+    resolve_existing: &dyn Fn(u32) -> Option<SuperTypeInfo>,
+) -> SizedResult<()> {
+    let start = reader.read_count();
+    match leading {
+        0x50 => {
+            parse_core_subtype_body(reader, false, base_len, defined, resolve_existing)?;
+        }
+        0x4f => {
+            parse_core_subtype_body(reader, true, base_len, defined, resolve_existing)?;
+        }
+        0x5e..=0x60 => {
+            // A bare comptype is a final subtype with no supertypes.
+            let (_, func) = parse_core_comptype(reader, leading)?;
+            defined.push(DefinedCoreSubtype {
+                func,
+                is_final: true,
+            });
+        }
+        x => {
+            return Err(ComponentParseError::InvalidType(format!(
+                "invalid leading byte (0x{x:x}) for core subtype"
+            )));
+        }
+    }
+    Ok((reader.read_count() - start, ()))
+}
+
+/// Decodes a `core:rectype` in the Core WebAssembly encoding — a
+/// `rec` group (0x4e) or a single subtype — whose leading byte has
+/// been read. Returns the types it defines, in index order.
+fn parse_core_rectype(
+    reader: &mut impl BinaryReader,
+    leading: u8,
+    base_len: usize,
+    resolve_existing: &dyn Fn(u32) -> Option<SuperTypeInfo>,
+) -> SizedResult<Vec<DefinedCoreSubtype>> {
+    let start = reader.read_count();
+    let mut defined = Vec::new();
+    match leading {
+        0x4e => {
+            let (_, count) = parse_u32(reader)?;
+            for _ in 0..count {
+                let leading = reader.read_exact_one()?;
+                parse_core_subtype(reader, leading, base_len, &mut defined, resolve_existing)?;
+            }
+        }
+        leading => {
+            parse_core_subtype(reader, leading, base_len, &mut defined, resolve_existing)?;
+        }
+    }
+    Ok((reader.read_count() - start, defined))
+}
+
+/// Decodes a `core:deftype` (a core type section entry, or the core
+/// typedef inside a component/instance type). Returns every core type
+/// the definition introduces into the core type index space, in index
+/// order: a `core:rectype` can define several types at once (a `rec`
+/// group), the other forms define exactly one.
+pub fn parse_core_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Vec<CoreType>> {
+    let start = ctx.reader.read_count();
+    let types = match ctx.reader.read_exact_one()? {
+        0x50 => vec![CoreType::Module(parse_core_module_type(ctx)?.1)],
+        0x00 => {
+            // `core:deftype` shares the 0x50 opcode between
+            // `core:moduletype` and a non-final `core:subtype`. The
+            // pre-1.0 resolution (design/mvp/Binary.md, "Type
+            // Definitions") is that a non-final subtype in this
+            // position is prefixed by 0x00, while a bare 0x50 is the
+            // moduletype above.
+            let prefix = ctx.reader.read_exact_one()?;
+            if prefix != 0x50 {
+                return Err(ComponentParseError::InvalidType(format!(
+                    "invalid leading byte (0x{prefix:x}) for core subtype: \
+                     a non-final subtype in a core type definition is \
+                     encoded as 0x00 0x50"
+                )));
+            }
+            let validator = &*ctx.validator;
+            let resolve_existing = |idx: u32| {
+                validator
+                    .scope()
+                    .core_types
+                    .get(LocalIdx::new(idx))
+                    .ok()
+                    .map(|ty| SuperTypeInfo {
+                        is_func: matches!(ty, CoreType::Func(_)),
+                        is_final: None,
+                    })
+            };
+            let mut defined = Vec::new();
+            parse_core_subtype_body(
+                ctx.reader,
+                false,
+                validator.scope().core_types.len(),
+                &mut defined,
+                &resolve_existing,
+            )?;
+            defined
+                .into_iter()
+                .map(|defined| CoreType::Func(defined.func))
+                .collect()
+        }
+        leading => {
+            // The remaining `core:deftype` form is a `core:rectype`
+            // directly: a `rec` group, a final subtype, or a bare
+            // comptype. A non-final subtype cannot start here — its
+            // 0x50 is the moduletype case above, and the prefixed form
+            // is the 0x00 case.
+            let validator = &*ctx.validator;
+            let resolve_existing = |idx: u32| {
+                validator
+                    .scope()
+                    .core_types
+                    .get(LocalIdx::new(idx))
+                    .ok()
+                    .map(|ty| SuperTypeInfo {
+                        is_func: matches!(ty, CoreType::Func(_)),
+                        is_final: None,
+                    })
+            };
+            let (_, defined) = parse_core_rectype(
+                ctx.reader,
+                leading,
+                validator.scope().core_types.len(),
+                &resolve_existing,
+            )?;
+            defined
+                .into_iter()
+                .map(|defined| CoreType::Func(defined.func))
+                .collect()
+        }
+    };
+    Ok((ctx.reader.read_count() - start, types))
 }

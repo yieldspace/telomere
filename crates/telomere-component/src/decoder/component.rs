@@ -96,13 +96,17 @@ fn _parse_component(
                 {
                     let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
                     for _ in parse_vec_range(&mut ctx)? {
-                        let (_, ty) = parse_core_type(&mut ctx)?;
-                        let idx = ctx
-                            .state
-                            .core_type_store
-                            .register(CoreRelation::Defined(ty.clone()));
-                        ctx.state.scope_mut().core_types.register(idx);
-                        ctx.validator.scope_mut().core_types.add(ty);
+                        // One `core:deftype` can define several core
+                        // types (a `rec` group); register each of them.
+                        let (_, types) = parse_core_type(&mut ctx)?;
+                        for ty in types {
+                            let idx = ctx
+                                .state
+                                .core_type_store
+                                .register(CoreRelation::Defined(ty.clone()));
+                            ctx.state.scope_mut().core_types.register(idx);
+                            ctx.validator.scope_mut().core_types.add(ty);
+                        }
                     }
                 }
                 finish_section(&mut sized_reader, section_start, section_size)?;
