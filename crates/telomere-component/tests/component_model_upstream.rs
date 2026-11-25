@@ -27,18 +27,6 @@ mod common;
 const ASYNC_NON_GOAL: &str = "async component-model proposals are a documented \
     non-goal (docs/component-model/new-component-runtime.md, Non-goals)";
 
-/// Reason shared by the files blocked on the nested-instantiation
-/// defect found while vendoring this suite (triage recorded with issue
-/// #136): instantiating a nested component with `(with ...)` arguments
-/// fails whenever the inner component's core instances depend on those
-/// arguments, because the arguments are resolved in an environment
-/// that does not carry them.
-const NESTED_INSTANTIATION_ARGS: &str = "blocked by a known runtime defect: \
-    instantiating a nested component with (with ...) arguments fails when \
-    the inner component's core instances depend on those arguments \
-    (instantiation reports the import unresolved / not supported by the \
-    linker)";
-
 /// Per-file exclusions outside `test/async/`, each with its reason.
 const EXCLUDED: &[(&str, &str)] = &[
     (
@@ -67,65 +55,79 @@ const EXCLUDED: &[(&str, &str)] = &[
          non-goal (docs/component-model/new-component-runtime.md, \
          Non-goals); the string/list cases before them pass",
     ),
-    ("values/numerics.wast", NESTED_INSTANTIATION_ARGS),
-    ("values/transcode.wast", NESTED_INSTANTIATION_ARGS),
     (
-        "linking/shared-everything-dynamic-linking.wast",
-        NESTED_INSTANTIATION_ARGS,
+        "values/numerics.wast",
+        "blocked by a canonical-ABI validation defect: `char` arguments \
+         are not validated when lowering, so invalid code points \
+         (surrogates, values above U+10FFFF) reach the guest, which \
+         traps `unreachable`, instead of the canonical `invalid char \
+         bit pattern` trap (lines 193, 195, 197)",
     ),
     (
-        "linking/link-time-virtualization.wast",
-        NESTED_INSTANTIATION_ARGS,
+        "resources/borrows.wast",
+        "blocked by resource-handle defects: the guest self-check \
+         traps on handle/rep state at line 158 (issue #317 family), \
+         and dropping an owned resource that is currently borrowed is \
+         not rejected (line 161: the expected trap `cannot remove \
+         owned resource while borrowed` does not happen)",
     ),
-    ("resources/borrows.wast", NESTED_INSTANTIATION_ARGS),
     (
         "resources/multiple-resources.wast",
-        NESTED_INSTANTIATION_ARGS,
+        "blocked by issue #317: resource handle state is shared \
+         across instances instead of per-instance, so the \
+         self-checking guest traps at line 169",
     ),
     (
         "values/alignment.wast",
-        "blocked by a known runtime defect: instantiating a nested \
-         component with (with ...) arguments fails when the inner \
-         component's core instances depend on those arguments; once that \
-         is fixed, issue #312 (canonical ABI loads do not trap on \
-         unaligned pointers) is expected to block the assert_trap cases",
+        "blocked by issue #312: canonical ABI loads do not trap on \
+         unaligned pointers, so the assert_trap cases (lines 26, 51, \
+         81, 110, 138, 170, 172, 204, 206) succeed instead of trapping",
     ),
     (
         "values/realloc.wast",
-        "blocked by a known runtime defect: instantiating a nested \
-         component with (with ...) arguments fails when the inner \
-         component's core instances depend on those arguments; \
-         additionally the result of realloc is not bounds-checked, so \
-         the assert_trap at line 110 (realloc return: beyond end of \
-         memory) does not trap",
+        "blocked by issue #322 (the result of realloc is not \
+         bounds-checked: line 110 does not trap, and lines 66, 108, 123 \
+         trap with a different error than the spec text), issue #312 \
+         (line 93: an unaligned pointer does not trap in the canonical \
+         layer), and a canonical lowering defect: lowering an empty \
+         list does not call realloc with (0, 0, align, 0) as the spec \
+         requires, so the guest traps at line 39",
     ),
     (
         "values/variants.wast",
-        "blocked by a known runtime defect: instantiating a nested \
-         component with (with ...) arguments fails when the inner \
-         component's core instances depend on those arguments; \
-         additionally the component at line 82 uses async canonical \
-         operations (canon task.return, async lift/lower), a documented \
-         non-goal",
+        "blocked by a canonical-ABI validation defect: variant/enum \
+         discriminants are not validated when lowering, so invalid \
+         discriminants reach the guest, which traps `unreachable`, \
+         instead of the canonical `invalid variant discriminant` trap \
+         (lines 72-78); additionally the component at line 82 uses \
+         async canonical operations (canon task.return, async \
+         lift/lower), a documented non-goal, which also removes the \
+         exports used at lines 182-185",
     ),
     (
         "linking/unit.wast",
-        "blocked by several known defects: nested-component \
-         instantiation arguments are not honoured (line 494 onwards); \
-         resource handle indices come from a table shared across \
-         instances instead of a per-instance table (line 1020); a valid \
-         func import whose surface type is an unnamed generic type is \
-         rejected (line 799); inline core instances exporting globals \
-         are not supported by the runtime (line 2010)",
+        "blocked by several known defects: nested component instances \
+         are instantiated lazily in resolution order rather than \
+         eagerly in definition order, so core start functions observe \
+         ticket ranks 2, 3, 1 instead of 1, 2, 3 (lines 645-647); \
+         resource handle indices and destructor counts are shared \
+         across instances instead of per-instance (issue #317; lines \
+         724-729, 787-792, 863-866, 930-933, 994-997, 1020-1022); a \
+         valid func import whose surface type is an unnamed generic \
+         type is rejected (issue #321; line 799); inline core \
+         instances exporting globals are not supported by the runtime \
+         (issue #324; lines 2010, 2043)",
     ),
     (
         "resources/handle-table.wast",
-        "blocked by known resource-handle defects: handle index \
-         allocation/reuse order diverges from the spec (indices allocate \
-         sequentially from 1 and freed indices are reused LIFO), so the \
-         self-checking guest traps (line 48); later sections are \
-         additionally blocked by the nested-component \
-         instantiation-argument defect (line 105)",
+        "blocked by resource-handle defects (issue #317 family): \
+         handle index allocation/reuse order diverges from the spec, \
+         so the self-checking guest traps (lines 48, 105); \
+         additionally canonical handle operations do not validate \
+         indices, so unknown, already-dropped, zero, and wrong-type \
+         handles reach the guest or silently succeed instead of \
+         trapping `unknown handle index` (lines 200-212, 260, 292, \
+         321, 323)",
     ),
     (
         "validation/attributes.wast",
