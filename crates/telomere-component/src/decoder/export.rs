@@ -85,9 +85,29 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             let info = match desc {
                 None => crate::decoder::validator::ExportInfo::TypeEq(type_id),
                 Some(ExternDesc::Eq(id)) => {
-                    ctx.validator
-                        .get_type(type_id)?
-                        .assert_subtype_of(ctx.validator.get_type(id)?, ctx.validator)?;
+                    let item_ty = ctx.validator.get_type(type_id)?;
+                    let ascribed_ty = ctx.validator.get_type(id)?;
+                    // An `(eq ...)` ascription asserts that the
+                    // exported type *is* the ascribed type, so resource
+                    // faces need nominal identity, not mere subtyping:
+                    // the generic subtype relation accepts any two
+                    // `Sub`-bounded generics (and any resource against
+                    // a `Sub` generic) without comparing identities,
+                    // which would let this export denote a different
+                    // resource externally than its local type index
+                    // denotes. When either side resolves to a face,
+                    // both sides must resolve to the very same face.
+                    match (
+                        item_ty.resource_face_id(ctx.validator)?,
+                        ascribed_ty.resource_face_id(ctx.validator)?,
+                    ) {
+                        (Some(a), Some(b)) if a == b => {}
+                        (None, None) => {}
+                        _ => Err(ComponentParseError::TypeMismatch(
+                            "resource types are not the same".to_owned(),
+                        ))?,
+                    }
+                    item_ty.assert_subtype_of(ascribed_ty, ctx.validator)?;
                     crate::decoder::validator::ExportInfo::TypeEq(id)
                 }
                 Some(ExternDesc::Sub) => {

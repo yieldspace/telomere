@@ -297,3 +297,76 @@ fn chained_sub_ascription_mints_identity_distinct_from_face() {
         "resource types are not the same",
     );
 }
+
+#[test]
+fn eq_ascription_between_distinct_sub_ascribed_faces_is_invalid() {
+    // Regression (Codex review of PR #357, round 3): an `(eq ...)`
+    // ascription on a type export asserts identity, but the check used
+    // the generic subtype relation, which accepts any two `Sub`-bounded
+    // generics without comparing identities. Two faces minted from
+    // distinct resources could therefore be equated, and the export
+    // would denote the second face externally while its local type
+    // index still denotes the first.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_of_face_to_itself_is_valid() {
+    // Positive control: an eq ascription naming the very same face is
+    // an identity assertion that holds.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (export "c" (type $a) (type (eq $a)))))
+"#,
+    )
+    .expect("an eq ascription of a face to itself must be accepted");
+}
+
+#[test]
+fn eq_ascription_between_resource_and_its_own_face_is_invalid() {
+    // Sibling direction of the round-3 finding: the concrete resource
+    // equated to a face minted from it. The subtype relation accepted
+    // this (a resource is a subtype of any `Sub` generic), but the
+    // face is a distinct identity from the underlying resource.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (export "c" (type $r) (type (eq $a)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_face_and_its_underlying_resource_is_invalid() {
+    // Companion direction: a face equated to its underlying resource
+    // must also be rejected as an identity mismatch.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (export "c" (type $a) (type (eq $r)))))
+"#,
+        "resource types are not the same",
+    );
+}

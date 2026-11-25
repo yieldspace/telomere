@@ -60,6 +60,27 @@ impl Type {
             _ => false,
         })
     }
+    /// If this type resolves (through `Eq`-bound generics) to an
+    /// abstract resource face -- a `Generic` with a `Sub` bound, as
+    /// minted by `(sub resource)` imports and export ascriptions --
+    /// returns that generic's nominal identity. Concrete resources and
+    /// every other type resolve to `None`. The generic subtype
+    /// relation accepts any two `Sub` generics without comparing
+    /// identities, so equality assertions about faces must consult
+    /// this identity explicitly.
+    pub fn resource_face_id(&self, validator: &Validator) -> ParseResult<Option<usize>> {
+        Ok(match self {
+            Type::Generic(Generic {
+                id,
+                bound: GenericBound::Sub,
+            }) => Some(*id),
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => validator.get_type(*inner)?.resource_face_id(validator)?,
+            _ => None,
+        })
+    }
     pub fn is_component(&self) -> bool {
         matches!(self, Type::Component(_))
     }
