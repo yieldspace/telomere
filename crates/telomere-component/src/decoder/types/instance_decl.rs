@@ -29,6 +29,11 @@ pub fn _parse_instance_decl(
         0x01 => {
             let t = parse_type(ctx, depth)?;
             let id = ctx.validator.new_type(t);
+            // Types defined inside an instance or component type are
+            // definitions like any other: the effective-size gate must
+            // run here too, since the aggregate gate no longer covers
+            // the value types a component/instance type contains.
+            ctx.validator.validate_effective_type_size(id)?;
             ctx.validator.scope_mut().type_indexes.add(id);
         }
         0x02 => {

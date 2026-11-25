@@ -319,7 +319,7 @@ fn valtype_contains_borrow(
 ) -> ParseResult<bool> {
     match ty {
         ValType::Primitive(_) => Ok(false),
-        ValType::Type(type_id) => type_contains_borrow(ctx, ctx.validator.get_type(*type_id)?),
+        ValType::Type(type_id) => ctx.validator.type_contains_borrow(*type_id),
     }
 }
 
@@ -337,39 +337,6 @@ fn ensure_kebab_label(label: &Label, kind: &str) -> ParseResult<()> {
             label
         )))
     }
-}
-
-fn type_contains_borrow(ctx: &ParseContext<impl BinaryReader>, ty: &Type) -> ParseResult<bool> {
-    Ok(match ty {
-        Type::DefVal(def) => match def {
-            DefValType::Primitive(_) | DefValType::Own(_) => false,
-            DefValType::Borrow(_) => true,
-            DefValType::Record(fields) => fields.iter().try_fold(false, |found, field| {
-                if found {
-                    Ok(true)
-                } else {
-                    valtype_contains_borrow(ctx, &field.ty)
-                }
-            })?,
-            DefValType::Variant(cases) => cases
-                .iter()
-                .filter_map(|case| case.ty.as_ref())
-                .try_fold(false, |found, ty| {
-                    if found {
-                        Ok(true)
-                    } else {
-                        valtype_contains_borrow(ctx, ty)
-                    }
-                })?,
-            DefValType::Flags(_) => false,
-            DefValType::List(ty, _) => valtype_contains_borrow(ctx, ty)?,
-        },
-        Type::Generic(_)
-        | Type::Resource(_)
-        | Type::Func(_)
-        | Type::Component(_)
-        | Type::Instance(_) => false,
-    })
 }
 
 fn is_resource_like_type(

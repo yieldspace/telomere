@@ -173,3 +173,97 @@ fn shared_reference_chains_stay_fast() {
         start.elapsed()
     );
 }
+
+#[test]
+fn shared_variant_chain_as_func_result_stays_fast() {
+    // Regression (Codex P1 on PR #364, round 2): admitting shared type
+    // graphs under the elem_size rule also admitted them as function
+    // results, where the parse-time borrow check
+    // (`type_contains_borrow`) re-expanded both variant branches at
+    // every level without memoisation — exponential time on small,
+    // valid inputs (measured pre-fix in release mode: 28 definitions /
+    // ~1.5 KB took ~3.5 s as a func result, vs ~0.13 ms for the
+    // definitions alone; each added definition doubled the work). The
+    // predicate is now memoised per type, like the size and alignment
+    // walks. A 40-deep chain is only feasible at all with the cache
+    // (2^40 uncached steps); the time bound is a loose backstop.
+    let mut types = String::from("(type $v0 (variant (case \"x\" u8)))");
+    for k in 1..40 {
+        types.push_str(&format!(
+            " (type $v{k} (variant (case \"l\" $v{}) (case \"r\" $v{})))",
+            k - 1,
+            k - 1
+        ));
+    }
+    types.push_str(" (type $f (func (result $v39)))");
+    let start = std::time::Instant::now();
+    assert_valid(&types);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "borrow check on a shared variant chain must be linear, took {:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
+fn borrow_deep_in_shared_chain_is_still_rejected() {
+    // The memoised borrow check must keep its semantics: a `borrow`
+    // reachable through a shared variant chain still makes a function
+    // result invalid, while the `own` mirror of the same chain is
+    // accepted.
+    let mut borrow_chain = String::from(
+        "(type $r (resource (rep i32))) (type $b (borrow $r)) (type $v0 (variant (case \"x\" $b)))",
+    );
+    for k in 1..8 {
+        borrow_chain.push_str(&format!(
+            " (type $v{k} (variant (case \"l\" $v{}) (case \"r\" $v{})))",
+            k - 1,
+            k - 1
+        ));
+    }
+    borrow_chain.push_str(" (type $f (func (result $v7)))");
+    let text = format!("(component {borrow_chain})");
+    let error = compile_component(&text)
+        .err()
+        .unwrap_or_else(|| panic!("expected the borrow chain result to be rejected"));
+    assert!(
+        error.to_string().contains("cannot contain a `borrow` type"),
+        "expected a borrow-in-result error, got: {error}"
+    );
+
+    let mut own_chain = String::from(
+        "(type $r (resource (rep i32))) (type $o (own $r)) (type $v0 (variant (case \"x\" $o)))",
+    );
+    for k in 1..8 {
+        own_chain.push_str(&format!(
+            " (type $v{k} (variant (case \"l\" $v{}) (case \"r\" $v{})))",
+            k - 1,
+            k - 1
+        ));
+    }
+    own_chain.push_str(" (type $f (func (result $v7)))");
+    assert_valid(&own_chain);
+}
+
+#[test]
+fn nested_type_definitions_are_size_gated() {
+    // Regression (Codex P2 on PR #364, round 2): the elem_size gate
+    // applies to defined value types, but types defined *inside* an
+    // instance or component type were registered without ever running
+    // it — the aggregate traversal that used to catch oversized types
+    // through their exports no longer runs. Both nested forms must
+    // reject a value type at the 2^28 boundary, and accept the same
+    // shape one byte below it.
+    assert_too_big(
+        "(type (instance (type $big (list u8 268435456)) (export \"big\" (type (eq $big)))))",
+    );
+    assert_too_big(
+        "(type (component (type $big (list u8 268435456)) (export \"big\" (type (eq $big)))))",
+    );
+    assert_valid(
+        "(type (instance (type $big (list u8 268435455)) (export \"big\" (type (eq $big)))))",
+    );
+    assert_valid(
+        "(type (component (type $big (list u8 268435455)) (export \"big\" (type (eq $big)))))",
+    );
+}

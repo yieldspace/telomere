@@ -147,6 +147,87 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// Whether a value of this type can contain a `borrow` handle
+    /// anywhere inside it. Function results are rejected when this
+    /// holds. Memoized per type in the arena, following the same
+    /// discipline as `contains_resource_handle`: only completed
+    /// results are cached, and a re-entrant visit (a recursive type)
+    /// contributes `false` without being cached. Without the cache,
+    /// shared references in a type graph (successive variants whose
+    /// cases both reference the preceding type, say) are re-expanded
+    /// at every visit and the check takes exponential time on types
+    /// the size gate now admits.
+    pub(crate) fn type_contains_borrow(&self, type_id: TypeId) -> ParseResult<bool> {
+        let mut visiting = VisitTracker::new(self.types.len());
+        self.type_contains_borrow_with_tracker(type_id, &mut visiting)
+    }
+
+    fn type_contains_borrow_with_tracker(
+        &self,
+        type_id: TypeId,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        if let Some(found) = self.types.contains_borrow(type_id) {
+            return Ok(found);
+        }
+        if !visiting.enter(type_id) {
+            return Ok(false);
+        }
+
+        let result = match self.get_type(type_id)? {
+            Type::DefVal(def) => self.defval_contains_borrow(def, visiting),
+            Type::Generic(_)
+            | Type::Resource(_)
+            | Type::Func(_)
+            | Type::Component(_)
+            | Type::Instance(_) => Ok(false),
+        };
+        visiting.leave(type_id);
+        let found = result?;
+        self.types.set_contains_borrow(type_id, found);
+        Ok(found)
+    }
+
+    fn defval_contains_borrow(
+        &self,
+        def: &DefValType,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        match def {
+            DefValType::Primitive(_) | DefValType::Own(_) => Ok(false),
+            DefValType::Borrow(_) => Ok(true),
+            DefValType::Record(fields) => fields.iter().try_fold(false, |found, field| {
+                if found {
+                    Ok(true)
+                } else {
+                    self.valtype_contains_borrow(&field.ty, visiting)
+                }
+            }),
+            DefValType::Variant(cases) => cases.iter().try_fold(false, |found, case| {
+                if found {
+                    Ok(true)
+                } else if let Some(ty) = &case.ty {
+                    self.valtype_contains_borrow(ty, visiting)
+                } else {
+                    Ok(false)
+                }
+            }),
+            DefValType::Flags(_) => Ok(false),
+            DefValType::List(ty, _) => self.valtype_contains_borrow(ty, visiting),
+        }
+    }
+
+    fn valtype_contains_borrow(
+        &self,
+        ty: &ValType,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        match ty {
+            ValType::Primitive(_) => Ok(false),
+            ValType::Type(type_id) => self.type_contains_borrow_with_tracker(*type_id, visiting),
+        }
+    }
+
     pub(super) fn resource_owner_summary(
         &self,
         type_id: TypeId,
