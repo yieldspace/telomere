@@ -562,46 +562,42 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-25, the `Embedder footprint` workflow was run four times
-against the code of PR #339: workflow_dispatch runs 45549109565,
-45549132836 and 45549156346 against the PR branch at head
-`3baa5ab2ed17f394be3e940bce2478952353ef82` (the #192 change —
-the three baseline JIT backends (x86_64, aarch64, riscv64) merged
-into one shared lowering generic over a per-target `BaselineMasm`
-trait, plus the Codex P1 fix mapping the inverted condition
-through `cond_code` in AArch64 `cset_w` — merged with current
-`main` at `7db0701`
-(PRs #329, #336, #337 and #338)),
-and pull-request run 45549088433, which built the same tree
-(`ubuntu-24.04`, Rust 1.96.0). A three-run control against
-unmodified `main` at `7db0701` (workflow_dispatch runs
-45549096511, 45549121384 and 45549145537) isolates the
-attribution recorded in the re-baseline history below. Every run produced
-byte-identical sizes: for all sixteen
-profile/configuration rows, the raw file size, the `.text` size,
-the stripped file size, and the stripped `.text` size each have a
-run-to-run spread of **0 B** across the samples. The observed
-values are the baselines in the table below (stripped file /
-stripped `.text`, in bytes).
+On 2026-11-25, the `Embedder footprint` workflow was run four
+times against the code of PR #340: workflow_dispatch runs
+45553848727, 45553863204 and 45553876588 against the PR branch at
+head `7294a40abbb9d8f60d80d7e8ffa5dca1e14b4c09` (the #312 change —
+canonical ABI loads and stores trap on unaligned pointers, and the
+canon-lower trampoline preserves the trap cause — merged with
+current `main` at `3acb556` (PRs #326, #336, #337, #338 and
+#339)), and pull-request run 45553841830, which built the same
+tree (`ubuntu-24.04`, Rust 1.96.0). A three-run control against
+unmodified `main` at `3acb556` (workflow_dispatch runs
+45553891986, 45553905012 and 45553917777) isolates the attribution
+recorded in the re-baseline history below. Every run produced
+byte-identical sizes: for all sixteen profile/configuration rows,
+the raw file size, the `.text` size, the stripped file size, and
+the stripped `.text` size each have a run-to-run spread of **0 B**
+across the samples. The observed values are the baselines in the
+table below (stripped file / stripped `.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,675,928 | 2,122,279 |
-| `release` | `wasi` | 2,903,488 | 2,296,727 |
+| `release` | `component` | 2,674,496 | 2,120,183 |
+| `release` | `wasi` | 2,902,056 | 2,294,631 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,119,176 | 2,464,039 |
+| `release` | `wasi-threads` | 3,117,776 | 2,461,943 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,679,192 | 1,239,671 |
-| `release-size` | `wasi` | 1,799,992 | 1,321,015 |
+| `release-size` | `component` | 1,678,920 | 1,239,191 |
+| `release-size` | `wasi` | 1,800,264 | 1,321,079 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,942,696 | 1,415,719 |
+| `release-size` | `wasi-threads` | 1,943,000 | 1,415,799 |
 
 #### Re-baseline history
 
@@ -1990,6 +1986,57 @@ second round shows no such outlier. Against the original
 not changed by this PR. The baseline was re-measured on the
 branch and updated as recorded above, following the procedure
 below.
+
+PR #340 (#312, canonical ABI loads and stores trap on unaligned
+pointers; the canon-lower trampoline keeps the trap cause instead
+of flattening it to `unreachable`) merged current `main` into its
+branch first; its CI run on the merged tree then tripped the gate
+on four of the 32 gated series (the `release-size` `wasi` and
+`wasi-threads` file and `.text` series). Attribution was isolated
+by measuring current `main` alone three times (workflow_dispatch
+runs 45553891986, 45553905012 and 45553917777 on `main` at
+`3acb5566b26769d7b9d1cd11838c87ff2391acca`; all three runs pass
+the gate). The main control reproduces the checked-in baseline
+exactly on 20 of the 32 gated series; on the 12 series of the
+three configurations that link `telomere-component` it measures
+below the checked-in baseline by exactly PR #336's (#316)
+shrinkage — in `release`, stripped file −2,680 B (`component`),
+−2,696 B (`wasi`), −2,664 B (`wasi-threads`) and stripped `.text`
+−2,464 B in each; in `release-size`, stripped file
+−1,568/−1,040/−1,024 B and stripped `.text` −1,488/−944/−944 B —
+which was never re-baselined because the gate passes on shrinkage,
+so part of this PR's growth is absorbed by that staleness and the
+gate failure is confined to the four series where the growth
+exceeds it. This PR's own delta against the main control is
+confined to the same 12 series: in `release`, stripped file +1,248
+B in `component` and +1,264 B in `wasi` and `wasi-threads`,
+stripped `.text` +368 B in each; in `release-size`, stripped file
++1,296 B / stripped `.text` +1,008 B in `component`, +1,312 B /
++1,008 B in `wasi`, and +1,328 B / +1,024 B in `wasi-threads`.
+Every other configuration is byte-identical to `main` in both
+profiles. The change is confined to `telomere-component`'s
+canonical ABI layer: `validate_pointer_alignment` runs at the
+load/store dispatcher entry for every canonical type, the utf16
+and latin1+utf16 string contents are checked on the same paths,
+and the trampoline records the trap it raised so the single
+conversion point can restore the canonical cause; the core library
+is untouched. The branch also carries a test-only integration
+follow-up: the #312 regression fixtures were written against wast
+243 and are modernised to the strict component WAT syntax wast 263
+requires (no assertion changes), `values/alignment.wast` is re-
+enabled in the vendored upstream suite now that its blocker is
+fixed (files=79 ran=10 excluded=69 checked=273, all passing in the
+real tree), and the stale #312 citation is dropped from
+`values/realloc.wast`'s exclusion reason (its line 93 no longer
+fails; the file stays excluded for #322 and the empty-list
+lowering defect). Against the original #164 baseline, the largest
+cumulative growth is now the `release` `component` stripped file
+series at +9.90% (2,433,656 B to 2,674,496 B), down from +9.96%
+because PR #336's shrinkage is now reflected in the baseline; the
+`release` `core-nosimd` stripped file series is unchanged at
++9.83% (1,275,448 B to 1,400,840 B). The baseline was re-measured
+on the branch and updated as recorded above, following the
+procedure below.
 
 ### Threshold derivation
 
