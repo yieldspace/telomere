@@ -16,8 +16,8 @@ fn suite_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-#[test]
-fn component_model_testsuite() {
+#[tokio::test]
+async fn component_model_testsuite() {
     let root = testsuite_dir();
     let files = suite_files(&root);
     assert!(
@@ -32,7 +32,7 @@ fn component_model_testsuite() {
     for path in files {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-        let report = common::component_model::run_component_testsuite_case(&path, &text);
+        let report = common::component_model::run_component_testsuite_case(&path, &text).await;
         checked += report.directives_checked;
         failures.extend(report.failures);
     }

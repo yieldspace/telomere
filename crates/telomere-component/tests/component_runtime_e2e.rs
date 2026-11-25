@@ -236,14 +236,16 @@ async fn component_runtime_nested_component_instantiation_succeeds() {
     let bytes = compile_component(
         r#"
 (component
-  (type
-    (component
-      (type (func (result u32)))
-      (import "x" (func (type 0)))
-    )
+  ;; This fixture used to obtain the component passed as "a" from an
+  ;; unsatisfiable root import `(import "b" (component (type 0)))`.
+  ;; Instantiation now rejects unsatisfiable imports whether or not
+  ;; they are used (#313), so the argument component is defined inline
+  ;; instead; the instantiation chain is unchanged.
+  (component $xi
+    (type (func (result u32)))
+    (import "x" (func (type 0)))
   )
-  (import "b" (component (type 0)))
-  (component
+  (component $d
     (type
       (component
         (type (func (result u32)))
@@ -252,7 +254,7 @@ async fn component_runtime_nested_component_instantiation_succeeds() {
     )
     (import "a" (component (type 0)))
   )
-  (instance (instantiate 1 (with "a" (component 0))))
+  (instance (instantiate $d (with "a" (component $xi))))
 )
 "#,
     );
@@ -471,7 +473,7 @@ async fn component_runtime_canon_lower_writes_indirect_results_into_caller_area(
   )
   (core instance $libc (instantiate $libc))
   (core func $host-lower
-    (canon lower (func $host) (memory $libc "memory") (realloc (func $libc "realloc")))
+    (canon lower (func $host) (memory (core memory $libc "memory")) (realloc (core func $libc "realloc")))
   )
   (core module $caller
     (import "" "host" (func $host (param i32)))
@@ -488,7 +490,7 @@ async fn component_runtime_canon_lower_writes_indirect_results_into_caller_area(
     )
   )
   (func (export "call-host") (result string)
-    (canon lift (core func $caller "call-host") (memory $libc "memory"))
+    (canon lift (core func $caller "call-host") (memory (core memory $libc "memory")))
   )
 )
 "#,
@@ -531,7 +533,7 @@ async fn component_runtime_canon_lower_reads_packed_u8_lists_from_guest_memory()
   )
   (core instance $guest (instantiate $guest))
   (core func $host-lower
-    (canon lower (func $host) (memory $guest "memory"))
+    (canon lower (func $host) (memory (core memory $guest "memory")))
   )
   (core module $caller
     (import "" "host" (func $host (param i32 i32)))
@@ -547,7 +549,7 @@ async fn component_runtime_canon_lower_reads_packed_u8_lists_from_guest_memory()
     )
   )
   (func (export "call-host")
-    (canon lift (core func $caller "call-host") (memory $guest "memory"))
+    (canon lift (core func $caller "call-host") (memory (core memory $guest "memory")))
   )
 )
 "#,
@@ -668,7 +670,7 @@ async fn component_runtime_calls_post_return_after_lift() {
   )
   (core instance $i (instantiate $m))
   (func (export "str") (result string)
-    (canon lift (core func $i "f") (memory $i "mem") (post-return (func $i "p")))
+    (canon lift (core func $i "f") (memory (core memory $i "mem")) (post-return (core func $i "p")))
   )
   (func (export "count") (result u32)
     (canon lift (core func $i "count"))
@@ -718,7 +720,7 @@ async fn component_runtime_surfaces_post_return_traps() {
   )
   (core instance $i (instantiate $m))
   (func (export "str") (result string)
-    (canon lift (core func $i "f") (memory $i "mem") (post-return (func $i "p")))
+    (canon lift (core func $i "f") (memory (core memory $i "mem")) (post-return (core func $i "p")))
   )
 )
 "#,
@@ -753,7 +755,7 @@ async fn component_runtime_surfaces_resource_drop_destructor_traps() {
     )
   )
   (core instance $m (instantiate $m))
-  (type $r (resource (rep i32) (dtor (func $m "dtor"))))
+  (type $r (resource (rep i32) (dtor (core func $m "dtor"))))
   (core func $new (canon resource.new $r))
   (core func $drop (canon resource.drop $r))
   (core module $caller

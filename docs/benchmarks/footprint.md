@@ -562,18 +562,20 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-25, the `Embedder footprint` workflow was run three times
-against the code of PR #315: workflow_dispatch runs 45534017783,
-45534029382 and 45534039628 against the PR branch at head
-`9bdd30033dfbff2eece920ed0e22fa9ae04b22a6` (the #201 change —
-component bundles: hash-keyed AoT artifacts for the core modules
-embedded in a component, including the alias-identity fix in
-commit `6ffbfd8` — merged with current `main` at `b868802`
-(PR #329)),
-and pull-request run 45533984355, which built the same tree
+On 2026-11-25, the `Embedder footprint` workflow was run four times
+against the code of PR #339: workflow_dispatch runs 45549109565,
+45549132836 and 45549156346 against the PR branch at head
+`3baa5ab2ed17f394be3e940bce2478952353ef82` (the #192 change —
+the three baseline JIT backends (x86_64, aarch64, riscv64) merged
+into one shared lowering generic over a per-target `BaselineMasm`
+trait, plus the Codex P1 fix mapping the inverted condition
+through `cond_code` in AArch64 `cset_w` — merged with current
+`main` at `7db0701`
+(PRs #329, #336, #337 and #338)),
+and pull-request run 45549088433, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). A three-run control against
-unmodified `main` at `b868802` (workflow_dispatch runs
-45534050177, 45534060121 and 45534068404) isolates the
+unmodified `main` at `7db0701` (workflow_dispatch runs
+45549096511, 45549121384 and 45549145537) isolates the
 attribution recorded in the re-baseline history below. Every run produced
 byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
@@ -586,20 +588,20 @@ stripped `.text`, in bytes).
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,673,368 | 2,120,183 |
-| `release` | `wasi` | 2,900,928 | 2,294,631 |
+| `release` | `component` | 2,675,928 | 2,122,279 |
+| `release` | `wasi` | 2,903,488 | 2,296,727 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
-| `release` | `core-jit` | 2,130,712 | 1,638,487 |
+| `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,116,632 | 2,461,943 |
+| `release` | `wasi-threads` | 3,119,176 | 2,464,039 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,677,144 | 1,237,831 |
-| `release-size` | `wasi` | 1,798,344 | 1,319,575 |
+| `release-size` | `component` | 1,679,192 | 1,239,671 |
+| `release-size` | `wasi` | 1,799,992 | 1,321,015 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
-| `release-size` | `core-jit` | 1,538,464 | 1,091,783 |
+| `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,941,048 | 1,414,279 |
+| `release-size` | `wasi-threads` | 1,942,696 | 1,415,719 |
 
 #### Re-baseline history
 
@@ -1914,6 +1916,80 @@ of silently running interpreted). Against the original
 to 1,400,840 B), which this PR does not change. The
 baseline was re-measured on the branch and updated as
 recorded above, following the procedure below.
+
+PR #338 (#313, check every declared import at instantiation,
+used or not) merged current `main` into its branch first; its
+CI run on the merged tree then tripped the gate on 12 of the
+32 gated series. Attribution was isolated by measuring
+current `main` alone three times (workflow_dispatch runs
+45541261935, 45541270512 and 45541278948 on `main` at
+`726fdd964b5b6c5dd264397d8616154cb7a9b242`; all three runs
+pass the gate). The main control reproduces the checked-in
+baseline exactly on all 32 gated series, so no part of the
+gate failure is main-side staleness. This PR's own delta
+against the main control is confined to the three
+configurations that link `telomere-component` (`component`,
+`wasi`, `wasi-threads`): in `release`, stripped file
++2,560 B in `component` and `wasi` and +2,544 B in
+`wasi-threads`, stripped `.text` +2,096 B in each; in
+`release-size`, stripped file +2,048 B / stripped `.text`
++1,840 B in `component`, and +1,648 B / +1,440 B in `wasi`
+and `wasi-threads`. Every other configuration is
+byte-identical to `main` in both profiles. The change is
+confined to `telomere-component`'s runtime:
+`check_imports_satisfied` in `runtime/env.rs` resolves
+every declared import through the existing
+`lookup_import_*` helpers at the two component-instance
+creation sites (the root `instantiate_sync` and the
+`Defined` arm of `resolve_instance`), so an import that
+nothing references fails at instantiation with the same
+error it would have produced at first use; the core library
+is untouched. Against the original #164 baseline, the
+largest cumulative growth is now the `release` `component`
+stripped file series at +9.96% (2,433,656 B to 2,675,928 B);
+the `release` `core-nosimd` stripped file series is
+unchanged at +9.83% (1,275,448 B to 1,400,840 B). The
+baseline was re-measured on the branch and updated as
+recorded above, following the procedure below.
+
+PR #339 (#192, the three baseline JIT backends merged into one
+shared lowering over a per-target `BaselineMasm` trait) merged
+current `main` into its branch first; its CI run on the merged
+tree then tripped the gate on the `core-jit` series. The branch
+also carries the Codex P1 fix for the shared lowering (AArch64
+`cset_w` emitted the inverted condition code from the shared
+semantic `Cond` discriminant instead of the target encoding;
+fixed by mapping through `cond_code`, with an encoder unit test
+pinning the CSET condition field for all ten conditions). The
+branch merged `main` twice during integration (`726fdd9`, then
+`7db0701` after PRs #336 and #338 landed); the recorded values
+come from the second measurement round. Attribution was
+isolated by measuring current `main` alone three times
+(workflow_dispatch runs 45549096511, 45549121384 and
+45549145537 on `main` at
+`7db0701fdf188885150683e531fd6a246235d55d`; all three runs
+pass the gate). The main control reproduces the checked-in
+baseline exactly on all 32 gated series, so no part of the
+gate failure is main-side staleness. This PR's own delta
+against the main control is confined to `core-jit`, the only
+embedder configuration that links the JIT backends: in
+`release`, stripped file +576 B and stripped `.text` +384 B;
+in `release-size`, stripped file -64 B and stripped `.text`
++112 B. Every other configuration is byte-identical to `main`
+in both profiles, and all four branch samples
+(workflow_dispatch runs 45549109565, 45549132836 and
+45549156346, and pull-request run 45549088433) agree
+byte-for-byte on every series. The delta is identical to the
+first measurement round against `main` at `726fdd9`, in which
+the pull-request run measured the three component
+configurations 848–2,344 B lower than every other sample; the
+second round shows no such outlier. Against the original
+#164 baseline, the largest cumulative growth is now the
+`release` `component` stripped file series at +9.96%
+(2,433,656 B to 2,675,928 B), raised by PR #338's landing and
+not changed by this PR. The baseline was re-measured on the
+branch and updated as recorded above, following the procedure
+below.
 
 ### Threshold derivation
 

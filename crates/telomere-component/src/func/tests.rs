@@ -17,6 +17,8 @@ fn dummy_program(types: Vec<Type>) -> ComponentProgram {
         root: Component {
             imports: HashMap::new(),
             exports: HashMap::new(),
+            core_instances: Vec::new(),
+            instances: Vec::new(),
         },
         types: types.into_boxed_slice(),
         component_store: HashMap::new(),

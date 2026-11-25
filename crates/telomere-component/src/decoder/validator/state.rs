@@ -206,10 +206,33 @@ impl<'a> ParseState<'a> {
 }
 
 impl Scope {
-    pub fn make_component(&self) -> Component {
+    pub fn make_component(
+        &self,
+        core_instance_store: &ValueStore<CoreInstance, CoreRelation<CoreInstance>>,
+        instance_store: &ValueStore<Instance>,
+    ) -> Component {
         Component {
             imports: self.imports.clone(),
             exports: self.exports.clone(),
+            core_instances: self
+                .core_instances
+                .values
+                .iter()
+                .copied()
+                .filter(|idx| {
+                    matches!(
+                        core_instance_store.get(*idx),
+                        Some(CoreRelation::Defined(_))
+                    )
+                })
+                .collect(),
+            instances: self
+                .instances
+                .values
+                .iter()
+                .copied()
+                .filter(|idx| matches!(instance_store.get(*idx), Some(Relation::Defined(_))))
+                .collect(),
         }
     }
 

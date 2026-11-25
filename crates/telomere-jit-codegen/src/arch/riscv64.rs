@@ -3,6 +3,8 @@ use crate::{
     target::{TargetArch, TargetInfo, TargetOs},
 };
 
+pub use crate::masm::{BranchKind, Cond};
+
 const VREGS: usize = 32;
 const SLOT_SIZE: i32 = 8;
 const FRAME_SIZE: i32 = ((VREGS as i32 * SLOT_SIZE + 16 + 15) & !15) + 16;
@@ -26,28 +28,6 @@ const T3: u8 = 28;
 const T4: u8 = 29;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cond {
-    Eq,
-    Ne,
-    Hs,
-    Lo,
-    Hi,
-    Ls,
-    Ge,
-    Lt,
-    Gt,
-    Le,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BranchKind {
-    B,
-    BCond(Cond),
-    CbnzX(u8),
-    CbnzW(u8),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Width {
     W32,
     X64,
@@ -69,27 +49,6 @@ enum Rhs {
 enum LastCmp {
     Int { width: Width, lhs: u8, rhs: Rhs },
     Float { width: FloatWidth, lhs: u8, rhs: u8 },
-}
-
-impl Cond {
-    pub const fn inverted(self) -> Self {
-        match self {
-            Self::Eq => Self::Ne,
-            Self::Ne => Self::Eq,
-            Self::Lo => Self::Hs,
-            Self::Hs => Self::Lo,
-            Self::Hi => Self::Ls,
-            Self::Ls => Self::Hi,
-            Self::Lt => Self::Ge,
-            Self::Ge => Self::Lt,
-            Self::Gt => Self::Le,
-            Self::Le => Self::Gt,
-        }
-    }
-
-    const fn uses_signed_operands(self) -> bool {
-        matches!(self, Self::Ge | Self::Gt | Self::Le | Self::Lt)
-    }
 }
 
 pub fn target_info() -> TargetInfo {
@@ -192,6 +151,8 @@ impl Riscv64BaselineMasm {
                 self.insn(encode_jal(ZERO, 0).expect("zero jal encodes"));
                 Ok(at)
             }
+            // CbzW is an aarch64-only placeholder shape.
+            BranchKind::CbzW(_) => Err(AsmError::UnsupportedFeature),
         }
     }
 
@@ -894,7 +855,12 @@ impl Riscv64BaselineMasm {
             return;
         }
         let low = ((value << 52) >> 52) as i32;
-        let high = (value - i64::from(low)) >> 12;
+        // Wrapping on purpose (#328): for values near i64::MAX the
+        // sign-extended low chunk is negative, so the plain subtraction
+        // overflows (a debug-build panic). The wrapped result is what
+        // the emitted addi/slli sequence needs — the final addi wraps
+        // in hardware and lands on the requested value.
+        let high = value.wrapping_sub(i64::from(low)) >> 12;
         self.li(rd, high);
         self.slli(rd, rd, 12);
         if low != 0 {
@@ -913,7 +879,7 @@ impl Riscv64BaselineMasm {
         for chunk in &mut chunks {
             let low = ((rest << 52) >> 52) as i32;
             *chunk = low;
-            rest = (rest - i64::from(low)) >> 12;
+            rest = rest.wrapping_sub(i64::from(low)) >> 12;
         }
         debug_assert_eq!(rest, 0, "six 12-bit chunks cover any i64");
         self.addi(rd, ZERO, chunks[5]).expect("top li chunk fits");
@@ -936,7 +902,7 @@ impl Riscv64BaselineMasm {
         for chunk in &mut chunks {
             let low = ((rest << 52) >> 52) as i32;
             *chunk = low;
-            rest = (rest - i64::from(low)) >> 12;
+            rest = rest.wrapping_sub(i64::from(low)) >> 12;
         }
         debug_assert_eq!(rest, 0, "three 12-bit chunks cover a sign-extended i32");
         self.addi(rd, ZERO, chunks[2]).expect("top li chunk fits");
@@ -1421,6 +1387,8 @@ fn encode_fp(funct7: u32, rm: u32, rd: u8, rs1: u8, rs2: u8, _fmt: u32, _unused:
         | 0x53
 }
 
+crate::impl_baseline_masm!(Riscv64BaselineMasm);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1437,6 +1405,75 @@ mod tests {
         asm.csel_w(2, 1, 2, Cond::Ne);
         asm.cset_w(3, Cond::Ne);
         assert!(!asm.into_bytes().is_empty());
+    }
+
+    /// Tiny interpreter for the two instruction forms `li` / `li_reloc` /
+    /// `li_reloc32` emit (addi and slli into a single register), used to
+    /// check that a materialised immediate equals the requested value.
+    fn eval_li_sequence(bytes: &[u8], rd: u8) -> i64 {
+        let mut regs = [0i64; 32];
+        for word in bytes.chunks_exact(4) {
+            let insn = u32::from_le_bytes(word.try_into().unwrap());
+            assert_eq!(insn & 0x7f, 0x13, "li sequences only use OP-IMM");
+            let dest = ((insn >> 7) & 0x1f) as usize;
+            let rs1 = ((insn >> 15) & 0x1f) as usize;
+            let imm = i64::from((insn as i32) >> 20);
+            match (insn >> 12) & 0x7 {
+                0 => regs[dest] = regs[rs1].wrapping_add(imm),
+                1 => regs[dest] = regs[rs1] << ((insn >> 20) & 0x3f),
+                funct3 => panic!("unexpected funct3 {funct3} in li sequence"),
+            }
+        }
+        regs[usize::from(rd)]
+    }
+
+    #[test]
+    fn li_handles_immediates_near_i64_max() {
+        // Regression test for #328: the 12-bit chunk decomposition
+        // computed `value - low` with plain subtraction. When the
+        // sign-extended low chunk is negative and the value is near
+        // i64::MAX, that subtraction overflows and panics in debug
+        // builds (release builds wrapped and produced the right code).
+        for value in [
+            i64::MAX,
+            i64::MAX - 1,
+            i64::MIN,
+            i64::from(i32::MAX),
+            i64::from(i32::MIN),
+            -1,
+            0,
+            2047,
+            2048,
+            -2048,
+            -2049,
+            1 << 62,
+            -(1 << 62),
+            0x1234_5678_9abc_def0u64 as i64,
+        ] {
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li({value})"
+            );
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li_reloc(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li_reloc({value})"
+            );
+        }
+        for value in [i64::from(i32::MAX), i64::from(i32::MIN), -1, 0, 2047, -2048] {
+            let mut asm = Riscv64BaselineMasm::with_capacity(256);
+            asm.li_reloc32(A0, value);
+            assert_eq!(
+                eval_li_sequence(&asm.into_bytes(), A0),
+                value,
+                "li_reloc32({value})"
+            );
+        }
     }
 
     #[test]

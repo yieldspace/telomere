@@ -191,7 +191,7 @@ impl ComponentEngine {
         bytes: &[u8],
     ) -> Result<ComponentProgram, ComponentError> {
         let scope = state.scope();
-        let root = scope.make_component();
+        let root = scope.make_component(&state.core_instance_store, &state.instance_store);
 
         let mut imports = Vec::with_capacity(scope.imports.len());
         let mut callable_imports = Vec::new();

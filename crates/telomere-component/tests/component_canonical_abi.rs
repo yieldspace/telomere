@@ -208,8 +208,8 @@ fn latin1_utf16_store_component(misalign_realloc: bool) -> String {
   (core func $host-lower
     (canon lower (func $host)
       string-encoding=latin1+utf16
-      (memory $guest "memory")
-      (realloc (func $guest "realloc"))))
+      (memory (core memory $guest "memory"))
+      (realloc (core func $guest "realloc"))))
   (core module $caller
     (import "" "host" (func $host (param i32)))
     (func (export "run")
@@ -240,7 +240,7 @@ fn latin1_utf16_load_component(data: &str, ptr: u32, tagged_len: u32) -> String 
   (core func $host-lower
     (canon lower (func $host)
       string-encoding=latin1+utf16
-      (memory $guest "memory")))
+      (memory (core memory $guest "memory"))))
   (core module $caller
     (import "" "host" (func $host (param i32 i32)))
     (func (export "run")
@@ -270,8 +270,8 @@ fn string_roundtrip_component(encoding: &str) -> String {
   (core func $host-lower
     (canon lower (func $host)
       string-encoding={encoding}
-      (memory $guest "memory")
-      (realloc (func $guest "realloc"))))
+      (memory (core memory $guest "memory"))
+      (realloc (core func $guest "realloc"))))
   (core module $caller
     (import "" "host" (func $host (param i32 i32 i32)))
     (func (export "run") (param i32 i32) (result i32)
@@ -285,8 +285,8 @@ fn string_roundtrip_component(encoding: &str) -> String {
     (canon lift
       (core func $caller "run")
       string-encoding={encoding}
-      (memory $guest "memory")
-      (realloc (func $guest "realloc"))))
+      (memory (core memory $guest "memory"))
+      (realloc (core func $guest "realloc"))))
 )
 "#,
         guest = guest_fixture("", false),
@@ -305,8 +305,8 @@ fn direct_list_component(type_defs: &str, misalign_realloc: bool) -> String {
   (func (export "run") (param "values" $value)
     (canon lift
       (core func $guest "capture-direct")
-      (memory $guest "memory")
-      (realloc (func $guest "realloc"))))
+      (memory (core memory $guest "memory"))
+      (realloc (core func $guest "realloc"))))
   {observers}
 )
 "#,
@@ -327,8 +327,8 @@ fn indirect_list_component(type_defs: &str, params: &str, misalign_realloc: bool
     {params}
     (canon lift
       (core func $guest "capture-indirect")
-      (memory $guest "memory")
-      (realloc (func $guest "realloc"))))
+      (memory (core memory $guest "memory"))
+      (realloc (core func $guest "realloc"))))
   {observers}
 )
 "#,
