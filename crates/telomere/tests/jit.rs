@@ -313,6 +313,63 @@ async fn jit_executes_i32_locals_and_arithmetic() {
     )
 ))]
 #[tokio::test]
+async fn jit_executes_multi_lane_select_before_return() {
+    // Regression test for #309: a select over a two-slot value (i64/f64)
+    // lowers to one compare followed by one csel per lane. The riscv64
+    // masm consumed the deferred compare on the first csel, so compiling
+    // this shape panicked with "csel follows cmp" on the second lane.
+    for (cond, expected) in [(0, 0), (1, -1)] {
+        let wat = format!(
+            r#"
+            (module
+              (func (export "pick") (result i64)
+                i64.const -1
+                i64.const 0
+                i32.const {cond}
+                select
+                return))
+            "#
+        );
+        let jit_result = invoke_jit(&wat, "pick", vec![]).await;
+        assert_success_values(jit_result, ResultValue::new(vec![WasmValue::I64(expected)]));
+        let interpreter_result = invoke_interpreter(&wat, "pick", vec![]).await;
+        assert_success_values(
+            interpreter_result,
+            ResultValue::new(vec![WasmValue::I64(expected)]),
+        );
+    }
+
+    for (cond, expected) in [(0, 0.25), (1, -1.5)] {
+        let wat = format!(
+            r#"
+            (module
+              (func (export "pick") (result f64)
+                f64.const -1.5
+                f64.const 0.25
+                i32.const {cond}
+                select
+                return))
+            "#
+        );
+        let jit_result = invoke_jit(&wat, "pick", vec![]).await;
+        assert_success_values(jit_result, ResultValue::new(vec![WasmValue::F64(expected)]));
+        let interpreter_result = invoke_interpreter(&wat, "pick", vec![]).await;
+        assert_success_values(
+            interpreter_result,
+            ResultValue::new(vec![WasmValue::F64(expected)]),
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
 async fn jit_signed_remainder_overflow_returns_zero() {
     let result = invoke_jit(
         r#"
