@@ -1,4 +1,4 @@
-use super::canonical::{program_func_type, runtime_resource_id};
+use super::canonical::{program_func_type, register_host_argument_handles, runtime_resource_id};
 use super::host::{
     linker_binding_to_callable, materialize_inline_core_instance, vm_result_to_component_error,
 };
@@ -263,7 +263,32 @@ impl RuntimeInstance {
     ) -> Result<Vec<ComponentValue>, ComponentError> {
         let namespace = self.resolve_namespace(store, path)?;
         match namespace.resolve_export(name, store)? {
-            RuntimeExport::Func(callable) => callable.call_sync(store, args),
+            RuntimeExport::Func(callable) => {
+                // Handles the embedder supplies directly as arguments
+                // live in the host namespace; register them before the
+                // call so the boundary validation can tell them from
+                // guest-invented indices. Borrow registrations end with
+                // this call.
+                let (shared, borrows) = match &*callable {
+                    ResolvedCallable::Lifted {
+                        func_type,
+                        program,
+                        shared,
+                        ..
+                    } => (
+                        Some(shared.clone()),
+                        register_host_argument_handles(func_type, args, program, shared),
+                    ),
+                    _ => (None, Vec::new()),
+                };
+                let result = callable.call_sync(store, args);
+                if let Some(shared) = &shared {
+                    for handle in borrows {
+                        shared.release_host_borrow(handle);
+                    }
+                }
+                result
+            }
             _ => Err(ComponentError::ExportNotFound(name.to_owned())),
         }
     }
@@ -452,6 +477,7 @@ impl RuntimeEnv {
                     func_type,
                     options: Box::new(options),
                     program: self.program.clone(),
+                    shared: self.shared.clone(),
                     handles: self.handles.clone(),
                 })
             }

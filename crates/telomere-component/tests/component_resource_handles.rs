@@ -168,12 +168,11 @@ async fn resource_handle_from_sibling_instance_is_unknown() {
         .call(&store, "drop-in2", &[])
         .await
         .expect_err("index 1 is unknown in instance 2 and must trap");
-    // Canon-op failures inside a core module used to surface as an
-    // unreachable guest trap; since #312 the canon-lower trampoline
-    // preserves the trap cause, so the runtime's own message reaches the
-    // caller. What #317 pins is that the drop traps at all.
+    // The canon-op trap cause is preserved across the core host
+    // trampoline (#312) and phrased canonically (#335): the caller sees
+    // the `unknown handle index` trap itself, not a bare `unreachable`.
     assert!(
-        matches!(&error, telomere_component::ComponentError::Trap(message) if message.contains("resource handle 1 is invalid")),
+        matches!(error, telomere_component::ComponentError::Trap(ref message) if message.contains("unknown handle index 1")),
         "dropping a sibling instance's handle should trap, got {error:?}"
     );
     instance
@@ -400,6 +399,225 @@ async fn resource_destructor_may_drop_in_same_instance() {
         .await
         .expect("run should succeed");
     assert_eq!(result, vec![ComponentValue::U32(42)]);
+}
+
+// Regression tests for #335: canonical handle operations validate the
+// handle index against the instance's handle table. Unknown,
+// already-dropped, zero, and max indices trap with the canonical
+// `unknown handle index N` text, and using a handle through another
+// resource type's canon op traps with the canonical wrong-type text,
+// instead of reaching the guest or silently succeeding (upstream
+// `resources/handle-table.wast` lines 200-212, 260, 292, 321, 323).
+//
+// The canon ops below run inside core modules, so their traps cross the
+// core host trampoline; the trap *cause* text is preserved across that
+// boundary by the #312 trampoline fix (PR #340). Until that lands, the
+// in-core cases surface as a bare `unreachable` guest trap at the public
+// API; the assertions here pin the canonical text the runtime produces
+// once the cause is preserved (verified against an integrated tree).
+
+fn expect_call_trap_text(
+    result: Result<Vec<ComponentValue>, telomere_component::ComponentError>,
+    expected: &str,
+    context: &str,
+) {
+    let error = result.expect_err(context);
+    let text = format!("{error:?}");
+    assert!(
+        text.contains(expected),
+        "{context}: expected an error containing `{expected}`, got {text}"
+    );
+}
+
+/// The `$Traps` component of upstream `resources/handle-table.wast`:
+/// `resource.drop` / `resource.rep` of a never-allocated, already-dropped,
+/// zero, or max handle index must trap `unknown handle index N`.
+#[tokio::test]
+async fn canon_handle_ops_trap_on_unknown_handle_indices() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (canon resource.new $R (core func $R.resource.new))
+  (canon resource.drop $R (core func $R.resource.drop))
+  (canon resource.rep $R (core func $R.resource.rep))
+  (core module $M
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (import "" "rep" (func $rep (param i32) (result i32)))
+    (func (export "drop-never-allocated") (call $drop (i32.const 5)))
+    (func (export "rep-never-allocated") (drop (call $rep (i32.const 5))))
+    (func (export "double-drop")
+      (if (i32.ne (i32.const 1) (call $new (i32.const 100))) (then unreachable))
+      (call $drop (i32.const 1))
+      (call $drop (i32.const 1))
+    )
+    (func (export "drop-zero") (call $drop (i32.const 0)))
+    (func (export "drop-max") (call $drop (i32.const 0xffffffff)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "new" (func $R.resource.new))
+    (export "drop" (func $R.resource.drop))
+    (export "rep" (func $R.resource.rep))
+  ))))
+  (func (export "drop-never-allocated") (canon lift (core func $m "drop-never-allocated")))
+  (func (export "rep-never-allocated") (canon lift (core func $m "rep-never-allocated")))
+  (func (export "double-drop") (canon lift (core func $m "double-drop")))
+  (func (export "drop-zero") (canon lift (core func $m "drop-zero")))
+  (func (export "drop-max") (canon lift (core func $m "drop-max")))
+)
+"#,
+    );
+    for (export, expected) in [
+        ("drop-never-allocated", "unknown handle index 5"),
+        ("rep-never-allocated", "unknown handle index 5"),
+        ("double-drop", "unknown handle index 1"),
+        ("drop-zero", "unknown handle index 0"),
+        ("drop-max", "unknown handle index 4294967295"),
+    ] {
+        let (store, instance) = instantiate(&bytes).await;
+        let result = instance.call(&store, export, &[]).await;
+        expect_call_trap_text(result, expected, export);
+    }
+}
+
+/// The `$WrongType` component of upstream `resources/handle-table.wast`:
+/// two resource types share one table, but each entry remembers its type.
+/// Dropping an $R1 handle through $R2's `resource.drop`, and returning an
+/// $R1 handle from a function typed as returning `own $R2`, must both
+/// trap with the canonical wrong-type text.
+#[tokio::test]
+async fn canon_handle_ops_trap_on_wrong_type_handles() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $R1 (resource (rep i32)))
+  (type $R2 (resource (rep i32)))
+  (canon resource.new $R1 (core func $R1.resource.new))
+  (canon resource.drop $R2 (core func $R2.resource.drop))
+  (core module $M
+    (import "" "R1.new" (func $R1.new (param i32) (result i32)))
+    (import "" "R2.drop" (func $R2.drop (param i32)))
+    (func (export "drop-R1-as-R2")
+      (if (i32.ne (i32.const 1) (call $R1.new (i32.const 100))) (then unreachable))
+      (call $R2.drop (i32.const 1))
+    )
+    (func (export "return-R1-as-R2") (result i32)
+      (call $R1.new (i32.const 100))
+    )
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "R1.new" (func $R1.resource.new))
+    (export "R2.drop" (func $R2.resource.drop))
+  ))))
+  (export $R2' "R2" (type $R2))
+  (func (export "drop-R1-as-R2") (canon lift (core func $m "drop-R1-as-R2")))
+  (func (export "return-R1-as-R2") (result (own $R2')) (canon lift (core func $m "return-R1-as-R2")))
+)
+"#,
+    );
+    const WRONG_TYPE: &str = "handle index 1 used with the wrong type, expected \
+        guest-defined resource but found a different guest-defined resource";
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance.call(&store, "drop-R1-as-R2", &[]).await;
+    expect_call_trap_text(result, WRONG_TYPE, "drop-R1-as-R2");
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance.call(&store, "return-R1-as-R2", &[]).await;
+    expect_call_trap_text(result, WRONG_TYPE, "return-R1-as-R2");
+}
+
+/// The middleman section of upstream `resources/handle-table.wast`
+/// (lines 186-212): after $D drops the handle it received, passing the
+/// same index to a lowered `consume` (own) is not reached in these cases;
+/// the pinned cases here are a `borrow` argument naming an index that
+/// was never valid in the caller's table, which must trap
+/// `unknown handle index 3` at the canon-lower boundary instead of
+/// reaching the callee, and a valid borrow of a live handle, which must
+/// keep working.
+#[tokio::test]
+async fn canon_lower_borrow_args_validate_handle_indices() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (type $R' (resource (rep i32)))
+    (export $R "R" (type $R'))
+    (canon resource.new $R' (core func $R.resource.new))
+    (canon resource.drop $R' (core func $R.resource.drop))
+    (core module $CM
+      (import "" "new" (func $new (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "make") (result i32) (call $new (i32.const 100)))
+      (func (export "consume") (param $h i32) (call $drop (local.get $h)))
+      (func (export "use") (param $rep i32))
+    )
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "new" (func $R.resource.new))
+      (export "drop" (func $R.resource.drop))
+    ))))
+    (func (export "make") (result (own $R)) (canon lift (core func $cm "make")))
+    (func (export "consume") (param "r" (own $R)) (canon lift (core func $cm "consume")))
+    (func (export "use") (param "r" (borrow $R)) (canon lift (core func $cm "use")))
+  )
+  (component $D
+    (import "c" (instance $c
+      (export "R" (type $R (sub resource)))
+      (export "make" (func (result (own $R))))
+      (export "consume" (func (param "r" (own $R))))
+      (export "use" (func (param "r" (borrow $R))))
+    ))
+    (alias export $c "R" (type $R))
+    (canon resource.drop $R (core func $R.resource.drop))
+    (canon lower (func $c "make") (core func $make'))
+    (canon lower (func $c "consume") (core func $consume'))
+    (canon lower (func $c "use") (core func $use'))
+    (core module $DM
+      (import "" "make" (func $make (result i32)))
+      (import "" "consume" (func $consume (param i32)))
+      (import "" "use" (func $use (param i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "own-use-after-drop")
+        (if (i32.ne (i32.const 1) (call $make)) (then unreachable))
+        (call $drop (i32.const 1))
+        (call $consume (i32.const 1))
+      )
+      (func (export "borrow-never-valid")
+        (call $use (i32.const 3))
+      )
+      (func (export "borrow-valid")
+        (if (i32.ne (i32.const 1) (call $make)) (then unreachable))
+        (call $use (i32.const 1))
+      )
+    )
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "make" (func $make'))
+      (export "consume" (func $consume'))
+      (export "use" (func $use'))
+      (export "drop" (func $R.resource.drop))
+    ))))
+    (func (export "own-use-after-drop") (canon lift (core func $dm "own-use-after-drop")))
+    (func (export "borrow-never-valid") (canon lift (core func $dm "borrow-never-valid")))
+    (func (export "borrow-valid") (canon lift (core func $dm "borrow-valid")))
+  )
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c" (instance $c))))
+  (func (export "own-use-after-drop") (alias export $d "own-use-after-drop"))
+  (func (export "borrow-never-valid") (alias export $d "borrow-never-valid"))
+  (func (export "borrow-valid") (alias export $d "borrow-valid"))
+)
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance.call(&store, "borrow-never-valid", &[]).await;
+    expect_call_trap_text(result, "unknown handle index 3", "borrow-never-valid");
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance.call(&store, "own-use-after-drop", &[]).await;
+    expect_call_trap_text(result, "unknown handle index 1", "own-use-after-drop");
+    let (store, instance) = instantiate(&bytes).await;
+    instance
+        .call(&store, "borrow-valid", &[])
+        .await
+        .expect("borrowing a live handle through canon lower should succeed");
 }
 
 // Regression tests for #342: canonical lift/lower must transfer resource
@@ -682,13 +900,464 @@ async fn transferred_handles_keep_their_resource_type() {
         .await
         .expect_err("dropping an R1 handle through R2's drop must trap");
     // With trap-cause preservation (#312), the runtime's precise
-    // wrong-type error surfaces instead of a flattened guest trap.
+    // wrong-type error surfaces instead of a flattened guest trap;
+    // since #335 that text is the canonical wrong-type trap.
     assert!(
         matches!(
             &error,
             telomere_component::ComponentError::Trap(message)
-                if message.contains("resource handle 2 is invalid")
+                if message.contains("handle index 2 used with the wrong type")
         ),
         "wrong-type drop should trap, got {error:?}"
+    );
+}
+
+/// A host-provided handle and a locally created resource can carry the
+/// same index: the local table's allocator and the host allocator both
+/// start at 1, in separate namespaces. Returning the host handle
+/// upward through a canon lift must not be judged against the
+/// unrelated local entry (Codex review on PR #349).
+#[tokio::test]
+async fn host_handle_colliding_with_local_index_passes_through_lift() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "H" (type (sub resource)))
+      (export "get" (func (result (own 0))))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "H" (type $H))
+  (alias export $host "get" (func $get))
+  (type $L (resource (rep i32)))
+  (canon resource.new $L (core func $L.resource.new))
+  (core func $get' (canon lower (func $get)))
+  (core module $M
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "get" (func $get (result i32)))
+    (func (export "run") (result i32)
+      ;; a local resource takes this instance's table index 1
+      (drop (call $new (i32.const 7)))
+      ;; the host-provided handle is also 1, in the SharedState namespace
+      (call $get))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "new" (func $L.resource.new))
+    (export "get" (func $get'))
+  ))))
+  (func (export "run") (result (own $H)) (canon lift (core func $m "run")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("get", |_store, _args| Ok(vec![ComponentValue::Own(1)]));
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("returning a host-provided handle through lift should succeed");
+    assert_eq!(result, vec![ComponentValue::Own(1)]);
+}
+
+/// The same provider instance imported under two names: the decoder
+/// freshens each import declaration independently, so the resource
+/// carries a distinct synthetic identity along each import path. A
+/// resource created through the first import must still validate when
+/// borrowed through the second (Codex review on PR #349; the
+/// two-import variant of `borrow_handle_crosses_to_defining_instance_as_rep`).
+#[tokio::test]
+async fn borrow_through_second_import_of_same_instance() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $M
+      (global $dtor-count (mut i32) (i32.const 0))
+      (func (export "dtor") (param i32)
+        (global.set $dtor-count (i32.add (global.get $dtor-count) (i32.const 1))))
+      (func (export "dtor-count") (result i32) (global.get $dtor-count)))
+    (core instance $m (instantiate $M))
+    (type $R' (resource (rep i32) (dtor (core func $m "dtor"))))
+    (export $R "R" (type $R'))
+    (canon resource.new $R' (core func $R.resource.new))
+    (core module $CM
+      (import "" "new" (func $new (param i32) (result i32)))
+      (func (export "make") (result i32) (call $new (i32.const 0x41)))
+      (func (export "get-rep") (param $rep i32) (result i32) (local.get $rep)))
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "new" (func $R.resource.new))))))
+    (func (export "make") (result (own $R)) (canon lift (core func $cm "make")))
+    (func (export "get-rep") (param "r" (borrow $R)) (result u32) (canon lift (core func $cm "get-rep")))
+    (func (export "dtor-count") (result u32) (canon lift (core func $m "dtor-count"))))
+  (component $D
+    (import "c1" (instance $c1
+      (export "R" (type $R1 (sub resource)))
+      (export "make" (func (result (own $R1))))
+      (export "get-rep" (func (param "r" (borrow $R1)) (result u32)))))
+    (import "c2" (instance $c2
+      (export "R" (type $R2 (sub resource)))
+      (export "make" (func (result (own $R2))))
+      (export "get-rep" (func (param "r" (borrow $R2)) (result u32)))))
+    (alias export $c1 "R" (type $R))
+    (canon resource.drop $R (core func $R.resource.drop))
+    (canon lower (func $c1 "make") (core func $make'))
+    (canon lower (func $c2 "get-rep") (core func $get-rep'))
+    (core module $DM
+      (import "" "make" (func $make (result i32)))
+      (import "" "get-rep" (func $get-rep (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "run") (result i32)
+        (local $h i32)
+        (local.set $h (call $make))
+        (if (i32.ne (i32.const 1) (local.get $h)) (then unreachable))
+        (if (i32.ne (i32.const 0x41) (call $get-rep (local.get $h))) (then unreachable))
+        (call $drop (local.get $h))
+        (i32.const 44)))
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "make" (func $make'))
+      (export "get-rep" (func $get-rep'))
+      (export "drop" (func $R.resource.drop))))))
+    (func (export "run") (result u32) (canon lift (core func $dm "run"))))
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c1" (instance $c)) (with "c2" (instance $c))))
+  (func (export "run") (alias export $d "run"))
+  (func (export "dtor-count") (alias export $c "dtor-count")))
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("borrowing through the second import of the same instance should succeed");
+    assert_eq!(result, vec![ComponentValue::U32(44)]);
+    let count = instance
+        .call(&store, "dtor-count", &[])
+        .await
+        .expect("dtor-count should succeed");
+    assert_eq!(count, vec![ComponentValue::U32(1)]);
+}
+
+// Regression tests for the second Codex review round on PR #349 (#335):
+// handles the embedder supplies directly as arguments of a public call
+// live in the host namespace, exactly like handles returned from lowered
+// host calls, and must be registered at the public call boundary before
+// the boundary validation judges them; and a `resource.drop` naming a
+// host handle whose index collides with an unrelated local entry must
+// still reach the host-resource fallback.
+
+/// An exported function accepts a `borrow` of a host resource and
+/// forwards it to an imported host function. The embedder supplies the
+/// borrow directly through `ComponentInstance::call`; the handle never
+/// entered guest code through a lowered call, so only the public
+/// boundary can register it (Codex review on PR #349).
+#[tokio::test]
+async fn host_supplied_borrow_argument_forwards_to_host_function() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "H" (type (sub resource)))
+      (export "use" (func (param "r" (borrow 0))))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "H" (type $H))
+  (alias export $host "use" (func $use))
+  (core func $use' (canon lower (func $use)))
+  (core module $M
+    (import "" "use" (func $use (param i32)))
+    (func (export "fwd") (param $h i32) (call $use (local.get $h)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "use" (func $use'))
+  ))))
+  (func (export "fwd") (param "r" (borrow $H)) (canon lift (core func $m "fwd")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seen_by_host = Rc::clone(&seen);
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("use", move |_store, args| {
+        seen_by_host.borrow_mut().extend_from_slice(args);
+        Ok(vec![])
+    });
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    instance
+        .call(&store, "fwd", &[ComponentValue::Borrow(77)])
+        .await
+        .expect("forwarding a host-supplied borrow to a host function should succeed");
+    assert_eq!(
+        *seen.borrow(),
+        vec![ComponentValue::Borrow(77)],
+        "the host callback should run with the supplied borrow"
+    );
+}
+
+/// The `own` counterpart: an embedder-supplied `own` handle the guest
+/// simply returns upward must validate on the way out, like a handle a
+/// lowered host call produced (Codex review on PR #349).
+#[tokio::test]
+async fn host_supplied_own_argument_passes_through_lift() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "H" (type (sub resource)))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "H" (type $H))
+  (core module $M
+    (func (export "id") (param $h i32) (result i32) (local.get $h))
+  )
+  (core instance $m (instantiate $M))
+  (func (export "id") (param "r" (own $H)) (result (own $H)) (canon lift (core func $m "id")))
+)
+"#,
+    );
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", telomere_component::ComponentLinkerInstance::new());
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "id", &[ComponentValue::Own(77)])
+        .await
+        .expect("returning a host-supplied own handle through lift should succeed");
+    assert_eq!(result, vec![ComponentValue::Own(77)]);
+}
+
+/// A borrow supplied by the embedder is lent for the duration of that
+/// call only: a handle index the guest stashes and forwards during a
+/// later call is unknown again, exactly like a guest-invented index.
+#[tokio::test]
+async fn host_supplied_borrow_does_not_outlive_the_call() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "H" (type (sub resource)))
+      (export "use" (func (param "r" (borrow 0))))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "H" (type $H))
+  (alias export $host "use" (func $use))
+  (core func $use' (canon lower (func $use)))
+  (core module $M
+    (import "" "use" (func $use (param i32)))
+    (global $stash (mut i32) (i32.const 0))
+    (func (export "stash") (param $h i32) (global.set $stash (local.get $h)))
+    (func (export "use-stashed") (call $use (global.get $stash)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "use" (func $use'))
+  ))))
+  (func (export "stash") (param "r" (borrow $H)) (canon lift (core func $m "stash")))
+  (func (export "use-stashed") (canon lift (core func $m "use-stashed")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("use", |_store, _args| Ok(vec![]));
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    instance
+        .call(&store, "stash", &[ComponentValue::Borrow(77)])
+        .await
+        .expect("the call carrying the borrow should succeed");
+    let result = instance.call(&store, "use-stashed", &[]).await;
+    expect_call_trap_text(result, "unknown handle index 77", "use-stashed");
+}
+
+/// A local resource and a host-provided resource can carry the same
+/// index in their separate namespaces. Dropping the host handle through
+/// `canon resource.drop` must run the registered host destructor even
+/// though this instance's table holds an unrelated local entry at that
+/// index (Codex review on PR #349; the drop counterpart of
+/// `host_handle_colliding_with_local_index_passes_through_lift`).
+#[tokio::test]
+async fn host_resource_drop_wins_over_colliding_local_entry() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "thing" (type (sub resource)))
+      (export "make" (func (result (own 0))))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "thing" (type $thing))
+  (alias export $host "make" (func $make))
+  (type $L (resource (rep i32)))
+  (canon resource.new $L (core func $L.resource.new))
+  (core func $make' (canon lower (func $make)))
+  (core func $drop-thing (canon resource.drop $thing))
+  (core module $M
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "make" (func $make (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "run") (result i32)
+      ;; a local resource takes this instance's table index 1
+      (drop (call $new (i32.const 7)))
+      ;; the host-provided handle is also 1, in the SharedState namespace;
+      ;; dropping it must run the host destructor, not trap on the local entry
+      (call $drop (call $make))
+      (i32.const 44))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "new" (func $L.resource.new))
+    (export "make" (func $make'))
+    (export "drop" (func $drop-thing))
+  ))))
+  (func (export "run") (result s32) (canon lift (core func $m "run")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("make", |_store, _args| Ok(vec![ComponentValue::Own(1)]));
+    let dropped = Rc::new(RefCell::new(Vec::new()));
+    let dropped_by_host = Rc::clone(&dropped);
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+    linker.register_import_resource_drop("host", "thing", move |_store, handle| {
+        dropped_by_host.borrow_mut().push(handle);
+        Ok(())
+    });
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("dropping the host handle should succeed despite the colliding local entry");
+    assert_eq!(result, vec![ComponentValue::S32(44)]);
+    assert_eq!(
+        *dropped.borrow(),
+        vec![1],
+        "the host destructor should run exactly once, with the host handle"
+    );
+}
+
+// Regression test for the third Codex review round on PR #349 (#335):
+// a `borrow` argument of a canon-lowered function whose resource is
+// defined in the lowering component itself is the resource's
+// representation, not a handle-table index (the defining component's
+// core code works with reps, exactly like `HandleTransfer::borrow`
+// delivers reps to defining instances). The boundary validation must
+// not judge it against the caller's table.
+
+/// The defining component's core code passes representation 65 for a
+/// borrow of its own resource to a lowered host function; 65 is not a
+/// live handle index in any table, yet the call is valid and the host
+/// observes the representation unchanged.
+#[tokio::test]
+async fn canon_lower_borrow_of_locally_defined_resource_passes_representation() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let bytes = compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (type $iface
+    (instance
+      (export "R" (type (eq $R)))
+      (export "use" (func (param "r" (borrow 0)) (result u32)))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "use" (func $use))
+  (core func $use' (canon lower (func $use)))
+  (core module $M
+    (import "" "use" (func $use (param i32) (result i32)))
+    (func (export "run") (result i32) (call $use (i32.const 65)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "use" (func $use'))
+  ))))
+  (func (export "run") (result u32) (canon lift (core func $m "run")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seen_by_host = Rc::clone(&seen);
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("use", move |_store, args| {
+        seen_by_host.borrow_mut().extend_from_slice(args);
+        Ok(vec![ComponentValue::U32(7)])
+    });
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("passing a representation for a locally defined borrow should succeed");
+    assert_eq!(result, vec![ComponentValue::U32(7)]);
+    assert_eq!(
+        *seen.borrow(),
+        vec![ComponentValue::Borrow(65)],
+        "the host should observe the representation unchanged"
     );
 }
