@@ -16,6 +16,11 @@ optimizer. The CLI exposes both directions:
 - `telomere-cli compile MODULE [-o OUTPUT]` writes the artifact
   (default output: the module path with `.tpre` appended) and prints the
   per-phase serialize timings.
+- `telomere-cli compile --check ARTIFACT` validates an existing
+  artifact (precompiled or AoT) against the running build without
+  executing or installing anything: success when the fingerprint
+  matches, otherwise the typed rejection reason is printed and the
+  exit status is failure (#199).
 - Every CLI entry point that loads a core module detects artifacts by
   magic and restores them transparently.
 

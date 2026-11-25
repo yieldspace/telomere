@@ -260,7 +260,15 @@ impl Riscv64BaselineMasm {
                 .expect("ra spill fits");
             self.store_mem64(SP, FRAME_SIZE - 16, S0)
                 .expect("s0 spill fits");
-            self.addi(S0, SP, FRAME_SIZE).expect("frame fits");
+            // The virtual-register slots hang below S0 (slot_disp is
+            // negative), so the slot base must sit below the saved
+            // RA/S0 pair at the top of the frame. Anchoring S0 at
+            // FRAME_SIZE put slot 0 on the RA spill (FRAME_SIZE - 8)
+            // and slot 1 on the S0 spill (FRAME_SIZE - 16): the entry
+            // argument spill then overwrote the saved return address,
+            // and the epilogue returned to whatever value the body
+            // last left in slot 0 (#161).
+            self.addi(S0, SP, FRAME_SIZE - 16).expect("frame fits");
             for (slot, reg) in [A0, A1, A2, A3, A4, A5, A6, A7].into_iter().enumerate() {
                 self.store_slot64(slot as u8, reg)
                     .expect("entry argument slot fits");
@@ -1008,7 +1016,14 @@ impl Riscv64BaselineMasm {
     }
 
     fn binop(&mut self, rd: u8, rn: u8, rm: u8, width: Width, funct3: u32, funct7: u32) {
+        // RISC-V has no 32-bit forms of AND/OR/XOR: OP-32 with funct3
+        // 4/6/7 and funct7 0 is an unassigned encoding that raises an
+        // illegal-instruction fault on hardware, not just under
+        // emulation (#161). The W32 slot loads zero-extend, so the
+        // 64-bit form computes the same low 32 bits and store_slot32
+        // discards the rest.
         let opcode = match width {
+            Width::W32 if funct7 == 0 && matches!(funct3, 4 | 6 | 7) => 0x33,
             Width::W32 => 0x3b,
             Width::X64 => 0x33,
         };
@@ -1515,5 +1530,83 @@ mod tests {
         assert!(!bytes.windows(4).any(|window| {
             u32::from_le_bytes(window.try_into().unwrap()) == encode_i(0x13, 5, T1, T1, 32).unwrap()
         }));
+    }
+
+    #[test]
+    fn prologue_slots_do_not_overlap_saved_registers() {
+        // #161: the slot base used to be anchored at the frame top,
+        // putting slot 0 on the RA spill and slot 1 on the S0 spill.
+        // The entry argument spill then overwrote the saved return
+        // address, and the epilogue returned to whatever value the
+        // function body last left in slot 0.
+        let mut asm = Riscv64BaselineMasm::with_capacity(256);
+        asm.stp_pre(29, 30);
+        let bytes = asm.into_bytes();
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect();
+
+        // Recover the slot base from the addi that loads S0 from SP.
+        let slot_base = words
+            .iter()
+            .filter(|&&w| {
+                w & 0x7f == 0x13
+                    && (w >> 7) & 0x1f == u32::from(S0)
+                    && (w >> 15) & 0x1f == u32::from(SP)
+                    && (w >> 12) & 0x7 == 0
+            })
+            .map(|&w| i64::from((w as i32) >> 20))
+            .next()
+            .expect("prologue sets the slot base from SP");
+
+        // Effective frame offsets (from the new SP) of every 64-bit
+        // store the prologue emits, split by base register.
+        let mut saved_offsets = Vec::new();
+        let mut slot_offsets = Vec::new();
+        for &w in &words {
+            if w & 0x7f != 0x23 || (w >> 12) & 0x7 != 3 {
+                continue; // not an sd
+            }
+            let base = (w >> 15) & 0x1f;
+            let imm = (((w as i32) >> 25) << 5) | ((w >> 7) & 0x1f) as i32;
+            if base == u32::from(SP) {
+                saved_offsets.push(i64::from(imm));
+            } else if base == u32::from(S0) {
+                slot_offsets.push(slot_base + i64::from(imm));
+            }
+        }
+        assert_eq!(saved_offsets.len(), 2, "prologue spills RA and S0");
+        assert_eq!(slot_offsets.len(), 8, "prologue spills eight arguments");
+        for slot in &slot_offsets {
+            assert!(
+                !saved_offsets.contains(slot),
+                "slot at frame offset {slot} overlaps a saved-register spill {saved_offsets:?}"
+            );
+            assert!((0..i64::from(FRAME_SIZE)).contains(slot));
+        }
+    }
+
+    #[test]
+    fn emits_bitwise_w_with_64_bit_forms() {
+        // #161: and_w/orr_w/eor_w must not emit the unassigned OP-32
+        // encodings (funct3 4/6/7, funct7 0); the 64-bit forms are
+        // used instead.
+        let emit: [fn(&mut Riscv64BaselineMasm, u8, u8, u8); 3] = [
+            Riscv64BaselineMasm::and_w,
+            Riscv64BaselineMasm::orr_w,
+            Riscv64BaselineMasm::eor_w,
+        ];
+        for (emit, funct3) in emit.into_iter().zip([7, 6, 4]) {
+            let mut asm = Riscv64BaselineMasm::with_capacity(64);
+            emit(&mut asm, 2, 0, 1);
+            let bytes = asm.into_bytes();
+            assert!(bytes
+                .windows(4)
+                .any(|window| { window == encode_r(0x33, funct3, 0, T0, T0, T1).to_le_bytes() }));
+            assert!(!bytes
+                .windows(4)
+                .any(|window| { window == encode_r(0x3b, funct3, 0, T0, T0, T1).to_le_bytes() }));
+        }
     }
 }

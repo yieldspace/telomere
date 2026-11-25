@@ -15,6 +15,7 @@ telomere::Completion | always
 telomere::CompletionPayload | always
 telomere::DiagnosticsConfig | always
 telomere::ExecutionDriver | always
+telomere::FrontendPhaseCounters | always
 telomere::HostCallFuture | always
 telomere::HostCallOutcome | always
 telomere::HostCallPending | always
@@ -125,6 +126,7 @@ telomere::current_fingerprint | cfg(feature = "aot-load")
 telomere::deserialize_module | always
 telomere::deserialize_module_timed | always
 telomere::diagnostics | always
+telomere::frontend_phase_counters | always
 telomere::get_global | always
 telomere::install_aot_artifact | cfg(feature = "aot-load")
 telomere::instantiate | always
