@@ -40,7 +40,7 @@ macro_rules! parse_leb128impl {
 
                 // Check for overflow: Ensure we don't exceed the specified bit size
                 if (read_bytes * 7) >= bit_size {
-                    return Err(WasmParserError::InvalidLeb128Encoding);
+                    return Err(WasmParserError::IntegerTooLarge);
                 }
             }
 
@@ -63,7 +63,7 @@ macro_rules! parse_leb128impl {
             };
 
             if remaining != 0 {
-                return Err(WasmParserError::InvalidLeb128Encoding);
+                return Err(WasmParserError::IntegerTooLarge);
             }
 
             Ok((read_bytes, result))

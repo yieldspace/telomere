@@ -47,6 +47,18 @@ impl fmt::Display for ProposalFeature {
     }
 }
 
+/// Formats an I/O failure from the module source, keeping the specific
+/// reason instead of flattening every failure into one generic line: an
+/// exhausted source is the spec's `unexpected end-of-file`, which is the
+/// text malformed-input diagnostics name.
+fn format_io_error(error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+        "unexpected end-of-file".to_string()
+    } else {
+        format!("error from underlying layer: {error}")
+    }
+}
+
 /// Errors produced while decoding or validating a core WebAssembly module.
 ///
 /// An [`UnsupportedFeature`](Self::UnsupportedFeature) reports a recognised
@@ -63,6 +75,9 @@ pub enum WasmParserError {
     /// A LEB128 integer was not encoded canonically or overflowed its width.
     #[error("invalid leb128 encoding")]
     InvalidLeb128Encoding,
+    /// A LEB128 integer's value does not fit in the target width.
+    #[error("integer too large")]
+    IntegerTooLarge,
     /// A section body did not consume exactly its declared size.
     #[error("invalid section size")]
     InvalidSectionSize,
@@ -73,7 +88,7 @@ pub enum WasmParserError {
     #[error("invalid value type: {0}")]
     InvalidValueType(u8),
     /// A length-prefixed UTF-8 name could not be decoded.
-    #[error("invalid name encoding")]
+    #[error("malformed UTF-8 encoding")]
     InvalidNameEncoding,
     /// An export descriptor uses an unknown kind byte.
     #[error("invalid export desc: {0}")]
@@ -81,8 +96,9 @@ pub enum WasmParserError {
     /// A function body consumed a different number of bytes than declared.
     #[error("invalid instruction size: expected: {0:?}, actual: {1:?}")]
     InvalidInstructionSize(u32, u32),
-    /// Reading from the module source failed.
-    #[error("error from underlying layer")]
+    /// Reading from the module source failed; the message keeps the
+    /// specific reason (see [`format_io_error`]).
+    #[error("{}", format_io_error(.0))]
     IoError(#[from] std::io::Error),
     /// An opcode or prefixed subopcode has no recognised core instruction.
     #[error("invalid instruction: {0:?}")]
