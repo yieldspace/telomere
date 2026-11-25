@@ -1068,8 +1068,11 @@ async fn component_runtime_drops_host_provided_resource() {
         .call(&store, "drop-twice", &[])
         .await
         .expect_err("dropping the same handle twice should trap");
+    // The invalid-handle trap is raised by the `canon resource.drop`
+    // trampoline; the guest observes an `unreachable` trap, but the
+    // component-level error keeps the canonical cause.
     assert!(
-        matches!(error, ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
+        matches!(error, ComponentError::Trap(ref message) if message.contains("is invalid")),
         "double drop should trap, got {error:?}"
     );
     assert_eq!(
@@ -1083,7 +1086,7 @@ async fn component_runtime_drops_host_provided_resource() {
         .await
         .expect_err("dropping a handle that was never issued should trap");
     assert!(
-        matches!(error, ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
+        matches!(error, ComponentError::Trap(ref message) if message.contains("is invalid")),
         "dropping an unknown handle should trap, got {error:?}"
     );
     assert_eq!(*dropped.borrow(), vec![100, 101]);

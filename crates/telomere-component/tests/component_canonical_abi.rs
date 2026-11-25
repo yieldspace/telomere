@@ -749,13 +749,13 @@ async fn latin1_utf16_load_rejects_an_odd_pointer() {
         .expect_err("odd latin1+utf16 pointer must trap");
     // Canonical ABI `load_string_from_range` requires `ptr == align_to(ptr, 2)`:
     // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
+    // The trap is raised inside the canon-lower trampoline; the guest
+    // observes an `unreachable` trap, but the component-level error keeps
+    // the canonical cause.
     assert!(
         matches!(
             error,
-            ComponentError::GuestTrap {
-                kind: telomere::TrapKind::Unreachable,
-                ..
-            }
+            ComponentError::Trap(ref message) if message.contains("unaligned pointer")
         ),
         "unexpected error: {error}"
     );
@@ -783,13 +783,12 @@ async fn latin1_utf16_store_rejects_a_misaligned_realloc_result() {
         .expect_err("misaligned latin1+utf16 realloc result must trap");
     // Canonical ABI `store_string_to_latin1_or_utf16` checks `ptr == align_to(ptr, 2)`:
     // https://github.com/WebAssembly/component-model/blob/73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc/design/mvp/CanonicalABI.md
+    // As with the load side, the component-level error keeps the
+    // canonical cause even though the guest observes `unreachable`.
     assert!(
         matches!(
             error,
-            ComponentError::GuestTrap {
-                kind: telomere::TrapKind::Unreachable,
-                ..
-            }
+            ComponentError::Trap(ref message) if message.contains("not aligned")
         ),
         "unexpected error: {error}"
     );

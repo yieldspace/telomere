@@ -414,7 +414,23 @@ fn component_host_trampoline(cx: &mut HostContext) -> VMResult<Vec<WasmValue>> {
         // yields under the first-poll contract -- surfaces to the guest as
         // an `unreachable` trap. That is the documented behaviour for the
         // canon-lower path; component-level calls return the error itself.
-        Err(_) => VMResult::Unreachable,
+        // To keep that last part true when the failure is a trap (a
+        // canonical ABI trap, or a guest trap from a nested call), the
+        // error is also kept in `PENDING_HOST_TRAP`, and
+        // `vm_result_to_component_error` restores it when this execution's
+        // result is converted: the guest still observes only `unreachable`,
+        // but the component-level caller sees the original trap cause
+        // instead of a bare "trapped: unreachable". Non-trap failures are
+        // not kept; they keep surfacing as the plain `unreachable` trap.
+        Err(error) => {
+            if matches!(
+                error,
+                ComponentError::Trap(_) | ComponentError::GuestTrap { .. }
+            ) {
+                PENDING_HOST_TRAP.with(|pending| *pending.borrow_mut() = Some(error));
+            }
+            VMResult::Unreachable
+        }
     }
 }
 
@@ -486,10 +502,20 @@ pub(super) fn vm_result_to_component_error(
 ) -> ComponentError {
     match result {
         CoreVMResult::Success(_) => unreachable!(),
-        CoreVMResult::Unreachable => ComponentError::GuestTrap {
-            kind: telomere::TrapKind::Unreachable,
-            message: format!("{context} trapped: unreachable"),
-        },
+        CoreVMResult::Unreachable => {
+            // A trap a host binding raised while servicing this execution
+            // was kept by `component_host_trampoline`; restore it so the
+            // trap cause survives the core boundary. Every core execution's
+            // non-success result is converted exactly once, through this
+            // function, so a kept trap cannot outlive its own execution.
+            if let Some(error) = PENDING_HOST_TRAP.with(|pending| pending.borrow_mut().take()) {
+                return error;
+            }
+            ComponentError::GuestTrap {
+                kind: telomere::TrapKind::Unreachable,
+                message: format!("{context} trapped: unreachable"),
+            }
+        }
         CoreVMResult::StackOverflow => ComponentError::GuestTrap {
             kind: telomere::TrapKind::StackOverflow,
             message: format!("{context} trapped: stack overflow"),

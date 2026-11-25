@@ -26,7 +26,10 @@ fn host_roundtrip_component(
       (param $old_ptr i32) (param $old_len i32) (param $align i32) (param $new_len i32)
       (result i32)
       (local $ptr i32)
-      (local.set $ptr (global.get $bump))
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
       (global.set $bump (i32.add (local.get $ptr) (local.get $new_len)))
       (local.get $ptr)
     )
@@ -177,7 +180,10 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
       (param $old_ptr i32) (param $old_len i32) (param $align i32) (param $new_len i32)
       (result i32)
       (local $ptr i32)
-      (local.set $ptr (global.get $bump))
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
       (global.set $bump (i32.add (local.get $ptr) (local.get $new_len)))
       (local.get $ptr)
     )
@@ -239,7 +245,10 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
       (param $old_ptr i32) (param $old_len i32) (param $align i32) (param $new_len i32)
       (result i32)
       (local $ptr i32)
-      (local.set $ptr (global.get $bump))
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
       (global.set $bump (i32.add (local.get $ptr) (local.get $new_len)))
       (local.get $ptr)
     )
@@ -353,7 +362,10 @@ async fn component_dynamic_values_support_indirect_parameter_areas() {
       (param $old_ptr i32) (param $old_len i32) (param $align i32) (param $new_len i32)
       (result i32)
       (local $ptr i32)
-      (local.set $ptr (global.get $bump))
+      (local.set $ptr
+        (i32.and
+          (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+          (i32.sub (i32.const 0) (local.get $align))))
       (global.set $bump (i32.add (local.get $ptr) (local.get $new_len)))
       (local.get $ptr)
     )
