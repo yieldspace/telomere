@@ -1,4 +1,4 @@
-use crate::decoder::name::parse_export_name_dash;
+use crate::decoder::name::{parse_export_name_dash, validate_name_attributes_sort};
 use crate::decoder::sort::parse_sort_with_idx;
 use crate::decoder::types::parse_externdesc;
 use crate::decoder::types::validate_annotated_export;
@@ -26,6 +26,8 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
     focus.export_names.push(name.clone());
 
     let si = parse_sort_with_idx(ctx)?;
+    validate_name_attributes_sort(matches!(si, Sort::Instance(_, _)), &name.attributes)
+        .map_err(ComponentParseError::InvalidExportName)?;
     if matches!(si, Sort::Instance(_, _)) {
         ensure_concrete_surface_name(&name)?;
     }

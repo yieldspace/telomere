@@ -1,4 +1,6 @@
-use crate::decoder::name::{is_kebab_label, parse_export_name_dash, parse_import_name_dash};
+use crate::decoder::name::{
+    is_kebab_label, parse_export_name_dash, parse_import_name_dash, validate_name_attributes_sort,
+};
 use crate::decoder::types::interface::annotated::{
     validate_annotated_export, validate_annotated_import,
 };
@@ -27,6 +29,11 @@ pub fn parse_import_decl(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResu
     }
     ctx.validator.scope_mut().import_names.push(name.clone());
     let ed = parse_externdesc(ctx)?;
+    validate_name_attributes_sort(
+        matches!(ed, crate::ir::ExternDesc::Instance(_)),
+        &name.attributes,
+    )
+    .map_err(crate::decoder::ComponentParseError::InvalidImportName)?;
     if !matches!(
         ed,
         crate::ir::ExternDesc::Eq(_) | crate::ir::ExternDesc::Sub
@@ -56,6 +63,11 @@ pub fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseRes
     }
     ctx.validator.scope_mut().export_names.push(name.clone());
     let desc = parse_externdesc(ctx)?;
+    validate_name_attributes_sort(
+        matches!(desc, crate::ir::ExternDesc::Instance(_)),
+        &name.attributes,
+    )
+    .map_err(crate::decoder::ComponentParseError::InvalidExportName)?;
     if !matches!(
         desc,
         crate::ir::ExternDesc::Eq(_) | crate::ir::ExternDesc::Sub
