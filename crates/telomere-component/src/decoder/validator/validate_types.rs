@@ -3,10 +3,23 @@ use super::*;
 
 impl<'a> Validator<'a> {
     pub fn validate_current_component_resources(&self, type_id: TypeId) -> ParseResult<()> {
+        self.validate_resources_owned_by(type_id, self.current_scope_id())
+    }
+
+    /// The resource-ownership check for an outer alias written in a
+    /// type declarator: the aliased type may mention resources of
+    /// the component the declarator belongs to (the nearest
+    /// enclosing concrete scope), but not resources of any other
+    /// component.
+    pub fn validate_type_decl_alias_resources(&self, type_id: TypeId) -> ParseResult<()> {
+        self.validate_resources_owned_by(type_id, self.nearest_concrete_scope_id())
+    }
+
+    fn validate_resources_owned_by(&self, type_id: TypeId, owner: ScopeId) -> ParseResult<()> {
         let mut visiting = VisitTracker::new(self.types.len());
         if self
             .resource_owner_summary(type_id, &mut visiting)?
-            .refs_foreign_resource(self.current_scope_id())
+            .refs_foreign_resource(owner)
         {
             return Err(ComponentParseError::TypeMismatch(
                 "refers to resources not defined in the current component".to_owned(),
@@ -692,7 +705,10 @@ impl<'a> Validator<'a> {
                 .enumerate()
                 .all(|(index, field)| field.label.0 == index.to_string()),
             DefValType::Variant(cases) => !self.variant_is_inline(cases),
-            DefValType::Flags(_) => false,
+            // Flags types are never anonymous at a surface: like
+            // records and variants, a flags type must be named by an
+            // import or export wherever it is mentioned.
+            DefValType::Flags(_) => true,
             DefValType::List(_, _) => false,
             DefValType::Own(_) | DefValType::Borrow(_) => false,
         }

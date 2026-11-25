@@ -64,14 +64,11 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "linking/unit.wast",
-        "blocked by several known defects: a \
-         valid func import whose surface type is an unnamed generic \
-         type is rejected (issue #321; line 799); inline core \
-         instances exporting globals are not supported by the runtime \
-         (issue #324; lines 2010, 2043); the definer instances' \
-         `count` exports cannot be invoked through the outer \
-         component's aliases (issue #347; lines 865-866: export not found, a \
-         pre-existing failure unrelated to handle tables)",
+        "inline core instances exporting globals are not supported \
+         by the runtime (issue #324; lines 2010, 2043, with the \
+         knock-on invoke failures at lines 2011-2012). The line 799 \
+         func import rejection and the dependent count-1/count-2 \
+         failures at lines 863-866 (issues #321, #347) are fixed",
     ),
     (
         "binary/binary.wast",
@@ -93,16 +90,17 @@ const EXCLUDED: &[(&str, &str)] = &[
          non-canonical message (issue #356; lines 460, 924)",
     ),
     (
-        "validation/outer-alias.wast",
-        "outer-alias validation is not enforced: aliases that \
-         transitively refer to resources (line 68) and aliases to items \
-         other than types or instances (line 172) are accepted",
-    ),
-    (
         "validation/external-visibility.wast",
-        "func exportability is not validated: funcs that are not valid \
-         to be used as exports are accepted (lines 27, 69, 129), and one \
-         valid case is rejected instead (line 79)",
+        "a plain type export names the underlying type in telomere's \
+         surface model, so a func mentioning the local resource or \
+         record type is accepted as an export (lines 27, 69) and the \
+         valid record-through-the-export case is rejected instead \
+         (line 79). The reference validator distinguishes the \
+         export's own type index from the underlying type; matching \
+         that requires (eq) export faces in the type index space \
+         plus eq resolution across the canonical-ABI and runtime \
+         type consumers (issue #321). The flags case (line 129) is \
+         fixed: flags types must be named at a surface",
     ),
     (
         "validation/max-value-size.wast",

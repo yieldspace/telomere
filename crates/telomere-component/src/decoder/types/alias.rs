@@ -10,6 +10,14 @@ pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
     let sort = parse_sort(ctx)?;
     match ctx.reader.read_exact_one()? {
         0x00 => {
+            // Inside a component or instance type, an alias export
+            // may only refer to types or instances (a subset of the
+            // sorts allowed for alias definitions).
+            if !matches!(sort, SortType::Type | SortType::Instance) {
+                return Err(ComponentParseError::InvalidSignature(format!(
+                    "aliases in a component or instance type may only refer to types or instances: found {sort:?}"
+                )));
+            }
             let idx = parse_instance_local_idx(ctx)?;
             let name = parse_export_name(ctx)?;
             let instance_type_id = ctx.validator.scope().instance_indexes.get(idx)?;
@@ -44,6 +52,13 @@ pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
             }
         }
         0x02 => {
+            // Inside a component or instance type, an alias outer
+            // may only refer to types or core types.
+            if !matches!(sort, SortType::Type | SortType::Core(CoreSortType::Type)) {
+                return Err(ComponentParseError::InvalidSignature(format!(
+                    "aliases in a component or instance type may only refer to types or instances: found {sort:?}"
+                )));
+            }
             let (_, count) = parse_u32(ctx.reader)?;
             let (_, index) = parse_u32(ctx.reader)?;
             match sort {
@@ -72,10 +87,7 @@ pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
                             .type_indexes
                             .get(LocalIdx::new(index))?
                     };
-                    if ctx.validator.in_concrete_scope() {
-                        ctx.validator
-                            .validate_current_component_resources(type_id)?;
-                    }
+                    ctx.validator.validate_type_decl_alias_resources(type_id)?;
                     ctx.validator.scope_mut().type_indexes.add(type_id);
                 }
                 SortType::Instance => {

@@ -171,6 +171,21 @@ impl<'a> Validator<'a> {
         self.scope().scope_id
     }
 
+    /// The id of the nearest enclosing concrete (component
+    /// definition) scope. Inside a type declarator the innermost
+    /// scope is a type scope, but aliases there still refer to items
+    /// of the component the declarator belongs to: only crossing a
+    /// `component` boundary changes which component's resources an
+    /// aliased type may mention.
+    pub fn nearest_concrete_scope_id(&self) -> ScopeId {
+        let index = self
+            .scope_kinds
+            .iter()
+            .rposition(|kind| matches!(kind, ScopeKind::Concrete))
+            .unwrap_or(0);
+        self.scopes[index].scope_id
+    }
+
     pub fn new_type(&mut self, ty: Type) -> TypeId {
         self.types.add(ty)
     }

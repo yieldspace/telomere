@@ -148,7 +148,40 @@ impl<'a> Validator<'a> {
         }
 
         let ty = self.get_type(type_id)?.clone();
-        let cloned = self.freshen_import_type(&ty, context)?;
+        // A `(sub resource)` generic is freshened only when a type
+        // on the current walk declares it. A generic that belongs to
+        // an enclosing component and is merely referenced through
+        // the imported type (e.g. an instance type declared in the
+        // enclosing component whose methods mention the enclosing
+        // component's imported abstract resource) keeps its
+        // identity, so surfaces mentioning it still resolve to the
+        // enclosing component's name for it.
+        if let Type::Generic(Generic {
+            bound: GenericBound::Sub,
+            ..
+        }) = &ty
+        {
+            if context.freshen_declares(type_id) {
+                let new_type_id = self.new_type(Type::Generic(Generic::new(GenericBound::Sub)));
+                self.validate_effective_type_size(new_type_id)?;
+                self.types.record_transform(
+                    type_id,
+                    TypeTransformKind::FreshenImport,
+                    context.generation(),
+                    env_id,
+                    new_type_id,
+                );
+                context.insert(type_id, new_type_id);
+                return Ok(new_type_id);
+            }
+            context.insert(type_id, type_id);
+            return Ok(type_id);
+        }
+        let declared = self.declared_freshen_generics(&ty);
+        context.push_freshen_declared(declared);
+        let result = self.freshen_import_type(&ty, context);
+        context.pop_freshen_declared();
+        let cloned = result?;
         let new_type_id = self.new_type(cloned);
         self.validate_effective_type_size(new_type_id)?;
         self.types.record_transform(
@@ -160,6 +193,46 @@ impl<'a> Validator<'a> {
         );
         context.insert(type_id, new_type_id);
         Ok(new_type_id)
+    }
+
+    /// The `(sub resource)` generics a component or instance type
+    /// declares through its own type import/export entries. Nested
+    /// component/instance types declare their own generics, which
+    /// are collected when the walk descends into them.
+    fn declared_freshen_generics(&self, ty: &Type) -> std::collections::HashSet<TypeId> {
+        let mut declared = std::collections::HashSet::new();
+        let mut note = |type_id: TypeId| {
+            if let Ok(Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            })) = self.get_type(type_id)
+            {
+                declared.insert(type_id);
+            }
+        };
+        match ty {
+            Type::Component(component) => {
+                for import in component.imports.values() {
+                    if let ComponentImportType::Type { type_id, .. } = import {
+                        note(*type_id);
+                    }
+                }
+                for export in component.exports.values() {
+                    if let ComponentExportType::Type(type_id) = export {
+                        note(*type_id);
+                    }
+                }
+            }
+            Type::Instance(instance) => {
+                for export in instance.exports.values() {
+                    if let InstanceExportType::Type(type_id) = export {
+                        note(*type_id);
+                    }
+                }
+            }
+            _ => {}
+        }
+        declared
     }
 
     fn instantiate_type(&mut self, ty: &Type, context: &mut TransformContext) -> ParseResult<Type> {

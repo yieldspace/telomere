@@ -298,6 +298,14 @@ pub(crate) struct TransformContext {
     /// to such a resource follow its plain instantiation instead of
     /// the tie, so signatures stay paired with the plain export.
     plain_exported: HashSet<TypeId>,
+    /// Stack of `(sub resource)` generic type ids declared by the
+    /// component/instance types a freshen-import walk is currently
+    /// inside. Only declared generics are freshened: a generic that
+    /// belongs to an enclosing component and is merely referenced
+    /// through the imported type keeps its identity, so a surface
+    /// mentioning it still resolves to the enclosing component's
+    /// imported/exported name for it.
+    freshen_declared: Vec<HashSet<TypeId>>,
 }
 
 impl TransformContext {
@@ -308,6 +316,7 @@ impl TransformContext {
             ties: HashMap::new(),
             plain_roots: HashMap::new(),
             plain_exported: HashSet::new(),
+            freshen_declared: Vec::new(),
         }
     }
 
@@ -357,6 +366,24 @@ impl TransformContext {
 
     pub(crate) fn is_plain_exported(&self, type_id: TypeId) -> bool {
         self.plain_exported.contains(&type_id)
+    }
+
+    /// Push the generics declared by the type a freshen-import
+    /// walk is about to descend into.
+    pub(crate) fn push_freshen_declared(&mut self, declared: HashSet<TypeId>) {
+        self.freshen_declared.push(declared);
+    }
+
+    pub(crate) fn pop_freshen_declared(&mut self) {
+        self.freshen_declared.pop();
+    }
+
+    /// Whether `type_id` is a `(sub resource)` generic declared by
+    /// one of the types the current freshen-import walk is inside.
+    pub(crate) fn freshen_declares(&self, type_id: TypeId) -> bool {
+        self.freshen_declared
+            .iter()
+            .any(|declared| declared.contains(&type_id))
     }
 
     pub(crate) fn plain_root(&self, root: TypeId) -> Option<TypeId> {
