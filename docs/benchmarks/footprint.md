@@ -562,47 +562,49 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-25, the `Embedder footprint` workflow was run four
-times against the code of PR #353: workflow_dispatch runs
-45591081391, 45591092701 and 45591107329 against the PR branch at
-head `0dd39b5425c11aafdfdb5ac28d0b87087e15ca4b` (the #318 change —
-split extern-name encodings (name prefix `0x02`) decode and
-extern names are validated against the package-name grammar —
-merged with current `main` at `d5af7b8` (PRs #348, #351 and
-#350)), and pull-request run 45591075501, which
-built the same tree (`ubuntu-24.04`, Rust 1.96.0). A three-run
-control against unmodified `main` at `d5af7b8` (workflow_dispatch
-runs 45591120085, 45591130821 and 45591141591) isolates the
-attribution recorded in the re-baseline history below. Every run
-produced byte-identical sizes for its tree: for all sixteen
-profile/configuration rows, the raw file size, the `.text` size,
-the stripped file size, and the stripped `.text` size each have a
-run-to-run spread of **0 B** across the samples. The table below
-shows the checked-in baselines (stripped file /
-stripped `.text`, in bytes): the twelve series of the
-three configurations that link `telomere-component` were
-re-baselined to this campaign's branch measurements, and every
-other baseline is unchanged — on all remaining series the branch
-measured byte-identical to the checked-in baseline.
+On 2026-11-25, the `Embedder footprint` workflow was run three
+times against the code of PR #349: workflow_dispatch runs
+45596285864 and 45596292563 against the PR branch at head
+`695d95648431e72da3349a072e7684d7e4651aef` (the #335 change —
+canonical handle operations validate handle indices against the
+instance table, with the Codex-review follow-up — merged with
+current `main` at `b20ed79` (PRs #350 and #353)), and
+pull-request run 45596294067, which built the same tree
+(`ubuntu-24.04`, Rust 1.96.0). A three-run control against
+unmodified `main` at `b20ed79` (workflow_dispatch runs
+45596237962, 45596246881 and 45596255577) isolates the
+attribution recorded in the re-baseline history below. Every
+run produced byte-identical sizes for its tree: for all
+sixteen profile/configuration rows, the raw file size, the
+`.text` size, the stripped file size, and the stripped `.text`
+size each have a run-to-run spread of **0 B** across the
+samples. The table below shows the checked-in baselines
+(stripped file / stripped `.text`, in bytes): the twelve
+series of the three configurations that link
+`telomere-component` were re-baselined to this campaign's
+branch measurements, and every other baseline is unchanged —
+on all remaining series the branch is byte-identical to the
+`main` control, which is itself byte-identical to the
+checked-in baseline on all 32 gated series.
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,701,856 | 2,143,383 |
-| `release` | `wasi` | 2,929,352 | 2,317,751 |
+| `release` | `component` | 2,706,384 | 2,146,839 |
+| `release` | `wasi` | 2,933,880 | 2,321,207 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,145,056 | 2,485,063 |
+| `release` | `wasi-threads` | 3,149,584 | 2,488,519 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,692,920 | 1,250,711 |
-| `release-size` | `wasi` | 1,814,136 | 1,332,487 |
+| `release-size` | `component` | 1,696,288 | 1,252,983 |
+| `release-size` | `wasi` | 1,817,504 | 1,334,759 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,956,840 | 1,427,191 |
+| `release-size` | `wasi-threads` | 1,960,208 | 1,429,463 |
 
 #### Re-baseline history
 
@@ -2217,6 +2219,43 @@ up from +10.29%; the `release` `core-nosimd` stripped file
 series is unchanged at +9.83% (1,275,448 B to 1,400,840 B).
 The baseline was re-measured on the branch and updated as
 recorded above, following the procedure below.
+
+PR #349 (#335, canonical handle operations validate handle
+indices against the instance table) was re-baselined a third
+time after its Codex-review follow-up (host-provided handles
+pass through on a local-index collision; two synthetic
+import-path identities of one provider resource are not
+distinguished at the boundary) and the merges of PR #350
+(#330, merge commit `d8e85b9`) and PR #353 (#318, merge
+commit `695d956`) into the branch, bringing `main` to
+`b20ed79513bbb12f6e4447158fd4028808ac129b`. The #353 merge
+conflicted in the vendored exclusion table, resolved as the
+union of both removals (the `handle-table.wast` entry and
+the three extern-name entries all stay removed; the merged
+tree runs the vendored suite at ran=17 / checked=428, all
+pass), and in the baseline files, resolved by taking
+`main`'s baseline as this campaign's base. Attribution was
+isolated by measuring current `main` alone three times
+(workflow_dispatch runs 45596237962, 45596246881 and
+45596255577 on `main` at `b20ed79`; all three runs pass the
+gate, and the main control is byte-identical to the
+checked-in baseline on all 32 gated series). This PR's own
+delta against the main control is confined to the series of
+the three configurations that link `telomere-component`: in
+`release`, stripped file +4,528 B and stripped `.text`
++3,456 B in each of `component`, `wasi` and `wasi-threads`;
+in `release-size`, stripped file +3,368 B and stripped
+`.text` +2,272 B in each. Every other configuration is
+byte-identical to `main` in both profiles. All twelve
+series exceed the checked-in baseline, so all twelve are
+re-baselined to the branch measurements. Against the
+original #164 baseline, the largest cumulative growth is
+the `release` `component` stripped file series at +11.21%
+(2,433,656 B to 2,706,384 B); the step from this PR's
+previous +10.47% is PR #353's own growth, already absorbed
+into `main`'s baseline. The baseline was re-measured on the
+branch and updated as recorded above, following the
+procedure below.
 
 ### Threshold derivation
 
