@@ -19,6 +19,14 @@ impl<'a> Validator<'a> {
         if let Some(mapped) = context.get(type_id) {
             return Ok(mapped);
         }
+        // A `(sub resource)` export face tied to this type (seeded by
+        // the generics-replace evaluation) makes a reference to the
+        // underlying resource denote the face's instantiation, so an
+        // exported function stays tied to the exported face instead
+        // of materialising a second, unrelated resource.
+        if let Some(face) = context.tie_target(type_id) {
+            return self.instantiate_sub_resource_type(face, context);
+        }
         let env_id = self.types.subst_env_id(context);
         if let Some(mapped) = self.types.lookup_transform(
             type_id,
@@ -52,6 +60,16 @@ impl<'a> Validator<'a> {
     ) -> ParseResult<TypeId> {
         if let Some(mapped) = context.get(type_id) {
             return Ok(mapped);
+        }
+        // A face over a resource the context has already substituted
+        // -- an imported resource instantiated by an actual argument
+        // -- denotes that same resource: the face is an abstract
+        // view of the provider's resource, and the component cannot
+        // mint an identity distinct from it.
+        if let Some(root) = self.sub_face_root(type_id) {
+            if let Some(mapped) = context.get(root) {
+                return Ok(mapped);
+            }
         }
 
         let ty = self.get_type(type_id)?;

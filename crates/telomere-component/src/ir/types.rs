@@ -215,7 +215,10 @@ struct ResourceIdentityCheck<'v> {
     /// identities denoted from the enclosing scopes, keyed by the
     /// bound generic's id (on whichever side declares it) and valued
     /// by the instantiating generic's id. Like the alpha pairings, an
-    /// entry is dropped when its binder leaves scope.
+    /// entry is dropped when its binder leaves scope. An entry also
+    /// constrains the binder's alpha partner: paired binders denote
+    /// one identity, so an instantiation recorded for either of them
+    /// must agree with any instantiation recorded for the other.
     bound_assignment: HashMap<usize, usize>,
 }
 
@@ -275,8 +278,9 @@ impl<'v> ResourceIdentityCheck<'v> {
     /// bijection, so a sharing pattern must be consistent); a bound
     /// generic matched against a free one is instantiated by it
     /// (recorded in `bound_assignment`, so the instantiation must be
-    /// consistent); anything else equates two distinct abstract
-    /// identities.
+    /// consistent -- including across an alpha pairing, since paired
+    /// binders denote one identity); anything else equates two
+    /// distinct abstract identities.
     fn generic_pair(&mut self, a: &Generic, b: &Generic) -> ParseResult<()> {
         if a.id == b.id {
             return Ok(());
@@ -290,6 +294,19 @@ impl<'v> ResourceIdentityCheck<'v> {
                 None => {
                     if self.alpha_rev.contains_key(&b.id) {
                         return Self::mismatch();
+                    }
+                    // The pairing makes the two binders denote one
+                    // identity, so instantiations already recorded
+                    // for them (by earlier bound-to-free matches) must
+                    // agree; checking here as well as in `assign_bound`
+                    // keeps the verdict independent of traversal order.
+                    if let (Some(&fa), Some(&fb)) = (
+                        self.bound_assignment.get(&a.id),
+                        self.bound_assignment.get(&b.id),
+                    ) {
+                        if fa != fb {
+                            return Self::mismatch();
+                        }
                     }
                     self.alpha.insert(a.id, b.id);
                     self.alpha_rev.insert(b.id, a.id);
@@ -306,16 +323,28 @@ impl<'v> ResourceIdentityCheck<'v> {
     /// instantiated by the free identity `free`. The same bound
     /// identity must be instantiated the same way everywhere it is
     /// matched within the scope that binds it; distinct bound
-    /// identities may share one instantiating identity.
+    /// identities may share one instantiating identity. If `bound`
+    /// is alpha-paired with a binder on the other side, the pairing
+    /// makes the two denote one identity, so an instantiation
+    /// recorded for the partner constrains this one (and vice versa)
+    /// -- otherwise two matches could independently assign the
+    /// paired binders to distinct free identities, equating the
+    /// latter through the pairing.
     fn assign_bound(&mut self, bound: usize, free: usize) -> ParseResult<()> {
-        match self.bound_assignment.get(&bound) {
-            Some(&prev) if prev == free => Ok(()),
-            Some(_) => Self::mismatch(),
-            None => {
-                self.bound_assignment.insert(bound, free);
-                Ok(())
+        let partner = self
+            .alpha
+            .get(&bound)
+            .copied()
+            .or_else(|| self.alpha_rev.get(&bound).copied());
+        for key in [Some(bound), partner].into_iter().flatten() {
+            match self.bound_assignment.get(&key) {
+                Some(&prev) if prev == free => {}
+                Some(_) => return Self::mismatch(),
+                None => {}
             }
         }
+        self.bound_assignment.insert(bound, free);
+        Ok(())
     }
 
     fn ids(&mut self, a: TypeId, b: TypeId) -> ParseResult<()> {

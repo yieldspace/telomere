@@ -1078,3 +1078,192 @@ fn eq_ascription_with_bound_identity_instantiated_inconsistently_is_invalid() {
         "resource types are not the same",
     );
 }
+
+#[test]
+fn sub_ascribed_export_stays_tied_to_exported_func() {
+    // The instance type of $D must tie `make`'s result to the
+    // resource exported through the `(sub resource)` face: a
+    // consumer importing the two under one resource type has to
+    // accept them. Before the fix, instantiation materialised a
+    // second resource for `make`, unrelated to the face, and the
+    // consumer instantiation failed with "resource types are not
+    // the same".
+    compile_component(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (export $r2 "r" (type $r) (type (sub resource)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make"))))
+  (instance $d (instantiate $D))
+  (alias export $d "r" (type $r2))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $r2)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("exported func must stay tied to the sub-ascribed resource face");
+}
+
+#[test]
+fn sub_ascribed_export_stays_tied_to_exported_func_declared_first() {
+    // Same shape with the function export declared before the type
+    // export: the tie must not depend on declaration order.
+    compile_component(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make")))
+    (export $r2 "r" (type $r) (type (sub resource))))
+  (instance $d (instantiate $D))
+  (alias export $d "r" (type $r2))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $r2)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("exported func must stay tied to the face regardless of declaration order");
+}
+
+#[test]
+fn sub_ascribed_reexport_of_imported_resource_stays_tied() {
+    // The exported resource is imported here: once the component is
+    // instantiated with an actual resource, the `(sub resource)`
+    // re-export and the exported function both denote that same
+    // resource.
+    compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (component $D
+    (import "r" (type $r (sub resource)))
+    (export "r2" (type $r) (type (sub resource)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make"))))
+  (instance $d (instantiate $D (with "r" (type $R))))
+  (alias export $d "r2" (type $r2))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $r2)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("re-exported imported resource and func must denote the instantiated resource");
+}
+
+#[test]
+fn cross_assignments_through_alpha_pairing_are_invalid() {
+    // The x comparison alpha-pairs the two binders, so they denote
+    // one identity; y then instantiates the left binder by $r2 while
+    // z instantiates the right binder by $r1. Accepting would equate
+    // the distinct faces $r1 and $r2 through the pairing.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $f1 "f1" (type $r1) (type (sub resource)))
+    (export $f2 "f2" (type $r2) (type (sub resource)))
+    (type $a (component
+      (export "x" (type $xa (sub resource)))
+      (export "y" (type (eq $xa)))
+      (export "z" (type (eq $f1)))))
+    (type $b (component
+      (export "x" (type $xb (sub resource)))
+      (export "y" (type (eq $f2)))
+      (export "z" (type (eq $xb)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn cross_assignments_through_alpha_pairing_mirrored_are_invalid() {
+    // Mirror image: the cross assignments run the other way.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $f1 "f1" (type $r1) (type (sub resource)))
+    (export $f2 "f2" (type $r2) (type (sub resource)))
+    (type $a (component
+      (export "x" (type $xa (sub resource)))
+      (export "y" (type (eq $f2)))
+      (export "z" (type (eq $xa)))))
+    (type $b (component
+      (export "x" (type $xb (sub resource)))
+      (export "y" (type (eq $xb)))
+      (export "z" (type (eq $f1)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn cross_assignments_around_pairing_in_imports_are_invalid() {
+    // The pairing and both cross assignments all happen while the
+    // types' imports are compared; whichever entry is visited
+    // first, the inconsistency must surface.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $f1 "f1" (type $r1) (type (sub resource)))
+    (export $f2 "f2" (type $r2) (type (sub resource)))
+    (type $a (component
+      (import "x" (type $xa (sub resource)))
+      (import "w" (type (eq $xa)))
+      (import "v" (type (eq $f1)))))
+    (type $b (component
+      (import "x" (type $xb (sub resource)))
+      (import "w" (type (eq $f2)))
+      (import "v" (type (eq $xb)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn consistent_cross_assignments_through_alpha_pairing_are_valid() {
+    // Both cross matches instantiate the paired binders by the same
+    // free identity $f1: consistent, so the types are equal.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $f1 "f1" (type $r1) (type (sub resource)))
+    (export $f2 "f2" (type $r2) (type (sub resource)))
+    (type $a (component
+      (export "x" (type $xa (sub resource)))
+      (export "y" (type (eq $xa)))
+      (export "z" (type (eq $f1)))))
+    (type $b (component
+      (export "x" (type $xb (sub resource)))
+      (export "y" (type (eq $f1)))
+      (export "z" (type (eq $xb)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("consistent cross assignments through a pairing are valid");
+}

@@ -1,5 +1,5 @@
 use crate::decoder::{ParseResult, TransformContext, Validator};
-use crate::ir::types::{CoreModuleType, ValType};
+use crate::ir::types::{CoreModuleType, Generic, GenericBound, Type, ValType};
 use crate::ir::TypeId;
 use std::collections::HashMap;
 
@@ -28,6 +28,55 @@ fn resolve_generics(
     unified: &mut TransformContext,
 ) -> ParseResult<TypeId> {
     validator.instantiate_type_id(ty, unified)
+}
+
+/// Resolve the target of an `ExportTypeEq` instruction. When the
+/// exported type is itself a resource tied to a `(sub resource)`
+/// export face, the plain export keeps its own instantiation of the
+/// underlying resource -- distinct from the face's -- while every
+/// other reference in the program follows the tie. The untied
+/// instantiation is computed with the tie suspended and cached in
+/// the context's plain-root table, apart from the ordinary mapping,
+/// so the two instantiations never pre-empt each other regardless
+/// of the order the exports are declared in.
+fn resolve_export_type_eq(
+    ty: TypeId,
+    validator: &mut Validator,
+    unified: &mut TransformContext,
+) -> ParseResult<TypeId> {
+    // Resolve eq aliases to the type the export actually denotes.
+    let mut root = ty;
+    while let Ok(Type::Generic(Generic {
+        bound: GenericBound::Eq(inner),
+        ..
+    })) = validator.get_type(root)
+    {
+        root = *inner;
+    }
+    let tied_face = match unified.tie_target(root) {
+        // Only the resource itself is exempt; an export of one of
+        // its faces, or of any other type, resolves through the tie
+        // like any other reference.
+        Some(face) if validator.sub_face_root(root).is_none() => Some(face),
+        _ => None,
+    };
+    let Some(face) = tied_face else {
+        return resolve_generics(ty, validator, unified);
+    };
+    if let Some(mapped) = unified.plain_root(root) {
+        return Ok(mapped);
+    }
+    unified.remove_tie(root);
+    let resolved = resolve_generics(ty, validator, unified);
+    unified.restore_tie(root, face);
+    let mapped = resolved?;
+    // The untied resolution recorded ordinary mappings for the
+    // exported type and its root; drop them so later references keep
+    // following the tie, and remember the result as the plain root.
+    unified.remove(ty);
+    unified.remove(root);
+    unified.insert_plain_root(root, mapped);
+    Ok(mapped)
 }
 impl GenericsReplaceDSL {
     pub fn evaluate_one(
@@ -66,7 +115,7 @@ impl GenericsReplaceDSL {
             GenericsReplaceDSL::ExportTypeEq(name, type_id) => {
                 result.insert(
                     name.clone(),
-                    InstanceExportType::Type(resolve_generics(*type_id, validator, unified)?),
+                    InstanceExportType::Type(resolve_export_type_eq(*type_id, validator, unified)?),
                 );
             }
             GenericsReplaceDSL::ExportTypeSub(name, type_id) => {
@@ -89,6 +138,25 @@ impl GenericsReplaceDSL {
             result: HashMap::new(),
             unified: initial_unified,
         };
+        // Seed the ties between `(sub resource)` export faces and
+        // the resources they abstract before running the program, so
+        // references to an underlying resource elsewhere in the
+        // program instantiate as the face's resource regardless of
+        // the order the exports are declared in. A resource the
+        // context has already substituted -- an imported resource
+        // instantiated by an actual argument -- is exempt: its face
+        // denotes the substituted type itself (see
+        // `Validator::instantiate_sub_resource_type`).
+        for instr in program {
+            if let GenericsReplaceDSL::ExportTypeSub(_, face) = instr {
+                if let Some(root) = validator.sub_face_root(*face) {
+                    if env.unified.get(root).is_none() {
+                        env.unified.seed_tie(root, *face);
+                        env.unified.seed_tie(*face, *face);
+                    }
+                }
+            }
+        }
         tracing::trace!("{program:?}");
         for instr in program {
             Self::evaluate_one(instr, validator, &mut env)?

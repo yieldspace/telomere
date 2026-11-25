@@ -198,6 +198,40 @@ impl TransformMap {
         }
     }
 
+    fn remove(&mut self, type_id: TypeId) -> Option<TypeId> {
+        match self {
+            TransformMap::Empty => None,
+            TransformMap::One(pair) => {
+                if pair.0 == type_id {
+                    let mapped = pair.1;
+                    *self = TransformMap::Empty;
+                    Some(mapped)
+                } else {
+                    None
+                }
+            }
+            TransformMap::Two(pairs) => {
+                if pairs[0].0 == type_id {
+                    let mapped = pairs[0].1;
+                    *self = TransformMap::One(pairs[1]);
+                    Some(mapped)
+                } else if pairs[1].0 == type_id {
+                    let mapped = pairs[1].1;
+                    *self = TransformMap::One(pairs[0]);
+                    Some(mapped)
+                } else {
+                    None
+                }
+            }
+            TransformMap::Many(pairs) => {
+                match pairs.binary_search_by_key(&type_id, |(lhs, _)| *lhs) {
+                    Ok(index) => Some(pairs.remove(index).1),
+                    Err(_) => None,
+                }
+            }
+        }
+    }
+
     fn insert(&mut self, type_id: TypeId, mapped: TypeId) {
         match self {
             TransformMap::Empty => {
@@ -242,6 +276,23 @@ fn insert_sorted_pair(entries: &mut Vec<(TypeId, TypeId)>, pair: (TypeId, TypeId
 pub(crate) struct TransformContext {
     generation: u32,
     map: TransformMap,
+    /// `(sub resource)` export faces tied to the resource identity
+    /// they abstract, keyed by the face's underlying resource type
+    /// id (a face also keys itself). Seeded from a generics-replace
+    /// program's `ExportTypeSub` instructions before the program is
+    /// evaluated: references to the underlying resource from
+    /// elsewhere in the program -- an exported function's signature,
+    /// a value type, a nested type -- instantiate as the face's
+    /// resource, so the program's exports stay tied to the exported
+    /// face instead of materialising a second, unrelated resource.
+    /// The plain (eq) export of the underlying resource itself is
+    /// exempt and keeps its own instantiation (see `plain_roots`).
+    ties: HashMap<TypeId, TypeId>,
+    /// Instantiations of tied resources computed for their plain
+    /// (eq) exports, keyed by the resource type id. Kept apart from
+    /// `map` so a plain export neither pre-empts nor is pre-empted
+    /// by the tied instantiation the rest of the program uses.
+    plain_roots: HashMap<TypeId, TypeId>,
 }
 
 impl TransformContext {
@@ -249,6 +300,8 @@ impl TransformContext {
         Self {
             generation,
             map: TransformMap::Empty,
+            ties: HashMap::new(),
+            plain_roots: HashMap::new(),
         }
     }
 
@@ -262,6 +315,40 @@ impl TransformContext {
 
     pub(crate) fn insert(&mut self, type_id: TypeId, mapped: TypeId) {
         self.map.insert(type_id, mapped);
+    }
+
+    pub(crate) fn remove(&mut self, type_id: TypeId) -> Option<TypeId> {
+        self.map.remove(type_id)
+    }
+
+    /// The face a type is tied to, if a `(sub resource)` export of
+    /// this evaluation abstracts it (or the type is such a face).
+    pub(crate) fn tie_target(&self, type_id: TypeId) -> Option<TypeId> {
+        self.ties.get(&type_id).copied()
+    }
+
+    /// Tie `root` to the `(sub resource)` export face `face`. The
+    /// first face seeded for a root wins: with several faces over
+    /// one resource the program's other exports follow the first,
+    /// while each face export itself still instantiates distinctly.
+    pub(crate) fn seed_tie(&mut self, root: TypeId, face: TypeId) {
+        self.ties.entry(root).or_insert(face);
+    }
+
+    pub(crate) fn remove_tie(&mut self, root: TypeId) -> Option<TypeId> {
+        self.ties.remove(&root)
+    }
+
+    pub(crate) fn restore_tie(&mut self, root: TypeId, face: TypeId) {
+        self.ties.insert(root, face);
+    }
+
+    pub(crate) fn plain_root(&self, root: TypeId) -> Option<TypeId> {
+        self.plain_roots.get(&root).copied()
+    }
+
+    pub(crate) fn insert_plain_root(&mut self, root: TypeId, mapped: TypeId) {
+        self.plain_roots.insert(root, mapped);
     }
 }
 
