@@ -49,7 +49,7 @@ async fn misaligned_retptr_traps_on_lift() {
     (func (export "f") (result i32) (i32.const 1)))
   (core instance $m (instantiate $M))
   (func (export "f") (result (tuple u32 u32))
-    (canon lift (core func $m "f") (memory $m "mem"))))
+    (canon lift (core func $m "f") (memory (core memory $m "mem")))))
 "#;
     expect_unaligned_trap(text, "f").await;
 }
@@ -65,10 +65,10 @@ async fn misaligned_retptr_traps_on_lower() {
     (func (export "f") (result i32) (i32.const 0)))
   (core instance $m (instantiate $M))
   (func $f (result (tuple u32 u32))
-    (canon lift (core func $m "f") (memory $m "mem")))
+    (canon lift (core func $m "f") (memory (core memory $m "mem"))))
   (core module $Libc (memory (export "mem") 1))
   (core instance $libc (instantiate $Libc))
-  (core func $f' (canon lower (func $f) (memory $libc "mem")))
+  (core func $f' (canon lower (func $f) (memory (core memory $libc "mem"))))
   (core module $Main
     (import "" "f" (func $f (param i32)))
     (func (export "run") (call $f (i32.const 1))))
@@ -92,10 +92,10 @@ async fn misaligned_argptr_traps_on_lift() {
   (core instance $m (instantiate $M))
   (func $f (param "a" $big)
     (canon lift (core func $m "f")
-      (memory $m "mem") (realloc (func $m "realloc"))))
+      (memory (core memory $m "mem")) (realloc (core func $m "realloc"))))
   (core module $Libc (memory (export "mem") 1))
   (core instance $libc (instantiate $Libc))
-  (core func $f' (canon lower (func $f) (memory $libc "mem")))
+  (core func $f' (canon lower (func $f) (memory (core memory $libc "mem"))))
   (core module $Main
     (import "" "f" (func $f (param i32)))
     (func (export "run") (call $f (i32.const 1))))
@@ -120,10 +120,10 @@ async fn misaligned_realloc_result_traps_for_spilled_args() {
   (core instance $m (instantiate $M))
   (func $f (param "a" $big)
     (canon lift (core func $m "f")
-      (memory $m "mem") (realloc (func $m "realloc"))))
+      (memory (core memory $m "mem")) (realloc (core func $m "realloc"))))
   (core module $Libc (memory (export "mem") 1))
   (core instance $libc (instantiate $Libc))
-  (core func $f' (canon lower (func $f) (memory $libc "mem")))
+  (core func $f' (canon lower (func $f) (memory (core memory $libc "mem"))))
   (core module $Main
     (import "" "f" (func $f (param i32)))
     (func (export "run") (call $f (i32.const 8))))
@@ -146,11 +146,11 @@ async fn misaligned_utf16_string_pointer_traps_even_when_empty() {
   (core instance $m (instantiate $M))
   (func $f (param "s" string)
     (canon lift (core func $m "f") string-encoding=utf8
-      (memory $m "mem") (realloc (func $m "realloc"))))
+      (memory (core memory $m "mem")) (realloc (core func $m "realloc"))))
   (core module $Libc (memory (export "mem") 1))
   (core instance $libc (instantiate $Libc))
   (core func $f' (canon lower (func $f) string-encoding=utf16
-    (memory $libc "mem")))
+    (memory (core memory $libc "mem"))))
   (core module $Main
     (import "" "f" (func $f (param i32 i32)))
     (func (export "run") (call $f (i32.const 1) (i32.const 0))))
@@ -173,11 +173,11 @@ async fn misaligned_latin1_utf16_string_pointer_traps() {
   (core instance $m (instantiate $M))
   (func $f (param "s" string)
     (canon lift (core func $m "f") string-encoding=utf8
-      (memory $m "mem") (realloc (func $m "realloc"))))
+      (memory (core memory $m "mem")) (realloc (core func $m "realloc"))))
   (core module $Libc (memory (export "mem") 1))
   (core instance $libc (instantiate $Libc))
   (core func $f' (canon lower (func $f) string-encoding=latin1+utf16
-    (memory $libc "mem")))
+    (memory (core memory $libc "mem"))))
   (core module $Main
     (import "" "f" (func $f (param i32 i32)))
     (func (export "run-latin1") (call $f (i32.const 1) (i32.const 0)))
@@ -204,10 +204,10 @@ async fn misaligned_list_element_pointer_traps() {
   (core instance $m (instantiate $M))
   (func $f (param "xs" (list u64))
     (canon lift (core func $m "f")
-      (memory $m "mem") (realloc (func $m "realloc"))))
+      (memory (core memory $m "mem")) (realloc (core func $m "realloc"))))
   (core module $Libc (memory (export "mem") 1))
   (core instance $libc (instantiate $Libc))
-  (core func $f' (canon lower (func $f) (memory $libc "mem")))
+  (core func $f' (canon lower (func $f) (memory (core memory $libc "mem"))))
   (core module $Main
     (import "" "f" (func $f (param i32 i32)))
     (func (export "run") (call $f (i32.const 2) (i32.const 1))))
@@ -228,10 +228,10 @@ async fn aligned_pointers_still_work() {
     (func (export "f") (result i32) (i32.const 0)))
   (core instance $m (instantiate $M))
   (func $f (export "f") (result (tuple u32 u32))
-    (canon lift (core func $m "f") (memory $m "mem")))
+    (canon lift (core func $m "f") (memory (core memory $m "mem"))))
   (core module $Libc (memory (export "mem") 1))
   (core instance $libc (instantiate $Libc))
-  (core func $f' (canon lower (func $f) (memory $libc "mem")))
+  (core func $f' (canon lower (func $f) (memory (core memory $libc "mem"))))
   (core module $Main
     (import "" "f" (func $f (param i32)))
     (func (export "run") (call $f (i32.const 8))))

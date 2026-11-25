@@ -78,20 +78,13 @@ const EXCLUDED: &[(&str, &str)] = &[
          self-checking guest traps at line 169",
     ),
     (
-        "values/alignment.wast",
-        "blocked by issue #312: canonical ABI loads do not trap on \
-         unaligned pointers, so the assert_trap cases (lines 26, 51, \
-         81, 110, 138, 170, 172, 204, 206) succeed instead of trapping",
-    ),
-    (
         "values/realloc.wast",
         "blocked by issue #322 (the result of realloc is not \
          bounds-checked: line 110 does not trap, and lines 66, 108, 123 \
-         trap with a different error than the spec text), issue #312 \
-         (line 93: an unaligned pointer does not trap in the canonical \
-         layer), and a canonical lowering defect: lowering an empty \
-         list does not call realloc with (0, 0, align, 0) as the spec \
-         requires, so the guest traps at line 39",
+         trap with a different error than the spec text), and a \
+         canonical lowering defect: lowering an empty list does not \
+         call realloc with (0, 0, align, 0) as the spec requires, so \
+         the guest traps at line 39",
     ),
     (
         "values/variants.wast",
