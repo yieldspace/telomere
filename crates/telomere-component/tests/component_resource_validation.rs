@@ -370,3 +370,394 @@ fn eq_ascription_between_face_and_its_underlying_resource_is_invalid() {
         "resource types are not the same",
     );
 }
+
+#[test]
+fn eq_ascription_between_own_of_distinct_faces_is_invalid() {
+    // Regression (Codex review of PR #357, round 4): the round-3
+    // identity check only looked at the top-level type, so wrapping
+    // two distinct faces in `own` made both sides structural types
+    // that return `None` from `resource_face_id`, bypassing the check;
+    // the subtype relation then accepted the distinct sub-bounded
+    // handle targets inside.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (export "c" (type $oa) (type (eq $ob)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_borrow_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $ba (borrow $a))
+    (type $bb (borrow $b))
+    (export "c" (type $ba) (type (eq $bb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_own_of_same_face_is_valid() {
+    // Positive control: structurally wrapped references to the very
+    // same face still satisfy the identity assertion.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (type $oa (own $a))
+    (export "c" (type $oa) (type (eq $oa)))))
+"#,
+    )
+    .expect("an eq ascription between own of the same face must be accepted");
+}
+
+#[test]
+fn eq_ascription_between_list_of_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $la (list $oa))
+    (type $lb (list $ob))
+    (export "c" (type $la) (type (eq $lb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_record_with_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $ra (record (field "h" $oa)))
+    (type $rb (record (field "h" $ob)))
+    (export "c" (type $ra) (type (eq $rb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_variant_with_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $va (variant (case "h" $oa)))
+    (type $vb (variant (case "h" $ob)))
+    (export "c" (type $va) (type (eq $vb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_option_of_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $pa (option $oa))
+    (type $pb (option $ob))
+    (export "c" (type $pa) (type (eq $pb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_result_with_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $ra (result $oa))
+    (type $rb (result $ob))
+    (export "c" (type $ra) (type (eq $rb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_tuple_with_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $ta (tuple $oa))
+    (type $tb (tuple $ob))
+    (export "c" (type $ta) (type (eq $tb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_func_param_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $fa (func (param "x" $oa)))
+    (type $fb (func (param "x" $ob)))
+    (export "c" (type $fa) (type (eq $fb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_func_result_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $fa (func (result $oa)))
+    (type $fb (func (result $ob)))
+    (export "c" (type $fa) (type (eq $fb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_record_with_own_of_face_and_resource_is_invalid() {
+    // Nested form of the round-3 sibling direction: a face on one
+    // side, its underlying concrete resource on the other, both
+    // wrapped in `own` inside a record.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (type $oa (own $a))
+    (type $or (own $r))
+    (type $ra (record (field "h" $oa)))
+    (type $rr (record (field "h" $or)))
+    (export "c" (type $ra) (type (eq $rr)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_own_of_distinct_concrete_resources_is_invalid() {
+    // Baseline control without faces: distinct concrete resources
+    // were already rejected before this PR's face machinery, at any
+    // nesting depth, and must stay rejected with the same message.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (type $o1 (own $r1))
+    (type $o2 (own $r2))
+    (export "c" (type $o1) (type (eq $o2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_record_with_own_of_same_face_is_valid() {
+    // Positive control at depth: the same face referenced from both
+    // sides inside a record satisfies the identity assertion.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ra (record (field "h" $oa)))
+    (export "c" (type $ra) (type (eq $ra)))))
+"#,
+    )
+    .expect("an eq ascription between records over own of the same face must be accepted");
+}
+
+#[test]
+fn eq_ascription_between_instance_types_exporting_distinct_faces_is_invalid() {
+    // The identity assertion applies through instance types too: an
+    // instance type whose type export is pinned to one face is not
+    // the same type as one pinned to a different face.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $i1 (instance (export "x" (type (eq $a)))))
+    (type $i2 (instance (export "x" (type (eq $b)))))
+    (export "c" (type $i1) (type (eq $i2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_instance_types_with_func_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $i1 (instance (export "f" (func (param "x" $oa)))))
+    (type $i2 (instance (export "f" (func (param "x" $ob)))))
+    (export "c" (type $i1) (type (eq $i2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_component_types_exporting_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $ct1 (component (export "x" (type (eq $a)))))
+    (type $ct2 (component (export "x" (type (eq $b)))))
+    (export "c" (type $ct1) (type (eq $ct2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_instance_types_exporting_same_face_is_valid() {
+    // Positive control at the instance-type level: both sides pin
+    // the export to the very same face.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (type $i1 (instance (export "x" (type (eq $a)))))
+    (type $i2 (instance (export "x" (type (eq $a)))))
+    (export "c" (type $i1) (type (eq $i2)))))
+"#,
+    )
+    .expect("instance types pinning the same face must satisfy the eq ascription");
+}
+
+#[test]
+fn eq_ascription_between_instance_types_with_inline_sub_exports_is_valid() {
+    // Alpha-equivalence control: abstract types declared *inside*
+    // an instance type are bound by that type, not denoted by it, so
+    // two separately written instance types exporting an abstract
+    // resource are the same type -- as they were before faces.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $i1 (instance (export "x" (type (sub resource)))))
+    (type $i2 (instance (export "x" (type (sub resource)))))
+    (export "c" (type $i1) (type (eq $i2)))))
+"#,
+    )
+    .expect("inline abstract exports of two instance types must alpha-match");
+}
+
+#[test]
+fn eq_ascription_between_component_types_with_independent_sub_imports_is_valid() {
+    // Alpha-equivalence control at the component-type level: two
+    // component types whose imports are independent `(sub resource)`
+    // generics matched by bound before this change and must keep
+    // matching; only identities denoted from the enclosing scope are
+    // nominal.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $ct1 (component (import "x" (type (sub resource)))))
+    (type $ct2 (component (import "x" (type (sub resource)))))
+    (export "c" (type $ct1) (type (eq $ct2)))))
+"#,
+    )
+    .expect("independent abstract imports of two component types must alpha-match");
+}

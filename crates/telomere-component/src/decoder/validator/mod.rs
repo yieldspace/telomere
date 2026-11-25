@@ -167,6 +167,17 @@ impl<'a> Validator<'a> {
         self.types.add(ty)
     }
 
+    /// Whether `id` is visible from the scopes currently on the
+    /// validation stack -- i.e. it denotes a type of an enclosing
+    /// scope (a free reference at this point), as opposed to a type
+    /// defined inside a component/instance type value, whose scope
+    /// has already been popped by the time the value is compared.
+    pub fn type_id_visible_in_scope_stack(&self, id: TypeId) -> bool {
+        self.scopes
+            .iter()
+            .any(|scope| scope.type_indexes.contains(id))
+    }
+
     pub fn get_type(&self, id: TypeId) -> ParseResult<&Type> {
         self.types
             .get(id)
