@@ -564,15 +564,15 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 On 2026-11-25, the `Embedder footprint` workflow was run three
 times against the code of PR #349: workflow_dispatch runs
-45604539314 and 45604546843 against the PR branch at head
-`9ec422c993f7b2e292cbedba720e6328be600628` (the #335 change —
+45613750066 and 45613760858 against the PR branch at head
+`27416cb160da45e14845bc1a32f8fe844fe63113` (the #335 change —
 canonical handle operations validate handle indices against the
 instance table, with the Codex-review follow-up — merged with
 current `main` at `b20ed79` (PRs #350 and #353)), and
-pull-request run 45603104312, which built the same tree
+pull-request run 45612073405, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). A three-run control against
 unmodified `main` at `b20ed79` (workflow_dispatch runs
-45604554539, 45604561643 and 45604568688) isolates the
+45613767941, 45613778933 and 45613787203) isolates the
 attribution recorded in the re-baseline history below. Every
 run produced byte-identical sizes for its tree: for all
 sixteen profile/configuration rows, the raw file size, the
@@ -591,22 +591,55 @@ checked-in baseline on all 32 gated series.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,711,616 | 2,151,543 |
-| `release` | `wasi` | 2,939,112 | 2,325,927 |
+| `release` | `component` | 2,711,648 | 2,151,575 |
+| `release` | `wasi` | 2,939,144 | 2,325,959 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,154,816 | 2,493,239 |
+| `release` | `wasi-threads` | 3,154,848 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,698,920 | 1,255,271 |
-| `release-size` | `wasi` | 1,820,152 | 1,337,047 |
+| `release-size` | `component` | 1,698,904 | 1,255,271 |
+| `release-size` | `wasi` | 1,820,136 | 1,337,047 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+PR #349 (#335, canonical handle operations validate handle
+indices against the instance table) was re-baselined a fifth
+time after its third Codex-review follow-up (commit
+`27416cb`: a borrow of a resource defined in the validating
+program crosses the canonical boundary as the resource's
+representation, not a handle-table index, so the boundary
+validation exempts locally defined borrow leaves instead of
+trapping them as unknown indices). Attribution was isolated by
+measuring current `main` alone three times
+(workflow_dispatch runs 45613767941, 45613778933 and
+45613787203 on `main` at `b20ed79`; all three runs pass the
+gate, and the main control is byte-identical to the
+checked-in baseline on all 32 gated series). This PR's own
+delta against the main control is confined to the series of
+the three configurations that link `telomere-component`: in
+`release`, stripped file +9,792 B in each of `component`,
+`wasi` and `wasi-threads` and stripped `.text` +8,192 B
+(`component`) / +8,208 B (`wasi`, `wasi-threads`); in
+`release-size`, stripped file +5,984 B (`component`) /
++6,000 B (`wasi`) / +6,016 B (`wasi-threads`) and stripped
+`.text` +4,560 B in each. Every other configuration is
+byte-identical to `main` in both profiles. Against the
+previous re-baseline the step is small: +32 B stripped file
+and +32 B stripped `.text` in `release` for each of the
+three configurations, and −16 B stripped file in
+`release-size` `component` and `wasi` (every other series
+unchanged), so all twelve series are re-baselined to the
+branch measurements. Against the original #164 baseline,
+the largest cumulative growth is the `release` `component`
+stripped file series at +11.42% (2,433,656 B to 2,711,648 B).
+The baseline was re-measured on the branch and updated as
+recorded above, following the procedure below.
 
 PR #349 (#335, canonical handle operations validate handle
 indices against the instance table) was re-baselined a fourth
