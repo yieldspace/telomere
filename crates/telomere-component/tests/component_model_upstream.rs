@@ -78,19 +78,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          self-checking guest traps at line 169",
     ),
     (
-        "values/alignment.wast",
-        "blocked by issue #312: canonical ABI loads do not trap on \
-         unaligned pointers, so the assert_trap cases (lines 26, 51, \
-         81, 110, 138, 170, 172, 204, 206) succeed instead of trapping",
-    ),
-    (
-        "values/realloc.wast",
-        "blocked by issue #312 (lines 66 and 93 trap with the \
-         flattened `unreachable` message instead of the canonical trap \
-         text: the canon-lower trampoline erases the trap cause, and \
-         the canonical layer does not check pointer alignment)",
-    ),
-    (
         "values/variants.wast",
         "blocked by a canonical-ABI validation defect: variant/enum \
          discriminants are not validated when lowering, so invalid \

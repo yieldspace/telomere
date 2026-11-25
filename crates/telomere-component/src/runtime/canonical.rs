@@ -904,6 +904,7 @@ fn write_value_to_memory(
     store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
+    validate_pointer_alignment(ptr, memory_abi_for_valtype(ty, program)?.align)?;
     match ty {
         ValType::Primitive(prim) => {
             write_primitive_to_memory(value, prim, options, program, store, ptr)
@@ -922,6 +923,7 @@ fn read_value_from_memory(
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
+    validate_pointer_alignment(ptr, memory_abi_for_valtype(ty, program)?.align)?;
     match ty {
         ValType::Primitive(prim) => {
             read_primitive_from_memory(prim, options, program, store, memory, ptr)
@@ -2109,15 +2111,12 @@ fn read_string_from_memory(
             String::from_utf8(bytes).map_err(|error| ComponentError::Trap(error.to_string()))
         }
         CanonicalStringEncoding::Utf16 => {
+            validate_pointer_alignment(ptr, 2)?;
             let bytes = read_memory(store, memory, ptr, len as usize * 2)?;
             decode_utf16_le(bytes)
         }
         CanonicalStringEncoding::CompactUtf16 => {
-            if ptr % 2 != 0 {
-                return Err(ComponentError::Trap(format!(
-                    "latin1+utf16 string pointer {ptr} is not aligned to 2 bytes"
-                )));
-            }
+            validate_pointer_alignment(ptr, 2)?;
             if len & COMPACT_UTF16_TAG != 0 {
                 let utf16_len = len ^ COMPACT_UTF16_TAG;
                 let bytes = read_memory(store, memory, ptr, utf16_len as usize * 2)?;
@@ -2257,6 +2256,21 @@ fn call_realloc(
             "realloc returned an unexpected result".to_owned(),
         )),
     }
+}
+
+/// The canonical ABI traps when a pointer used to load or store a value
+/// is not aligned to the value type's alignment (`unaligned pointer` in
+/// the spec's trap wording). This applies to every guest-supplied pointer
+/// the runtime dereferences on the guest's behalf: retptrs, spilled
+/// argptrs, record/variant field bases (aligned by construction once the
+/// base is checked), list element bases, and string content pointers.
+fn validate_pointer_alignment(ptr: u32, align: u32) -> Result<(), ComponentError> {
+    if align > 1 && ptr % align != 0 {
+        return Err(ComponentError::Trap(format!(
+            "unaligned pointer: address {ptr} is not aligned to {align} bytes"
+        )));
+    }
+    Ok(())
 }
 
 /// Validates a pointer returned by a canonical `realloc` against the
