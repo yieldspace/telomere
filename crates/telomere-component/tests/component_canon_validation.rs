@@ -19,7 +19,7 @@ fn canon_lower_allows_indirect_non_memory_results_without_realloc() {
   )
   (core instance $libc (instantiate $libc))
   (core func $host-lower
-    (canon lower (func $host) (memory $libc "memory"))
+    (canon lower (func $host) (memory (core memory $libc "memory")))
   )
 )
 "#,
@@ -39,7 +39,7 @@ fn canon_lower_requires_realloc_for_memory_backed_results() {
   )
   (core instance $libc (instantiate $libc))
   (core func $host-lower
-    (canon lower (func $host) (memory $libc "memory"))
+    (canon lower (func $host) (memory (core memory $libc "memory")))
   )
 )
 "#,

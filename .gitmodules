@@ -2,3 +2,6 @@
 	path = crates/telomere/tests/wasm-testsuite
 	url = https://github.com/WebAssembly/testsuite
 	branch = main
+[submodule "crates/telomere-component/tests/component-model-testsuite"]
+	path = crates/telomere-component/tests/component-model-testsuite
+	url = https://github.com/WebAssembly/component-model

@@ -5,7 +5,7 @@
     )
     (core instance $m (instantiate $M))
     (type (resource (rep i32)))
-    (type (resource (rep i32) (dtor (func $m "dtor"))))
+    (type (resource (rep i32) (dtor (core func $m "dtor"))))
 )
 
 (assert_invalid
@@ -14,7 +14,7 @@
             (func (export "bad-dtor") (param i64))
         )
         (core instance $m (instantiate $M))
-        (type (resource (rep i32) (dtor (func $m "bad-dtor"))))
+        (type (resource (rep i32) (dtor (core func $m "bad-dtor"))))
     )
     "resource destructor function type is not correct"
 )
