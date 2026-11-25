@@ -13,6 +13,7 @@ use crate::ir::types::{
     GenericBound, InstanceExportType, InstanceType, Type, ValType,
 };
 use crate::ir::{ResourceId, ScopeId, TypeId};
+use crate::support::common::ValType as CoreValType;
 pub(crate) use arena::TransformContext;
 use arena::{
     ComponentExportEntry, ComponentImportEntry, ComponentImportKind, ComponentSurfaceSummary,
@@ -22,7 +23,7 @@ use arena::{
 pub use scope::ExportInfo;
 pub use scope::ScopeGuard;
 pub use state::ParseState;
-use std::cell::Cell;
+use std::cell::{Cell, Ref};
 use std::collections::HashMap;
 use tracing::trace;
 use typed_arena::Arena;
@@ -247,6 +248,16 @@ impl<'a> Validator<'a> {
         self.types
             .get(id)
             .ok_or(ComponentParseError::TypeNotFound(id))
+    }
+
+    /// The memoised Canonical ABI flattening of the type behind `id`,
+    /// as computed by the canon layer (`decoder::canon::flatten`).
+    pub(crate) fn flattened_types(&self, id: TypeId) -> Option<Ref<'_, [CoreValType]>> {
+        self.types.flattened_types(id)
+    }
+
+    pub(crate) fn set_flattened_types(&self, id: TypeId, flat: Vec<CoreValType>) {
+        self.types.set_flattened_types(id, flat);
     }
 
     pub fn snapshot_types(&self) -> Box<[Type]> {

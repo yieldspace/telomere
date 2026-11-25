@@ -1,4 +1,6 @@
 use super::*;
+use crate::ir::TypeId;
+use std::collections::HashSet;
 
 pub(super) fn flatten_func_type(
     func_ty: &FuncType,
@@ -14,9 +16,10 @@ pub(super) fn flatten_param_types_ctx(
     func_ty: &FuncType,
     ctx: &ParseContext<impl BinaryReader>,
 ) -> ParseResult<Vec<CoreValType>> {
+    let mut visiting = HashSet::new();
     let mut params = Vec::new();
     for param in &func_ty.params {
-        flatten_val_type(param, ctx, &mut params)?;
+        flatten_val_type(param, ctx, &mut visiting, &mut params)?;
     }
     Ok(params)
 }
@@ -25,9 +28,10 @@ pub(super) fn flatten_result_types_ctx(
     func_ty: &FuncType,
     ctx: &ParseContext<impl BinaryReader>,
 ) -> ParseResult<Vec<CoreValType>> {
+    let mut visiting = HashSet::new();
     let mut results = Vec::new();
     if let Some(result) = &func_ty.result {
-        flatten_val_type(result, ctx, &mut results)?;
+        flatten_val_type(result, ctx, &mut visiting, &mut results)?;
     }
     Ok(results)
 }
@@ -61,6 +65,7 @@ fn abi_flatten_results(
 fn flatten_val_type(
     ty: &ValType,
     ctx: &ParseContext<impl BinaryReader>,
+    visiting: &mut HashSet<TypeId>,
     out: &mut Vec<CoreValType>,
 ) -> ParseResult<()> {
     match ty {
@@ -68,17 +73,61 @@ fn flatten_val_type(
             flatten_primitive(prim, out);
             Ok(())
         }
-        ValType::Type(type_id) => flatten_type(ctx.validator.get_type(*type_id)?, ctx, out),
+        ValType::Type(type_id) => flatten_type_by_id(*type_id, ctx, visiting, out),
     }
+}
+
+/// Flattens the type behind `type_id` into `out`, memoising the result
+/// per type in the validator's type arena.
+///
+/// The flat representation of a type is a pure function of the type
+/// graph reachable from it, and arena definitions are append-only, so a
+/// completed result stays valid for the rest of the parse. Without the
+/// cache, shared references are re-expanded at every visit: a chain of
+/// variants whose two cases both reference the preceding type took
+/// exponential time to flatten even though every type in the chain is
+/// small (issue #367; measured pre-fix in release mode, the chain's
+/// final type as a canon lift parameter took ~1.2 s at 24 definitions,
+/// growing exponentially, while the definitions alone stayed flat).
+/// The discipline matches the validator's size / alignment / borrow
+/// caches (PR #364): only completed results are cached and errors are
+/// not cached. A type already on the current traversal stack is never
+/// cached either; defined types cannot actually be recursive (a
+/// definition only references earlier types), so the re-entry guard is
+/// defensive and reports an error rather than recursing without bound,
+/// which is what the uncached walk did.
+fn flatten_type_by_id(
+    type_id: TypeId,
+    ctx: &ParseContext<impl BinaryReader>,
+    visiting: &mut HashSet<TypeId>,
+    out: &mut Vec<CoreValType>,
+) -> ParseResult<()> {
+    if let Some(flat) = ctx.validator.flattened_types(type_id) {
+        out.extend_from_slice(&flat);
+        return Ok(());
+    }
+    if !visiting.insert(type_id) {
+        return Err(ComponentParseError::TypeMismatch(
+            "recursive defined type cannot be flattened".to_owned(),
+        ));
+    }
+    let mut flat = Vec::new();
+    let result = flatten_type(ctx.validator.get_type(type_id)?, ctx, visiting, &mut flat);
+    visiting.remove(&type_id);
+    result?;
+    out.extend_from_slice(&flat);
+    ctx.validator.set_flattened_types(type_id, flat);
+    Ok(())
 }
 
 fn flatten_type(
     ty: &Type,
     ctx: &ParseContext<impl BinaryReader>,
+    visiting: &mut HashSet<TypeId>,
     out: &mut Vec<CoreValType>,
 ) -> ParseResult<()> {
     match ty {
-        Type::DefVal(def) => flatten_defval(def, ctx, out),
+        Type::DefVal(def) => flatten_defval(def, ctx, visiting, out),
         Type::Resource(_) | Type::Generic(_) => {
             out.push(CoreValType::I32);
             Ok(())
@@ -92,6 +141,7 @@ fn flatten_type(
 fn flatten_defval(
     def: &DefValType,
     ctx: &ParseContext<impl BinaryReader>,
+    visiting: &mut HashSet<TypeId>,
     out: &mut Vec<CoreValType>,
 ) -> ParseResult<()> {
     match def {
@@ -101,7 +151,7 @@ fn flatten_defval(
         }
         DefValType::Record(fields) => {
             for field in fields {
-                flatten_val_type(&field.ty, ctx, out)?;
+                flatten_val_type(&field.ty, ctx, visiting, out)?;
             }
             Ok(())
         }
@@ -110,7 +160,7 @@ fn flatten_defval(
             for case in cases {
                 if let Some(ty) = &case.ty {
                     let mut flat = Vec::new();
-                    flatten_val_type(ty, ctx, &mut flat)?;
+                    flatten_val_type(ty, ctx, visiting, &mut flat)?;
                     for (index, ty) in flat.into_iter().enumerate() {
                         if let Some(current) = payload.get_mut(index) {
                             *current = join_core_types(*current, ty);
