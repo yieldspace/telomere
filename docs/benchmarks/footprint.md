@@ -562,20 +562,22 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-25, the `Embedder footprint` workflow was run four
+On 2026-11-25, the `Embedder footprint` workflow was run three
 times against the code of PR #352: workflow_dispatch runs
-45596144363, 45596163457 and 45596181128 against the PR branch at
-head `71b3bce86c8db4431cc55a36fa3e35fb1b2db662` (the #334 change —
+45604869761 and 45604878403 against the PR branch at
+head `94013a772f0a27e912410f8791a36ca48c8812fb` (the #334 change —
 a borrow of an owned resource can no longer be dropped while the
 borrow is outstanding, and ownership transfer of a borrowed
-resource is rejected — as revised by the second Codex review
-round, which registers transferred borrows against the
-originating resource's identity instead of resolving them by
-rep — merged with current `main` at `b20ed79` (PR #353)), and
-pull-request run 45595313921, which
+resource is rejected — as revised by the third Codex review
+round, which resolves every borrow's record in a first pass
+before any own moves its source entry, so a borrow passed
+after an own of the same resource is no longer silently
+dropped — on top of current `main` at `b20ed79` (PR #353),
+which has not moved since the branch's second re-baseline),
+and pull-request run 45603860686, which
 built the same tree (`ubuntu-24.04`, Rust 1.96.0). A three-run
 control against unmodified `main` at `b20ed79` (workflow_dispatch
-runs 45596195660, 45597833259 and 45597846454) isolates the
+runs 45604888709, 45604898651 and 45604915383) isolates the
 attribution recorded in the re-baseline history below. Every run
 produced byte-identical sizes for its tree: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
@@ -592,20 +594,20 @@ measured byte-identical to the checked-in baseline.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,711,272 | 2,152,103 |
-| `release` | `wasi` | 2,938,752 | 2,326,471 |
+| `release` | `component` | 2,713,632 | 2,153,959 |
+| `release` | `wasi` | 2,941,128 | 2,328,327 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,154,456 | 2,493,783 |
+| `release` | `wasi-threads` | 3,156,816 | 2,495,639 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,699,216 | 1,255,751 |
-| `release-size` | `wasi` | 1,820,432 | 1,337,527 |
+| `release-size` | `component` | 1,700,080 | 1,256,519 |
+| `release-size` | `wasi` | 1,821,312 | 1,338,311 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,963,152 | 1,432,231 |
+| `release-size` | `wasi-threads` | 1,964,032 | 1,433,015 |
 
 #### Re-baseline history
 
@@ -2258,6 +2260,48 @@ re-baselined, to the branch measurements. Against the
 original #164 baseline, the largest cumulative growth is now
 the `release` `component` stripped file series at +11.41%
 (2,433,656 B to 2,711,272 B), up from +11.02%; the `release`
+`core-nosimd` stripped file series is unchanged at +9.83%
+(1,275,448 B to 1,400,840 B). The baseline was re-measured on
+the branch and updated as recorded above, following the
+procedure below.
+
+PR #352 (#334, a borrow of an owned resource can no longer be
+dropped while the borrow is outstanding, and ownership transfer
+of a borrowed resource is rejected) was re-baselined a third
+time after the third Codex review round changed the fix: the
+handle-transfer walk processed arguments in order, so when a
+call passed the same resource as `(own R, borrow R)`, the own's
+transfer removed the source entry before the borrow was looked
+up; the borrow's identity was then never reported, and the
+destination could destroy the resource while it was borrowed.
+The walk now resolves every borrow's record in a first pass,
+before any own moves, and the second pass consumes those
+records, so the protection no longer depends on parameter or
+field order. `main` has not moved since the second
+re-baseline (`main` at `b20ed79`, PR #353), so no merge was
+needed, and the pull-request run on the new head tripped the
+gate on the twelve series of the three configurations that
+link `telomere-component`. Attribution was isolated by
+measuring current `main` alone three times (workflow_dispatch
+runs 45604888709, 45604898651 and 45604915383 on `main` at
+`b20ed79`; all three runs pass the gate against `main`'s
+checked-in baseline). This PR's delta against the main
+control is confined to the same 12 series: in `release`,
+stripped file +11,776 B (`component`), +11,776 B (`wasi`) and
++11,760 B (`wasi-threads`) and stripped `.text` +10,576 B in
+each; in `release-size`, stripped file +7,160 B / +7,176 B /
++7,192 B and stripped `.text` +5,808 B / +5,824 B / +5,824 B.
+The third round's own increment over the previous baseline
+is, in `release`, stripped file +2,360 B / +2,376 B / +2,360 B
+and stripped `.text` +1,856 B in each; in `release-size`,
+stripped file +864 B / +880 B / +880 B and stripped `.text`
++768 B / +784 B / +784 B. Every other configuration is
+byte-identical to `main` in both profiles. All twelve series
+exceed the checked-in baseline, so those twelve are
+re-baselined, to the branch measurements. Against the
+original #164 baseline, the largest cumulative growth is now
+the `release` `component` stripped file series at +11.50%
+(2,433,656 B to 2,713,632 B), up from +11.41%; the `release`
 `core-nosimd` stripped file series is unchanged at +9.83%
 (1,275,448 B to 1,400,840 B). The baseline was re-measured on
 the branch and updated as recorded above, following the

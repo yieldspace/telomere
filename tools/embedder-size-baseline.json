@@ -1,21 +1,20 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #352 (branch fix/334-borrowed-drop at head 71b3bce86c8db4431cc55a36fa3e35fb1b2db662 \u2014 the #334 change (a borrow of an owned resource can no longer be dropped while the borrow is outstanding, and ownership transfer of a borrowed resource is rejected), as revised by the second Codex review round (transferred borrows are registered against the originating resource\u2019s identity \u2014 a process-unique record id carried through the transfer \u2014 instead of being resolved by rep, which guest code can duplicate across distinct resources) merged with current main b20ed79513bbb12f6e4447158fd4028808ac129b (PR #353); the merge conflicted only in the size-baseline files, resolved by taking main\u2019s versions; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45596144363, 45596163457 and 45596181128 against the branch and pull-request run 45595313921, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "71b3bce86c8db4431cc55a36fa3e35fb1b2db662",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #352 (branch fix/334-borrowed-drop at head 94013a772f0a27e912410f8791a36ca48c8812fb \u2014 the #334 change (a borrow of an owned resource can no longer be dropped while the borrow is outstanding, and ownership transfer of a borrowed resource is rejected), as revised by the third Codex review round (the handle-transfer walk resolves every borrow\u2019s record in a first pass, before any own moves its source entry, so a borrow passed after an own of the same resource is no longer silently dropped) on top of current main b20ed79513bbb12f6e4447158fd4028808ac129b (PR #353), which has not moved since the branch\u2019s second re-baseline; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45604869761 and 45604878403 against the branch and pull-request run 45603860686, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "94013a772f0a27e912410f8791a36ca48c8812fb",
     "date": "2026-11-25",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45596144363,
-      45596163457,
-      45596181128
+      45604869761,
+      45604878403
     ],
     "cross_check_run_ids": [
-      45595313921
+      45603860686
     ],
-    "derivation": "Re-baseline for PR #352 (#334, a borrow of an owned resource can no longer be dropped while the borrow is outstanding, and ownership transfer of a borrowed resource is rejected), the branch\u2019s second: the second Codex review round found that the round-1 registration of transferred borrows resolved the lent resource\u2019s owned entry by rep, but reps are guest-chosen and two distinct resources can share one, so a transferred borrow could be registered against an unrelated owned entry; transferred borrows are now registered against the originating resource\u2019s identity \u2014 a process-unique record id minted when the record is allocated and carried through the transfer alongside the handle. The branch merged current main (merge commit 71b3bce86c8db4431cc55a36fa3e35fb1b2db662, main at b20ed79513bbb12f6e4447158fd4028808ac129b \u2014 PR #353 (#318, split extern-name encodings decode and extern names are validated against the package-name grammar) on top of the main at d5af7b8e004daff28d1735657155d3df5802d8a3 the branch was based on); the merge conflicted only in tools/embedder-size-baseline.json and docs/benchmarks/footprint.md, resolved by taking main\u2019s versions of both, and its CI run on the merged tree tripped the gate on the twelve series of the three configurations that link telomere-component. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45596195660, 45597833259 and 45597846454 on main at b20ed79513bbb12f6e4447158fd4028808ac129b; all three runs pass the gate against main\u2019s checked-in baseline). Against the checked-in baseline, the main control is byte-identical on all 32 gated series. This PR\u2019s own delta against the main control is confined to the same 12 series: in release, stripped file +9,416 B (component), +9,400 B (wasi) and +9,400 B (wasi-threads) and stripped .text +8,720 B in each; in release-size, stripped file +6,296 B / +6,296 B / +6,312 B and stripped .text +5,040 B in each. Every other configuration is byte-identical to main in both profiles. All twelve series exceed the checked-in baseline, so those twelve are re-baselined to the branch measurements. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.41% (2,433,656 B to 2,711,272 B), up from +11.02%; the release core-nosimd stripped file series is unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
+    "derivation": "Re-baseline for PR #352 (#334, a borrow of an owned resource can no longer be dropped while the borrow is outstanding, and ownership transfer of a borrowed resource is rejected), the branch\u2019s third: the third Codex review round found that the handle-transfer walk processed arguments in order, so when a call passed the same resource as (own R, borrow R), the own\u2019s transfer removed the source entry before the borrow was looked up; the borrow\u2019s identity was then never reported, and the destination could destroy the resource while it was borrowed. The walk now resolves every borrow\u2019s record in a first pass, before any own moves, and the second pass consumes those records, so the protection no longer depends on parameter or field order. Main has not moved since the branch\u2019s second re-baseline (main at b20ed79513bbb12f6e4447158fd4028808ac129b, PR #353), so no merge was needed, and the pull-request run on the new head tripped the gate on the twelve series of the three configurations that link telomere-component. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45604888709, 45604898651 and 45604915383 on main at b20ed79513bbb12f6e4447158fd4028808ac129b; all three runs pass the gate against main\u2019s checked-in baseline). This PR\u2019s delta against the main control is confined to the same 12 series: in release, stripped file +11,776 B (component), +11,776 B (wasi) and +11,760 B (wasi-threads) and stripped .text +10,576 B in each; in release-size, stripped file +7,160 B / +7,176 B / +7,192 B and stripped .text +5,808 B / +5,824 B / +5,824 B. The third round\u2019s own increment over the previous baseline is, in release, stripped file +2,360 B / +2,376 B / +2,360 B and stripped .text +1,856 B in each; in release-size, stripped file +864 B / +880 B / +880 B and stripped .text +768 B / +784 B / +784 B. Every other configuration is byte-identical to main in both profiles. All twelve series exceed the checked-in baseline, so those twelve are re-baselined to the branch measurements. Run-to-run spread was 0 B for every gated series across the three branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.50% (2,433,656 B to 2,713,632 B), up from +11.41%; the release core-nosimd stripped file series is unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -41,22 +40,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2711272,
-          "threshold": 2711272
+          "baseline": 2713632,
+          "threshold": 2713632
         },
         "stripped_text_bytes": {
-          "baseline": 2152103,
-          "threshold": 2152103
+          "baseline": 2153959,
+          "threshold": 2153959
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2938752,
-          "threshold": 2938752
+          "baseline": 2941128,
+          "threshold": 2941128
         },
         "stripped_text_bytes": {
-          "baseline": 2326471,
-          "threshold": 2326471
+          "baseline": 2328327,
+          "threshold": 2328327
         }
       },
       "core-nosimd": {
@@ -91,12 +90,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3154456,
-          "threshold": 3154456
+          "baseline": 3156816,
+          "threshold": 3156816
         },
         "stripped_text_bytes": {
-          "baseline": 2493783,
-          "threshold": 2493783
+          "baseline": 2495639,
+          "threshold": 2495639
         }
       }
     },
@@ -123,22 +122,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1699216,
-          "threshold": 1699216
+          "baseline": 1700080,
+          "threshold": 1700080
         },
         "stripped_text_bytes": {
-          "baseline": 1255751,
-          "threshold": 1255751
+          "baseline": 1256519,
+          "threshold": 1256519
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1820432,
-          "threshold": 1820432
+          "baseline": 1821312,
+          "threshold": 1821312
         },
         "stripped_text_bytes": {
-          "baseline": 1337527,
-          "threshold": 1337527
+          "baseline": 1338311,
+          "threshold": 1338311
         }
       },
       "core-nosimd": {
@@ -173,12 +172,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1963152,
-          "threshold": 1963152
+          "baseline": 1964032,
+          "threshold": 1964032
         },
         "stripped_text_bytes": {
-          "baseline": 1432231,
-          "threshold": 1432231
+          "baseline": 1433015,
+          "threshold": 1433015
         }
       }
     }
