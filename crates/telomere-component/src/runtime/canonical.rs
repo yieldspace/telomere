@@ -465,14 +465,26 @@ fn collect_defined_handle_leaves(
 /// Two synthetic (imported) identities are not distinguished at this
 /// boundary; the canon `resource.rep` / `resource.drop` operations
 /// keep comparing their table entries exactly.
+///
+/// Borrow leaves are the one exception to the table discipline: for
+/// a resource *defined* in this program, the value crossing the
+/// boundary is the resource's representation, not an index (the
+/// defining component's core code works with reps, exactly like the
+/// handle transfers deliver reps to defining instances), so there is
+/// no table entry to validate it against. `own` values are always
+/// handle indices, locally defined or not, and keep the full check.
 fn check_boundary_handle(
     program: &ComponentProgram,
     shared: &SharedState,
     handles: &RefCell<HandleTable>,
     type_id: TypeId,
     handle: u32,
+    is_own: bool,
 ) -> Result<(), ComponentError> {
     let resource = runtime_resource_id(program, shared, type_id)?;
+    if !is_own && resource_is_local_definition(resource) {
+        return Ok(());
+    }
     let table = handles.borrow();
     match table.resource_of(handle) {
         Some(entry_resource) if entry_resource == resource => Ok(()),
@@ -518,8 +530,8 @@ pub(super) fn validate_lifted_handle_results(
     };
     let mut leaves = Vec::new();
     collect_handle_leaves(result_ty, value, program, &mut leaves);
-    for (type_id, handle, _) in leaves {
-        check_boundary_handle(program, shared, handles, type_id, handle)?;
+    for (type_id, handle, is_own) in leaves {
+        check_boundary_handle(program, shared, handles, type_id, handle, is_own)?;
     }
     Ok(())
 }
@@ -531,7 +543,10 @@ pub(super) fn validate_lifted_handle_results(
 /// table holds traps `unknown handle index N` instead of reaching the
 /// callee. Host-provided handles are the one exception: they are
 /// tracked in `SharedState`, not in the caller's table, and a borrow of
-/// a live one is valid. `own` arguments are deliberately not checked
+/// a live one is valid. A borrow of a resource the caller itself
+/// defines is not an index either: the caller's core code passes the
+/// representation, which the table cannot judge (see
+/// `check_boundary_handle`). `own` arguments are deliberately not checked
 /// here: moving ownership across the boundary is the handle-transfer
 /// mechanism (#342), which this validation must not pre-empt.
 pub(super) fn validate_lowered_borrow_args(
@@ -548,7 +563,7 @@ pub(super) fn validate_lowered_borrow_args(
             if is_own {
                 continue;
             }
-            check_boundary_handle(program, shared, handles, type_id, handle)?;
+            check_boundary_handle(program, shared, handles, type_id, handle, false)?;
         }
     }
     Ok(())

@@ -1290,3 +1290,74 @@ async fn host_resource_drop_wins_over_colliding_local_entry() {
         "the host destructor should run exactly once, with the host handle"
     );
 }
+
+// Regression test for the third Codex review round on PR #349 (#335):
+// a `borrow` argument of a canon-lowered function whose resource is
+// defined in the lowering component itself is the resource's
+// representation, not a handle-table index (the defining component's
+// core code works with reps, exactly like `HandleTransfer::borrow`
+// delivers reps to defining instances). The boundary validation must
+// not judge it against the caller's table.
+
+/// The defining component's core code passes representation 65 for a
+/// borrow of its own resource to a lowered host function; 65 is not a
+/// live handle index in any table, yet the call is valid and the host
+/// observes the representation unchanged.
+#[tokio::test]
+async fn canon_lower_borrow_of_locally_defined_resource_passes_representation() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let bytes = compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (type $iface
+    (instance
+      (export "R" (type (eq $R)))
+      (export "use" (func (param "r" (borrow 0)) (result u32)))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "use" (func $use))
+  (core func $use' (canon lower (func $use)))
+  (core module $M
+    (import "" "use" (func $use (param i32) (result i32)))
+    (func (export "run") (result i32) (call $use (i32.const 65)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "use" (func $use'))
+  ))))
+  (func (export "run") (result u32) (canon lift (core func $m "run")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seen_by_host = Rc::clone(&seen);
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("use", move |_store, args| {
+        seen_by_host.borrow_mut().extend_from_slice(args);
+        Ok(vec![ComponentValue::U32(7)])
+    });
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("passing a representation for a locally defined borrow should succeed");
+    assert_eq!(result, vec![ComponentValue::U32(7)]);
+    assert_eq!(
+        *seen.borrow(),
+        vec![ComponentValue::Borrow(65)],
+        "the host should observe the representation unchanged"
+    );
+}
