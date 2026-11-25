@@ -921,3 +921,30 @@ fn plain_func_over_underlying_resource_of_sub_ascribed_export_is_valid() {
     )
     .expect("a plain exported func over the face's underlying resource must be accepted");
 }
+
+#[test]
+fn eq_ascription_with_instance_types_declared_inside_is_valid() {
+    // Round 6 (PR #357): the instance types are declared *inside* the
+    // component types being compared. Their abstract binders belong to
+    // the nested instance scope, not to the enclosing comparison, so
+    // each nested instance comparison must still alpha-rename
+    // independently: export "a" pairs $i1's abstract with $i2's and
+    // export "b" pairs the same $i1 abstract with $i3's.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $ct1 (component
+      (type $i1 (instance (export "x" (type (sub resource)))))
+      (export "a" (instance (type $i1)))
+      (export "b" (instance (type $i1)))))
+    (type $ct2 (component
+      (type $i2 (instance (export "x" (type (sub resource)))))
+      (type $i3 (instance (export "x" (type (sub resource)))))
+      (export "a" (instance (type $i2)))
+      (export "b" (instance (type $i3)))))
+    (export "c" (type $ct1) (type (eq $ct2)))))
+"#,
+    )
+    .expect("binders declared inside the compared types keep their own scope");
+}

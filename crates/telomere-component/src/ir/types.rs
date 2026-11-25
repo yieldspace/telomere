@@ -451,11 +451,13 @@ impl<'v> ResourceIdentityCheck<'v> {
     }
 }
 
-/// The generic identities a component type declares for itself: its
-/// type imports, plus every abstract identity reachable from its
-/// entries through types defined inside the value (references to
-/// types visible in the enclosing scopes are free references, not
-/// declarations of this value, and are not followed).
+/// The generic identities a component type declares in its own
+/// scope: its type imports, plus every abstract identity reachable
+/// from its entries through value types defined inside the value
+/// (references to types visible in the enclosing scopes are free
+/// references, not declarations of this value, and are not followed;
+/// nested component and instance types are scope boundaries whose
+/// own declarations are collected when the walk descends into them).
 fn bound_generics_of_component(validator: &Validator, ty: &ComponentType) -> HashSet<usize> {
     let mut out = HashSet::new();
     let mut seen = HashSet::new();
@@ -536,13 +538,15 @@ fn collect_bound_id(
                 collect_bound_valtype(validator, result, out, seen);
             }
         }
-        Type::Component(component) => {
-            out.extend(bound_generics_of_component(validator, component));
-        }
-        Type::Instance(instance) => {
-            out.extend(bound_generics_of_instance(validator, instance));
-        }
-        Type::Resource(_) => {}
+        // A nested component or instance type is a scope boundary:
+        // the generics it declares belong to that nested comparison,
+        // which collects them itself when the walk descends into the
+        // pair (see `components` / `instances`). Hoisting them into
+        // the enclosing bound set would leave nothing for the nested
+        // `extend_bounds` to add, so the nested scope's alpha pairings
+        // could not be restored on exit and would leak into sibling
+        // entries.
+        Type::Component(_) | Type::Instance(_) | Type::Resource(_) => {}
     }
 }
 
