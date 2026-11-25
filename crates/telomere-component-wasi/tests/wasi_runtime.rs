@@ -678,7 +678,7 @@ async fn run_stdout_drop(bytes: Vec<u8>) {
         .await
         .expect_err("writing through a dropped stdout handle should fail");
     assert!(
-        matches!(error, telomere_component::ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
+        matches!(error, telomere_component::ComponentError::Trap(ref message) if message.contains("unknown handle index")),
         "write after drop should trap, got {error:?}"
     );
     assert_eq!(state.stdout(), b"hello from a dropped stream\n");
