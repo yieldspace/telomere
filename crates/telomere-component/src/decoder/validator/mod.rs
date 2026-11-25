@@ -331,7 +331,11 @@ impl<'a> Validator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::size::{saturating_add, saturating_mul, VisitTracker, EFFECTIVE_TYPE_SIZE_CEILING};
+    use super::size::{
+        align_to, discriminant_elem_size, flags_elem_size, primitive_alignment,
+        primitive_elem_size, saturating_add, saturating_mul, VisitTracker,
+        EFFECTIVE_TYPE_SIZE_CEILING, ELEM_POINTER_SIZE,
+    };
     use super::*;
     use crate::ir::types::{LabelValType, PrimValType};
     use crate::ir::Label;
@@ -613,39 +617,112 @@ mod tests {
         visiting: &mut HashSet<TypeId>,
     ) -> ParseResult<u64> {
         match def {
-            DefValType::Primitive(_) => Ok(1),
+            DefValType::Primitive(prim) => Ok(primitive_elem_size(prim)),
             DefValType::Record(fields) => {
-                let mut total = 1;
+                let mut total = 0;
+                let mut record_alignment = 1;
                 for field in fields {
+                    let field_alignment = naive_val_alignment(validator, &field.ty, visiting)?;
+                    record_alignment = record_alignment.max(field_alignment);
+                    total = align_to(total, field_alignment);
                     total = saturating_add(total, naive_val_size(validator, &field.ty, visiting)?);
                 }
-                Ok(total)
+                Ok(align_to(total, record_alignment))
             }
             DefValType::Variant(cases) => {
-                let mut total = 1;
+                let discriminant = discriminant_elem_size(cases.len());
+                let mut max_case_alignment = 1;
+                let mut max_payload = 0;
                 for case in cases {
-                    total = saturating_add(
-                        total,
-                        if let Some(ty) = &case.ty {
-                            naive_val_size(validator, ty, visiting)?
-                        } else {
-                            1
-                        },
-                    );
+                    if let Some(ty) = &case.ty {
+                        max_case_alignment =
+                            max_case_alignment.max(naive_val_alignment(validator, ty, visiting)?);
+                        max_payload = max_payload.max(naive_val_size(validator, ty, visiting)?);
+                    }
                 }
-                Ok(total)
+                let total = saturating_add(align_to(discriminant, max_case_alignment), max_payload);
+                Ok(align_to(total, discriminant.max(max_case_alignment)))
             }
-            DefValType::Flags(labels) => Ok((labels.len() as u64).div_ceil(32).max(1)),
-            DefValType::List(ty, maybe_len) => {
-                let elem = naive_val_size(validator, ty, visiting)?;
-                Ok(match maybe_len {
-                    Some(len) => saturating_mul(elem, *len as u64),
-                    None => saturating_add(elem, 1),
-                })
+            DefValType::Flags(labels) => Ok(flags_elem_size(labels.len())),
+            DefValType::List(ty, maybe_len) => Ok(match maybe_len {
+                Some(len) => {
+                    let elem = naive_val_size(validator, ty, visiting)?;
+                    saturating_mul(elem, *len as u64)
+                }
+                None => 2 * ELEM_POINTER_SIZE,
+            }),
+            DefValType::Own(_) | DefValType::Borrow(_) => Ok(4),
+        }
+    }
+
+    fn naive_type_alignment(
+        validator: &Validator<'_>,
+        type_id: TypeId,
+        visiting: &mut HashSet<TypeId>,
+    ) -> ParseResult<u64> {
+        if !visiting.insert(type_id) {
+            return Ok(1);
+        }
+        let ty = validator.get_type(type_id)?.clone();
+        let result = match &ty {
+            Type::DefVal(def) => naive_defval_alignment(validator, def, visiting),
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => naive_type_alignment(validator, *inner, visiting),
+            Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            })
+            | Type::Resource(_)
+            | Type::Func(_)
+            | Type::Component(_)
+            | Type::Instance(_) => Ok(1),
+        };
+        let _ = visiting.remove(&type_id);
+        result
+    }
+
+    fn naive_defval_alignment(
+        validator: &Validator<'_>,
+        def: &DefValType,
+        visiting: &mut HashSet<TypeId>,
+    ) -> ParseResult<u64> {
+        match def {
+            DefValType::Primitive(prim) => Ok(primitive_alignment(prim)),
+            DefValType::Record(fields) => {
+                let mut alignment = 1;
+                for field in fields {
+                    alignment = alignment.max(naive_val_alignment(validator, &field.ty, visiting)?);
+                }
+                Ok(alignment)
             }
-            DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
-                naive_effective_type_size(validator, *type_id, visiting)
+            DefValType::Variant(cases) => {
+                let mut alignment = discriminant_elem_size(cases.len());
+                for case in cases {
+                    if let Some(ty) = &case.ty {
+                        alignment = alignment.max(naive_val_alignment(validator, ty, visiting)?);
+                    }
+                }
+                Ok(alignment)
             }
+            DefValType::Flags(labels) => Ok(flags_elem_size(labels.len())),
+            DefValType::List(ty, maybe_len) => match maybe_len {
+                Some(_) => naive_val_alignment(validator, ty, visiting),
+                None => Ok(ELEM_POINTER_SIZE),
+            },
+            DefValType::Own(_) | DefValType::Borrow(_) => Ok(4),
+        }
+    }
+
+    fn naive_val_alignment(
+        validator: &Validator<'_>,
+        ty: &ValType,
+        visiting: &mut HashSet<TypeId>,
+    ) -> ParseResult<u64> {
+        match ty {
+            ValType::Primitive(prim) => Ok(primitive_alignment(prim)),
+            ValType::Type(type_id) => naive_type_alignment(validator, *type_id, visiting),
         }
     }
 
@@ -655,7 +732,7 @@ mod tests {
         visiting: &mut HashSet<TypeId>,
     ) -> ParseResult<u64> {
         match ty {
-            ValType::Primitive(_) => Ok(1),
+            ValType::Primitive(prim) => Ok(primitive_elem_size(prim)),
             ValType::Type(type_id) => naive_effective_type_size(validator, *type_id, visiting),
         }
     }

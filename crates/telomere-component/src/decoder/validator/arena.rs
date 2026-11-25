@@ -96,7 +96,9 @@ pub(crate) enum ComponentImportKind {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TypeMeta {
     effective_size: Option<u64>,
+    alignment: Option<u64>,
     contains_resource_handle: Option<bool>,
+    contains_borrow: Option<bool>,
     resource_owner_summary: Option<ResourceOwnerSummary>,
     visible_closure: Option<Box<[TypeId]>>,
     surface_validated: ValidationState,
@@ -515,6 +517,18 @@ impl TypeArena {
         }
     }
 
+    pub(crate) fn contains_borrow(&self, id: TypeId) -> Option<bool> {
+        self.slots
+            .get(id.index() as usize)
+            .and_then(|slot| slot.meta.borrow().contains_borrow)
+    }
+
+    pub(crate) fn set_contains_borrow(&self, id: TypeId, found: bool) {
+        if let Some(slot) = self.slots.get(id.index() as usize) {
+            slot.meta.borrow_mut().contains_borrow = Some(found);
+        }
+    }
+
     pub(crate) fn resource_owner_summary(&self, id: TypeId) -> Option<ResourceOwnerSummary> {
         self.slots
             .get(id.index() as usize)
@@ -536,6 +550,18 @@ impl TypeArena {
     pub(crate) fn set_effective_size(&self, id: TypeId, size: u64) {
         if let Some(slot) = self.slots.get(id.index() as usize) {
             slot.meta.borrow_mut().effective_size = Some(size);
+        }
+    }
+
+    pub(crate) fn alignment(&self, id: TypeId) -> Option<u64> {
+        self.slots
+            .get(id.index() as usize)
+            .and_then(|slot| slot.meta.borrow().alignment)
+    }
+
+    pub(crate) fn set_alignment(&self, id: TypeId, alignment: u64) {
+        if let Some(slot) = self.slots.get(id.index() as usize) {
+            slot.meta.borrow_mut().alignment = Some(alignment);
         }
     }
 
