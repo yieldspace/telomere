@@ -452,6 +452,8 @@ impl RuntimeEnv {
                     func_type,
                     options: Box::new(options),
                     program: self.program.clone(),
+                    shared: self.shared.clone(),
+                    handles: self.handles.clone(),
                 })
             }
             Some(Relation::Import(name)) => self.lookup_import_func(name)?,

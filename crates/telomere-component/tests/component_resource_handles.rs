@@ -399,3 +399,87 @@ async fn resource_destructor_may_drop_in_same_instance() {
         .expect("run should succeed");
     assert_eq!(result, vec![ComponentValue::U32(42)]);
 }
+
+/// Issue #334 (upstream `resources/borrows.wast` line 161): dropping an
+/// owned resource that is currently borrowed must trap instead of
+/// succeeding. The borrow here is lent to the very call that performs
+/// the drop — one handle passed as both the `borrow` and the `own`
+/// parameter of a function whose core implementation drops the own —
+/// which is exactly the upstream `lend-trap` shape.
+#[tokio::test]
+async fn resource_drop_of_borrowed_owned_resource_traps() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (export "R" (type $R))
+  (canon resource.new $R (core func $R.resource.new))
+  (canon resource.drop $R (core func $R.resource.drop))
+  (core module $M
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "make") (param i32) (result i32) (call $new (local.get 0)))
+    ;; Drops the second (own) parameter while the first (borrow)
+    ;; parameter is still lent to this call.
+    (func (export "drop-own") (param i32 i32) (call $drop (local.get 1)))
+    (func (export "drop") (param i32) (call $drop (local.get 0)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "new" (func $R.resource.new))
+    (export "drop" (func $R.resource.drop))
+  ))))
+  (func (export "make") (param "rep" u32) (result (own $R)) (canon lift (core func $m "make")))
+  (func (export "drop-own") (param "b" (borrow $R)) (param "o" (own $R)) (canon lift (core func $m "drop-own")))
+  (func (export "drop") (param "o" (own $R)) (canon lift (core func $m "drop")))
+)
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let first = instance
+        .call(&store, "make", &[ComponentValue::U32(0x41)])
+        .await
+        .expect("make should succeed");
+    assert_eq!(first, vec![ComponentValue::Own(1)]);
+    let second = instance
+        .call(&store, "make", &[ComponentValue::U32(0x42)])
+        .await
+        .expect("make should succeed");
+    assert_eq!(second, vec![ComponentValue::Own(2)]);
+
+    // Control: dropping a *different* resource while handle 1 is
+    // borrowed is fine.
+    instance
+        .call(
+            &store,
+            "drop-own",
+            &[ComponentValue::Borrow(1), ComponentValue::Own(2)],
+        )
+        .await
+        .expect("dropping an unborrowed resource while another is borrowed should succeed");
+
+    // The borrowed resource itself must not be dropped mid-call.
+    let error = instance
+        .call(
+            &store,
+            "drop-own",
+            &[ComponentValue::Borrow(1), ComponentValue::Own(1)],
+        )
+        .await
+        .expect_err("dropping an owned resource while it is borrowed must trap");
+    // Canon-op failures inside a core module surface as an unreachable
+    // guest trap (the same shape the sibling-instance drop test pins);
+    // the canonical message `cannot remove owned resource while
+    // borrowed` is produced by the drop itself and is pinned at the
+    // handle-table level in the runtime unit tests.
+    assert!(
+        matches!(error, telomere_component::ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
+        "dropping a borrowed resource should trap, got {error:?}"
+    );
+
+    // The trapped call must have released the borrow and left the own
+    // handle live: dropping it now succeeds.
+    instance
+        .call(&store, "drop", &[ComponentValue::Own(1)])
+        .await
+        .expect("dropping the resource after the borrow was released should succeed");
+}

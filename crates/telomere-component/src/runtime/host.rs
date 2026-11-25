@@ -1,6 +1,6 @@
 use super::canonical::{
-    component_value_to_direct_wasm, direct_wasm_to_component_value, lift_component_args,
-    lift_component_results, lower_component_args, lower_component_results,
+    collect_borrowed_handles, component_value_to_direct_wasm, direct_wasm_to_component_value,
+    lift_component_args, lift_component_results, lower_component_args, lower_component_results,
     lowered_indirect_result_area, track_host_owned_results,
 };
 use super::*;
@@ -36,15 +36,46 @@ impl ResolvedCallable {
                 func_type,
                 options,
                 program,
+                shared,
+                handles,
             } => {
-                let core_args = lower_component_args(func_type, args, options, program, store)?;
-                let core_results = core.call_sync(store, &core_args)?;
-                let lifted =
-                    lift_component_results(func_type, &core_results, options, program, store)?;
-                if let Some(post_return) = &options.post_return {
-                    post_return.call_sync(store, &core_results)?;
+                // Register the borrows lent to this call against this
+                // instance's handle table for the duration of the call:
+                // dropping the corresponding own handle while a borrow
+                // is outstanding traps (#334). A borrow whose handle has
+                // no entry in this table belongs to another instance's
+                // table (handles are passed through untranslated) and is
+                // not registered here. The table borrow is never held
+                // across the call itself, since the called code re-enters
+                // this instance's canon resource ops.
+                let mut registered: Vec<(ResourceId, u32)> = Vec::new();
+                {
+                    let mut table = handles.borrow_mut();
+                    for (resource, handle) in
+                        collect_borrowed_handles(func_type, args, program, shared)
+                    {
+                        if table.note_borrow(resource, handle) {
+                            registered.push((resource, handle));
+                        }
+                    }
                 }
-                Ok(lifted)
+                let outcome = (|| {
+                    let core_args = lower_component_args(func_type, args, options, program, store)?;
+                    let core_results = core.call_sync(store, &core_args)?;
+                    let lifted =
+                        lift_component_results(func_type, &core_results, options, program, store)?;
+                    if let Some(post_return) = &options.post_return {
+                        post_return.call_sync(store, &core_results)?;
+                    }
+                    Ok(lifted)
+                })();
+                {
+                    let mut table = handles.borrow_mut();
+                    for (resource, handle) in &registered {
+                        table.release_borrow(*resource, *handle);
+                    }
+                }
+                outcome
             }
         }
     }
@@ -217,6 +248,7 @@ impl HandleTable {
             HandleEntry {
                 resource,
                 record: ResourceRecord { rep, destructor },
+                borrows: 0,
             },
         );
         handle
@@ -233,12 +265,47 @@ impl HandleTable {
     ) -> Result<(i32, Option<RuntimeCoreFunc>), ComponentError> {
         let invalid = || ComponentError::Trap(format!("resource handle {handle} is invalid"));
         match self.entries.get(&handle) {
-            Some(entry) if entry.resource == resource => {}
+            Some(entry) if entry.resource == resource => {
+                // The canonical ABI forbids removing an owned resource
+                // while a borrow of it is still lent to a call in
+                // flight (#334).
+                if entry.borrows > 0 {
+                    return Err(ComponentError::Trap(
+                        "cannot remove owned resource while borrowed".to_owned(),
+                    ));
+                }
+            }
             _ => return Err(invalid()),
         }
         let entry = self.entries.remove(&handle).ok_or_else(invalid)?;
         self.free_list.push(handle);
         Ok((entry.record.rep, entry.record.destructor))
+    }
+
+    /// Registers one borrow of `handle` lent to a call in flight.
+    /// Returns whether the handle names a live entry of `resource` in
+    /// this table; a handle owned by another instance's table is not
+    /// registered (and cannot be dropped through this table either).
+    fn note_borrow(&mut self, resource: ResourceId, handle: u32) -> bool {
+        match self.entries.get_mut(&handle) {
+            Some(entry) if entry.resource == resource => {
+                entry.borrows = entry.borrows.saturating_add(1);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Releases one borrow previously registered with
+    /// [`HandleTable::note_borrow`]. The entry may already be gone if
+    /// the resource was dropped through a path that does not consult
+    /// this table; the count simply has nothing to release then.
+    fn release_borrow(&mut self, resource: ResourceId, handle: u32) {
+        if let Some(entry) = self.entries.get_mut(&handle) {
+            if entry.resource == resource {
+                entry.borrows = entry.borrows.saturating_sub(1);
+            }
+        }
     }
 
     fn resource_rep(&self, resource: ResourceId, handle: u32) -> Result<i32, ComponentError> {
@@ -619,6 +686,30 @@ mod tests {
             assert_eq!(kind, expected_kind);
             assert_eq!(message, format!("export run trapped: {expected_message}"));
         }
+    }
+
+    #[test]
+    fn dropping_a_borrowed_resource_is_rejected_with_the_canonical_message() {
+        // #334: `resource.drop` of an owned resource that is currently
+        // borrowed traps with the canonical message; once the borrow is
+        // released, the same drop succeeds.
+        let resource = ResourceId::synthetic();
+        let mut table = HandleTable::default();
+        let handle = table.alloc_resource(resource, 7, None);
+        assert!(table.note_borrow(resource, handle));
+        let error = match table.drop_resource(resource, handle) {
+            Ok(_) => panic!("dropping a borrowed resource must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, ComponentError::Trap(message) if message == "cannot remove owned resource while borrowed"),
+            "expected the canonical borrowed-drop trap, got {error:?}"
+        );
+        table.release_borrow(resource, handle);
+        let (rep, _) = table
+            .drop_resource(resource, handle)
+            .expect("dropping after the borrow is released should succeed");
+        assert_eq!(rep, 7);
     }
 
     #[test]

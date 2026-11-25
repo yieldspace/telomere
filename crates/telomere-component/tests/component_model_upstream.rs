@@ -65,11 +65,11 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "resources/borrows.wast",
-        "blocked by resource-handle defects: the guest self-check \
-         traps on handle/rep state at line 158 (issue #317 family), \
-         and dropping an owned resource that is currently borrowed is \
-         not rejected (line 161: the expected trap `cannot remove \
-         owned resource while borrowed` does not happen)",
+        "blocked by issue #342: the guest self-check traps on \
+         handle/rep state at line 158 when a handle created by the \
+         defining instance is used from the client instance (the \
+         line-161 borrowed-drop rejection is implemented by #334; \
+         its canonical trap message surfaces once #312 lands)",
     ),
     (
         "resources/multiple-resources.wast",

@@ -320,6 +320,122 @@ fn track_host_owned_defined(
     }
 }
 
+/// Collects every `(resource, handle)` pair lent as a `borrow`
+/// anywhere in a call's arguments, so the callee can register the
+/// borrows against its handle table for the duration of the call
+/// (#334). Owns transfer ownership and are not collected. The traversal
+/// mirrors `track_host_owned_value`, with the opposite polarity: only
+/// `borrow` positions are visited.
+pub(super) fn collect_borrowed_handles(
+    func_type: &FuncType,
+    args: &[ComponentValue],
+    program: &ComponentProgram,
+    shared: &SharedState,
+) -> Vec<(ResourceId, u32)> {
+    let mut borrows = Vec::new();
+    for (ty, value) in func_type.params.iter().zip(args.iter()) {
+        collect_borrowed_value(ty, value, program, shared, &mut borrows);
+    }
+    borrows
+}
+
+fn collect_borrowed_value(
+    ty: &ValType,
+    value: &ComponentValue,
+    program: &ComponentProgram,
+    shared: &SharedState,
+    borrows: &mut Vec<(ResourceId, u32)>,
+) {
+    let ValType::Type(type_id) = ty else {
+        return;
+    };
+    collect_borrowed_defined(*type_id, value, program, shared, borrows);
+}
+
+fn collect_borrowed_defined(
+    type_id: TypeId,
+    value: &ComponentValue,
+    program: &ComponentProgram,
+    shared: &SharedState,
+    borrows: &mut Vec<(ResourceId, u32)>,
+) {
+    let Some(ty) = program.get_type(type_id) else {
+        return;
+    };
+    match ty {
+        Type::DefVal(def) => match def {
+            DefValType::Borrow(_) => {
+                if let ComponentValue::Borrow(handle) = value {
+                    if let Ok(resource) = runtime_resource_id(program, shared, type_id) {
+                        borrows.push((resource, *handle));
+                    }
+                }
+            }
+            DefValType::Record(fields) => {
+                let values: Vec<&ComponentValue> = match value {
+                    ComponentValue::Tuple(values) if is_tuple_fields(fields) => {
+                        values.iter().collect()
+                    }
+                    ComponentValue::Record(entries) => {
+                        let mut values = Vec::with_capacity(fields.len());
+                        for field in fields {
+                            match entries.iter().find(|(name, _)| name == &field.label.0) {
+                                Some((_, field_value)) => values.push(field_value),
+                                None => return,
+                            }
+                        }
+                        values
+                    }
+                    _ => return,
+                };
+                for (field, field_value) in fields.iter().zip(values) {
+                    collect_borrowed_value(&field.ty, field_value, program, shared, borrows);
+                }
+            }
+            DefValType::List(elem, _) => {
+                if let ComponentValue::List(items) = value {
+                    for item in items {
+                        collect_borrowed_value(elem, item, program, shared, borrows);
+                    }
+                }
+            }
+            DefValType::Variant(cases) => {
+                let (case, payload) = match value {
+                    ComponentValue::Variant { case, value } => (case.as_str(), value.as_deref()),
+                    ComponentValue::Enum(case) => (case.as_str(), None),
+                    ComponentValue::Option(value) if is_option_cases(cases) => match value {
+                        Some(inner) => ("some", Some(inner.as_ref())),
+                        None => ("none", None),
+                    },
+                    ComponentValue::Result { ok, err } if is_result_cases(cases) => {
+                        match (ok, err) {
+                            (Some(inner), None) => ("ok", Some(inner.as_ref())),
+                            (None, Some(inner)) => ("err", Some(inner.as_ref())),
+                            _ => return,
+                        }
+                    }
+                    _ => return,
+                };
+                if let Some(payload) = payload {
+                    if let Some(case) = cases.iter().find(|c| c.label.0.as_str() == case) {
+                        if let Some(case_ty) = &case.ty {
+                            collect_borrowed_value(case_ty, payload, program, shared, borrows);
+                        }
+                    }
+                }
+            }
+            DefValType::Primitive(_) | DefValType::Flags(_) | DefValType::Own(_) => {}
+        },
+        Type::Generic(generic) => match generic.bound {
+            crate::ir::types::GenericBound::Eq(inner) => {
+                collect_borrowed_defined(inner, value, program, shared, borrows);
+            }
+            crate::ir::types::GenericBound::Sub => {}
+        },
+        Type::Resource(_) | Type::Func(_) | Type::Component(_) | Type::Instance(_) => {}
+    }
+}
+
 pub(super) fn lowered_indirect_result_area(
     func_type: &FuncType,
     args: &[WasmValue],

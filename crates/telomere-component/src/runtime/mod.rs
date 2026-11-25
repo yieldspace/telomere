@@ -179,6 +179,11 @@ impl Default for HandleTable {
 struct HandleEntry {
     resource: ResourceId,
     record: ResourceRecord,
+    /// Borrows of this entry currently lent to a call in flight (#334).
+    /// `resource.drop` of the own handle is rejected while this is
+    /// non-zero; the count is registered by the callee-side lift for the
+    /// duration of the call and released when the call returns.
+    borrows: u32,
 }
 
 #[derive(Clone)]
@@ -213,6 +218,8 @@ enum ResolvedCallable {
         func_type: FuncType,
         options: Box<RuntimeCanonicalOptions>,
         program: Rc<ComponentProgram>,
+        shared: Rc<SharedState>,
+        handles: Rc<RefCell<HandleTable>>,
     },
 }
 
