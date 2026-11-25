@@ -1349,6 +1349,196 @@ async fn indirect_u32_list_and_16_u32_params_use_a_72_byte_outer_area() {
     );
 }
 
+/// A component whose guest `realloc` always returns the same pointer,
+/// however the canonical layer asks it to allocate. Mirrors the
+/// `$HostOobRealloc` shape in the upstream `values/realloc.wast`.
+fn fixed_realloc_component(realloc_result: i32, param_ty: &str) -> String {
+    format!(
+        r#"
+(component
+  (core module $M
+    (memory (export "mem") 1)
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32) (i32.const {realloc_result}))
+    (func (export "f") (param i32 i32)))
+  (core instance $m (instantiate $M))
+  (func (export "f") (param "a" {param_ty})
+    (canon lift (core func $m "f") (memory (core memory $m "mem")) (realloc (core func $m "realloc")))))
+"#
+    )
+}
+
+#[tokio::test]
+async fn direct_list_lowering_rejects_an_out_of_bounds_realloc_result() {
+    // Upstream values/realloc.wast (`$HostOobRealloc`): realloc returns -4,
+    // which is 4-aligned, so only the bounds check on the realloc result can
+    // trap; the element writes alone would fail later with a generic
+    // memory-access error instead.
+    let (store, instance) = instantiate(
+        &fixed_realloc_component(-4, "(list u32)"),
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let error = instance
+        .call(
+            &store,
+            "f",
+            &[ComponentValue::List(vec![
+                ComponentValue::U32(1),
+                ComponentValue::U32(2),
+            ])],
+        )
+        .await
+        .expect_err("out-of-bounds list realloc result must trap");
+    assert!(
+        matches!(&error, ComponentError::Trap(message) if message.contains("realloc return: beyond end of memory")),
+        "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn direct_list_lowering_rejects_a_realloc_result_that_straddles_the_end() {
+    // The returned pointer is inside the 1-page memory and the first
+    // element's write would land in bounds; the allocation as a whole
+    // (8 bytes at 65532) extends past the end, so the realloc result check
+    // is what must trap.
+    let (store, instance) = instantiate(
+        &fixed_realloc_component(65532, "(list u32)"),
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let error = instance
+        .call(
+            &store,
+            "f",
+            &[ComponentValue::List(vec![
+                ComponentValue::U32(1),
+                ComponentValue::U32(2),
+            ])],
+        )
+        .await
+        .expect_err("straddling list realloc result must trap");
+    assert!(
+        matches!(&error, ComponentError::Trap(message) if message.contains("realloc return: beyond end of memory")),
+        "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn direct_list_lowering_accepts_a_realloc_result_ending_exactly_at_the_end() {
+    // 65528 + 8 == 65536: an allocation ending exactly at the end of the
+    // 1-page memory is in bounds.
+    let (store, instance) = instantiate(
+        &fixed_realloc_component(65528, "(list u32)"),
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    instance
+        .call(
+            &store,
+            "f",
+            &[ComponentValue::List(vec![
+                ComponentValue::U32(1),
+                ComponentValue::U32(2),
+            ])],
+        )
+        .await
+        .expect("realloc result ending exactly at the end of memory must succeed");
+}
+
+#[tokio::test]
+async fn direct_list_lowering_reports_misalignment_before_bounds() {
+    // Upstream values/realloc.wast (`$HostMisalignedRealloc`): realloc
+    // returns -1 for a (list u32), which is both misaligned and out of
+    // bounds; the alignment check fires first.
+    let (store, instance) = instantiate(
+        &fixed_realloc_component(-1, "(list u32)"),
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let error = instance
+        .call(
+            &store,
+            "f",
+            &[ComponentValue::List(vec![
+                ComponentValue::U32(1),
+                ComponentValue::U32(2),
+            ])],
+        )
+        .await
+        .expect_err("misaligned list realloc result must trap");
+    assert!(
+        matches!(&error, ComponentError::Trap(message) if message.contains("realloc return: result not aligned")),
+        "unexpected error: {error}"
+    );
+}
+
+/// A component whose guest `realloc` answers the first call with a valid
+/// bump pointer and every later call with -4, so the latin1+utf16 store's
+/// final shrink reallocation returns an out-of-bounds pointer. Nothing is
+/// written through the shrunk pointer afterwards, so only the bounds check
+/// on the realloc result can trap.
+fn oob_shrink_realloc_component() -> String {
+    r#"
+(component
+  (type $host-type (func (result string)))
+  (import "host" (func $host (type $host-type)))
+  (core module $guest
+    (memory (export "memory") 1)
+    (global $calls (mut i32) (i32.const 0))
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      (global.set $calls (i32.add (global.get $calls) (i32.const 1)))
+      (if (result i32) (i32.eq (global.get $calls) (i32.const 1))
+        (then (i32.const 1024))
+        (else (i32.const -4)))))
+  (core instance $guest (instantiate $guest))
+  (core func $host-lower
+    (canon lower (func $host)
+      string-encoding=latin1+utf16
+      (memory (core memory $guest "memory"))
+      (realloc (core func $guest "realloc"))))
+  (core module $caller
+    (import "" "host" (func $host (param i32)))
+    (func (export "run")
+      (call $host (i32.const 512))))
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance (export "host" (func $host-lower))))))
+  (func (export "run")
+    (canon lift (core func $caller "run"))))
+"#
+    .to_owned()
+}
+
+#[tokio::test]
+async fn latin1_utf16_store_rejects_an_out_of_bounds_shrink_realloc_result() {
+    let mut linker = ComponentLinker::new();
+    linker.register_import("host", |_store, args| {
+        assert!(args.is_empty());
+        // Both code points fit in latin1, but each takes two UTF-8 bytes, so
+        // the store's final realloc shrinks the allocation (4 -> 2 bytes).
+        Ok(vec![ComponentValue::String("\u{e9}\u{e9}".to_owned())])
+    });
+    let (store, instance) = instantiate(&oob_shrink_realloc_component(), &linker).await;
+
+    let error = instance
+        .call(&store, "run", &[])
+        .await
+        .expect_err("out-of-bounds shrink realloc result must trap");
+    // A canonical-layer trap inside the canon-lower trampoline used to
+    // surface as an `unreachable` guest trap at this boundary; since #312
+    // the trampoline preserves the trap cause, so the bounds check's own
+    // message reaches the caller. What #322 changes is that it traps at
+    // all (previously the out-of-bounds pointer was handed to the guest).
+    assert!(
+        matches!(&error, ComponentError::Trap(message) if message.contains("realloc return: beyond end of memory")),
+        "unexpected error: {error}"
+    );
+}
+
 #[tokio::test]
 async fn direct_list_lowering_rejects_a_misaligned_realloc_result() {
     let (store, instance) = instantiate(

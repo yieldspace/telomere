@@ -303,6 +303,7 @@ impl RuntimeEnv {
             parent,
             imports,
             shared,
+            handles: Rc::new(RefCell::new(HandleTable::default())),
             caches: Rc::new(RuntimeCaches::default()),
         }
     }
@@ -725,7 +726,7 @@ impl RuntimeEnv {
                     resource,
                     destructor,
                     signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
-                    shared: self.shared.clone(),
+                    handles: self.handles.clone(),
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceDrop { type_id })) => {
@@ -734,6 +735,7 @@ impl RuntimeEnv {
                     resource,
                     signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
                     shared: self.shared.clone(),
+                    handles: self.handles.clone(),
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceRep { type_id })) => {
@@ -741,7 +743,7 @@ impl RuntimeEnv {
                 RuntimeCoreFunc::Host(Rc::new(HostBinding::ResourceRep {
                     resource,
                     signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
-                    shared: self.shared.clone(),
+                    handles: self.handles.clone(),
                 }))
             }
             Some(CoreRelation::FromCoreExport(instance_idx, name)) => {
@@ -856,6 +858,10 @@ impl RuntimeEnv {
             parent: self.parent.clone(),
             imports: self.imports.clone(),
             shared: self.shared.clone(),
+            // A component definition's env names the enclosing instance's
+            // scope, so it shares that instance's handle table; each new
+            // instance env built by `RuntimeEnv::new` starts a fresh one.
+            handles: self.handles.clone(),
             // Cached component defs own cloned envs, so sharing this Rc can
             // make a cache retain itself through RuntimeComponentDef.
             caches: Rc::new(self.clone_caches_detached()),

@@ -235,6 +235,16 @@ pub mod common {
             }
         })
     }
+
+    /// Returns the current byte length of a store-owned memory.
+    pub fn memory_len(store: &crate::common::Store, memory: &CoreMemoryHandle) -> usize {
+        store.with_active_or_locked_runtime(|runtime| match *memory {
+            crate::common::MemoryHandle::Local(id) => runtime.local_memory(id).memory().data_size(),
+            crate::common::MemoryHandle::Shared(id) => runtime
+                .shared_memory(id)
+                .with_memory(|memory| memory.data_size()),
+        })
+    }
 }
 
 /// Runtime entry points reused by Component Model adapters.
