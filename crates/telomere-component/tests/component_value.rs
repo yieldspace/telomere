@@ -478,20 +478,21 @@ async fn linker_value_with_wrong_type_is_rejected_at_instantiate() {
 }
 
 #[tokio::test]
-async fn missing_linker_value_fails_at_first_use() {
+async fn missing_linker_value_fails_at_instantiate() {
+    // This used to pin lazy resolution ("fails at first use"): the
+    // component instantiated and only the `get_value` afterwards failed.
+    // All imports must be satisfied at instantiation time (#313), so the
+    // same Link error now surfaces from `instantiate` itself.
     let engine = ComponentEngine::new();
     let program = engine
         .compile(&import_reexport_component())
         .expect("compile should succeed");
     let store = telomere::Store::new();
     let linker = ComponentLinker::new();
-    let instance = engine
-        .instantiate(&program, &store, &linker)
-        .await
-        .expect("instantiate is lazy about value imports");
-    let err = instance
-        .get_value(&store, "v")
-        .expect_err("resolving an unprovided value import must fail");
+    let err = match engine.instantiate(&program, &store, &linker).await {
+        Ok(_) => panic!("instantiate must reject an unprovided value import"),
+        Err(err) => err,
+    };
     assert!(
         matches!(err, ComponentError::Link(_)),
         "unexpected error: {err}"

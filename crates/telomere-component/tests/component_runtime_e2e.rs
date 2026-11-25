@@ -236,18 +236,16 @@ async fn component_runtime_nested_component_instantiation_succeeds() {
     let bytes = compile_component(
         r#"
 (component
-  (type
-    (component
-      (type (func (result u32)))
-      (import "x" (func (type 0)))
-    )
-  )
-  (import "b" (component (type 0)))
-  (component
+  ;; This fixture used to obtain the component passed as "a" from an
+  ;; unsatisfiable root import `(import "b" (component (type 0)))`.
+  ;; Instantiation now rejects unsatisfiable imports whether or not
+  ;; they are used (#313), so the argument component is defined inline
+  ;; instead; the instantiation chain is unchanged.
+  (component $xi
     (type (func (result u32)))
     (import "x" (func (type 0)))
   )
-  (component
+  (component $d
     (type
       (component
         (type (func (result u32)))
@@ -256,7 +254,7 @@ async fn component_runtime_nested_component_instantiation_succeeds() {
     )
     (import "a" (component (type 0)))
   )
-  (instance (instantiate 2 (with "a" (component 1))))
+  (instance (instantiate $d (with "a" (component $xi))))
 )
 "#,
     );

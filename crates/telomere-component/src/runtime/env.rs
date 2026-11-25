@@ -56,8 +56,7 @@ fn instantiate_sync(
 
     // Host-provided values bypass the decoder, so check them against the
     // declared import types here: this is the canonical-ABI-side soundness
-    // gate for the value index space. Imports the linker does not provide
-    // stay lazy and fail at first use, like function imports.
+    // gate for the value index space.
     for (name, import) in &program.root.imports {
         if let crate::ir::ComponentImport::Value(ty) = import {
             if let Some(value) = linker.resolve_import_value(name) {
@@ -69,6 +68,12 @@ fn instantiate_sync(
             }
         }
     }
+
+    // Every declared import must be satisfied at instantiation, used or
+    // not (#313). Resolution used to be fully lazy, so an import nothing
+    // referenced was never looked up and an unsatisfiable component
+    // instantiated successfully.
+    check_imports_satisfied(root.env.as_ref(), &program.root)?;
 
     materialize_component_instances(&root, store)?;
 
@@ -83,6 +88,64 @@ fn instantiate_sync(
     }
 
     Ok(RuntimeInstance { root })
+}
+
+/// Verifies that every import declared by `component` resolves in `env`,
+/// whether or not the component ever references it.
+///
+/// The component model requires all imports to be satisfied at
+/// instantiation time. Resolution is otherwise lazy (an import is looked
+/// up when an alias / lower / export first references it), so without
+/// this check an import nothing references is never looked up and a
+/// component with an unsatisfiable import instantiates successfully
+/// (#313). The lookups are the same ones a use would perform, so a
+/// satisfied import costs one extra lookup and an unsatisfied one fails
+/// with the same error it would have failed with at first use.
+fn check_imports_satisfied(env: &RuntimeEnv, component: &Component) -> Result<(), ComponentError> {
+    use crate::ir::ComponentImport;
+
+    for (name, import) in &component.imports {
+        match import {
+            ComponentImport::Func(_) => {
+                if env.lookup_import_func(name).is_err() {
+                    // A func import the component re-exports can instead
+                    // be satisfied by a host export the embedder
+                    // registered under the export's name: that is the
+                    // resolution `resolve_export` performs for such
+                    // exports (#271), and it exists only at the root.
+                    let satisfied_via_host_export = env.parent.is_none()
+                        && component.exports.iter().any(|(export_name, export)| {
+                            let ComponentExport::Func { idx, .. } = export else {
+                                return false;
+                            };
+                            matches!(
+                                env.program.func_store.get(idx),
+                                Some(Relation::Import(import_name)) if import_name == name
+                            ) && env.linker.resolve_export(export_name).is_some()
+                        });
+                    if !satisfied_via_host_export {
+                        env.lookup_import_func(name)?;
+                    }
+                }
+            }
+            ComponentImport::Instance(_) => {
+                env.lookup_import_instance(name)?;
+            }
+            ComponentImport::Value(_) => {
+                env.lookup_import_value(name)?;
+            }
+            ComponentImport::Component => {
+                env.lookup_import_component(name)?;
+            }
+            ComponentImport::Module => {
+                env.lookup_import_core_module(name)?;
+            }
+            // The decoder never constructs resource imports, and resource
+            // imports have no linker-side resolution path to check against.
+            ComponentImport::Resource => {}
+        }
+    }
+    Ok(())
 }
 
 /// Maps each resource type exported by a root-level imported instance to
@@ -329,6 +392,10 @@ impl RuntimeEnv {
                     component.component.clone(),
                     env,
                 ));
+                // Creating the instance is its instantiation: every import
+                // the component declares must be satisfied here, whether
+                // or not the component ever references it (#313).
+                check_imports_satisfied(instance.env.as_ref(), &component.component)?;
                 materialize_component_instances(&instance, store)?;
                 instance
             }
