@@ -804,6 +804,99 @@ mod tests {
         assert!(validator.types.transform_cache_len() > 0);
     }
 
+    fn extract_instance_export_instance(
+        validator: &Validator<'_>,
+        type_id: TypeId,
+        name: &str,
+    ) -> TypeId {
+        let instance = validator.get_instance_type(type_id).unwrap();
+        let InstanceExportType::Instance(inner) = instance.exports.get(name).unwrap() else {
+            panic!("expected instance export");
+        };
+        *inner
+    }
+
+    fn extract_instance_func_param_own(
+        validator: &Validator<'_>,
+        type_id: TypeId,
+        name: &str,
+    ) -> TypeId {
+        let instance = validator.get_instance_type(type_id).unwrap();
+        let InstanceExportType::Func(func) = instance.exports.get(name).unwrap() else {
+            panic!("expected func export");
+        };
+        let func = validator.get_func_type(*func).unwrap();
+        let ValType::Type(own) = func.params[0] else {
+            panic!("expected type parameter");
+        };
+        let Type::DefVal(DefValType::Own(resource)) = validator.get_type(own).unwrap() else {
+            panic!("expected own parameter");
+        };
+        *resource
+    }
+
+    #[test]
+    fn freshen_import_freshens_resources_declared_by_nested_instances() {
+        // The imported instance type below declares a
+        // `(sub resource)` inside a nested instance and references
+        // it from a sibling func. The nested declaration must be
+        // freshened even when the func is traversed before the
+        // nested instance — the exports map does not iterate in a
+        // fixed order — so the shape is rebuilt in a loop: each
+        // iteration's maps iterate independently, and a traversal
+        // that pins the declaration to its template identity (or
+        // shares one identity between the two imports) fails the
+        // assertions below.
+        for _ in 0..64 {
+            let mut validator = new_validator();
+            let sub = validator.new_type(Type::Generic(Generic::new(GenericBound::Sub)));
+            let own = validator.new_type(Type::DefVal(DefValType::Own(sub)));
+            let func = validator.new_type(Type::Func(FuncType {
+                params: vec![ValType::Type(own)],
+                param_names: vec![Label::new("x")],
+                result: None,
+            }));
+            let inner = validator.new_type(Type::Instance(InstanceType {
+                exports: HashMap::from([("r".to_owned(), InstanceExportType::Type(sub))]),
+            }));
+            let template = validator.new_type(Type::Instance(InstanceType {
+                exports: HashMap::from([
+                    ("inner".to_owned(), InstanceExportType::Instance(inner)),
+                    ("f".to_owned(), InstanceExportType::Func(func)),
+                ]),
+            }));
+
+            let first = validator.freshen_import_type_id(template).unwrap();
+            let second = validator.freshen_import_type_id(template).unwrap();
+            let first_r = extract_instance_export_type(
+                &validator,
+                extract_instance_export_instance(&validator, first, "inner"),
+                "r",
+            );
+            let second_r = extract_instance_export_type(
+                &validator,
+                extract_instance_export_instance(&validator, second, "inner"),
+                "r",
+            );
+            // Each import's nested declaration gets a fresh
+            // identity: neither import keeps the template's
+            // generic, and the two imports do not share one.
+            assert_ne!(first_r, sub);
+            assert_ne!(second_r, sub);
+            assert_ne!(first_r, second_r);
+            // The sibling func references the resource its own
+            // import's nested instance declares.
+            assert_eq!(
+                extract_instance_func_param_own(&validator, first, "f"),
+                first_r
+            );
+            assert_eq!(
+                extract_instance_func_param_own(&validator, second, "f"),
+                second_r
+            );
+        }
+    }
+
     #[test]
     fn memoized_summaries_match_recursive_walk() {
         let mut validator = new_validator();
