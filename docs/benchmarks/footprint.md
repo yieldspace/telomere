@@ -564,14 +564,14 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 On 2026-11-25, the `Embedder footprint` workflow was run four
 times against the code of PR #357: workflow_dispatch runs
-45618907911, 45618925036 and 45618939244 against the PR branch
-at head `0c4ce204c042fb8edcb33c36f140e127d2aad6bd` (the #320
-change with its two Codex P2 fixes, merged with current
+45626770085, 45626777366 and 45626784798 against the PR branch
+at head `3ec45760193cfa608c075230c4f46706dc8c1ff5` (the #320
+change with its three Codex P2 fixes, on current
 `main` at `98e93a3` (PR #349)), and pull-request run
-45618917159, which built the same tree
+45625724782, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). A three-run control against
 unmodified `main` at `98e93a3` (workflow_dispatch runs
-45618952163, 45618969889 and 45618983894) isolates the
+45626794894, 45626804707 and 45626813591) isolates the
 attribution recorded in the re-baseline history below. Every
 run produced byte-identical sizes for its tree: for all
 sixteen profile/configuration rows, the raw file size, the
@@ -590,20 +590,20 @@ checked-in baseline on all 32 gated series.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,715,080 | 2,154,615 |
-| `release` | `wasi` | 2,942,576 | 2,328,999 |
+| `release` | `component` | 2,716,832 | 2,156,263 |
+| `release` | `wasi` | 2,944,344 | 2,330,647 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,158,264 | 2,496,311 |
+| `release` | `wasi-threads` | 3,160,048 | 2,497,959 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,701,128 | 1,257,111 |
-| `release-size` | `wasi` | 1,822,360 | 1,338,887 |
+| `release-size` | `component` | 1,702,936 | 1,258,791 |
+| `release-size` | `wasi` | 1,824,168 | 1,340,567 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,965,064 | 1,433,591 |
+| `release-size` | `wasi-threads` | 1,966,872 | 1,435,271 |
 
 #### Re-baseline history
 
@@ -2435,6 +2435,42 @@ now the `release` `component` stripped file series at
 (1,275,448 B to 1,400,840 B). The baseline was re-measured
 on the branch and updated as recorded above, following the
 procedure below.
+
+PR #357's Codex round-3 fix (export `(eq ...)` ascriptions
+over resource faces now require nominal identity) was
+re-baselined on the branch at head
+`3ec45760193cfa608c075230c4f46706dc8c1ff5`, on current
+`main` at `98e93a3`. Attribution was isolated by measuring
+current `main` alone three times (workflow_dispatch runs
+45626794894, 45626804707 and 45626813591 on `main` at
+`98e93a3`; all three runs pass the gate). The main control
+reproduces the checked-in baseline byte-identically on the
+24 series of the `baseline` and
+`telomere-component`-linking configurations and sits
+slightly below it on the eight core-only series (by
+256–512 B stripped file and 144–320 B stripped
+`.text` — pre-existing baseline staleness; no core series
+is re-baselined, as the branch is byte-identical to the
+main control there). This PR's own delta against the main
+control is confined to the series of the three
+configurations that link `telomere-component`: in
+`release`, stripped file +5,184 B (`component`), +5,200 B
+(`wasi`) and +5,200 B (`wasi-threads`) and stripped `.text`
++4,688 B in each; in `release-size`, stripped file
++4,032 B / +4,032 B / +4,016 B and stripped `.text`
++3,520 B in each. Every other configuration is
+byte-identical to `main` in both profiles. Twelve series
+exceed the checked-in baseline (by +1,752–+1,784 B
+stripped file and +1,648 B stripped `.text` in `release`;
+by +1,808 B and +1,680 B in `release-size`), so those
+twelve are re-baselined, to the branch measurements.
+Against the original #164 baseline, the largest cumulative
+growth is now the `release` `component` stripped file
+series at +11.64% (2,433,656 B to 2,716,832 B); the
+`release` `core-nosimd` stripped file series is unchanged
+at +9.83% (1,275,448 B to 1,400,840 B). The baseline was
+re-measured on the branch and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
