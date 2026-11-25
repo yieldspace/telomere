@@ -71,22 +71,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          happen)",
     ),
     (
-        "values/alignment.wast",
-        "blocked by issue #312: canonical ABI loads do not trap on \
-         unaligned pointers, so the assert_trap cases (lines 26, 51, \
-         81, 110, 138, 170, 172, 204, 206) succeed instead of trapping",
-    ),
-    (
-        "values/realloc.wast",
-        "blocked by issue #322 (the result of realloc is not \
-         bounds-checked: line 110 does not trap, and lines 66, 108, 123 \
-         trap with a different error than the spec text), issue #312 \
-         (line 93: an unaligned pointer does not trap in the canonical \
-         layer), and a canonical lowering defect: lowering an empty \
-         list does not call realloc with (0, 0, align, 0) as the spec \
-         requires, so the guest traps at line 39",
-    ),
-    (
         "values/variants.wast",
         "blocked by a canonical-ABI validation defect: variant/enum \
          discriminants are not validated when lowering, so invalid \
@@ -99,16 +83,13 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "linking/unit.wast",
-        "blocked by several known defects: nested component instances \
-         are instantiated lazily in resolution order rather than \
-         eagerly in definition order, so core start functions observe \
-         ticket ranks 2, 3, 1 instead of 1, 2, 3 (lines 645-647); a \
+        "blocked by several known defects: a \
          valid func import whose surface type is an unnamed generic \
          type is rejected (issue #321; line 799); inline core \
          instances exporting globals are not supported by the runtime \
          (issue #324; lines 2010, 2043); the definer instances' \
          `count` exports cannot be invoked through the outer \
-         component's aliases (lines 865-866: export not found, a \
+         component's aliases (issue #347; lines 865-866: export not found, a \
          pre-existing failure unrelated to handle tables)",
     ),
     (

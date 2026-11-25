@@ -1,8 +1,8 @@
 use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
 use crate::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
-    CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
-    InstanceImport, Relation, ResourceId, TypeId, Value,
+    CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, DefinedInstance, Func,
+    GlobalIdx, Instance, InstanceImport, Relation, ResourceId, TypeId, Value,
 };
 use crate::linker::{ComponentLinkerInstance, LinkerBinding, ResourceDropFn};
 use crate::support::common::InstanceHandle;
@@ -23,6 +23,12 @@ use std::thread::{self, Thread};
 
 thread_local! {
     static HOST_BINDINGS: RefCell<HashMap<(u32, u32), Rc<HostBinding>>> = RefCell::new(HashMap::new());
+    /// The trap a host binding raised while servicing a core call, kept
+    /// across the core boundary so the component-level error retains the
+    /// original cause. Written by `component_host_trampoline` and consumed
+    /// by `vm_result_to_component_error`; see those functions for the
+    /// contract.
+    static PENDING_HOST_TRAP: RefCell<Option<ComponentError>> = const { RefCell::new(None) };
 }
 
 /// Drives `future` to completion on the current thread.

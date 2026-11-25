@@ -65,20 +65,20 @@ pub(super) fn lower_component_args(
             ComponentError::Runtime("canonical option `realloc` is required".to_owned())
         })?;
         let layout = value_area_layout(&func_type.params, program)?;
-        let ptr = if layout.size == 0 {
-            0
-        } else {
-            call_realloc(
-                realloc,
-                store,
-                &memory,
-                0,
-                0,
-                layout.align as i32,
-                layout.size as i32,
-                "indirect canonical parameter area",
-            )? as u32
-        };
+        // Canonical ABI `lower_flat_values` allocates the indirect area by
+        // calling realloc unconditionally, with no zero-size shortcut. The
+        // returned pointer is validated (alignment and bounds) inside
+        // `call_realloc`.
+        let ptr = call_realloc(
+            realloc,
+            store,
+            &memory,
+            0,
+            0,
+            layout.align as i32,
+            layout.size as i32,
+            "indirect canonical parameter area",
+        )? as u32;
         for ((value, ty), offset) in args
             .iter()
             .zip(func_type.params.iter())
@@ -1151,6 +1151,7 @@ fn write_value_to_memory(
     store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
+    validate_pointer_alignment(ptr, memory_abi_for_valtype(ty, program)?.align)?;
     match ty {
         ValType::Primitive(prim) => {
             write_primitive_to_memory(value, prim, options, program, store, ptr)
@@ -1169,6 +1170,7 @@ fn read_value_from_memory(
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
+    validate_pointer_alignment(ptr, memory_abi_for_valtype(ty, program)?.align)?;
     match ty {
         ValType::Primitive(prim) => {
             read_primitive_from_memory(prim, options, program, store, memory, ptr)
@@ -2135,23 +2137,23 @@ fn lower_list_value(
     let elem_align = elem_abi.align.max(1);
     let stride = align_to(elem_abi.size, elem_align);
     let total_len = stride.saturating_mul(values.len() as u32);
-    let ptr = if total_len == 0 {
-        0
-    } else {
-        let memory = options.memory.clone().ok_or_else(|| {
-            ComponentError::Runtime("canonical option `memory` is required".to_owned())
-        })?;
-        call_realloc(
-            realloc,
-            store,
-            &memory,
-            0,
-            0,
-            elem_align as i32,
-            total_len as i32,
-            "canonical list",
-        )? as u32
-    };
+    // Canonical ABI `lower_list` calls realloc unconditionally: even an
+    // empty list allocates with (0, 0, align, 0) and uses the returned
+    // pointer, so there is no zero-size shortcut here. The returned pointer
+    // is validated (alignment and bounds) inside `call_realloc`.
+    let memory = options.memory.clone().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    let ptr = call_realloc(
+        realloc,
+        store,
+        &memory,
+        0,
+        0,
+        elem_align as i32,
+        total_len as i32,
+        "canonical list",
+    )? as u32;
     for (index, value) in values.iter().enumerate() {
         write_value_to_memory(
             value,
@@ -2356,15 +2358,12 @@ fn read_string_from_memory(
             String::from_utf8(bytes).map_err(|error| ComponentError::Trap(error.to_string()))
         }
         CanonicalStringEncoding::Utf16 => {
+            validate_pointer_alignment(ptr, 2)?;
             let bytes = read_memory(store, memory, ptr, len as usize * 2)?;
             decode_utf16_le(bytes)
         }
         CanonicalStringEncoding::CompactUtf16 => {
-            if ptr % 2 != 0 {
-                return Err(ComponentError::Trap(format!(
-                    "latin1+utf16 string pointer {ptr} is not aligned to 2 bytes"
-                )));
-            }
+            validate_pointer_alignment(ptr, 2)?;
             if len & COMPACT_UTF16_TAG != 0 {
                 let utf16_len = len ^ COMPACT_UTF16_TAG;
                 let bytes = read_memory(store, memory, ptr, utf16_len as usize * 2)?;
@@ -2504,6 +2503,21 @@ fn call_realloc(
             "realloc returned an unexpected result".to_owned(),
         )),
     }
+}
+
+/// The canonical ABI traps when a pointer used to load or store a value
+/// is not aligned to the value type's alignment (`unaligned pointer` in
+/// the spec's trap wording). This applies to every guest-supplied pointer
+/// the runtime dereferences on the guest's behalf: retptrs, spilled
+/// argptrs, record/variant field bases (aligned by construction once the
+/// base is checked), list element bases, and string content pointers.
+fn validate_pointer_alignment(ptr: u32, align: u32) -> Result<(), ComponentError> {
+    if align > 1 && ptr % align != 0 {
+        return Err(ComponentError::Trap(format!(
+            "unaligned pointer: address {ptr} is not aligned to {align} bytes"
+        )));
+    }
+    Ok(())
 }
 
 /// Validates a pointer returned by a canonical `realloc` against the
@@ -2763,8 +2777,7 @@ mod tests {
             root: Component {
                 imports: HashMap::new(),
                 exports: HashMap::new(),
-                core_instances: Vec::new(),
-                instances: Vec::new(),
+                defined_instances: Vec::new(),
             },
             types: Vec::new().into_boxed_slice(),
             component_store: HashMap::new(),

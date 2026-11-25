@@ -2,6 +2,7 @@ use crate::decoder::{ComponentParseError, ParseResult};
 use crate::ir::types::CoreType;
 use crate::ir::{
     Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreRelation, CoreTable,
+    DefinedInstance,
 };
 use crate::ir::{
     ComponentExport, ComponentImport, ExportName, Func, GlobalIdx, ImportName, Instance, LocalIdx,
@@ -35,6 +36,10 @@ pub struct Scope {
     pub values: ValueLocalStore<Value>,
     pub imports: HashMap<String, ComponentImport>,
     pub exports: HashMap<String, ComponentExport>,
+    /// Every core or component instance defined in this scope, in
+    /// definition order across both kinds; becomes
+    /// [`Component::defined_instances`].
+    pub instance_defs: Vec<DefinedInstance>,
 }
 
 pub struct ParseState<'a> {
@@ -214,24 +219,19 @@ impl Scope {
         Component {
             imports: self.imports.clone(),
             exports: self.exports.clone(),
-            core_instances: self
-                .core_instances
-                .values
+            defined_instances: self
+                .instance_defs
                 .iter()
                 .copied()
-                .filter(|idx| {
-                    matches!(
+                .filter(|def| match def {
+                    DefinedInstance::Core(idx) => matches!(
                         core_instance_store.get(*idx),
                         Some(CoreRelation::Defined(_))
-                    )
+                    ),
+                    DefinedInstance::Component(idx) => {
+                        matches!(instance_store.get(*idx), Some(Relation::Defined(_)))
+                    }
                 })
-                .collect(),
-            instances: self
-                .instances
-                .values
-                .iter()
-                .copied()
-                .filter(|idx| matches!(instance_store.get(*idx), Some(Relation::Defined(_))))
                 .collect(),
         }
     }

@@ -677,8 +677,11 @@ async fn run_stdout_drop(bytes: Vec<u8>) {
         .call(&store, "write-after-drop", &[])
         .await
         .expect_err("writing through a dropped stdout handle should fail");
+    // The failure is a trap raised by the provider inside the canon-lower
+    // trampoline; the guest observes an `unreachable` trap, but the
+    // component-level error keeps the provider's cause.
     assert!(
-        matches!(error, telomere_component::ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
+        matches!(error, telomere_component::ComponentError::Trap(ref message) if message.contains("unknown output-stream handle")),
         "write after drop should trap, got {error:?}"
     );
     assert_eq!(state.stdout(), b"hello from a dropped stream\n");
