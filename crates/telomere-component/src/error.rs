@@ -66,6 +66,7 @@ impl From<ComponentParseError> for ComponentError {
                     | InvalidVersion(_)
                     | InvalidLayer(_)
                     | InvalidSectionType(_)
+                    | InvalidSectionSize
                     | InvalidCoreSort(_)
                     | CoreWasmError(_)
                     | IoError(_) => Self::Decode(message),
