@@ -126,6 +126,8 @@ pub const MAX_CONTROL_NESTING_DEPTH: u32 = 512;
 
 /// Reads core WebAssembly bytes from any value that implements [`std::io::Read`].
 pub use binary::IoReadBinaryReader;
+/// Returns the calling thread's front-end phase counters (#199).
+pub use common::frontend_phase_counters;
 /// Deserializes a precompiled artifact back into a module (#196).
 pub use common::precompiled::deserialize_module;
 /// Deserializes a precompiled artifact, recording per-phase timings (#196).
@@ -142,6 +144,8 @@ pub use common::precompiled::PrecompiledError;
 pub use common::precompiled::PrecompiledTimings;
 /// Configures diagnostic metadata retained by a [`Store`].
 pub use common::DiagnosticsConfig;
+/// Snapshot of front-end phase counters (#199).
+pub use common::FrontendPhaseCounters;
 /// A cloneable, store-bound handle to an instantiated WebAssembly module.
 pub use common::InstanceHandle;
 /// Explains why metered guest execution stopped.

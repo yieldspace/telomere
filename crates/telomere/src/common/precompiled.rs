@@ -1653,6 +1653,7 @@ pub fn deserialize_module_timed(
         name,
     };
     validate_module(&module, &shape)?;
+    crate::common::frontend_phases::note_module_deserialized();
 
     if let Some(t) = timings {
         t.header = header_done - total_start;

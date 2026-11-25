@@ -12,6 +12,7 @@ pub(crate) fn optimize_function(
     instrs: Vec<Instr>,
     meta: Vec<InstructionMeta>,
 ) -> LoweredFunction {
+    crate::common::frontend_phases::note_function_optimized();
     pipeline::optimize_function(funcidx, functype, locals, instrs, meta)
 }
 

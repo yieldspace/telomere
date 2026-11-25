@@ -472,3 +472,85 @@ fn producer_enforces_the_loader_function_limit() {
         "production over the container limit must fail, got {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #199: the offline producer must never execute guest code, and the
+// load path must provably skip the front-end phases it replaces.
+
+#[test]
+fn building_an_artifact_never_executes_guest_code() {
+    // The start function traps unconditionally. If the producer
+    // instantiated the module the way a naive "instantiate in a
+    // scratch store, then emit" compiler would, building the
+    // artifact would run the start function and fail; the producer
+    // instead works from module-level facts only, so the build
+    // succeeds and the trap never fires.
+    let module = parse_module(
+        "(module \
+           (func (export \"answer\") (result i32) i32.const 42) \
+           (func unreachable) \
+           (start 1))",
+    );
+
+    // Sanity: the probe is live — instantiating the module really
+    // does run the start function and fail.
+    let store = Store::new();
+    let registry = Registry::new();
+    let outcome = block_on(instantiate(module.clone(), &store, &registry));
+    assert!(
+        !matches!(outcome, VMResult::Success(_)),
+        "instantiating a module whose start traps must fail, got {outcome:?}"
+    );
+
+    let unsigned = build_aot_artifact(&module, None).expect("unsigned build must succeed");
+    assert!(is_aot_artifact(&unsigned));
+    let signed = build_aot_artifact(&module, Some(&signer())).expect("signed build must succeed");
+    assert!(is_aot_artifact(&signed));
+}
+
+#[test]
+fn artifact_load_install_and_call_skip_frontend_phases() {
+    let module = parse_module(
+        "(module \
+           (func (export \"add\") (param i32 i32) (result i32) \
+             local.get 0 local.get 1 i32.add) \
+           (func (export \"seven\") (result i32) i32.const 7))",
+    );
+    let bytes = build_aot_artifact(&module, Some(&signer())).expect("build must succeed");
+
+    // Open: the module must come from the artifact front-end
+    // (deserialize), never from parse+optimize.
+    let before = telomere::frontend_phase_counters();
+    let opened = open_aot_artifact(&bytes, Some(&signer()), AotLoadPolicy::default())
+        .expect("open must succeed");
+    let after_open = telomere::frontend_phase_counters();
+    assert_eq!(after_open.parsed_modules, before.parsed_modules);
+    assert_eq!(after_open.optimized_functions, before.optimized_functions);
+    assert_eq!(
+        after_open.deserialized_modules,
+        before.deserialized_modules + 1
+    );
+
+    // Install + call: the blobs are mapped as-is; the on-demand
+    // emitter must not run for functions the artifact carries.
+    let store = jit_store();
+    let instance = instantiate_on(&store, opened.module().clone());
+    let before_install = telomere::frontend_phase_counters();
+    let report = install_aot_artifact(&store, &instance, &opened).expect("install must succeed");
+    assert_eq!(
+        report.installed, 2,
+        "both functions must carry blobs for this test to prove anything"
+    );
+    let args = ResultValue::new(vec![WasmValue::I32(19), WasmValue::I32(23)]);
+    let result = match block_on(run_module_function(&instance, &store, "add", &args)) {
+        VMResult::Success(values) => values,
+        other => panic!("installed add must run, got {other:?}"),
+    };
+    assert_eq!(result.iter().next(), Some(&WasmValue::I32(42)));
+    let after_call = telomere::frontend_phase_counters();
+    assert_eq!(
+        after_call.emitted_functions, before_install.emitted_functions,
+        "installing and calling AoT code must not emit on demand"
+    );
+    assert_eq!(after_call.parsed_modules, before_install.parsed_modules);
+}
