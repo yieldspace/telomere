@@ -513,6 +513,253 @@ pub(super) fn validate_lowered_borrow_args(
     Ok(())
 }
 
+/// Transfers resource handles in `values` between two component
+/// instances' handle tables at a call boundary (#342).
+///
+/// `values` are component values whose handle indices are expressed in
+/// the source instance's table; on return, every handle the source
+/// table actually holds has been rewritten to the destination table's
+/// index for the same resource:
+///
+/// - an `own` handle moves: its entry leaves the source table (freeing
+///   the index for LIFO reuse) and is allocated in the destination
+///   table under the destination side's resource identity, keeping its
+///   rep and its defining instance's destructor;
+/// - a `borrow` handle is registered in the destination table as a
+///   borrowed entry for the same resource, except that the component
+///   defining a resource works with reps in its core code: a borrow
+///   crossing into the defining instance is resolved to the rep, and a
+///   borrowed value the defining instance produced by lifting (a call
+///   result, marked by `src_reps`) already is a rep and is registered
+///   in the destination table keyed by it.
+///
+/// Handles the source table does not hold (host-provided resources,
+/// which are tracked in `SharedState` instead) pass through unchanged.
+/// Borrow entries created in the destination table are recorded in
+/// `lent` when it is `Some` (the argument direction) so the caller can
+/// retire them when the call returns; result registrations belong to
+/// the receiving instance and are not recorded.
+pub(super) fn transfer_handles(
+    values: &mut [ComponentValue],
+    src_tys: &[ValType],
+    dst_tys: &[ValType],
+    transfer: &mut HandleTransfer<'_>,
+) {
+    for (value, (src_ty, dst_ty)) in values.iter_mut().zip(src_tys.iter().zip(dst_tys.iter())) {
+        transfer.value(value, src_ty, dst_ty);
+    }
+}
+
+/// Removes borrow entries that [`transfer_handles`] registered for one
+/// call's arguments; entries the callee already dropped are absent and
+/// skipped.
+pub(super) fn retire_lent_handles(handles: &RefCell<HandleTable>, lent: &[u32]) {
+    if lent.is_empty() {
+        return;
+    }
+    let mut table = handles.borrow_mut();
+    for handle in lent {
+        table.remove_entry(*handle);
+    }
+}
+
+pub(super) struct HandleTransfer<'a> {
+    pub(super) program: &'a ComponentProgram,
+    pub(super) shared: &'a SharedState,
+    pub(super) src: &'a RefCell<HandleTable>,
+    pub(super) dst: &'a RefCell<HandleTable>,
+    pub(super) lent: Option<&'a mut Vec<u32>>,
+    /// Whether borrowed values coming from the source were produced by
+    /// lifting in the source component, in which case a borrow of a
+    /// resource the source defines already holds the resource's rep
+    /// rather than a source-table handle.
+    pub(super) src_reps: bool,
+}
+
+impl HandleTransfer<'_> {
+    fn value(&mut self, value: &mut ComponentValue, src_ty: &ValType, dst_ty: &ValType) {
+        let (ValType::Type(src_id), ValType::Type(dst_id)) = (src_ty, dst_ty) else {
+            return;
+        };
+        self.defined(value, *src_id, *dst_id);
+    }
+
+    fn defined(&mut self, value: &mut ComponentValue, src_id: TypeId, dst_id: TypeId) {
+        let (Some(src_ty), Some(dst_ty)) =
+            (self.program.get_type(src_id), self.program.get_type(dst_id))
+        else {
+            return;
+        };
+        match (src_ty, dst_ty) {
+            (Type::Resource(_), Type::Resource(_)) => self.own(value, src_id, dst_id),
+            (Type::DefVal(src_def), Type::DefVal(dst_def)) => {
+                self.defined_value(value, src_def, dst_def, src_id, dst_id);
+            }
+            (Type::Generic(src_generic), Type::Generic(dst_generic)) => {
+                match (&src_generic.bound, &dst_generic.bound) {
+                    (
+                        crate::ir::types::GenericBound::Eq(src_inner),
+                        crate::ir::types::GenericBound::Eq(dst_inner),
+                    ) => self.defined(value, *src_inner, *dst_inner),
+                    (crate::ir::types::GenericBound::Sub, crate::ir::types::GenericBound::Sub) => {
+                        self.own(value, src_id, dst_id)
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn defined_value(
+        &mut self,
+        value: &mut ComponentValue,
+        src_def: &DefValType,
+        dst_def: &DefValType,
+        src_id: TypeId,
+        dst_id: TypeId,
+    ) {
+        match (src_def, dst_def) {
+            (DefValType::Own(_), DefValType::Own(_)) => self.own(value, src_id, dst_id),
+            (DefValType::Borrow(_), DefValType::Borrow(_)) => self.borrow(value, src_id, dst_id),
+            (DefValType::Record(src_fields), DefValType::Record(dst_fields)) => match value {
+                ComponentValue::Tuple(values) if is_tuple_fields(src_fields) => {
+                    for ((value, src_field), dst_field) in values
+                        .iter_mut()
+                        .zip(src_fields.iter())
+                        .zip(dst_fields.iter())
+                    {
+                        self.value(value, &src_field.ty, &dst_field.ty);
+                    }
+                }
+                ComponentValue::Record(entries) => {
+                    for (src_field, dst_field) in src_fields.iter().zip(dst_fields.iter()) {
+                        if let Some((_, field_value)) = entries
+                            .iter_mut()
+                            .find(|(name, _)| name == &src_field.label.0)
+                        {
+                            self.value(field_value, &src_field.ty, &dst_field.ty);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            (DefValType::List(src_elem, _), DefValType::List(dst_elem, _)) => {
+                if let ComponentValue::List(items) = value {
+                    for item in items.iter_mut() {
+                        self.value(item, src_elem, dst_elem);
+                    }
+                }
+            }
+            (DefValType::Variant(src_cases), DefValType::Variant(dst_cases)) => {
+                let (case, payload) = match value {
+                    ComponentValue::Variant { case, value } => (case.clone(), value.as_deref_mut()),
+                    ComponentValue::Enum(case) => (case.clone(), None),
+                    ComponentValue::Option(inner) if is_option_cases(src_cases) => match inner {
+                        Some(inner) => ("some".to_owned(), Some(inner.as_mut())),
+                        None => ("none".to_owned(), None),
+                    },
+                    ComponentValue::Result { ok, err } if is_result_cases(src_cases) => {
+                        match (ok.as_deref_mut(), err.as_deref_mut()) {
+                            (Some(inner), None) => ("ok".to_owned(), Some(inner)),
+                            (None, Some(inner)) => ("err".to_owned(), Some(inner)),
+                            _ => return,
+                        }
+                    }
+                    _ => return,
+                };
+                if let Some(payload) = payload {
+                    let src_case = src_cases.iter().find(|c| c.label.0.as_str() == case);
+                    let dst_case = dst_cases.iter().find(|c| c.label.0.as_str() == case);
+                    if let (Some(src_case), Some(dst_case)) = (src_case, dst_case) {
+                        if let (Some(src_ty), Some(dst_ty)) = (&src_case.ty, &dst_case.ty) {
+                            self.value(payload, src_ty, dst_ty);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Moves an owned handle's entry from the source table to the
+    /// destination table, re-keying it to the destination side's
+    /// resource identity. The pairing is positional (the two function
+    /// types were checked compatible), so the entry's stored identity
+    /// is not consulted: one resource legitimately carries different
+    /// synthetic identities along different import paths of a single
+    /// consumer.
+    fn own(&mut self, value: &mut ComponentValue, _src_id: TypeId, dst_id: TypeId) {
+        let ComponentValue::Own(handle) = value else {
+            return;
+        };
+        let Ok(dst_resource) = runtime_resource_id(self.program, self.shared, dst_id) else {
+            return;
+        };
+        let Some(record) = self.src.borrow_mut().take_entry(*handle) else {
+            return;
+        };
+        let new_handle = self
+            .dst
+            .borrow_mut()
+            .insert_entry(dst_resource, record, false);
+        *value = ComponentValue::Own(new_handle);
+    }
+
+    fn borrow(&mut self, value: &mut ComponentValue, src_id: TypeId, dst_id: TypeId) {
+        let ComponentValue::Borrow(handle) = value else {
+            return;
+        };
+        let (Ok(src_resource), Ok(dst_resource)) = (
+            runtime_resource_id(self.program, self.shared, src_id),
+            runtime_resource_id(self.program, self.shared, dst_id),
+        ) else {
+            return;
+        };
+        // Resolve the borrowed resource's record. A value the source
+        // produced by lifting, for a resource the source defines,
+        // already holds the rep; every other value is a handle in the
+        // source table. A handle the source table does not hold is a
+        // host-provided resource and passes through unchanged.
+        let record = if self.src_reps && resource_is_local_definition(src_resource) {
+            ResourceRecord {
+                rep: *handle as i32,
+                destructor: None,
+            }
+        } else {
+            let Some(record) = self.src.borrow().record_of(*handle) else {
+                return;
+            };
+            record
+        };
+        // The component defining the resource receives the rep itself;
+        // any other destination gets a borrowed entry in its own table.
+        if resource_is_local_definition(dst_resource) {
+            *value = ComponentValue::Borrow(record.rep as u32);
+            return;
+        }
+        let new_handle = self
+            .dst
+            .borrow_mut()
+            .insert_entry(dst_resource, record, true);
+        if let Some(lent) = &mut self.lent {
+            lent.push(new_handle);
+        }
+        *value = ComponentValue::Borrow(new_handle);
+    }
+}
+
+/// Whether `resource` identifies a resource type *defined* by a
+/// component in this program. Defined resources carry the defining
+/// scope's id, whose depth is the component's nesting depth; types
+/// that merely name another component's resource (imported
+/// `(sub resource)` types, freshened import types, generic resources)
+/// carry a synthetic identity minted by the decoder, whose scope
+/// depth is `u32::MAX` (see `ScopeId::synthetic`).
+fn resource_is_local_definition(resource: ResourceId) -> bool {
+    resource.owner().depth() != u32::MAX
+}
+
 pub(super) fn lowered_indirect_result_area(
     func_type: &FuncType,
     args: &[WasmValue],

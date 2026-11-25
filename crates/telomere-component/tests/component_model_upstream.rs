@@ -65,17 +65,10 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "resources/borrows.wast",
-        "blocked by resource-handle defects: the guest self-check \
-         traps on handle/rep state at line 158 (issue #317 family), \
-         and dropping an owned resource that is currently borrowed is \
-         not rejected (line 161: the expected trap `cannot remove \
-         owned resource while borrowed` does not happen)",
-    ),
-    (
-        "resources/multiple-resources.wast",
-        "blocked by issue #317: resource handle state is shared \
-         across instances instead of per-instance, so the \
-         self-checking guest traps at line 169",
+        "blocked by issue #334: dropping an owned resource that is \
+         currently borrowed is not rejected (line 161: the expected \
+         trap `cannot remove owned resource while borrowed` does not \
+         happen)",
     ),
     (
         "values/variants.wast",
@@ -90,22 +83,14 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "linking/unit.wast",
-        "blocked by several known defects: resource handle indices \
-         and destructor counts are shared \
-         across instances instead of per-instance (issue #317; lines \
-         724-729, 787-792, 863-866, 930-933, 994-997, 1020-1022); a \
+        "blocked by several known defects: a \
          valid func import whose surface type is an unnamed generic \
          type is rejected (issue #321; line 799); inline core \
          instances exporting globals are not supported by the runtime \
-         (issue #324; lines 2010, 2043)",
-    ),
-    (
-        "resources/handle-table.wast",
-        "blocked by issue #342: canonical lift/lower does not \
-         transfer resource handles into the consumer instance's \
-         table, so the cross-instance case at line 105 traps; the \
-         handle-index validation cases (lines 200-212, 260, 292, \
-         321, 323) are covered by issue #335",
+         (issue #324; lines 2010, 2043); the definer instances' \
+         `count` exports cannot be invoked through the outer \
+         component's aliases (issue #347; lines 865-866: export not found, a \
+         pre-existing failure unrelated to handle tables)",
     ),
     (
         "validation/attributes.wast",

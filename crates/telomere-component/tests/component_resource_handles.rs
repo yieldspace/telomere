@@ -619,3 +619,295 @@ async fn canon_lower_borrow_args_validate_handle_indices() {
         .await
         .expect("borrowing a live handle through canon lower should succeed");
 }
+
+// Regression tests for #342: canonical lift/lower must transfer resource
+// handles between the handle tables of the two component instances at a
+// call boundary. An `own` handle moves (the entry leaves the producer's
+// table and is allocated in the consumer's table, keeping its rep and its
+// defining instance's destructor); a `borrow` handle is resolved in the
+// consumer's terms (the rep itself when the consumer defines the type).
+
+/// The cross-instance case of upstream `resources/handle-table.wast`
+/// (line 105): a consumer lowers the definer's `make`/`take`, drops one
+/// transferred handle itself, and transfers the other back. Indices in
+/// the consumer's table follow the consumer's own allocation discipline,
+/// and every drop runs the definer's destructor with the right rep.
+#[tokio::test]
+async fn own_handles_transfer_between_instances_and_drop_runs_definer_dtor() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $M
+      (global $dtor-reps (mut i32) (i32.const 0))
+      (global $dtor-count (mut i32) (i32.const 0))
+      (func (export "dtor") (param i32)
+        (global.set $dtor-reps (i32.add (global.get $dtor-reps) (local.get 0)))
+        (global.set $dtor-count (i32.add (global.get $dtor-count) (i32.const 1))))
+      (func (export "dtor-reps") (result i32) (global.get $dtor-reps))
+      (func (export "dtor-count") (result i32) (global.get $dtor-count)))
+    (core instance $m (instantiate $M))
+    (type $R' (resource (rep i32) (dtor (core func $m "dtor"))))
+    (export $R "R" (type $R'))
+    (canon resource.new $R' (core func $R.resource.new))
+    (canon resource.drop $R' (core func $R.resource.drop))
+    (core module $CM
+      (import "" "new" (func $new (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "make") (param $rep i32) (result i32) (call $new (local.get $rep)))
+      (func (export "take") (param $h i32) (call $drop (local.get $h))))
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "new" (func $R.resource.new))
+      (export "drop" (func $R.resource.drop))))))
+    (func (export "make") (param "rep" u32) (result (own $R)) (canon lift (core func $cm "make")))
+    (func (export "take") (param "r" (own $R)) (canon lift (core func $cm "take")))
+    (func (export "dtor-reps") (result u32) (canon lift (core func $m "dtor-reps")))
+    (func (export "dtor-count") (result u32) (canon lift (core func $m "dtor-count"))))
+  (component $D
+    (import "c" (instance $c
+      (export "R" (type $R (sub resource)))
+      (export "make" (func (param "rep" u32) (result (own $R))))
+      (export "take" (func (param "r" (own $R))))))
+    (alias export $c "R" (type $R))
+    (canon resource.drop $R (core func $R.resource.drop))
+    (canon lower (func $c "make") (core func $make'))
+    (canon lower (func $c "take") (core func $take'))
+    (core module $DM
+      (import "" "make" (func $make (param i32) (result i32)))
+      (import "" "take" (func $take (param i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "run") (result i32)
+        (if (i32.ne (i32.const 1) (call $make (i32.const 100))) (then unreachable))
+        (if (i32.ne (i32.const 2) (call $make (i32.const 200))) (then unreachable))
+        (call $drop (i32.const 2))
+        (call $take (i32.const 1))
+        (if (i32.ne (i32.const 1) (call $make (i32.const 300))) (then unreachable))
+        (call $drop (i32.const 1))
+        (i32.const 43)))
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "make" (func $make'))
+      (export "take" (func $take'))
+      (export "drop" (func $R.resource.drop))))))
+    (func (export "run") (result u32) (canon lift (core func $dm "run"))))
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c" (instance $c))))
+  (func (export "run") (alias export $d "run"))
+  (func (export "dtor-reps") (alias export $c "dtor-reps"))
+  (func (export "dtor-count") (alias export $c "dtor-count")))
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("run should succeed");
+    assert_eq!(result, vec![ComponentValue::U32(43)]);
+    // All three resources were destroyed exactly once, by the definer's
+    // destructor, with their reps: 200 (dropped by the consumer), 100
+    // (transferred back and dropped by the definer), 300 (dropped by the
+    // consumer).
+    let count = instance
+        .call(&store, "dtor-count", &[])
+        .await
+        .expect("dtor-count should succeed");
+    assert_eq!(count, vec![ComponentValue::U32(3)]);
+    let reps = instance
+        .call(&store, "dtor-reps", &[])
+        .await
+        .expect("dtor-reps should succeed");
+    assert_eq!(reps, vec![ComponentValue::U32(600)]);
+}
+
+/// A `borrow` passed from a consumer to the component that defines the
+/// resource arrives as the rep (the defining component's core code works
+/// with reps), and the lender's own handle stays usable after the call:
+/// the consumer can still read its rep and drop it.
+#[tokio::test]
+async fn borrow_handle_crosses_to_defining_instance_as_rep() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $M
+      (global $dtor-count (mut i32) (i32.const 0))
+      (func (export "dtor") (param i32)
+        (global.set $dtor-count (i32.add (global.get $dtor-count) (i32.const 1))))
+      (func (export "dtor-count") (result i32) (global.get $dtor-count)))
+    (core instance $m (instantiate $M))
+    (type $R' (resource (rep i32) (dtor (core func $m "dtor"))))
+    (export $R "R" (type $R'))
+    (canon resource.new $R' (core func $R.resource.new))
+    (core module $CM
+      (import "" "new" (func $new (param i32) (result i32)))
+      (func (export "make") (result i32) (call $new (i32.const 0x41)))
+      (func (export "get-rep") (param $rep i32) (result i32) (local.get $rep)))
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "new" (func $R.resource.new))))))
+    (func (export "make") (result (own $R)) (canon lift (core func $cm "make")))
+    (func (export "get-rep") (param "r" (borrow $R)) (result u32) (canon lift (core func $cm "get-rep")))
+    (func (export "dtor-count") (result u32) (canon lift (core func $m "dtor-count"))))
+  (component $D
+    (import "c" (instance $c
+      (export "R" (type $R (sub resource)))
+      (export "make" (func (result (own $R))))
+      (export "get-rep" (func (param "r" (borrow $R)) (result u32)))))
+    (alias export $c "R" (type $R))
+    (canon resource.drop $R (core func $R.resource.drop))
+    (canon lower (func $c "make") (core func $make'))
+    (canon lower (func $c "get-rep") (core func $get-rep'))
+    (core module $DM
+      (import "" "make" (func $make (result i32)))
+      (import "" "get-rep" (func $get-rep (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "run") (result i32)
+        (local $h i32)
+        (local.set $h (call $make))
+        (if (i32.ne (i32.const 1) (local.get $h)) (then unreachable))
+        ;; the borrow arrives at the definer as the rep, twice in a row
+        (if (i32.ne (i32.const 0x41) (call $get-rep (local.get $h))) (then unreachable))
+        (if (i32.ne (i32.const 0x41) (call $get-rep (local.get $h))) (then unreachable))
+        ;; the lender's handle is untouched by the borrows: it can be
+        ;; borrowed again and finally dropped
+        (if (i32.ne (i32.const 0x41) (call $get-rep (local.get $h))) (then unreachable))
+        (call $drop (local.get $h))
+        (i32.const 44)))
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "make" (func $make'))
+      (export "get-rep" (func $get-rep'))
+      (export "drop" (func $R.resource.drop))))))
+    (func (export "run") (result u32) (canon lift (core func $dm "run"))))
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c" (instance $c))))
+  (func (export "run") (alias export $d "run"))
+  (func (export "dtor-count") (alias export $c "dtor-count")))
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("run should succeed");
+    assert_eq!(result, vec![ComponentValue::U32(44)]);
+    let count = instance
+        .call(&store, "dtor-count", &[])
+        .await
+        .expect("dtor-count should succeed");
+    assert_eq!(count, vec![ComponentValue::U32(1)]);
+}
+
+/// Handles of two different resource types transferred into one consumer
+/// keep their type identity: each type's drop runs its own destructor,
+/// and dropping one type's handle through the other type's drop traps.
+#[tokio::test]
+async fn transferred_handles_keep_their_resource_type() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $M
+      (global $sum1 (mut i32) (i32.const 0))
+      (global $sum2 (mut i32) (i32.const 0))
+      (func (export "dtor1") (param i32)
+        (global.set $sum1 (i32.add (global.get $sum1) (local.get 0))))
+      (func (export "dtor2") (param i32)
+        (global.set $sum2 (i32.add (global.get $sum2) (local.get 0))))
+      (func (export "sum1") (result i32) (global.get $sum1))
+      (func (export "sum2") (result i32) (global.get $sum2)))
+    (core instance $m (instantiate $M))
+    (type $R1' (resource (rep i32) (dtor (core func $m "dtor1"))))
+    (type $R2' (resource (rep i32) (dtor (core func $m "dtor2"))))
+    (export $R1 "R1" (type $R1'))
+    (export $R2 "R2" (type $R2'))
+    (canon resource.new $R1' (core func $R1.resource.new))
+    (canon resource.new $R2' (core func $R2.resource.new))
+    (core module $CM
+      (import "" "new1" (func $new1 (param i32) (result i32)))
+      (import "" "new2" (func $new2 (param i32) (result i32)))
+      (func (export "make1") (param $rep i32) (result i32) (call $new1 (local.get $rep)))
+      (func (export "make2") (param $rep i32) (result i32) (call $new2 (local.get $rep))))
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "new1" (func $R1.resource.new))
+      (export "new2" (func $R2.resource.new))))))
+    (func (export "make1") (param "rep" u32) (result (own $R1)) (canon lift (core func $cm "make1")))
+    (func (export "make2") (param "rep" u32) (result (own $R2)) (canon lift (core func $cm "make2")))
+    (func (export "sum1") (result u32) (canon lift (core func $m "sum1")))
+    (func (export "sum2") (result u32) (canon lift (core func $m "sum2"))))
+  (component $D
+    (import "c" (instance $c
+      (export "R1" (type $R1 (sub resource)))
+      (export "R2" (type $R2 (sub resource)))
+      (export "make1" (func (param "rep" u32) (result (own $R1))))
+      (export "make2" (func (param "rep" u32) (result (own $R2))))))
+    (alias export $c "R1" (type $R1))
+    (alias export $c "R2" (type $R2))
+    (canon resource.drop $R1 (core func $R1.resource.drop))
+    (canon resource.drop $R2 (core func $R2.resource.drop))
+    (canon lower (func $c "make1") (core func $make1'))
+    (canon lower (func $c "make2") (core func $make2'))
+    (core module $DM
+      (import "" "make1" (func $make1 (param i32) (result i32)))
+      (import "" "make2" (func $make2 (param i32) (result i32)))
+      (import "" "drop1" (func $drop1 (param i32)))
+      (import "" "drop2" (func $drop2 (param i32)))
+      (func (export "run") (result i32)
+        (local $h1 i32) (local $h2 i32)
+        (local.set $h1 (call $make1 (i32.const 10)))
+        (local.set $h2 (call $make2 (i32.const 20)))
+        (if (i32.ne (i32.const 1) (local.get $h1)) (then unreachable))
+        (if (i32.ne (i32.const 2) (local.get $h2)) (then unreachable))
+        (call $drop1 (local.get $h1))
+        (call $drop2 (local.get $h2))
+        (i32.const 45))
+      (func (export "run-wrong-drop") (result i32)
+        (local $h1 i32)
+        (local.set $h1 (call $make1 (i32.const 30)))
+        ;; dropping an R1 handle through R2's drop must trap
+        (call $drop2 (local.get $h1))
+        (i32.const 46)))
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "make1" (func $make1'))
+      (export "make2" (func $make2'))
+      (export "drop1" (func $R1.resource.drop))
+      (export "drop2" (func $R2.resource.drop))))))
+    (func (export "run") (result u32) (canon lift (core func $dm "run")))
+    (func (export "run-wrong-drop") (result u32) (canon lift (core func $dm "run-wrong-drop"))))
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c" (instance $c))))
+  (func (export "run") (alias export $d "run"))
+  (func (export "run-wrong-drop") (alias export $d "run-wrong-drop"))
+  (func (export "sum1") (alias export $c "sum1"))
+  (func (export "sum2") (alias export $c "sum2")))
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("run should succeed");
+    assert_eq!(result, vec![ComponentValue::U32(45)]);
+    let sum1 = instance
+        .call(&store, "sum1", &[])
+        .await
+        .expect("sum1 should succeed");
+    assert_eq!(sum1, vec![ComponentValue::U32(10)]);
+    let sum2 = instance
+        .call(&store, "sum2", &[])
+        .await
+        .expect("sum2 should succeed");
+    assert_eq!(sum2, vec![ComponentValue::U32(20)]);
+    let error = instance
+        .call(&store, "run-wrong-drop", &[])
+        .await
+        .expect_err("dropping an R1 handle through R2's drop must trap");
+    // With trap-cause preservation (#312), the runtime's precise
+    // wrong-type error surfaces instead of a flattened guest trap;
+    // since #335 that text is the canonical wrong-type trap.
+    assert!(
+        matches!(
+            &error,
+            telomere_component::ComponentError::Trap(message)
+                if message.contains("handle index 2 used with the wrong type")
+        ),
+        "wrong-type drop should trap, got {error:?}"
+    );
+}
