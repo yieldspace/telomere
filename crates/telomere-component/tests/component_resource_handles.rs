@@ -681,8 +681,14 @@ async fn transferred_handles_keep_their_resource_type() {
         .call(&store, "run-wrong-drop", &[])
         .await
         .expect_err("dropping an R1 handle through R2's drop must trap");
+    // With trap-cause preservation (#312), the runtime's precise
+    // wrong-type error surfaces instead of a flattened guest trap.
     assert!(
-        matches!(error, telomere_component::ComponentError::GuestTrap { .. }),
+        matches!(
+            &error,
+            telomere_component::ComponentError::Trap(message)
+                if message.contains("resource handle 2 is invalid")
+        ),
         "wrong-type drop should trap, got {error:?}"
     );
 }
