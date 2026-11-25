@@ -261,7 +261,7 @@ async fn resource_destructor_may_allocate_in_same_instance() {
   (core instance $d (instantiate $D (with "" (instance
     (export "new" (func $S.new))
   ))))
-  (type $R (resource (rep i32) (dtor (func $d "dtor"))))
+  (type $R (resource (rep i32) (dtor (core func $d "dtor"))))
   (core func $R.new (canon resource.new $R))
   (core func $R.drop (canon resource.drop $R))
   (core module $M
@@ -312,7 +312,7 @@ async fn resource_destructor_may_rep_in_same_instance() {
   (core instance $d (instantiate $D (with "" (instance
     (export "rep" (func $S.rep))
   ))))
-  (type $R (resource (rep i32) (dtor (func $d "dtor"))))
+  (type $R (resource (rep i32) (dtor (core func $d "dtor"))))
   (core func $R.new (canon resource.new $R))
   (core func $R.drop (canon resource.drop $R))
   (core module $M
@@ -364,7 +364,7 @@ async fn resource_destructor_may_drop_in_same_instance() {
   (core instance $d (instantiate $D (with "" (instance
     (export "drop" (func $S.drop))
   ))))
-  (type $R (resource (rep i32) (dtor (func $d "dtor"))))
+  (type $R (resource (rep i32) (dtor (core func $d "dtor"))))
   (core func $R.new (canon resource.new $R))
   (core func $R.drop (canon resource.drop $R))
   (core module $M
