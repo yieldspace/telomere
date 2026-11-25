@@ -3,7 +3,7 @@ use crate::decoder::sort::parse_sort_with_idx;
 use crate::decoder::types::parse_externdesc;
 use crate::decoder::types::validate_annotated_export;
 use crate::decoder::{parse_option, ParseContext, ParseResult};
-use crate::ir::types::GenericsReplaceDSL;
+use crate::ir::types::{Generic, GenericBound, GenericsReplaceDSL, Type};
 use crate::ir::{
     ComponentExport, ExternDesc, ParsedExportName, PlainName, PlainNameShape, Sort, StrongUnique,
 };
@@ -69,6 +69,14 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             Ok(())
         }
         Sort::Type(type_id) => {
+            // A `(sub resource)` ascription gives the export a fresh
+            // abstract identity, distinct from the underlying resource
+            // (and from any other ascription of it). Like a sub-bounded
+            // import, the export therefore gets its own generic type id;
+            // the generics-replace program keys the per-instantiation
+            // fresh resource on that id, while `ExportInfo` keeps the
+            // underlying type for surface/annotated checks.
+            let mut sub_face_id = None;
             let info = match desc {
                 None => crate::decoder::validator::ExportInfo::TypeEq(type_id),
                 Some(ExternDesc::Eq(id)) => {
@@ -83,6 +91,10 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                             "export kind mismatch".to_owned(),
                         ))?;
                     }
+                    sub_face_id = Some(
+                        ctx.validator
+                            .new_type(Type::Generic(Generic::new(GenericBound::Sub))),
+                    );
                     crate::decoder::validator::ExportInfo::TypeSub(type_id)
                 }
                 _ => Err(ComponentParseError::TypeMismatch(
@@ -94,7 +106,10 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                     GenericsReplaceDSL::ExportTypeEq(name.original.clone(), id)
                 }
                 crate::decoder::validator::ExportInfo::TypeSub(_) => {
-                    GenericsReplaceDSL::ExportTypeSub(name.original.clone(), type_id)
+                    GenericsReplaceDSL::ExportTypeSub(
+                        name.original.clone(),
+                        sub_face_id.expect("sub export mints a face type id"),
+                    )
                 }
                 _ => unreachable!(),
             };

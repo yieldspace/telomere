@@ -112,13 +112,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          matches on",
     ),
     (
-        "validation/resources.wast",
-        "resource type validation gaps: valid resource types are \
-         rejected as imports (lines 270, 291, 312), a resource-identity \
-         mismatch is accepted (line 576), and own/borrow mismatches are \
-         reported only as a generic defvaltype mismatch (lines 101, 179)",
-    ),
-    (
         "validation/outer-alias.wast",
         "outer-alias validation is not enforced: aliases that \
          transitively refer to resources (line 68) and aliases to items \

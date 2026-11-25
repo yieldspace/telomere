@@ -87,6 +87,12 @@ impl DefValType {
                 id.assert_subtype_of(*parent_id, validator)?;
                 Ok(())
             }
+            (Own(_), Borrow(_)) => Err(ComponentParseError::TypeMismatch(
+                "expected borrow, found own".to_owned(),
+            ))?,
+            (Borrow(_), Own(_)) => Err(ComponentParseError::TypeMismatch(
+                "expected own, found borrow".to_owned(),
+            ))?,
             _ => Err(ComponentParseError::TypeMismatch(
                 "defvaltype mismatch".to_owned(),
             ))?,
