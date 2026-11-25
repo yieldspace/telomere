@@ -582,7 +582,7 @@ impl A64Masm {
     }
 
     pub fn cset_w(&mut self, rd: WReg, cond: Cond) {
-        let inverted = cond.inverted() as u32;
+        let inverted = cond_code(cond.inverted());
         self.insn(enc::CSET_W | (31 << 16) | (inverted << 12) | (31 << 5) | rd.bits());
     }
 
@@ -1463,5 +1463,33 @@ mod tests {
         patch_branch(&mut bytes, 0, 8, BranchKind::BCond(Cond::Eq)).expect("patch");
         let expected = enc::B_COND | (2 << 5) | cond_code(Cond::Eq);
         assert_eq!(u32::from_le_bytes(bytes), expected);
+    }
+
+    #[test]
+    fn emits_cset_w_encoding_for_all_conditions() {
+        // Regression test: CSET encodes the *inverted* condition in the
+        // AArch64 condition field. The shared `Cond` discriminants are
+        // semantic, not the hardware codes, so the field must come from
+        // `cond_code`. The expected fields below are the architectural
+        // codes of each inverted condition (Eq<->Ne, Hs<->Lo, Hi<->Ls,
+        // Ge<->Lt, Gt<->Le).
+        let cases = [
+            (Cond::Eq, 1),
+            (Cond::Ne, 0),
+            (Cond::Hs, 3),
+            (Cond::Lo, 2),
+            (Cond::Hi, 9),
+            (Cond::Ls, 8),
+            (Cond::Ge, 11),
+            (Cond::Lt, 10),
+            (Cond::Gt, 13),
+            (Cond::Le, 12),
+        ];
+        for (cond, field) in cases {
+            let mut asm = A64Masm::with_capacity(4);
+            asm.cset_w(WReg::new_unchecked(0), cond);
+            let expected = enc::CSET_W | (31 << 16) | (field << 12) | (31 << 5);
+            assert_eq!(asm.into_bytes(), expected.to_le_bytes(), "cond {cond:?}");
+        }
     }
 }
