@@ -9,8 +9,8 @@ use crate::ir::types::{
     ComponentImportType, Generic, GenericBound, GenericsReplaceDSL, InstanceType, Type,
 };
 use crate::ir::{
-    Component, ComponentExport, ExportName, ExternDesc, Instance, InstanceImport, ParsedExportName,
-    PlainName, PlainNameShape, Relation, Sort, StrongUnique,
+    Component, ComponentExport, DefinedInstance, ExportName, ExternDesc, Instance, InstanceImport,
+    ParsedExportName, PlainName, PlainNameShape, Relation, Sort, StrongUnique,
 };
 use crate::support::binary::BinaryReader;
 use crate::support::parser::core::{parse_name, parse_vec};
@@ -58,6 +58,10 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
         .instance_store
         .register(Relation::Defined(instance));
     ctx.state.scope_mut().instances.register(instance_gid);
+    ctx.state
+        .scope_mut()
+        .instance_defs
+        .push(DefinedInstance::Component(instance_gid));
     let component_tid = ctx
         .validator
         .scope_mut()
@@ -258,8 +262,7 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
     let component = Component {
         imports: Default::default(),
         exports: component_exports,
-        core_instances: Default::default(),
-        instances: Default::default(),
+        defined_instances: Default::default(),
     };
     let component_gid = ctx
         .state
@@ -280,6 +283,10 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
         .instance_store
         .register(Relation::Defined(instance));
     ctx.state.scope_mut().instances.register(instance_gid);
+    ctx.state
+        .scope_mut()
+        .instance_defs
+        .push(DefinedInstance::Component(instance_gid));
 
     let id = ctx
         .validator
