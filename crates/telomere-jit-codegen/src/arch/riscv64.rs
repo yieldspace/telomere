@@ -3,6 +3,8 @@ use crate::{
     target::{TargetArch, TargetInfo, TargetOs},
 };
 
+pub use crate::masm::{BranchKind, Cond};
+
 const VREGS: usize = 32;
 const SLOT_SIZE: i32 = 8;
 const FRAME_SIZE: i32 = ((VREGS as i32 * SLOT_SIZE + 16 + 15) & !15) + 16;
@@ -26,28 +28,6 @@ const T3: u8 = 28;
 const T4: u8 = 29;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cond {
-    Eq,
-    Ne,
-    Hs,
-    Lo,
-    Hi,
-    Ls,
-    Ge,
-    Lt,
-    Gt,
-    Le,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BranchKind {
-    B,
-    BCond(Cond),
-    CbnzX(u8),
-    CbnzW(u8),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Width {
     W32,
     X64,
@@ -69,27 +49,6 @@ enum Rhs {
 enum LastCmp {
     Int { width: Width, lhs: u8, rhs: Rhs },
     Float { width: FloatWidth, lhs: u8, rhs: u8 },
-}
-
-impl Cond {
-    pub const fn inverted(self) -> Self {
-        match self {
-            Self::Eq => Self::Ne,
-            Self::Ne => Self::Eq,
-            Self::Lo => Self::Hs,
-            Self::Hs => Self::Lo,
-            Self::Hi => Self::Ls,
-            Self::Ls => Self::Hi,
-            Self::Lt => Self::Ge,
-            Self::Ge => Self::Lt,
-            Self::Gt => Self::Le,
-            Self::Le => Self::Gt,
-        }
-    }
-
-    const fn uses_signed_operands(self) -> bool {
-        matches!(self, Self::Ge | Self::Gt | Self::Le | Self::Lt)
-    }
 }
 
 pub fn target_info() -> TargetInfo {
@@ -192,6 +151,8 @@ impl Riscv64BaselineMasm {
                 self.insn(encode_jal(ZERO, 0).expect("zero jal encodes"));
                 Ok(at)
             }
+            // CbzW is an aarch64-only placeholder shape.
+            BranchKind::CbzW(_) => Err(AsmError::UnsupportedFeature),
         }
     }
 
@@ -1425,6 +1386,8 @@ fn encode_fp(funct7: u32, rm: u32, rd: u8, rs1: u8, rs2: u8, _fmt: u32, _unused:
         | ((rd as u32) << 7)
         | 0x53
 }
+
+crate::impl_baseline_masm!(Riscv64BaselineMasm);
 
 #[cfg(test)]
 mod tests {
