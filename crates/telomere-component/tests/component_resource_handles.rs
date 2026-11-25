@@ -168,10 +168,11 @@ async fn resource_handle_from_sibling_instance_is_unknown() {
         .call(&store, "drop-in2", &[])
         .await
         .expect_err("index 1 is unknown in instance 2 and must trap");
-    // Canon-op failures inside a core module surface as an unreachable
-    // guest trap (the same shape the host-resource drop tests pin).
+    // The canon-op trap cause is preserved across the core host
+    // trampoline (#312) and phrased canonically (#335): the caller sees
+    // the `unknown handle index` trap itself, not a bare `unreachable`.
     assert!(
-        matches!(error, telomere_component::ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
+        matches!(error, telomere_component::ComponentError::Trap(ref message) if message.contains("unknown handle index 1")),
         "dropping a sibling instance's handle should trap, got {error:?}"
     );
     instance
@@ -467,7 +468,6 @@ async fn canon_handle_ops_trap_on_unknown_handle_indices() {
 )
 "#,
     );
-    let (store, instance) = instantiate(&bytes).await;
     for (export, expected) in [
         ("drop-never-allocated", "unknown handle index 5"),
         ("rep-never-allocated", "unknown handle index 5"),
@@ -475,6 +475,7 @@ async fn canon_handle_ops_trap_on_unknown_handle_indices() {
         ("drop-zero", "unknown handle index 0"),
         ("drop-max", "unknown handle index 4294967295"),
     ] {
+        let (store, instance) = instantiate(&bytes).await;
         let result = instance.call(&store, export, &[]).await;
         expect_call_trap_text(result, expected, export);
     }
@@ -515,11 +516,12 @@ async fn canon_handle_ops_trap_on_wrong_type_handles() {
 )
 "#,
     );
-    let (store, instance) = instantiate(&bytes).await;
     const WRONG_TYPE: &str = "handle index 1 used with the wrong type, expected \
         guest-defined resource but found a different guest-defined resource";
+    let (store, instance) = instantiate(&bytes).await;
     let result = instance.call(&store, "drop-R1-as-R2", &[]).await;
     expect_call_trap_text(result, WRONG_TYPE, "drop-R1-as-R2");
+    let (store, instance) = instantiate(&bytes).await;
     let result = instance.call(&store, "return-R1-as-R2", &[]).await;
     expect_call_trap_text(result, WRONG_TYPE, "return-R1-as-R2");
 }
@@ -608,8 +610,10 @@ async fn canon_lower_borrow_args_validate_handle_indices() {
     let (store, instance) = instantiate(&bytes).await;
     let result = instance.call(&store, "borrow-never-valid", &[]).await;
     expect_call_trap_text(result, "unknown handle index 3", "borrow-never-valid");
+    let (store, instance) = instantiate(&bytes).await;
     let result = instance.call(&store, "own-use-after-drop", &[]).await;
     expect_call_trap_text(result, "unknown handle index 1", "own-use-after-drop");
+    let (store, instance) = instantiate(&bytes).await;
     instance
         .call(&store, "borrow-valid", &[])
         .await
