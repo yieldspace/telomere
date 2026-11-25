@@ -2530,8 +2530,7 @@ mod tests {
             root: Component {
                 imports: HashMap::new(),
                 exports: HashMap::new(),
-                core_instances: Vec::new(),
-                instances: Vec::new(),
+                defined_instances: Vec::new(),
             },
             types: Vec::new().into_boxed_slice(),
             component_store: HashMap::new(),

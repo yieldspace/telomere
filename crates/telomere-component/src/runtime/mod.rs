@@ -1,8 +1,8 @@
 use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
 use crate::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
-    CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
-    InstanceImport, Relation, ResourceId, TypeId, Value,
+    CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, DefinedInstance, Func,
+    GlobalIdx, Instance, InstanceImport, Relation, ResourceId, TypeId, Value,
 };
 use crate::linker::{ComponentLinkerInstance, LinkerBinding, ResourceDropFn};
 use crate::support::common::InstanceHandle;
