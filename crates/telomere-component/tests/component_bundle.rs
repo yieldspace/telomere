@@ -615,3 +615,75 @@ async fn identical_modules_embedded_twice_are_keyed_by_ordinal() {
     }
     assert_eq!(loaded.artifacts().install_reports().len(), 2);
 }
+
+/// A core module defined inside a nested component, exported by that
+/// component, and aliased + instantiated by the parent. The alias
+/// occupies a different core-module index than the definition, but the
+/// bundle artifact keyed to the definition must still be installed
+/// (Codex P2 on PR #315: artifact identity must survive core module
+/// aliases).
+const ALIASED_NESTED_MODULE: &str = r#"
+(component
+  (type $add (func (param "lhs" s32) (param "rhs" s32) (result s32)))
+
+  (component $inner
+    (core module $inner-core
+      (func (export "add") (param i32 i32) (result i32)
+        local.get 0
+        local.get 1
+        i32.add)
+    )
+    (export "core" (core module $inner-core))
+  )
+  (instance $inner-instance (instantiate $inner))
+  (alias export $inner-instance "core" (core module $aliased-core))
+  (core instance $aliased-instance (instantiate $aliased-core))
+
+  (func (export "add") (type $add)
+    (canon lift (core func $aliased-instance "add"))
+  )
+)
+"#;
+
+#[tokio::test]
+async fn bundle_installs_artifact_through_core_module_alias() {
+    let bytes = component_bytes(ALIASED_NESTED_MODULE);
+    let sections = enumerate_core_module_sections(&bytes).expect("walk component");
+    assert_eq!(sections.len(), 1);
+
+    let bundle = build_component_bundle(&bytes, Some(&signer())).expect("build bundle");
+    let engine = ComponentEngine::new();
+    let loaded = engine
+        .compile_bundle(&bundle, Some(&signer()), AotLoadPolicy::default())
+        .expect("load bundle");
+    assert_eq!(loaded.report().substituted_ordinals, vec![0]);
+    assert_eq!(loaded.report().parsed_ordinals, Vec::<u32>::new());
+
+    let store = Store::new();
+    let linker = ComponentLinker::new();
+    let instance = engine
+        .instantiate_bundle(&loaded, &store, &linker)
+        .await
+        .expect("instantiate bundle");
+    let result = instance
+        .call(
+            &store,
+            "add",
+            &[ComponentValue::I32(20), ComponentValue::I32(22)],
+        )
+        .await
+        .expect("call add");
+    assert_eq!(result, vec![ComponentValue::S32(42)]);
+
+    // The module reaches instantiation through an alias, but its
+    // artifact must still be installed exactly once.
+    let installs = loaded.artifacts().install_reports();
+    assert_eq!(
+        installs.len(),
+        1,
+        "artifact must be installed through the core module alias, got {installs:?}"
+    );
+    let report = installs[0].1;
+    assert_eq!(report.installed + report.interpreted, 1);
+    assert_eq!(report.installed, 1);
+}
