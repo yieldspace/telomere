@@ -194,6 +194,9 @@ impl HostBinding {
                         lent: Some(&mut lent),
                         borrowed: Some(&mut borrowed),
                         src_reps: false,
+                        prewalk: false,
+                        resolved_borrows: Vec::new(),
+                        resolved_cursor: 0,
                     };
                     if let Err(error) = transfer_handles(
                         &mut component_args,
@@ -258,6 +261,9 @@ impl HostBinding {
                                 lent: None,
                                 borrowed: None,
                                 src_reps: true,
+                                prewalk: false,
+                                resolved_borrows: Vec::new(),
+                                resolved_cursor: 0,
                             };
                             if let Err(error) = transfer_handles(
                                 std::slice::from_mut(result),

@@ -360,6 +360,19 @@ pub(super) fn transfer_handles(
     dst_tys: &[ValType],
     transfer: &mut HandleTransfer<'_>,
 ) -> Result<(), ComponentError> {
+    // First pass: resolve every borrowed resource's record before
+    // any own moves its entry out of the source table. A call that
+    // passes the same resource as `(own R, borrow R)` would otherwise
+    // lose the borrow when the own is processed first: the source
+    // entry is already gone when the borrow is looked up, so its
+    // identity is never reported and the destination can destroy the
+    // resource while it is borrowed. The protection must not depend
+    // on parameter or field order (#334).
+    transfer.prewalk = true;
+    for (value, (src_ty, dst_ty)) in values.iter_mut().zip(src_tys.iter().zip(dst_tys.iter())) {
+        transfer.value(value, src_ty, dst_ty)?;
+    }
+    transfer.prewalk = false;
     for (value, (src_ty, dst_ty)) in values.iter_mut().zip(src_tys.iter().zip(dst_tys.iter())) {
         transfer.value(value, src_ty, dst_ty)?;
     }
@@ -398,6 +411,19 @@ pub(super) struct HandleTransfer<'a> {
     /// resource the source defines already holds the resource's rep
     /// rather than a source-table handle.
     pub(super) src_reps: bool,
+    /// Whether the walk is in its first pass (see
+    /// [`transfer_handles`]): owns do not move and borrows only
+    /// resolve their records in this pass.
+    pub(super) prewalk: bool,
+    /// The record each borrow position resolved to during the first
+    /// pass, in walk order (`None` where the borrow passes through
+    /// untransferred); the second pass consumes them in the same
+    /// order, so a borrow whose source entry an earlier own in the
+    /// same call already moved still resolves to its record.
+    pub(super) resolved_borrows: Vec<Option<ResourceRecord>>,
+    /// How many entries of `resolved_borrows` the second pass has
+    /// consumed.
+    pub(super) resolved_cursor: usize,
 }
 
 impl HandleTransfer<'_> {
@@ -534,6 +560,9 @@ impl HandleTransfer<'_> {
         _src_id: TypeId,
         dst_id: TypeId,
     ) -> Result<(), ComponentError> {
+        if self.prewalk {
+            return Ok(());
+        }
         let ComponentValue::Own(handle) = value else {
             return Ok(());
         };
@@ -568,48 +597,45 @@ impl HandleTransfer<'_> {
         src_id: TypeId,
         dst_id: TypeId,
     ) -> Result<(), ComponentError> {
-        let ComponentValue::Borrow(handle) = value else {
-            return Ok(());
-        };
-        let (Ok(src_resource), Ok(dst_resource)) = (
-            runtime_resource_id(self.program, self.shared, src_id),
-            runtime_resource_id(self.program, self.shared, dst_id),
-        ) else {
-            return Ok(());
-        };
-        // Resolve the borrowed resource's record. A value the source
-        // produced by lifting, for a resource the source defines,
-        // already holds the rep; the record (and with it the resource
-        // identity) is recovered from the source table by that rep,
-        // falling back to a bare record when the source table holds no
-        // such entry. Every other value is a handle in the source
-        // table. A handle the source table does not hold is a
-        // host-provided resource and passes through unchanged.
-        let record = if self.src_reps && resource_is_local_definition(src_resource) {
-            match self
-                .src
-                .borrow()
-                .record_by_rep(src_resource, *handle as i32)
-            {
-                Some(record) => record,
-                None => ResourceRecord {
-                    id: next_resource_id(),
-                    rep: *handle as i32,
-                    destructor: None,
-                },
+        if self.prewalk {
+            // First pass: resolve the borrowed resource's record and
+            // report its identity, without moving or rewriting
+            // anything. The record is kept for the second pass, which
+            // can no longer look it up once an own earlier in the
+            // same call has moved the source entry (#334).
+            let record = self.lookup_borrow_record(value, src_id, dst_id);
+            if let Some(record) = &record {
+                if let Some(borrowed) = &mut self.borrowed {
+                    if let Ok(dst_resource) = runtime_resource_id(self.program, self.shared, dst_id)
+                    {
+                        borrowed.push((dst_resource, record.id));
+                    }
+                }
             }
-        } else {
-            let Some(record) = self.src.borrow().record_of(*handle) else {
-                return Ok(());
-            };
-            record
-        };
-        // Report the borrowed resource's identity so the caller can
-        // register the borrow against the owned entry it belongs to
-        // in the destination table (#334).
-        if let Some(borrowed) = &mut self.borrowed {
-            borrowed.push((dst_resource, record.id));
+            self.resolved_borrows.push(record);
+            return Ok(());
         }
+        // Second pass: consume the record the first pass resolved
+        // for this borrow position. Every borrow position consumes
+        // exactly one entry, whatever value it holds, so the two
+        // passes stay aligned; a position that resolved to nothing
+        // (including a non-`Borrow` representation, which the
+        // transfer leaves alone) passes through unchanged.
+        let record = self
+            .resolved_borrows
+            .get(self.resolved_cursor)
+            .cloned()
+            .flatten();
+        self.resolved_cursor += 1;
+        if !matches!(value, ComponentValue::Borrow(_)) {
+            return Ok(());
+        }
+        let Some(record) = record else {
+            return Ok(());
+        };
+        let Ok(dst_resource) = runtime_resource_id(self.program, self.shared, dst_id) else {
+            return Ok(());
+        };
         // The component defining the resource receives the rep itself;
         // any other destination gets a borrowed entry in its own table.
         if resource_is_local_definition(dst_resource) {
@@ -625,6 +651,50 @@ impl HandleTransfer<'_> {
         }
         *value = ComponentValue::Borrow(new_handle);
         Ok(())
+    }
+
+    /// Resolves the record a borrowed value names, exactly as the
+    /// transfer's second pass needs it. A value the source produced
+    /// by lifting, for a resource the source defines, already holds
+    /// the rep; the record (and with it the resource identity) is
+    /// recovered from the source table by that rep, falling back to a
+    /// bare record when the source table holds no such entry. Every
+    /// other value is a handle in the source table. `None` covers
+    /// everything the transfer leaves alone: a non-handle value, an
+    /// unresolvable resource identity, and a handle the source table
+    /// does not hold (a host-provided resource, which passes through
+    /// unchanged).
+    fn lookup_borrow_record(
+        &self,
+        value: &ComponentValue,
+        src_id: TypeId,
+        dst_id: TypeId,
+    ) -> Option<ResourceRecord> {
+        let ComponentValue::Borrow(handle) = value else {
+            return None;
+        };
+        let (Ok(src_resource), Ok(_)) = (
+            runtime_resource_id(self.program, self.shared, src_id),
+            runtime_resource_id(self.program, self.shared, dst_id),
+        ) else {
+            return None;
+        };
+        if self.src_reps && resource_is_local_definition(src_resource) {
+            match self
+                .src
+                .borrow()
+                .record_by_rep(src_resource, *handle as i32)
+            {
+                Some(record) => Some(record),
+                None => Some(ResourceRecord {
+                    id: next_resource_id(),
+                    rep: *handle as i32,
+                    destructor: None,
+                }),
+            }
+        } else {
+            self.src.borrow().record_of(*handle)
+        }
     }
 }
 
