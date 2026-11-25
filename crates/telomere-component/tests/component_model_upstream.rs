@@ -84,10 +84,7 @@ const EXCLUDED: &[(&str, &str)] = &[
          async being a documented non-goal (lines 556, 742, 754, \
          993); the CM_MAP map type (0x63), a documented non-goal \
          (line 984); core rectype/moduletype encodings (the 0x50 \
-         `sub` prefix wart; issue #355; lines 891, 948); and alias \
-         sort validation - an invalid component outer-alias sort is \
-         accepted and a core alias sort is rejected with a \
-         non-canonical message (issue #356; lines 460, 924)",
+         `sub` prefix wart; issue #355; lines 891, 948)",
     ),
     (
         "validation/external-visibility.wast",
