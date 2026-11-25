@@ -2258,3 +2258,125 @@ async fn same_instance_borrow_of_local_resource_protects_the_rep_entry() {
         .expect("dtor-count should succeed");
     assert_eq!(count, vec![ComponentValue::U32(0)]);
 }
+
+/// Codex review of PR #352 (round 5): the same provider instance
+/// imported twice carries a distinct synthetic resource identity
+/// along each import path. An owned handle obtained through the
+/// first path and borrowed through the second in the same call must
+/// still be protected: the borrow registration must resolve the
+/// entry the handle actually names, not only an entry keyed under
+/// the borrow parameter's own import-path identity. On the pre-fix
+/// code `f` returned `Ok([])` — the core implementation dropped the
+/// owned resource while it was borrowed through the second path.
+#[tokio::test]
+async fn borrowed_drop_protection_spans_equivalent_import_paths() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $M
+      (global $dtor-count (mut i32) (i32.const 0))
+      (func (export "dtor") (param i32)
+        (global.set $dtor-count (i32.add (global.get $dtor-count) (i32.const 1))))
+      (func (export "dtor-count") (result i32) (global.get $dtor-count)))
+    (core instance $m (instantiate $M))
+    (type $R' (resource (rep i32) (dtor (core func $m "dtor"))))
+    (export $R "R" (type $R'))
+    (canon resource.new $R' (core func $R.resource.new))
+    (core module $CM
+      (import "" "new" (func $new (param i32) (result i32)))
+      (func (export "make") (param $rep i32) (result i32) (call $new (local.get $rep))))
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "new" (func $R.resource.new))))))
+    (func (export "make") (param "rep" u32) (result (own $R)) (canon lift (core func $cm "make")))
+    (func (export "dtor-count") (result u32) (canon lift (core func $m "dtor-count"))))
+  (component $D
+    (import "c1" (instance $c1
+      (export "R" (type $R1 (sub resource)))
+      (export "make" (func (param "rep" u32) (result (own $R1))))))
+    (import "c2" (instance $c2
+      (export "R" (type $R2 (sub resource)))
+      (export "make" (func (param "rep" u32) (result (own $R2))))))
+    (alias export $c1 "R" (type $RA))
+    (alias export $c2 "R" (type $RB))
+    (export "R1" (type $RA))
+    (export "R2" (type $RB))
+    (canon resource.drop $RA (core func $RA.resource.drop))
+    (canon lower (func $c1 "make") (core func $make'))
+    (core module $DM
+      (import "" "make" (func $make (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "make") (param $rep i32) (result i32) (call $make (local.get $rep)))
+      ;; Drops the second (own) parameter while the first (borrow)
+      ;; parameter is still lent to this call.
+      (func (export "drop-own") (param i32 i32) (call $drop (local.get 1)))
+      (func (export "drop") (param i32) (call $drop (local.get 0))))
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "make" (func $make'))
+      (export "drop" (func $RA.resource.drop))))))
+    (func (export "make") (param "rep" u32) (result (own $RA)) (canon lift (core func $dm "make")))
+    (func (export "f") (param "b" (borrow $RB)) (param "o" (own $RA)) (canon lift (core func $dm "drop-own")))
+    (func (export "drop") (param "o" (own $RA)) (canon lift (core func $dm "drop"))))
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c1" (instance $c)) (with "c2" (instance $c))))
+  (alias export $d "R1" (type $RR1))
+  (alias export $d "R2" (type $RR2))
+  (export "R1" (type $RR1))
+  (export "R2" (type $RR2))
+  (func (export "make") (alias export $d "make"))
+  (func (export "f") (alias export $d "f"))
+  (func (export "drop") (alias export $d "drop"))
+  (func (export "dtor-count") (alias export $c "dtor-count")))
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let first = instance
+        .call(&store, "make", &[ComponentValue::U32(0x41)])
+        .await
+        .expect("make should succeed");
+    assert_eq!(first, vec![ComponentValue::Own(1)]);
+    let second = instance
+        .call(&store, "make", &[ComponentValue::U32(0x42)])
+        .await
+        .expect("make should succeed");
+    assert_eq!(second, vec![ComponentValue::Own(2)]);
+
+    // Control: dropping a *different* resource while handle 1 is
+    // borrowed through the second import path is fine.
+    instance
+        .call(
+            &store,
+            "f",
+            &[ComponentValue::Borrow(1), ComponentValue::Own(2)],
+        )
+        .await
+        .expect("dropping an unborrowed resource while another is borrowed should succeed");
+
+    // The borrowed resource itself must not be dropped mid-call,
+    // even though the borrow names it through the second import path.
+    let error = instance
+        .call(
+            &store,
+            "f",
+            &[ComponentValue::Borrow(1), ComponentValue::Own(1)],
+        )
+        .await
+        .expect_err("dropping an owned resource while it is borrowed must trap");
+    assert!(
+        matches!(error, telomere_component::ComponentError::Trap(ref message) if message.contains("cannot remove owned resource while borrowed")),
+        "dropping a borrowed resource should trap, got {error:?}"
+    );
+
+    // The trapped call released the borrow and left the own handle
+    // live: dropping it now succeeds, and the destructor has run
+    // exactly twice in total (the control's handle and this one).
+    instance
+        .call(&store, "drop", &[ComponentValue::Own(1)])
+        .await
+        .expect("dropping the resource after the borrow was released should succeed");
+    let count = instance
+        .call(&store, "dtor-count", &[])
+        .await
+        .expect("dtor-count should succeed");
+    assert_eq!(count, vec![ComponentValue::U32(2)]);
+}

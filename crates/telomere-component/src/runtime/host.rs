@@ -445,6 +445,25 @@ impl HostBinding {
     }
 }
 
+/// Whether two resource identities may name the same entry of one
+/// handle table. An entry is keyed under the identity a single
+/// declaration gave the resource, but the same underlying resource
+/// carries a distinct synthetic identity along each import path:
+/// importing one provider instance twice — or naming its resource
+/// through two aliases — mints one identity per path, and none of
+/// them is the defining identity. The boundary validation already
+/// judges a handle across such paths as naming the same resource
+/// (see `check_boundary_handle` in canonical.rs); the borrow
+/// bookkeeping must resolve entries the same way, or a borrow that
+/// validation accepted goes unregistered and the resource it lends
+/// is left unprotected. Identities of resources a component defines
+/// are exact: a defined resource is only ever keyed under its
+/// defining identity, and a synthetic identity never names one, so
+/// the aliasing only ever holds between two synthetic identities.
+fn resource_ids_may_alias(a: ResourceId, b: ResourceId) -> bool {
+    a == b || (!resource_is_local_definition(a) && !resource_is_local_definition(b))
+}
+
 impl HandleTable {
     /// Allocates a handle in this instance's table: the most recently
     /// freed index is reused first (LIFO); otherwise the next fresh
@@ -639,14 +658,19 @@ impl HandleTable {
     /// that resolves to no owned entry in this table belongs to
     /// another instance's table (or to the host) and is not registered
     /// here; it cannot be dropped through this table either.
+    ///
+    /// The identity comparison is the aliasing-aware one
+    /// ([`resource_ids_may_alias`]): the entry may be keyed under
+    /// the identity of a different import path for the same
+    /// resource than the one the borrow parameter names.
     fn note_borrow(&mut self, resource: ResourceId, handle: u32) -> Option<u32> {
         match self.entries.get(&handle) {
-            Some(entry) if entry.resource == resource && !entry.borrowed => {
+            Some(entry) if resource_ids_may_alias(entry.resource, resource) && !entry.borrowed => {
                 let entry = self.entries.get_mut(&handle)?;
                 entry.borrows = entry.borrows.saturating_add(1);
                 Some(handle)
             }
-            Some(entry) if entry.resource == resource => {
+            Some(entry) if resource_ids_may_alias(entry.resource, resource) => {
                 let id = entry.record.id;
                 self.note_borrow_id(resource, id)
             }
@@ -661,13 +685,19 @@ impl HandleTable {
     /// instance that holds the corresponding own — whether the own
     /// crossed in the same call or was already there — is registered
     /// against exactly that entry, regardless of any rep collisions
-    /// with unrelated entries.
+    /// with unrelated entries. The entry may be keyed under the
+    /// identity of another import path for the same resource than
+    /// the one the transfer reported (see
+    /// [`resource_ids_may_alias`]); the record identity is what
+    /// pins it.
     fn note_borrow_id(&mut self, resource: ResourceId, id: u64) -> Option<u32> {
         let target = self
             .entries
             .iter()
             .filter(|(_, entry)| {
-                entry.resource == resource && !entry.borrowed && entry.record.id == id
+                resource_ids_may_alias(entry.resource, resource)
+                    && !entry.borrowed
+                    && entry.record.id == id
             })
             .map(|(index, _)| *index)
             .min()?;
@@ -694,9 +724,14 @@ impl HandleTable {
     /// [`HandleTable::note_borrow`]. The entry may already be gone if
     /// the resource was dropped through a path that does not consult
     /// this table; the count simply has nothing to release then.
+    /// The identity comparison is the aliasing-aware one
+    /// ([`resource_ids_may_alias`]), matching the registration: the
+    /// entry may be keyed under the identity of a different import
+    /// path for the same resource than the one the borrow was
+    /// registered under.
     fn release_borrow(&mut self, resource: ResourceId, handle: u32) {
         if let Some(entry) = self.entries.get_mut(&handle) {
-            if entry.resource == resource {
+            if resource_ids_may_alias(entry.resource, resource) {
                 entry.borrows = entry.borrows.saturating_sub(1);
             }
         }
@@ -1192,6 +1227,43 @@ mod tests {
         assert!(table.drop_resource(resource, lent).is_ok());
         // An identity no live entry carries registers nothing.
         assert_eq!(table.note_borrow_id(resource, u64::MAX), None);
+    }
+
+    #[test]
+    fn borrow_registration_spans_equivalent_import_path_identities() {
+        // The same underlying resource imported twice carries a
+        // distinct synthetic identity along each import path: an
+        // entry keyed under the first path's identity must still be
+        // registered — and released — when the borrow names it
+        // under the second path's identity, by handle and by record
+        // identity alike. Identities of defined resources are exact
+        // and never alias with a synthetic identity.
+        let first_path = ResourceId::synthetic();
+        let second_path = ResourceId::synthetic();
+        let defined = ResourceId::new(crate::ir::ScopeId::new(0));
+        let mut table = HandleTable::default();
+        let handle = table.alloc_resource(first_path, 7, None);
+        // By handle (the public-call registration).
+        assert_eq!(table.note_borrow(second_path, handle), Some(handle));
+        assert!(table.drop_resource(first_path, handle).is_err());
+        table.release_borrow(second_path, handle);
+        // By record identity (the call-boundary registration).
+        let id = table.record_of(handle).expect("entry exists").id;
+        assert_eq!(table.note_borrow_id(second_path, id), Some(handle));
+        assert!(table.has_outstanding_borrows(handle));
+        table.release_borrow(second_path, handle);
+        assert!(!table.has_outstanding_borrows(handle));
+        // A defined resource's identity never aliases: no borrow
+        // registration may cross between a synthetic identity and a
+        // defining one, in either direction.
+        assert_eq!(table.note_borrow(defined, handle), None);
+        let defined_handle = table.alloc_resource(defined, 9, None);
+        assert_eq!(table.note_borrow(first_path, defined_handle), None);
+        let defined_id = table
+            .record_of(defined_handle)
+            .expect("defined entry exists")
+            .id;
+        assert_eq!(table.note_borrow_id(first_path, defined_id), None);
     }
 
     #[test]
