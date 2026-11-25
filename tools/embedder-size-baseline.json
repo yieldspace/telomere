@@ -1,21 +1,21 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #353 (branch fix/318-extern-names at head 0dd39b5425c11aafdfdb5ac28d0b87087e15ca4b \u2014 the #318 change (split extern-name encodings (name prefix 0x02: implements / version-suffix / external-id) decode, and extern names are validated against the package-name grammar) merged with current main d5af7b8e004daff28d1735657155d3df5802d8a3 (PRs #348, #351 and #350), with no merge conflicts; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45591081391, 45591092701 and 45591107329 against the branch and pull-request run 45591075501, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "0dd39b5425c11aafdfdb5ac28d0b87087e15ca4b",
+    "summary": "GitHub Actions ‘Embedder footprint’ runs for PR #354 (branch fix/319-decoder-strictness at head c965df7ea3720c33fab6283cb02de5eb947e1e24 — the #319 change (the component decoder parses every section body through a size-limited reader and must consume it exactly, custom sections validate their name, and core/component decode errors keep the spec reasons: `unexpected end-of-file`, `integer too large`, `malformed UTF-8 encoding`) merged with current main b20ed79513bbb12f6e4447158fd4028808ac129b (PR #353), with no merge conflicts; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45610872278, 45610879531 and 45610885686 against the branch and pull-request run 45610864030, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "c965df7ea3720c33fab6283cb02de5eb947e1e24",
     "date": "2026-11-25",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45591081391,
-      45591092701,
-      45591107329
+      45610872278,
+      45610879531,
+      45610885686
     ],
     "cross_check_run_ids": [
-      45591075501
+      45610864030
     ],
-    "derivation": "Re-baseline for PR #353 (#318, split extern-name encodings decode and extern names are validated against the package-name grammar). The branch merged current main (merge commit 0dd39b5, main at d5af7b8e004daff28d1735657155d3df5802d8a3 \u2014 PR #348 (#342, canonical lift/lower transfers resource handles across component call boundaries), PR #351 (#331, trap invalid variant discriminants with the canonical message) and PR #350 (#330, core-to-component char conversions trap with the canonical \u2018invalid `char` bit pattern\u2019 message) on top of the main at 90f1437b1445b8523daa2f78eecb366de415ed11 the branch was based on); the merge was conflict-free, and its CI run on the merged tree tripped the gate on the twelve series of the three configurations that link telomere-component. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45591120085, 45591130821 and 45591141591 on main at d5af7b8e004daff28d1735657155d3df5802d8a3; all three runs pass the gate against main\u2019s checked-in baseline). Against the checked-in baseline, the main control is byte-identical on 29 of the 32 gated series; on the three release stripped file series of component, wasi and wasi-threads it measures \u221232 B below that baseline, the branch-tree snapshot staleness recorded for PRs #348 and #350 (the gate passes shrinkage, so the staleness was inert). This PR\u2019s own delta against the main control is confined to the same 12 series: in release, stripped file +17,960 B (component), +17,976 B (wasi) and +17,976 B (wasi-threads) and stripped .text +16,416 B in each; in release-size, stripped file +10,328 B / +10,328 B / +10,296 B and stripped .text +9,056 B / +9,056 B / +9,040 B. Every other configuration is byte-identical to main in both profiles. All twelve series exceed the checked-in baseline, so those twelve are re-baselined to the branch measurements. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.02% (2,433,656 B to 2,701,856 B), up from +10.29%; the release core-nosimd stripped file series is unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
+    "derivation": "Re-baseline for PR #354 (#319, component section sizes are enforced and core decode reasons are preserved). The branch merged current main (merge commit 1eba0c7, main at b20ed79513bbb12f6e4447158fd4028808ac129b — PR #353 (#318) on top of the 21edef0 main the branch was based on); the merge was conflict-free, and its CI run on the merged tree tripped the gate. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45610897012, 45610904920 and 45610913665 on main at b20ed79513bbb12f6e4447158fd4028808ac129b): the main control is byte-identical to the checked-in baseline on all 32 gated series. This PR's own delta against the main control splits by configuration family. The four core configurations grow slightly in both profiles — release stripped file +304 B (core), +320 B (core-nosimd), +272 B (core-jit), +256 B (core-aot) and stripped .text +176/+176/+144/+144 B; release-size stripped file +512/+512/+416/+432 B and stripped .text +304/+320/+240/+240 B — the new WasmParserError::IntegerTooLarge variant and the format_io_error helper in the telomere library. The three configurations that link telomere-component shrink substantially — release stripped file −123,960 B (component), −123,976 B (wasi), −123,992 B (wasi-threads) and stripped .text −112,064 B in each; release-size stripped file −69,208/−69,192/−69,144 B and stripped .text −63,248/−63,248/−63,216 B — because every section body is now parsed through the take() size-limited reader, so the generic section parsers are monomorphized for a single reader type instead of two (previously only the CoreModule and Component sections used a limited reader). The baseline configuration is unchanged. Following the established practice of re-baselining growth only (the gate passes shrinkage), the sixteen exceeding core series are re-baselined to the branch measurements and the twelve shrunken component series keep their PR #353 baselines, so those baselines now sit above the measured sizes by the amounts above until a future re-baseline absorbs the shrinkage. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series at +11.02% (2,433,656 B to 2,701,856 B, the retained PR #353 baseline; the branch itself measures 2,577,896 B, +5.93%); the release core-nosimd stripped file series rises from +9.83% to +9.86% (1,275,448 B to 1,401,160 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -31,12 +31,12 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1591952,
-          "threshold": 1591952
+          "baseline": 1592256,
+          "threshold": 1592256
         },
         "stripped_text_bytes": {
-          "baseline": 1204487,
-          "threshold": 1204487
+          "baseline": 1204663,
+          "threshold": 1204663
         }
       },
       "component": {
@@ -61,32 +61,32 @@
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1400840,
-          "threshold": 1400840
+          "baseline": 1401160,
+          "threshold": 1401160
         },
         "stripped_text_bytes": {
-          "baseline": 1059319,
-          "threshold": 1059319
+          "baseline": 1059495,
+          "threshold": 1059495
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2131288,
-          "threshold": 2131288
+          "baseline": 2131560,
+          "threshold": 2131560
         },
         "stripped_text_bytes": {
-          "baseline": 1638871,
-          "threshold": 1638871
+          "baseline": 1639015,
+          "threshold": 1639015
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1637928,
-          "threshold": 1637928
+          "baseline": 1638184,
+          "threshold": 1638184
         },
         "stripped_text_bytes": {
-          "baseline": 1237751,
-          "threshold": 1237751
+          "baseline": 1237895,
+          "threshold": 1237895
         }
       },
       "wasi-threads": {
@@ -113,12 +113,12 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1115544,
-          "threshold": 1115544
+          "baseline": 1116056,
+          "threshold": 1116056
         },
         "stripped_text_bytes": {
-          "baseline": 787159,
-          "threshold": 787159
+          "baseline": 787463,
+          "threshold": 787463
         }
       },
       "component": {
@@ -143,32 +143,32 @@
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1000752,
-          "threshold": 1000752
+          "baseline": 1001264,
+          "threshold": 1001264
         },
         "stripped_text_bytes": {
-          "baseline": 707607,
-          "threshold": 707607
+          "baseline": 707927,
+          "threshold": 707927
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1538400,
-          "threshold": 1538400
+          "baseline": 1538816,
+          "threshold": 1538816
         },
         "stripped_text_bytes": {
-          "baseline": 1091895,
-          "threshold": 1091895
+          "baseline": 1092135,
+          "threshold": 1092135
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1154608,
-          "threshold": 1154608
+          "baseline": 1155040,
+          "threshold": 1155040
         },
         "stripped_text_bytes": {
-          "baseline": 812359,
-          "threshold": 812359
+          "baseline": 812599,
+          "threshold": 812599
         }
       },
       "wasi-threads": {

@@ -563,45 +563,48 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-25, the `Embedder footprint` workflow was run four
-times against the code of PR #353: workflow_dispatch runs
-45591081391, 45591092701 and 45591107329 against the PR branch at
-head `0dd39b5425c11aafdfdb5ac28d0b87087e15ca4b` (the #318 change —
-split extern-name encodings (name prefix `0x02`) decode and
-extern names are validated against the package-name grammar —
-merged with current `main` at `d5af7b8` (PRs #348, #351 and
-#350)), and pull-request run 45591075501, which
+times against the code of PR #354: workflow_dispatch runs
+45610872278, 45610879531 and 45610885686 against the PR branch at
+head `c965df7ea3720c33fab6283cb02de5eb947e1e24` (the #319 change —
+the component decoder enforces section sizes and core decode
+reasons are preserved — merged with current `main` at `b20ed79`
+(PR #353)), and pull-request run 45610864030, which
 built the same tree (`ubuntu-24.04`, Rust 1.96.0). A three-run
-control against unmodified `main` at `d5af7b8` (workflow_dispatch
-runs 45591120085, 45591130821 and 45591141591) isolates the
-attribution recorded in the re-baseline history below. Every run
+control against unmodified `main` at `b20ed79` (workflow_dispatch
+runs 45610897012, 45610904920 and 45610913665) isolates the
+attribution recorded in the re-baseline history below; the
+control is byte-identical to the checked-in baseline on all 32
+gated series. Every run
 produced byte-identical sizes for its tree: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
 the stripped file size, and the stripped `.text` size each have a
 run-to-run spread of **0 B** across the samples. The table below
 shows the checked-in baselines (stripped file /
-stripped `.text`, in bytes): the twelve series of the
-three configurations that link `telomere-component` were
-re-baselined to this campaign's branch measurements, and every
-other baseline is unchanged — on all remaining series the branch
-measured byte-identical to the checked-in baseline.
+stripped `.text`, in bytes): the sixteen series of the four core
+configurations were re-baselined to this campaign's branch
+measurements. The three configurations that link
+`telomere-component` measured well below their baselines on the
+branch (see the history entry); following the established
+practice of re-baselining growth only, their baselines are
+unchanged.
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,591,952 | 1,204,487 |
+| `release` | `core` | 1,592,256 | 1,204,663 |
 | `release` | `component` | 2,701,856 | 2,143,383 |
 | `release` | `wasi` | 2,929,352 | 2,317,751 |
-| `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
-| `release` | `core-jit` | 2,131,288 | 1,638,871 |
-| `release` | `core-aot` | 1,637,928 | 1,237,751 |
+| `release` | `core-nosimd` | 1,401,160 | 1,059,495 |
+| `release` | `core-jit` | 2,131,560 | 1,639,015 |
+| `release` | `core-aot` | 1,638,184 | 1,237,895 |
 | `release` | `wasi-threads` | 3,145,056 | 2,485,063 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,115,544 | 787,159 |
+| `release-size` | `core` | 1,116,056 | 787,463 |
 | `release-size` | `component` | 1,692,920 | 1,250,711 |
 | `release-size` | `wasi` | 1,814,136 | 1,332,487 |
-| `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
-| `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
-| `release-size` | `core-aot` | 1,154,608 | 812,359 |
+| `release-size` | `core-nosimd` | 1,001,264 | 707,927 |
+| `release-size` | `core-jit` | 1,538,816 | 1,092,135 |
+| `release-size` | `core-aot` | 1,155,040 | 812,599 |
 | `release-size` | `wasi-threads` | 1,956,840 | 1,427,191 |
 
 #### Re-baseline history
@@ -2217,6 +2220,50 @@ up from +10.29%; the `release` `core-nosimd` stripped file
 series is unchanged at +9.83% (1,275,448 B to 1,400,840 B).
 The baseline was re-measured on the branch and updated as
 recorded above, following the procedure below.
+
+PR #354 (#319, the component decoder enforces section sizes
+and preserves core decode reasons) merged current `main` into
+its branch first (merge commit `1eba0c7`, `main` at
+`b20ed79513bbb12f6e4447158fd4028808ac129b` — PR #353 (#318) on
+top of the `21edef0` `main` the branch was based on); the merge
+was conflict-free, and its CI run on the merged tree tripped
+the gate. Attribution was isolated by measuring current `main`
+alone three times (workflow_dispatch runs 45610897012,
+45610904920 and 45610913665 on `main` at `b20ed79`): the main
+control is byte-identical to the checked-in baseline on all 32
+gated series. This PR's own delta against the main control
+splits by configuration family. The four core configurations
+grow slightly in both profiles — `release` stripped file
++304 B (`core`), +320 B (`core-nosimd`), +272 B (`core-jit`),
++256 B (`core-aot`) and stripped `.text` +176/+176/+144/+144 B;
+`release-size` stripped file +512/+512/+416/+432 B and
+stripped `.text` +304/+320/+240/+240 B — the new
+`WasmParserError::IntegerTooLarge` variant and the
+`format_io_error` helper in the telomere library. The three
+configurations that link `telomere-component` shrink
+substantially — `release` stripped file −123,960 B
+(`component`), −123,976 B (`wasi`), −123,992 B (`wasi-threads`)
+and stripped `.text` −112,064 B in each; `release-size`
+stripped file −69,208/−69,192/−69,144 B and stripped `.text`
+−63,248/−63,248/−63,216 B — because every section body is now
+parsed through the `take()` size-limited reader, so the
+generic section parsers are monomorphized for a single reader
+type instead of two (previously only the CoreModule and
+Component sections used a limited reader). The `baseline`
+configuration is unchanged. Following the established practice
+of re-baselining growth only (the gate passes shrinkage), the
+sixteen exceeding core series are re-baselined to the branch
+measurements and the twelve shrunken component series keep
+their PR #353 baselines, so those baselines now sit above the
+measured sizes by the amounts above until a future re-baseline
+absorbs the shrinkage. Against the original #164 baseline,
+the largest cumulative growth remains the `release`
+`component` stripped file series at +11.02% (2,433,656 B to
+2,701,856 B, the retained PR #353 baseline; the branch itself
+measures 2,577,896 B, +5.93%); the `release` `core-nosimd`
+stripped file series rises from +9.83% to +9.86% (1,275,448 B
+to 1,401,160 B). The baseline was re-measured on the branch
+and updated as recorded above, following the procedure below.
 
 ### Threshold derivation
 
