@@ -341,6 +341,129 @@ The observation is not confined to the headline delta: the Linux/macOS
 225376/185012 = 1.22× for the JIT increment. These are recorded
 platform-specific comparisons, not explanations of their causes.
 
+### Platform text-delta attribution (#169)
+
+Issue [#169](https://github.com/yieldspace/telomere/issues/169) asked why the
+Linux x86_64 text deltas above are larger than the macOS arm64 ones, with
+evidence rather than inference. This section records that attribution. The
+macOS numbers are the #139 values recorded above; they were not re-measured
+here. Everything else was measured on Linux (x86_64 host, Rust 1.96.0) at the
+#139 measurement head `b0012a6dc87ce9323e076f74a5e687bb1c3d3d58`, in the
+`release-size` profile, using the same per-configuration Cargo invocations as
+`tools/measure-embedder-footprint.py`.
+
+**Reproduction.** Rebuilt at `b0012a6` on Linux x86_64 (glibc), all seven
+`.text` values reproduce the #139 Linux table byte-for-byte (baseline 228114,
+core 732743, component 1139911, wasi 1267639, core-nosimd 659719, core-jit
+958119, wasi-threads 1340151). The attribution below is therefore an
+attribution of the recorded artifacts, not of a neighbouring build.
+
+**Method.** Two extra target builds at the same head separate the factors:
+`x86_64-unknown-linux-musl` (same ISA as the recorded Linux build, different
+libc) and `aarch64-unknown-linux-musl` (different ISA, same ELF format and
+linker family, static musl libc). Cross-target links used `rust-lld`; those
+binaries were measured, not executed. Layer increments are the unit of
+comparison, because the libc carried by the `baseline` configuration differs
+between dynamic glibc and static musl and cancels in increments.
+
+| Increment | x86_64 glibc (recorded) | x86_64 musl | aarch64 musl | macOS arm64 (recorded) |
+| --- | ---: | ---: | ---: | ---: |
+| `core - baseline` | 504629 | 505011 | 400320 | 381940 |
+| `component - core` | 407168 | 407200 | 291824 | 282084 |
+| `wasi - component` | 127728 | 128068 | 85984 | 82364 |
+| `wasi - baseline` | 1039525 | 1040279 | 778128 | 746388 |
+| `core - core-nosimd` (SIMD) | 73024 | 73040 | 43360 | 42068 |
+| `wasi-threads - wasi` | 72512 | 72512 | 43952 | 42604 |
+| `core-jit - core` (JIT) | 225376 | link failed | no backend | 185012 |
+
+**Result.** The gap is mostly instruction-set code density, not OS, libc, or
+file format. Splitting each recorded ratio into an ISA factor (x86_64-musl /
+aarch64-musl) and a platform factor (aarch64-musl / macOS arm64):
+
+| Increment | ISA factor | Platform factor | Product | Recorded ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `core - baseline` | 1.261 | 1.048 | 1.322 | 1.32 |
+| `component - core` | 1.395 | 1.035 | 1.444 | 1.44 |
+| `wasi - component` | 1.489 | 1.044 | 1.555 | 1.55 |
+| `wasi - baseline` | 1.337 | 1.043 | 1.394 | 1.39 |
+| SIMD increment | 1.685 | 1.031 | 1.736 | 1.74 |
+| Threads increment | 1.650 | 1.032 | 1.702 | 1.70 |
+
+For the headline delta, the ISA factor accounts for about 88% of the gap on a
+log scale and the platform factor about 13%. The libc factor on x86_64
+(glibc / musl increments) is 0.997-1.000 in every row: nil. In absolute terms
+static musl adds 70541 B to the `baseline` `.text` (its libc and libunwind,
+which the dynamic glibc build does not carry), which is why absolute
+cross-libc comparisons mislead and increments are used here.
+
+The JIT increment is not decomposed: at this head there is no aarch64-Linux
+JIT backend. `crates/telomere/src/runtime/jit/backend.rs` gates the aarch64
+backend to macOS, and `telomere_jit_codegen::target::supported()` lists only
+macOS/aarch64, macOS-or-Linux/x86_64, and Linux/riscv64-gnu, so no aarch64
+ELF build containing JIT code exists to measure. (The aarch64-musl `core-jit`
+cell, 618152 B, is *below* its `core` cell; it measures the
+unsupported-target shape of the feature, not JIT code.) The recorded 1.22x
+JIT ratio is a pair of supported targets and is not split here. The
+x86_64-musl `core-jit` link also failed in this environment (`__clear_cache`
+undefined under the self-contained musl link), so that cell is unmeasured.
+
+**Per-symbol evidence, core layer.** `nm` attribution of an unstripped
+`core` build (identical `.text` to the stripped artifact; symbol coverage
+99.5% of `.text`) gives, on Linux x86_64: the `telomere` crate 396209 B
+(54.1%) - `parser` 222395, `runtime` 160175, `common` 13131; `core`/`std`/
+`alloc` together 196051 B (26.8%), of which the std backtrace machinery
+(`gimli` 33816, `addr2line` 12977, `rustc_demangle` 19768, `miniz_oxide`
+9570, plus `std::backtrace_rs` 43578) totals about 119709 B (16.3%);
+`core::fmt` paths 33250 B (4.5%); panic handlers 3202 B (0.4%, expected
+under `panic = "abort"`); `hashbrown` 13207 B; the embedder harness's own
+code 21401 B. The largest single symbols are the parser and optimizer entry
+points (`parse_inst` 40472 B, `optimize_function` 33234 B, `parse_module`
+27413 B).
+
+Comparing the same demangled symbols in the x86_64 and aarch64-musl `core`
+binaries: 2258 shared symbols total 718782 B on x86_64 against 559716 B on
+aarch64 (1.28x); for the `telomere` crate alone the shared-symbol ratio is
+1.41x. The ratio grows with function size (functions of 4 KiB or more:
+1.50x; under 64 B: 0.98x), consistent with fixed-length 4-byte A64 encoding
+winning on small functions while x86_64 pays for longer encodings of 64-bit
+immediates and addressing and for spill traffic in larger ones. The aarch64
+build also contains about 1587 tiny LLVM machine-outliner functions (26164 B)
+with no x86_64 counterpart, a deduplication mechanism that reduces aarch64
+text. The std backtrace machinery (about 120 KB of the core layer on both
+platforms) is the largest single reduction candidate this attribution
+quantifies; removing it needs `-Z build-std` std feature control, already
+listed under [Not yet measured](#not-yet-measured).
+
+**Implications for unmeasured targets.**
+
+- Linux aarch64 should look like macOS arm64, not like Linux x86_64: the
+  OS/libc/format factor on increments is only 1.03-1.05, so a Linux aarch64
+  embedder should land within a few percent of the macOS figures above. The
+  platform axis is mostly an ISA axis.
+- riscv64 should be expected near the x86_64 end, not the macOS end.
+  Object-level evidence (the `telomere` crate only, `opt-level = "z"`, LTO
+  disabled by profile override, per-function `.text` sections summed):
+  x86_64 437332 B, aarch64 364496 B, riscv64 436656 B - riscv64 is 0.999x
+  x86_64 and 1.20x aarch64 before LTO. This is not a linked-binary
+  measurement: LTO, the layer mix, std, and the riscv64 JIT backend (which
+  exists for riscv64-gnu) all move the final number, so
+  [#140](https://github.com/yieldspace/telomere/issues/140)'s linked
+  measurement is still required. The planning-relevant statement is the
+  direction: budgeting a riscv64 appliance from the macOS numbers would
+  under-budget by roughly the same factor seen on x86_64.
+- 32-bit ARM is not measured or extrapolated here.
+
+**Current-head stability.** The same decomposition at `c86bee7` (main when
+this was measured) gives a headline ISA factor of 1.349 for the musl pair
+(headline increments: x86_64 glibc 1091285 B, x86_64 musl 1092055 B,
+aarch64 musl 809472 B), so the attribution is not an artefact of the #139
+head.
+
+**Not measured in this environment.** macOS re-measurement (no macOS host);
+aarch64-linux-glibc linked builds (no aarch64 glibc sysroot); riscv64
+linked builds (no riscv64 libc sysroot; the Rust 1.96 riscv64 musl std is
+not self-contained and its link requires a real musl toolchain).
+
 For the #138 change, the important conclusion is not a claimed megabyte saving:
 the byte deltas above are modest comparative observations that make optional
 layers visible. #138's value is the no-Tokio dependency topology and supported
