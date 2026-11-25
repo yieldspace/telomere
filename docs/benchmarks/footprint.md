@@ -346,6 +346,90 @@ the byte deltas above are modest comparative observations that make optional
 layers visible. #138's value is the no-Tokio dependency topology and supported
 embeddability boundary; the no-threads configurations prove that path.
 
+### riscv64gc under QEMU user-mode (#140)
+
+First measurement of `riscv64gc-unknown-linux-gnu`, the stated primary
+product target. File and `.text` sizes are exact bytes of the riscv64
+artifacts. RSS and cold-start values are **not** RISC-V hardware values:
+the binaries were executed by `qemu-riscv64` user-mode emulation on an
+x86_64 host, so both describe the emulator process (translation, sysroot
+loading, and guest work combined). They establish a behavioural baseline
+and a repeatable method, not an appliance performance figure.
+
+| Measurement environment | Value |
+| --- | --- |
+| Date and host | 2026-11-25; Debian 12 x86_64 (Linux 6.1.0-55-amd64); 72 threads; 157 GiB |
+| Toolchain and source | Rust 1.96.0 (repo pin); source head `c86bee7` (origin/main) |
+| Emulation | qemu-riscv64 7.2.22 (Debian `qemu-user`); sysroot `/usr/riscv64-linux-gnu` (gcc-riscv64-linux-gnu 12.2.0); linker `riscv64-linux-gnu-gcc` |
+| Method | `tools/measure-embedder-footprint.py --target riscv64gc-unknown-linux-gnu --runner "qemu-riscv64 -L /usr/riscv64-linux-gnu"`; same run counts as the host tables (cold median of 30 after 3 warmups, peak RSS median of 5 via `/usr/bin/time -v` around the emulator process) |
+
+Behavioural signal (acceptance evidence, not footprint): the full
+non-JIT workspace test suite was executed on the target with
+`cargo test --release --workspace --target riscv64gc-unknown-linux-gnu`,
+the Cargo runner above, and `QEMU_LD_PREFIX=/usr/riscv64-linux-gnu` set
+so test-spawned subprocesses re-enter the emulator through binfmt with
+the sysroot visible: **984 passed, 0 failed** (61 test binaries and 6
+doc-test suites; the wast harness passed 166/166). Without
+`QEMU_LD_PREFIX`, the six `cli_component` tests fail because the
+binfmt-launched emulator cannot find the guest loader
+(`/lib/ld-linux-riscv64-lp64d.so.1`) — an environment artifact, not a
+product failure; all six pass with it. The suite found no product
+defects on this target.
+
+`core-jit` is sizes-only in both profiles: the build succeeds, but
+executing the JIT embedder under qemu-user segfaults (exit status -11)
+in both profiles. That is the already-tracked riscv64 JIT emulation
+failure (#161); #140 does not require JIT execution.
+
+#### `release` (stripped file size is primary)
+
+| Configuration | Raw file (B) | Stripped file (B) | `.text` (B) | Peak RSS median of 5 (B) | Cold median of 30 (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `baseline` | 446720 | 321072 | 224800 | 16433152 | 28.048 |
+| `core` | 2257520 | 1679392 | 1211958 | 45309952 | 107.454 |
+| `component` | 3429192 | 2626288 | 1971280 | 23580672 | 99.638 |
+| `wasi` | 3721832 | 2855728 | 2135692 | 77258752 | 222.527 |
+| `core-nosimd` | 1889896 | 1377968 | 987308 | 45232128 | 108.828 |
+| `core-jit` | 2868960 | 2162912 | 1590780 | — (sizes only; #161) | — |
+| `core-aot` | 2307696 | 1720456 | 1240720 | 45502464 | 111.697 |
+| `wasi-threads` | 4039176 | 3120072 | 2324620 | 77393920 | 218.621 |
+
+#### `release-size` (already stripped by profile)
+
+| Configuration | File (B) | `.text` (B) | Peak RSS median of 5 (B) | Cold median of 30 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| `baseline` | 283856 | 201366 | 16375808 | 27.879 |
+| `core` | 1029568 | 707916 | 44367872 | 108.343 |
+| `component` | 1467848 | 1042286 | 19881984 | 85.106 |
+| `wasi` | 1570296 | 1106904 | 75677696 | 207.309 |
+| `core-nosimd` | 931264 | 636884 | 44515328 | 104.567 |
+| `core-jit` | 1381888 | 958964 | — (sizes only; #161) | — |
+| `core-aot` | 1066472 | 734296 | 44605440 | 103.772 |
+| `wasi-threads` | 1689144 | 1189330 | 75657216 | 197.696 |
+
+Cross-architecture observation, recorded without a cause: the riscv64
+`release-size` `core` `.text` (707916 B) is slightly smaller than the
+Linux x86_64 value (732743 B), and `core-jit` `.text` is at near parity
+(958964 B vs 958119 B). The `wasi − baseline` text delta on riscv64
+`release-size` is 905538 B, between the recorded macOS (746388 B) and
+Linux x86_64 (1039525 B) values.
+
+#### Default CLI (`release`)
+
+Artifact: raw file 5440040 B; stripped file 4242840 B; `.text` 3071386 B
+(strip applied to a copy under the fixed basename `telomere-cli`, per
+the #139 basename note). Cases mirror `tools/measure-cold-start.py`
+minus the JIT row, run under the same emulator; the `.tpre` artifact
+was produced by the riscv64 CLI itself under emulation.
+
+| Case | Cold median of 30 (ms) | Peak RSS median of 5 (B) |
+| --- | ---: | ---: |
+| `add.wasm` core call, interpreter | 330.01 | 112803840 |
+| `wasi-preview1-hello.wasm` preview1 command | 374.87 | 115458048 |
+| `wasi-component-args.wasm` WASI 0.2 component | 434.97 | 143941632 |
+| `wasi-preview1-stock-hello.wasm` preview1 command | 1305.27 | 121274368 |
+| `wasi-preview1-stock-hello.tpre` precompiled preview1 command | 350.04 | 114925568 |
+
 ## Size regression gate (#164)
 
 #139 measured the minimal-embedder ladder but shipped no gate, because a
@@ -1927,18 +2011,50 @@ module, and `max_memory_pages`, then measure process RSS and, on Linux, inspect
 document. The inaccessible `PROT_NONE` tail is only a fail-fast guard if an
 existing explicit bounds check regresses; it is not a host-containment boundary.
 
+#### Measured instance counts under a 256 MiB budget (#140)
+
+Measured with the `embed-instances` bin of `telomere-minimal-embedder`
+(added for this measurement): it holds N instances of
+`examples/add.wasm` — memory minimum 16 pages (1 MiB), no declared
+maximum, so each instance carries the default 4 GiB reservation ceiling
+with 1 MiB committed — in one `Store`, optionally calling each
+instance's `main(1, 2)` once, and reports the count while
+`/usr/bin/time -v` records the process peak RSS. `release-size`, `core`
+configuration.
+
+| Setup | Result |
+| --- | --- |
+| qemu-riscv64, `add.wasm`, instantiate only | N=0: 18792 KiB; N=1: 43384 KiB; N=9: 240396 KiB (largest measured N inside 256 MiB); N=10: 264872 KiB (exceeds 262144 KiB); slope ≈ 24.6 MiB/instance |
+| qemu-riscv64, `add.wasm`, one call per instance | Same slope (N=1: 43572 KiB; N=10: 265304 KiB) |
+| qemu-riscv64, bounded variant (same module with declared maximum 16 pages → 1 MiB reservation) | N=100: 19692 KiB total; slope ≈ 8 KiB/instance |
+| Native x86_64 control (same harness, no emulation) | N=100 instantiate only: 2776 KiB total; N=5000 with one call each: 9828 KiB total (≈1.4 KiB/instance between N=1000 and N=5000) |
+
+Reading: the ≈24.6 MiB/instance QEMU slope tracks the *reservation
+size*, not committed guest memory — it collapses to ≈8 KiB/instance
+when the reservation is bounded to 1 MiB, and the native control holds
+5,000 executed instances in ≈9.6 MiB. The QEMU figure measures
+emulator handling of large inaccessible reservations and must not be
+read as the guest's static memory cost. What is established: (i) under
+QEMU user-mode as configured here, a process holding instances of an
+unbounded-max module crosses a 256 MiB budget between 9 and 10
+instances; (ii) the guest-intrinsic static cost per held instance is
+the committed-but-untouched 1 MiB initial memory plus a measured RSS
+slope of ≈1.4–8 KiB. A real-hardware RSS ceiling for unbounded-max
+modules remains unmeasured.
+
 ## Not yet measured
 
 The following are open and should not be inferred from the numbers above:
 
-- `riscv64gc-unknown-linux-gnu` binary size, RSS, and cold start. #140 must
-  retain the `baseline`, `core`, `component`, `wasi`, `core-nosimd`,
-  `core-jit`, and `wasi-threads` configuration names as its contract. The
-  target is currently only cross-checked for compilation in CI; measuring it
-  needs hardware or a QEMU user-mode setup.
+- `riscv64gc-unknown-linux-gnu` on real hardware. Every riscv64 number in
+  this document was measured under QEMU user-mode on an x86_64 host (see
+  the #140 section above); hardware RSS and cold start, and the hardware
+  static-memory ceiling for unbounded-max modules, remain unmeasured.
 - Linux `aarch64` numbers.
-- Static memory ceiling under a constrained RAM budget (the 256 MiB class device
-  target).
+- Static memory ceiling under a constrained RAM budget on real hardware
+  (the 256 MiB class device target); the QEMU user-mode measurement and
+  its reservation-size caveat are recorded under
+  [Static linear-memory ceiling](#static-linear-memory-ceiling).
 - Instantiation-only latency, separated from process start-up.
 - `-Z build-std` and `panic_immediate_abort` footprint and behavior under the
   size-oriented profile.
