@@ -99,7 +99,12 @@ impl Type {
     /// Abstract types declared *inside* a component/instance type
     /// value are bound by that value rather than denoted by it, so
     /// pairs of them are matched by bound (alpha-equivalence), with a
-    /// bijection keeping the sharing pattern consistent. Everything
+    /// bijection keeping the sharing pattern consistent. A bound
+    /// abstract identity can also be matched against an abstract
+    /// identity denoted from the enclosing scopes, which instantiates
+    /// it; the instantiation must be consistent (one bound identity,
+    /// one instantiating identity) but need not be injective.
+    /// Everything
     /// else about the two types remains the subtype check's business;
     /// this walk only adds the identity constraints.
     pub fn assert_same_resource_identities(
@@ -113,6 +118,7 @@ impl Type {
             bound_right: HashSet::new(),
             alpha: HashMap::new(),
             alpha_rev: HashMap::new(),
+            bound_assignment: HashMap::new(),
         };
         check.types(self, other)
     }
@@ -205,6 +211,12 @@ struct ResourceIdentityCheck<'v> {
     bound_right: HashSet<usize>,
     alpha: HashMap<usize, usize>,
     alpha_rev: HashMap<usize, usize>,
+    /// Instantiations of bound abstract identities by abstract
+    /// identities denoted from the enclosing scopes, keyed by the
+    /// bound generic's id (on whichever side declares it) and valued
+    /// by the instantiating generic's id. Like the alpha pairings, an
+    /// entry is dropped when its binder leaves scope.
+    bound_assignment: HashMap<usize, usize>,
 }
 
 impl<'v> ResourceIdentityCheck<'v> {
@@ -260,14 +272,19 @@ impl<'v> ResourceIdentityCheck<'v> {
     /// Judge a pair of `Sub`-bounded generics: the same declaration
     /// always matches; two generics bound by the type values being
     /// descended into match by alpha-equivalence (recorded in the
-    /// bijection, so a sharing pattern must be consistent); anything
-    /// else equates two distinct abstract identities.
+    /// bijection, so a sharing pattern must be consistent); a bound
+    /// generic matched against a free one is instantiated by it
+    /// (recorded in `bound_assignment`, so the instantiation must be
+    /// consistent); anything else equates two distinct abstract
+    /// identities.
     fn generic_pair(&mut self, a: &Generic, b: &Generic) -> ParseResult<()> {
         if a.id == b.id {
             return Ok(());
         }
-        if self.bound_left.contains(&a.id) && self.bound_right.contains(&b.id) {
-            match self.alpha.get(&a.id) {
+        let a_bound = self.bound_left.contains(&a.id);
+        let b_bound = self.bound_right.contains(&b.id);
+        match (a_bound, b_bound) {
+            (true, true) => match self.alpha.get(&a.id) {
                 Some(&paired) if paired == b.id => Ok(()),
                 Some(_) => Self::mismatch(),
                 None => {
@@ -278,9 +295,26 @@ impl<'v> ResourceIdentityCheck<'v> {
                     self.alpha_rev.insert(b.id, a.id);
                     Ok(())
                 }
+            },
+            (true, false) => self.assign_bound(a.id, b.id),
+            (false, true) => self.assign_bound(b.id, a.id),
+            (false, false) => Self::mismatch(),
+        }
+    }
+
+    /// Record that the bound abstract identity `bound` is
+    /// instantiated by the free identity `free`. The same bound
+    /// identity must be instantiated the same way everywhere it is
+    /// matched within the scope that binds it; distinct bound
+    /// identities may share one instantiating identity.
+    fn assign_bound(&mut self, bound: usize, free: usize) -> ParseResult<()> {
+        match self.bound_assignment.get(&bound) {
+            Some(&prev) if prev == free => Ok(()),
+            Some(_) => Self::mismatch(),
+            None => {
+                self.bound_assignment.insert(bound, free);
+                Ok(())
             }
-        } else {
-            Self::mismatch()
         }
     }
 
@@ -447,6 +481,8 @@ impl<'v> ResourceIdentityCheck<'v> {
                 .retain(|l, r| !left.contains(l) && !right.contains(r));
             self.alpha_rev
                 .retain(|r, l| !right.contains(r) && !left.contains(l));
+            self.bound_assignment
+                .retain(|bound, _| !left.contains(bound) && !right.contains(bound));
         }
     }
 }

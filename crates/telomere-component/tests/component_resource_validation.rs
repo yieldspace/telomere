@@ -948,3 +948,133 @@ fn eq_ascription_with_instance_types_declared_inside_is_valid() {
     )
     .expect("binders declared inside the compared types keep their own scope");
 }
+
+// ---------------------------------------------------------------------------
+// Codex round 7 (PR #357): a bound abstract identity matched against a
+// free identity is an instantiation, not an identity equation.
+
+#[test]
+fn eq_ascription_between_component_types_with_bound_export_matched_by_imported_resource_is_valid() {
+    // The ascribed component type $b exports an abstract resource
+    // bound inside $b; the actual component type $a exports the
+    // enclosing scope's imported resource $r at the same position.
+    // The abstract export is satisfied by $r -- it does not require
+    // $a to declare a corresponding fresh binder (wasmparser accepts
+    // this component).
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (type $a (component (export "x" (type (eq $r)))))
+    (type $b (component (export "x" (type (sub resource)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("a bound abstract export must be instantiable by a free resource identity");
+}
+
+#[test]
+fn eq_ascription_between_component_types_with_bound_on_left_matched_by_imported_resource_is_valid()
+{
+    // Mirror image: the bound abstract export is on the actual side
+    // and the free imported resource on the ascribed side.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (type $a (component (export "x" (type (eq $r)))))
+    (type $b (component (export "x" (type (sub resource)))))
+    (export "c" (type $b) (type (eq $a)))))
+"#,
+    )
+    .expect("bound-to-free matching must work in both directions");
+}
+
+#[test]
+fn eq_ascription_between_instance_types_with_bound_export_matched_by_imported_resource_is_valid() {
+    // The same instantiation at the instance-type level.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (type $a (instance (export "x" (type (eq $r)))))
+    (type $b (instance (export "x" (type (sub resource)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("a bound abstract export of an instance type must be instantiable by a free identity");
+}
+
+#[test]
+fn eq_ascription_with_import_declared_bound_identity_matched_by_imported_resource_is_valid() {
+    // The bound identity is declared by an import inside the compared
+    // component type and re-exported; a free identity instantiates it
+    // just like an inline `(sub resource)` export.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (type $a (component (export "x" (type (eq $r)))))
+    (type $b (component (import "bx" (type $bx (sub resource))) (export "x" (type (eq $bx)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("an import-declared bound identity must be instantiable by a free identity");
+}
+
+#[test]
+fn eq_ascription_with_bound_identity_instantiated_consistently_is_valid() {
+    // One bound identity matched at two positions must be
+    // instantiated the same way at both; here it is.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r1" (type $r1 (sub resource)))
+    (type $a (component (export "x" (type (eq $r1))) (export "y" (type (eq $r1)))))
+    (type $b (component (import "bx" (type $bx (sub resource))) (export "x" (type (eq $bx))) (export "y" (type (eq $bx)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("a bound identity instantiated consistently must satisfy the eq ascription");
+}
+
+#[test]
+fn eq_ascription_with_distinct_bound_identities_sharing_one_instantiation_is_valid() {
+    // Instantiation need not be injective: two distinct bound
+    // identities may both be instantiated by the same free identity.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r1" (type $r1 (sub resource)))
+    (type $a (component (export "x" (type (eq $r1))) (export "y" (type (eq $r1)))))
+    (type $b (component (export "x" (type (sub resource))) (export "y" (type (sub resource)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("distinct bound identities may share one instantiating identity");
+}
+
+#[test]
+fn eq_ascription_with_bound_identity_instantiated_inconsistently_is_invalid() {
+    // The bound identity $bx is matched against $r1 at export "x" and
+    // against the distinct $r2 at export "y": no single instantiation
+    // of $bx makes the two component types equal.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (import "r1" (type $r1 (sub resource)))
+    (import "r2" (type $r2 (sub resource)))
+    (type $a (component (export "x" (type (eq $r1))) (export "y" (type (eq $r2)))))
+    (type $b (component (import "bx" (type $bx (sub resource))) (export "x" (type (eq $bx))) (export "y" (type (eq $bx)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
