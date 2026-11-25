@@ -3,6 +3,9 @@ use crate::{
     target::{TargetArch, TargetInfo, TargetOs},
 };
 
+use crate::masm::BaselineMasm;
+pub use crate::masm::{BranchKind, Cond};
+
 const VREGS: usize = 32;
 const SLOT_SIZE: i32 = 8;
 const FRAME_SIZE: i32 = ((VREGS as i32 + 2) * SLOT_SIZE + 15) & !15;
@@ -20,29 +23,6 @@ const R9: u8 = 9;
 const R10: u8 = 10;
 const R11: u8 = 11;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cond {
-    Eq = 0x4,
-    Ne = 0x5,
-    Hs = 0x3,
-    Lo = 0x2,
-    Hi = 0x7,
-    Ls = 0x6,
-    Ge = 0xd,
-    Lt = 0xc,
-    Gt = 0xf,
-    Le = 0xe,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BranchKind {
-    B,
-    BCond(Cond),
-    CbnzX(u8),
-    CbnzW(u8),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FloatWidth {
     F32,
@@ -52,23 +32,6 @@ enum FloatWidth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LastCmp {
     Float { width: FloatWidth, lhs: u8, rhs: u8 },
-}
-
-impl Cond {
-    pub const fn inverted(self) -> Self {
-        match self {
-            Self::Eq => Self::Ne,
-            Self::Ne => Self::Eq,
-            Self::Lo => Self::Hs,
-            Self::Hs => Self::Lo,
-            Self::Hi => Self::Ls,
-            Self::Ls => Self::Hi,
-            Self::Lt => Self::Ge,
-            Self::Ge => Self::Lt,
-            Self::Gt => Self::Le,
-            Self::Le => Self::Gt,
-        }
-    }
 }
 
 pub fn target_info() -> TargetInfo {
@@ -111,12 +74,31 @@ const fn target_os() -> TargetOs {
     }
 }
 
+/// The x86 condition-code encoding of a semantic [`Cond`] (the
+/// values the removed per-module `Cond` discriminants carried).
+fn cond_code(cond: Cond) -> u8 {
+    match cond {
+        Cond::Eq => 0x4,
+        Cond::Ne => 0x5,
+        Cond::Hs => 0x3,
+        Cond::Lo => 0x2,
+        Cond::Hi => 0x7,
+        Cond::Ls => 0x6,
+        Cond::Ge => 0xd,
+        Cond::Lt => 0xc,
+        Cond::Gt => 0xf,
+        Cond::Le => 0xe,
+    }
+}
+
 pub fn patch_branch(bytes: &mut [u8], at: usize, target: usize, kind: BranchKind) -> AsmResult {
     let (disp_at, insn_len) = match kind {
         BranchKind::B => (at.checked_add(1).ok_or(AsmError::InvalidImmediate)?, 5usize),
         BranchKind::BCond(_) | BranchKind::CbnzX(_) | BranchKind::CbnzW(_) => {
             (at.checked_add(2).ok_or(AsmError::InvalidImmediate)?, 6usize)
         }
+        // CbzW is an aarch64-only placeholder shape.
+        BranchKind::CbzW(_) => return Err(AsmError::UnsupportedFeature),
     };
     let after = at.checked_add(insn_len).ok_or(AsmError::InvalidImmediate)?;
     let disp = (target as isize)
@@ -175,7 +157,7 @@ impl X64BaselineMasm {
             }
             BranchKind::BCond(cond) => {
                 let at = self.offset();
-                self.emit(&[0x0f, 0x80 | cond as u8, 0, 0, 0, 0]);
+                self.emit(&[0x0f, 0x80 | cond_code(cond), 0, 0, 0, 0]);
                 Ok(at)
             }
             BranchKind::CbnzX(reg) => {
@@ -192,6 +174,8 @@ impl X64BaselineMasm {
                 self.emit(&[0x0f, 0x85, 0, 0, 0, 0]);
                 Ok(at)
             }
+            // CbzW is an aarch64-only placeholder shape.
+            BranchKind::CbzW(_) => Err(AsmError::UnsupportedFeature),
         }
     }
 
@@ -528,7 +512,7 @@ impl X64BaselineMasm {
                 .expect("virtual register fits");
             return;
         }
-        self.emit(&[0x0f, 0x90 | cond as u8, 0xc0]);
+        self.emit(&[0x0f, 0x90 | cond_code(cond), 0xc0]);
         self.emit(&[0x0f, 0xb6, 0xc0]);
         self.store_slot32(rd, RAX).expect("virtual register fits");
     }
@@ -537,7 +521,7 @@ impl X64BaselineMasm {
         self.load_slot32(RAX, rm).expect("virtual register fits");
         self.load_slot32(RCX, rn).expect("virtual register fits");
         self.emit_rex(false, RCX, RAX);
-        self.emit(&[0x0f, 0x40 | cond as u8]);
+        self.emit(&[0x0f, 0x40 | cond_code(cond)]);
         self.modrm_rr(RCX, RAX);
         self.store_slot32(rd, RAX).expect("virtual register fits");
     }
@@ -1116,7 +1100,7 @@ impl X64BaselineMasm {
 
     fn emit_jcc_placeholder(&mut self, cond: Cond) -> usize {
         let at = self.offset();
-        self.emit(&[0x0f, 0x80 | cond as u8, 0, 0, 0, 0]);
+        self.emit(&[0x0f, 0x80 | cond_code(cond), 0, 0, 0, 0]);
         at
     }
 
@@ -1395,6 +1379,375 @@ impl X64BaselineMasm {
             _ => unreachable!("invalid store width"),
         }
         self.modrm_mem_disp32(RAX, RCX, 0);
+    }
+}
+
+impl BaselineMasm for X64BaselineMasm {
+    fn with_capacity(capacity: usize) -> Self {
+        X64BaselineMasm::with_capacity(capacity)
+    }
+    fn offset(&self) -> usize {
+        X64BaselineMasm::offset(self)
+    }
+    fn truncate(&mut self, len: usize) {
+        X64BaselineMasm::truncate(self, len)
+    }
+    fn as_mut_bytes(&mut self) -> &mut [u8] {
+        X64BaselineMasm::as_mut_bytes(self)
+    }
+    fn into_bytes(self) -> Vec<u8> {
+        X64BaselineMasm::into_bytes(self)
+    }
+    fn branch_placeholder(&mut self, kind: BranchKind) -> AsmResult<usize> {
+        X64BaselineMasm::branch_placeholder(self, kind)
+    }
+    fn ret(&mut self) {
+        X64BaselineMasm::ret(self)
+    }
+    fn mov_x_from_sp(&mut self, rd: u8) {
+        X64BaselineMasm::mov_x_from_sp(self, rd)
+    }
+    fn blr_x(&mut self, rn: u8) {
+        X64BaselineMasm::blr_x(self, rn)
+    }
+    fn mov_x(&mut self, rd: u8, rn: u8) {
+        X64BaselineMasm::mov_x(self, rd, rn)
+    }
+    fn mov_w(&mut self, rd: u8, rn: u8) {
+        X64BaselineMasm::mov_w(self, rd, rn)
+    }
+    fn mov_imm_u32(&mut self, rd: u8, value: u32) {
+        X64BaselineMasm::mov_imm_u32(self, rd, value)
+    }
+    fn mov_imm_u64(&mut self, rd: u8, value: u64) {
+        X64BaselineMasm::mov_imm_u64(self, rd, value)
+    }
+    fn mov_imm_u32_reloc(&mut self, rd: u8, value: u32) {
+        X64BaselineMasm::mov_imm_u32_reloc(self, rd, value)
+    }
+    fn mov_imm_u64_reloc(&mut self, rd: u8, value: u64) {
+        X64BaselineMasm::mov_imm_u64_reloc(self, rd, value)
+    }
+    fn stp_pre_x_sp(&mut self, rt: u8, rt2: u8) {
+        X64BaselineMasm::stp_pre_x_sp(self, rt, rt2)
+    }
+    fn stp_pre(&mut self, rt: u8, rt2: u8) {
+        X64BaselineMasm::stp_pre(self, rt, rt2)
+    }
+    fn ldp_post_x_sp(&mut self, rt: u8, rt2: u8) {
+        X64BaselineMasm::ldp_post_x_sp(self, rt, rt2)
+    }
+    fn ldp_post(&mut self, rt: u8, rt2: u8) {
+        X64BaselineMasm::ldp_post(self, rt, rt2)
+    }
+    fn add_imm_u32(&mut self, rd: u8, rn: u8, imm: u32) -> AsmResult {
+        X64BaselineMasm::add_imm_u32(self, rd, rn, imm)
+    }
+    fn add_imm_u64(&mut self, rd: u8, rn: u8, imm: u64) -> AsmResult {
+        X64BaselineMasm::add_imm_u64(self, rd, rn, imm)
+    }
+    fn sub_imm_u32(&mut self, rd: u8, rn: u8, imm: u32) -> AsmResult {
+        X64BaselineMasm::sub_imm_u32(self, rd, rn, imm)
+    }
+    fn add_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::add_w(self, rd, rn, rm)
+    }
+    fn add_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::add_x(self, rd, rn, rm)
+    }
+    fn sub_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::sub_w(self, rd, rn, rm)
+    }
+    fn sub_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::sub_x(self, rd, rn, rm)
+    }
+    fn mul_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::mul_w(self, rd, rn, rm)
+    }
+    fn mul_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::mul_x(self, rd, rn, rm)
+    }
+    fn udiv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::udiv_w(self, rd, rn, rm)
+    }
+    fn sdiv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::sdiv_w(self, rd, rn, rm)
+    }
+    fn udiv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::udiv_x(self, rd, rn, rm)
+    }
+    fn sdiv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::sdiv_x(self, rd, rn, rm)
+    }
+    fn msub_w(&mut self, rd: u8, rn: u8, rm: u8, ra: u8) {
+        X64BaselineMasm::msub_w(self, rd, rn, rm, ra)
+    }
+    fn msub_x(&mut self, rd: u8, rn: u8, rm: u8, ra: u8) {
+        X64BaselineMasm::msub_x(self, rd, rn, rm, ra)
+    }
+    fn neg_w(&mut self, rd: u8, rm: u8) {
+        X64BaselineMasm::neg_w(self, rd, rm)
+    }
+    fn neg_x(&mut self, rd: u8, rm: u8) {
+        X64BaselineMasm::neg_x(self, rd, rm)
+    }
+    fn and_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::and_w(self, rd, rn, rm)
+    }
+    fn and_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::and_x(self, rd, rn, rm)
+    }
+    fn orr_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::orr_w(self, rd, rn, rm)
+    }
+    fn orr_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::orr_x(self, rd, rn, rm)
+    }
+    fn eor_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::eor_w(self, rd, rn, rm)
+    }
+    fn eor_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::eor_x(self, rd, rn, rm)
+    }
+    fn lslv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::lslv_w(self, rd, rn, rm)
+    }
+    fn lslv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::lslv_x(self, rd, rn, rm)
+    }
+    fn lsrv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::lsrv_w(self, rd, rn, rm)
+    }
+    fn lsrv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::lsrv_x(self, rd, rn, rm)
+    }
+    fn asrv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::asrv_w(self, rd, rn, rm)
+    }
+    fn asrv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::asrv_x(self, rd, rn, rm)
+    }
+    fn rorv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::rorv_w(self, rd, rn, rm)
+    }
+    fn rorv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        X64BaselineMasm::rorv_x(self, rd, rn, rm)
+    }
+    fn rbit_w(&mut self, rd: u8, rn: u8) {
+        X64BaselineMasm::rbit_w(self, rd, rn)
+    }
+    fn rbit_x(&mut self, rd: u8, rn: u8) {
+        X64BaselineMasm::rbit_x(self, rd, rn)
+    }
+    fn clz_w(&mut self, rd: u8, rn: u8) {
+        X64BaselineMasm::clz_w(self, rd, rn)
+    }
+    fn clz_x(&mut self, rd: u8, rn: u8) {
+        X64BaselineMasm::clz_x(self, rd, rn)
+    }
+    fn sxth_w(&mut self, rd: u8, rn: u8) {
+        X64BaselineMasm::sxth_w(self, rd, rn)
+    }
+    fn sxtb_w(&mut self, rd: u8, rn: u8) {
+        X64BaselineMasm::sxtb_w(self, rd, rn)
+    }
+    fn cmp_w(&mut self, rn: u8, rm: u8) {
+        X64BaselineMasm::cmp_w(self, rn, rm)
+    }
+    fn cmp_x(&mut self, rn: u8, rm: u8) {
+        X64BaselineMasm::cmp_x(self, rn, rm)
+    }
+    fn cmp_w_imm(&mut self, rn: u8, imm: u32) -> AsmResult {
+        X64BaselineMasm::cmp_w_imm(self, rn, imm)
+    }
+    fn cmp_w_u32(&mut self, rn: u8, imm: u32) {
+        X64BaselineMasm::cmp_w_u32(self, rn, imm)
+    }
+    fn cset_w(&mut self, rd: u8, cond: Cond) {
+        X64BaselineMasm::cset_w(self, rd, cond)
+    }
+    fn csel_w(&mut self, rd: u8, rn: u8, rm: u8, cond: Cond) {
+        X64BaselineMasm::csel_w(self, rd, rn, rm, cond)
+    }
+    fn fmov_s_from_w(&mut self, vd: u8, rn: u8) {
+        X64BaselineMasm::fmov_s_from_w(self, vd, rn)
+    }
+    fn fmov_w_from_s(&mut self, rd: u8, vn: u8) {
+        X64BaselineMasm::fmov_w_from_s(self, rd, vn)
+    }
+    fn fmov_d_from_x(&mut self, vd: u8, rn: u8) {
+        X64BaselineMasm::fmov_d_from_x(self, vd, rn)
+    }
+    fn fmov_x_from_d(&mut self, rd: u8, vn: u8) {
+        X64BaselineMasm::fmov_x_from_d(self, rd, vn)
+    }
+    fn fcmp_s(&mut self, vn: u8, vm: u8) {
+        X64BaselineMasm::fcmp_s(self, vn, vm)
+    }
+    fn fcmp_d(&mut self, vn: u8, vm: u8) {
+        X64BaselineMasm::fcmp_d(self, vn, vm)
+    }
+    fn fadd_d(&mut self, vd: u8, vn: u8, vm: u8) {
+        X64BaselineMasm::fadd_d(self, vd, vn, vm)
+    }
+    fn fadd_s(&mut self, vd: u8, vn: u8, vm: u8) {
+        X64BaselineMasm::fadd_s(self, vd, vn, vm)
+    }
+    fn fsub_d(&mut self, vd: u8, vn: u8, vm: u8) {
+        X64BaselineMasm::fsub_d(self, vd, vn, vm)
+    }
+    fn fsub_s(&mut self, vd: u8, vn: u8, vm: u8) {
+        X64BaselineMasm::fsub_s(self, vd, vn, vm)
+    }
+    fn fmul_d(&mut self, vd: u8, vn: u8, vm: u8) {
+        X64BaselineMasm::fmul_d(self, vd, vn, vm)
+    }
+    fn fmul_s(&mut self, vd: u8, vn: u8, vm: u8) {
+        X64BaselineMasm::fmul_s(self, vd, vn, vm)
+    }
+    fn fdiv_d(&mut self, vd: u8, vn: u8, vm: u8) {
+        X64BaselineMasm::fdiv_d(self, vd, vn, vm)
+    }
+    fn fdiv_s(&mut self, vd: u8, vn: u8, vm: u8) {
+        X64BaselineMasm::fdiv_s(self, vd, vn, vm)
+    }
+    fn fabs_s(&mut self, vd: u8, vn: u8) {
+        X64BaselineMasm::fabs_s(self, vd, vn)
+    }
+    fn fabs_d(&mut self, vd: u8, vn: u8) {
+        X64BaselineMasm::fabs_d(self, vd, vn)
+    }
+    fn fneg_s(&mut self, vd: u8, vn: u8) {
+        X64BaselineMasm::fneg_s(self, vd, vn)
+    }
+    fn fneg_d(&mut self, vd: u8, vn: u8) {
+        X64BaselineMasm::fneg_d(self, vd, vn)
+    }
+    fn fsqrt_s(&mut self, vd: u8, vn: u8) {
+        X64BaselineMasm::fsqrt_s(self, vd, vn)
+    }
+    fn fsqrt_d(&mut self, vd: u8, vn: u8) {
+        X64BaselineMasm::fsqrt_d(self, vd, vn)
+    }
+    fn frintn_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        X64BaselineMasm::frintn_s(self, vd, vn)
+    }
+    fn frintn_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        X64BaselineMasm::frintn_d(self, vd, vn)
+    }
+    fn frintp_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        X64BaselineMasm::frintp_s(self, vd, vn)
+    }
+    fn frintp_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        X64BaselineMasm::frintp_d(self, vd, vn)
+    }
+    fn frintm_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        X64BaselineMasm::frintm_s(self, vd, vn)
+    }
+    fn frintm_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        X64BaselineMasm::frintm_d(self, vd, vn)
+    }
+    fn frintz_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        X64BaselineMasm::frintz_s(self, vd, vn)
+    }
+    fn frintz_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        X64BaselineMasm::frintz_d(self, vd, vn)
+    }
+    fn cvtf_d_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
+        X64BaselineMasm::cvtf_d_from_w(self, vd, rn, signed)
+    }
+    fn cvtf_s_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
+        X64BaselineMasm::cvtf_s_from_w(self, vd, rn, signed)
+    }
+    fn cvtf_d_from_x(&mut self, vd: u8, rn: u8, signed: bool) {
+        X64BaselineMasm::cvtf_d_from_x(self, vd, rn, signed)
+    }
+    fn cvtf_s_from_x(&mut self, vd: u8, rn: u8, signed: bool) {
+        X64BaselineMasm::cvtf_s_from_x(self, vd, rn, signed)
+    }
+    fn fcvt_s_from_d(&mut self, vd: u8, vn: u8) {
+        X64BaselineMasm::fcvt_s_from_d(self, vd, vn)
+    }
+    fn fcvt_d_from_s(&mut self, vd: u8, vn: u8) {
+        X64BaselineMasm::fcvt_d_from_s(self, vd, vn)
+    }
+    fn fcvt_w_from_s(&mut self, rd: u8, vn: u8, signed: bool) {
+        X64BaselineMasm::fcvt_w_from_s(self, rd, vn, signed)
+    }
+    fn fcvt_w_from_d(&mut self, rd: u8, vn: u8, signed: bool) {
+        X64BaselineMasm::fcvt_w_from_d(self, rd, vn, signed)
+    }
+    fn lsl_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
+        X64BaselineMasm::lsl_w_imm(self, rd, rn, shift)
+    }
+    fn lsr_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
+        X64BaselineMasm::lsr_w_imm(self, rd, rn, shift)
+    }
+    fn asr_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
+        X64BaselineMasm::asr_w_imm(self, rd, rn, shift)
+    }
+    fn ubfm_w(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
+        X64BaselineMasm::ubfm_w(self, rd, rn, immr, imms)
+    }
+    fn ubfm_x(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
+        X64BaselineMasm::ubfm_x(self, rd, rn, immr, imms)
+    }
+    fn sbfm_w(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
+        X64BaselineMasm::sbfm_w(self, rd, rn, immr, imms)
+    }
+    fn sbfm_x(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
+        X64BaselineMasm::sbfm_x(self, rd, rn, immr, imms)
+    }
+    fn lsl_x_imm(&mut self, rd: u8, rn: u8, shift: u32) -> AsmResult {
+        X64BaselineMasm::lsl_x_imm(self, rd, rn, shift)
+    }
+    fn lsr_x_imm(&mut self, rd: u8, rn: u8, shift: u32) -> AsmResult {
+        X64BaselineMasm::lsr_x_imm(self, rd, rn, shift)
+    }
+    fn ldr_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        X64BaselineMasm::ldr_x_imm(self, rt, rn, offset)
+    }
+    fn ldr_w_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        X64BaselineMasm::ldr_w_imm(self, rt, rn, offset)
+    }
+    fn ldr_w_unscaled_imm(&mut self, rt: u8, rn: u8, offset: u32) -> AsmResult {
+        X64BaselineMasm::ldr_w_unscaled_imm(self, rt, rn, offset)
+    }
+    fn ldrb_w(&mut self, rt: u8, rn: u8) {
+        X64BaselineMasm::ldrb_w(self, rt, rn)
+    }
+    fn ldrsb_w(&mut self, rt: u8, rn: u8) {
+        X64BaselineMasm::ldrsb_w(self, rt, rn)
+    }
+    fn ldrh_w(&mut self, rt: u8, rn: u8) {
+        X64BaselineMasm::ldrh_w(self, rt, rn)
+    }
+    fn ldrsh_w(&mut self, rt: u8, rn: u8) {
+        X64BaselineMasm::ldrsh_w(self, rt, rn)
+    }
+    fn ldr_w(&mut self, rt: u8, rn: u8) {
+        X64BaselineMasm::ldr_w(self, rt, rn)
+    }
+    fn strb_w(&mut self, rt: u8, rn: u8) {
+        X64BaselineMasm::strb_w(self, rt, rn)
+    }
+    fn strh_w(&mut self, rt: u8, rn: u8) {
+        X64BaselineMasm::strh_w(self, rt, rn)
+    }
+    fn str_w(&mut self, rt: u8, rn: u8) {
+        X64BaselineMasm::str_w(self, rt, rn)
+    }
+    fn str_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        X64BaselineMasm::str_x_imm(self, rt, rn, offset)
+    }
+    fn str_w_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        X64BaselineMasm::str_w_imm(self, rt, rn, offset)
+    }
+    fn str_w_unscaled_imm(&mut self, rt: u8, rn: u8, offset: u32) -> AsmResult {
+        X64BaselineMasm::str_w_unscaled_imm(self, rt, rn, offset)
+    }
+    fn patch_branch(bytes: &mut [u8], at: usize, target: usize, kind: BranchKind) -> AsmResult {
+        patch_branch(bytes, at, target, kind)
     }
 }
 

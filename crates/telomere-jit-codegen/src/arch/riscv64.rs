@@ -3,6 +3,9 @@ use crate::{
     target::{TargetArch, TargetInfo, TargetOs},
 };
 
+use crate::masm::BaselineMasm;
+pub use crate::masm::{BranchKind, Cond};
+
 const VREGS: usize = 32;
 const SLOT_SIZE: i32 = 8;
 const FRAME_SIZE: i32 = ((VREGS as i32 * SLOT_SIZE + 16 + 15) & !15) + 16;
@@ -26,28 +29,6 @@ const T3: u8 = 28;
 const T4: u8 = 29;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cond {
-    Eq,
-    Ne,
-    Hs,
-    Lo,
-    Hi,
-    Ls,
-    Ge,
-    Lt,
-    Gt,
-    Le,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BranchKind {
-    B,
-    BCond(Cond),
-    CbnzX(u8),
-    CbnzW(u8),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Width {
     W32,
     X64,
@@ -69,27 +50,6 @@ enum Rhs {
 enum LastCmp {
     Int { width: Width, lhs: u8, rhs: Rhs },
     Float { width: FloatWidth, lhs: u8, rhs: u8 },
-}
-
-impl Cond {
-    pub const fn inverted(self) -> Self {
-        match self {
-            Self::Eq => Self::Ne,
-            Self::Ne => Self::Eq,
-            Self::Lo => Self::Hs,
-            Self::Hs => Self::Lo,
-            Self::Hi => Self::Ls,
-            Self::Ls => Self::Hi,
-            Self::Lt => Self::Ge,
-            Self::Ge => Self::Lt,
-            Self::Gt => Self::Le,
-            Self::Le => Self::Gt,
-        }
-    }
-
-    const fn uses_signed_operands(self) -> bool {
-        matches!(self, Self::Ge | Self::Gt | Self::Le | Self::Lt)
-    }
 }
 
 pub fn target_info() -> TargetInfo {
@@ -192,6 +152,8 @@ impl Riscv64BaselineMasm {
                 self.insn(encode_jal(ZERO, 0).expect("zero jal encodes"));
                 Ok(at)
             }
+            // CbzW is an aarch64-only placeholder shape.
+            BranchKind::CbzW(_) => Err(AsmError::UnsupportedFeature),
         }
     }
 
@@ -1412,6 +1374,375 @@ fn encode_fp(funct7: u32, rm: u32, rd: u8, rs1: u8, rs2: u8, _fmt: u32, _unused:
         | (rm << 12)
         | ((rd as u32) << 7)
         | 0x53
+}
+
+impl BaselineMasm for Riscv64BaselineMasm {
+    fn with_capacity(capacity: usize) -> Self {
+        Riscv64BaselineMasm::with_capacity(capacity)
+    }
+    fn offset(&self) -> usize {
+        Riscv64BaselineMasm::offset(self)
+    }
+    fn truncate(&mut self, len: usize) {
+        Riscv64BaselineMasm::truncate(self, len)
+    }
+    fn as_mut_bytes(&mut self) -> &mut [u8] {
+        Riscv64BaselineMasm::as_mut_bytes(self)
+    }
+    fn into_bytes(self) -> Vec<u8> {
+        Riscv64BaselineMasm::into_bytes(self)
+    }
+    fn branch_placeholder(&mut self, kind: BranchKind) -> AsmResult<usize> {
+        Riscv64BaselineMasm::branch_placeholder(self, kind)
+    }
+    fn ret(&mut self) {
+        Riscv64BaselineMasm::ret(self)
+    }
+    fn mov_x_from_sp(&mut self, rd: u8) {
+        Riscv64BaselineMasm::mov_x_from_sp(self, rd)
+    }
+    fn blr_x(&mut self, rn: u8) {
+        Riscv64BaselineMasm::blr_x(self, rn)
+    }
+    fn mov_x(&mut self, rd: u8, rn: u8) {
+        Riscv64BaselineMasm::mov_x(self, rd, rn)
+    }
+    fn mov_w(&mut self, rd: u8, rn: u8) {
+        Riscv64BaselineMasm::mov_w(self, rd, rn)
+    }
+    fn mov_imm_u32(&mut self, rd: u8, value: u32) {
+        Riscv64BaselineMasm::mov_imm_u32(self, rd, value)
+    }
+    fn mov_imm_u64(&mut self, rd: u8, value: u64) {
+        Riscv64BaselineMasm::mov_imm_u64(self, rd, value)
+    }
+    fn mov_imm_u32_reloc(&mut self, rd: u8, value: u32) {
+        Riscv64BaselineMasm::mov_imm_u32_reloc(self, rd, value)
+    }
+    fn mov_imm_u64_reloc(&mut self, rd: u8, value: u64) {
+        Riscv64BaselineMasm::mov_imm_u64_reloc(self, rd, value)
+    }
+    fn stp_pre_x_sp(&mut self, rt: u8, rt2: u8) {
+        Riscv64BaselineMasm::stp_pre_x_sp(self, rt, rt2)
+    }
+    fn stp_pre(&mut self, rt: u8, rt2: u8) {
+        Riscv64BaselineMasm::stp_pre(self, rt, rt2)
+    }
+    fn ldp_post_x_sp(&mut self, rt: u8, rt2: u8) {
+        Riscv64BaselineMasm::ldp_post_x_sp(self, rt, rt2)
+    }
+    fn ldp_post(&mut self, rt: u8, rt2: u8) {
+        Riscv64BaselineMasm::ldp_post(self, rt, rt2)
+    }
+    fn add_imm_u32(&mut self, rd: u8, rn: u8, imm: u32) -> AsmResult {
+        Riscv64BaselineMasm::add_imm_u32(self, rd, rn, imm)
+    }
+    fn add_imm_u64(&mut self, rd: u8, rn: u8, imm: u64) -> AsmResult {
+        Riscv64BaselineMasm::add_imm_u64(self, rd, rn, imm)
+    }
+    fn sub_imm_u32(&mut self, rd: u8, rn: u8, imm: u32) -> AsmResult {
+        Riscv64BaselineMasm::sub_imm_u32(self, rd, rn, imm)
+    }
+    fn add_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::add_w(self, rd, rn, rm)
+    }
+    fn add_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::add_x(self, rd, rn, rm)
+    }
+    fn sub_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::sub_w(self, rd, rn, rm)
+    }
+    fn sub_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::sub_x(self, rd, rn, rm)
+    }
+    fn mul_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::mul_w(self, rd, rn, rm)
+    }
+    fn mul_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::mul_x(self, rd, rn, rm)
+    }
+    fn udiv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::udiv_w(self, rd, rn, rm)
+    }
+    fn sdiv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::sdiv_w(self, rd, rn, rm)
+    }
+    fn udiv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::udiv_x(self, rd, rn, rm)
+    }
+    fn sdiv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::sdiv_x(self, rd, rn, rm)
+    }
+    fn msub_w(&mut self, rd: u8, rn: u8, rm: u8, ra: u8) {
+        Riscv64BaselineMasm::msub_w(self, rd, rn, rm, ra)
+    }
+    fn msub_x(&mut self, rd: u8, rn: u8, rm: u8, ra: u8) {
+        Riscv64BaselineMasm::msub_x(self, rd, rn, rm, ra)
+    }
+    fn neg_w(&mut self, rd: u8, rm: u8) {
+        Riscv64BaselineMasm::neg_w(self, rd, rm)
+    }
+    fn neg_x(&mut self, rd: u8, rm: u8) {
+        Riscv64BaselineMasm::neg_x(self, rd, rm)
+    }
+    fn and_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::and_w(self, rd, rn, rm)
+    }
+    fn and_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::and_x(self, rd, rn, rm)
+    }
+    fn orr_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::orr_w(self, rd, rn, rm)
+    }
+    fn orr_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::orr_x(self, rd, rn, rm)
+    }
+    fn eor_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::eor_w(self, rd, rn, rm)
+    }
+    fn eor_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::eor_x(self, rd, rn, rm)
+    }
+    fn lslv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::lslv_w(self, rd, rn, rm)
+    }
+    fn lslv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::lslv_x(self, rd, rn, rm)
+    }
+    fn lsrv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::lsrv_w(self, rd, rn, rm)
+    }
+    fn lsrv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::lsrv_x(self, rd, rn, rm)
+    }
+    fn asrv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::asrv_w(self, rd, rn, rm)
+    }
+    fn asrv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::asrv_x(self, rd, rn, rm)
+    }
+    fn rorv_w(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::rorv_w(self, rd, rn, rm)
+    }
+    fn rorv_x(&mut self, rd: u8, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::rorv_x(self, rd, rn, rm)
+    }
+    fn rbit_w(&mut self, rd: u8, rn: u8) {
+        Riscv64BaselineMasm::rbit_w(self, rd, rn)
+    }
+    fn rbit_x(&mut self, rd: u8, rn: u8) {
+        Riscv64BaselineMasm::rbit_x(self, rd, rn)
+    }
+    fn clz_w(&mut self, rd: u8, rn: u8) {
+        Riscv64BaselineMasm::clz_w(self, rd, rn)
+    }
+    fn clz_x(&mut self, rd: u8, rn: u8) {
+        Riscv64BaselineMasm::clz_x(self, rd, rn)
+    }
+    fn sxth_w(&mut self, rd: u8, rn: u8) {
+        Riscv64BaselineMasm::sxth_w(self, rd, rn)
+    }
+    fn sxtb_w(&mut self, rd: u8, rn: u8) {
+        Riscv64BaselineMasm::sxtb_w(self, rd, rn)
+    }
+    fn cmp_w(&mut self, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::cmp_w(self, rn, rm)
+    }
+    fn cmp_x(&mut self, rn: u8, rm: u8) {
+        Riscv64BaselineMasm::cmp_x(self, rn, rm)
+    }
+    fn cmp_w_imm(&mut self, rn: u8, imm: u32) -> AsmResult {
+        Riscv64BaselineMasm::cmp_w_imm(self, rn, imm)
+    }
+    fn cmp_w_u32(&mut self, rn: u8, imm: u32) {
+        Riscv64BaselineMasm::cmp_w_u32(self, rn, imm)
+    }
+    fn cset_w(&mut self, rd: u8, cond: Cond) {
+        Riscv64BaselineMasm::cset_w(self, rd, cond)
+    }
+    fn csel_w(&mut self, rd: u8, rn: u8, rm: u8, cond: Cond) {
+        Riscv64BaselineMasm::csel_w(self, rd, rn, rm, cond)
+    }
+    fn fmov_s_from_w(&mut self, vd: u8, rn: u8) {
+        Riscv64BaselineMasm::fmov_s_from_w(self, vd, rn)
+    }
+    fn fmov_w_from_s(&mut self, rd: u8, vn: u8) {
+        Riscv64BaselineMasm::fmov_w_from_s(self, rd, vn)
+    }
+    fn fmov_d_from_x(&mut self, vd: u8, rn: u8) {
+        Riscv64BaselineMasm::fmov_d_from_x(self, vd, rn)
+    }
+    fn fmov_x_from_d(&mut self, rd: u8, vn: u8) {
+        Riscv64BaselineMasm::fmov_x_from_d(self, rd, vn)
+    }
+    fn fcmp_s(&mut self, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fcmp_s(self, vn, vm)
+    }
+    fn fcmp_d(&mut self, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fcmp_d(self, vn, vm)
+    }
+    fn fadd_d(&mut self, vd: u8, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fadd_d(self, vd, vn, vm)
+    }
+    fn fadd_s(&mut self, vd: u8, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fadd_s(self, vd, vn, vm)
+    }
+    fn fsub_d(&mut self, vd: u8, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fsub_d(self, vd, vn, vm)
+    }
+    fn fsub_s(&mut self, vd: u8, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fsub_s(self, vd, vn, vm)
+    }
+    fn fmul_d(&mut self, vd: u8, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fmul_d(self, vd, vn, vm)
+    }
+    fn fmul_s(&mut self, vd: u8, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fmul_s(self, vd, vn, vm)
+    }
+    fn fdiv_d(&mut self, vd: u8, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fdiv_d(self, vd, vn, vm)
+    }
+    fn fdiv_s(&mut self, vd: u8, vn: u8, vm: u8) {
+        Riscv64BaselineMasm::fdiv_s(self, vd, vn, vm)
+    }
+    fn fabs_s(&mut self, vd: u8, vn: u8) {
+        Riscv64BaselineMasm::fabs_s(self, vd, vn)
+    }
+    fn fabs_d(&mut self, vd: u8, vn: u8) {
+        Riscv64BaselineMasm::fabs_d(self, vd, vn)
+    }
+    fn fneg_s(&mut self, vd: u8, vn: u8) {
+        Riscv64BaselineMasm::fneg_s(self, vd, vn)
+    }
+    fn fneg_d(&mut self, vd: u8, vn: u8) {
+        Riscv64BaselineMasm::fneg_d(self, vd, vn)
+    }
+    fn fsqrt_s(&mut self, vd: u8, vn: u8) {
+        Riscv64BaselineMasm::fsqrt_s(self, vd, vn)
+    }
+    fn fsqrt_d(&mut self, vd: u8, vn: u8) {
+        Riscv64BaselineMasm::fsqrt_d(self, vd, vn)
+    }
+    fn frintn_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        Riscv64BaselineMasm::frintn_s(self, vd, vn)
+    }
+    fn frintn_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        Riscv64BaselineMasm::frintn_d(self, vd, vn)
+    }
+    fn frintp_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        Riscv64BaselineMasm::frintp_s(self, vd, vn)
+    }
+    fn frintp_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        Riscv64BaselineMasm::frintp_d(self, vd, vn)
+    }
+    fn frintm_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        Riscv64BaselineMasm::frintm_s(self, vd, vn)
+    }
+    fn frintm_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        Riscv64BaselineMasm::frintm_d(self, vd, vn)
+    }
+    fn frintz_s(&mut self, vd: u8, vn: u8) -> AsmResult {
+        Riscv64BaselineMasm::frintz_s(self, vd, vn)
+    }
+    fn frintz_d(&mut self, vd: u8, vn: u8) -> AsmResult {
+        Riscv64BaselineMasm::frintz_d(self, vd, vn)
+    }
+    fn cvtf_d_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
+        Riscv64BaselineMasm::cvtf_d_from_w(self, vd, rn, signed)
+    }
+    fn cvtf_s_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
+        Riscv64BaselineMasm::cvtf_s_from_w(self, vd, rn, signed)
+    }
+    fn cvtf_d_from_x(&mut self, vd: u8, rn: u8, signed: bool) {
+        Riscv64BaselineMasm::cvtf_d_from_x(self, vd, rn, signed)
+    }
+    fn cvtf_s_from_x(&mut self, vd: u8, rn: u8, signed: bool) {
+        Riscv64BaselineMasm::cvtf_s_from_x(self, vd, rn, signed)
+    }
+    fn fcvt_s_from_d(&mut self, vd: u8, vn: u8) {
+        Riscv64BaselineMasm::fcvt_s_from_d(self, vd, vn)
+    }
+    fn fcvt_d_from_s(&mut self, vd: u8, vn: u8) {
+        Riscv64BaselineMasm::fcvt_d_from_s(self, vd, vn)
+    }
+    fn fcvt_w_from_s(&mut self, rd: u8, vn: u8, signed: bool) {
+        Riscv64BaselineMasm::fcvt_w_from_s(self, rd, vn, signed)
+    }
+    fn fcvt_w_from_d(&mut self, rd: u8, vn: u8, signed: bool) {
+        Riscv64BaselineMasm::fcvt_w_from_d(self, rd, vn, signed)
+    }
+    fn lsl_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
+        Riscv64BaselineMasm::lsl_w_imm(self, rd, rn, shift)
+    }
+    fn lsr_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
+        Riscv64BaselineMasm::lsr_w_imm(self, rd, rn, shift)
+    }
+    fn asr_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
+        Riscv64BaselineMasm::asr_w_imm(self, rd, rn, shift)
+    }
+    fn ubfm_w(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
+        Riscv64BaselineMasm::ubfm_w(self, rd, rn, immr, imms)
+    }
+    fn ubfm_x(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
+        Riscv64BaselineMasm::ubfm_x(self, rd, rn, immr, imms)
+    }
+    fn sbfm_w(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
+        Riscv64BaselineMasm::sbfm_w(self, rd, rn, immr, imms)
+    }
+    fn sbfm_x(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
+        Riscv64BaselineMasm::sbfm_x(self, rd, rn, immr, imms)
+    }
+    fn lsl_x_imm(&mut self, rd: u8, rn: u8, shift: u32) -> AsmResult {
+        Riscv64BaselineMasm::lsl_x_imm(self, rd, rn, shift)
+    }
+    fn lsr_x_imm(&mut self, rd: u8, rn: u8, shift: u32) -> AsmResult {
+        Riscv64BaselineMasm::lsr_x_imm(self, rd, rn, shift)
+    }
+    fn ldr_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        Riscv64BaselineMasm::ldr_x_imm(self, rt, rn, offset)
+    }
+    fn ldr_w_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        Riscv64BaselineMasm::ldr_w_imm(self, rt, rn, offset)
+    }
+    fn ldr_w_unscaled_imm(&mut self, rt: u8, rn: u8, offset: u32) -> AsmResult {
+        Riscv64BaselineMasm::ldr_w_unscaled_imm(self, rt, rn, offset)
+    }
+    fn ldrb_w(&mut self, rt: u8, rn: u8) {
+        Riscv64BaselineMasm::ldrb_w(self, rt, rn)
+    }
+    fn ldrsb_w(&mut self, rt: u8, rn: u8) {
+        Riscv64BaselineMasm::ldrsb_w(self, rt, rn)
+    }
+    fn ldrh_w(&mut self, rt: u8, rn: u8) {
+        Riscv64BaselineMasm::ldrh_w(self, rt, rn)
+    }
+    fn ldrsh_w(&mut self, rt: u8, rn: u8) {
+        Riscv64BaselineMasm::ldrsh_w(self, rt, rn)
+    }
+    fn ldr_w(&mut self, rt: u8, rn: u8) {
+        Riscv64BaselineMasm::ldr_w(self, rt, rn)
+    }
+    fn strb_w(&mut self, rt: u8, rn: u8) {
+        Riscv64BaselineMasm::strb_w(self, rt, rn)
+    }
+    fn strh_w(&mut self, rt: u8, rn: u8) {
+        Riscv64BaselineMasm::strh_w(self, rt, rn)
+    }
+    fn str_w(&mut self, rt: u8, rn: u8) {
+        Riscv64BaselineMasm::str_w(self, rt, rn)
+    }
+    fn str_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        Riscv64BaselineMasm::str_x_imm(self, rt, rn, offset)
+    }
+    fn str_w_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        Riscv64BaselineMasm::str_w_imm(self, rt, rn, offset)
+    }
+    fn str_w_unscaled_imm(&mut self, rt: u8, rn: u8, offset: u32) -> AsmResult {
+        Riscv64BaselineMasm::str_w_unscaled_imm(self, rt, rn, offset)
+    }
+    fn patch_branch(bytes: &mut [u8], at: usize, target: usize, kind: BranchKind) -> AsmResult {
+        patch_branch(bytes, at, target, kind)
+    }
 }
 
 #[cfg(test)]
