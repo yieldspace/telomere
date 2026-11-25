@@ -508,14 +508,21 @@ impl Riscv64BaselineMasm {
     }
 
     pub fn cset_w(&mut self, rd: u8, cond: Cond) {
-        let cmp = self.last_cmp.take().expect("cset follows cmp");
+        let cmp = self.last_cmp.expect("cset follows cmp");
         self.emit_cmp_bool(T0, cmp, cond)
             .expect("comparison operands fit");
         self.store_slot32(rd, T0).expect("virtual register fits");
     }
 
     pub fn csel_w(&mut self, rd: u8, rn: u8, rm: u8, cond: Cond) {
-        let cmp = self.last_cmp.take().expect("csel follows cmp");
+        // The deferred compare is not consumed by materialising it:
+        // it describes the most recent compare until another compare
+        // replaces it, mirroring hardware flags on the other backends.
+        // cset and conditional branches read it the same way, so a
+        // single compare may feed several conditional operations — a
+        // multi-lane select emits one compare followed by one csel
+        // per lane.
+        let cmp = self.last_cmp.expect("csel follows cmp");
         self.emit_cmp_bool(T0, cmp, cond)
             .expect("comparison operands fit");
         self.load_slot32(T1, rn).expect("virtual register fits");
@@ -1417,6 +1424,20 @@ fn encode_fp(funct7: u32, rm: u32, rd: u8, rs1: u8, rs2: u8, _fmt: u32, _unused:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csel_and_cset_reuse_one_compare() {
+        // Regression test for #309: materialising the deferred compare
+        // must not consume it. A multi-lane select emits one compare
+        // followed by one csel per lane; the second csel used to panic
+        // with "csel follows cmp".
+        let mut asm = Riscv64BaselineMasm::with_capacity(256);
+        asm.cmp_w_imm(0, 0).unwrap();
+        asm.csel_w(1, 1, 2, Cond::Ne);
+        asm.csel_w(2, 1, 2, Cond::Ne);
+        asm.cset_w(3, Cond::Ne);
+        assert!(!asm.into_bytes().is_empty());
+    }
 
     #[test]
     fn patches_jal_forward() {
