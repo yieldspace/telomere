@@ -222,6 +222,14 @@ fn handle_module(
     let program = match compile_component_program(&runtime.engine, module) {
         Ok(program) => program,
         Err(error) => {
+            // Fail closed (issue #361): the directive produced no
+            // component, so runtime state from earlier directives must
+            // not stand in for it. Without the reset, later directives
+            // silently execute against the previous component's
+            // instance — in linking/unit.wast, invokes meant for the
+            // component that failed validation at line 799 ran against
+            // the preceding dtor component and appeared to pass.
+            runtime.invalidate_failed_directive(module.name().map(|id| id.name()), definition_only);
             fail_at(
                 path,
                 text,
@@ -755,6 +763,30 @@ impl RuntimeState {
             self.instances.insert(name, instance.clone());
         }
         Ok(instance)
+    }
+
+    /// Fail-closed reset for a `(component ...)` /
+    /// `(component definition ...)` directive whose compilation failed
+    /// (issue #361). The failed directive is the most recent component
+    /// directive in the file, so state left over from earlier directives
+    /// must not stand in for it: the latest-definition pointer is
+    /// dropped, a plain directive also drops the current instance and
+    /// the pending program, and a name carried by the failed directive
+    /// loses its previous binding (definition, plain-name status and
+    /// cached instance), so no later directive can resolve the failed
+    /// component's predecessor under that name either.
+    fn invalidate_failed_directive(&mut self, name: Option<&str>, definition_only: bool) {
+        self.latest = None;
+        if !definition_only {
+            self.current = None;
+            self.pending = None;
+            self.pending_name = None;
+        }
+        if let Some(name) = name {
+            self.definitions.remove(name);
+            self.plain_names.remove(name);
+            self.instances.remove(name);
+        }
     }
 
     /// Returns the current instance, instantiating the pending component

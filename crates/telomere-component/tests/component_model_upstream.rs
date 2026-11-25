@@ -918,3 +918,119 @@ async fn upstream_harness_codex_p2_round3_regressions() {
         "upstream_harness_codex_p2_round3_regressions completed: all cases behaved as expected"
     );
 }
+
+/// Regression coverage for issue #361: when a `(component ...)` directive
+/// fails to compile, the harness must not keep the previous component's
+/// instance (or program) standing in for it. Before the fix, later
+/// directives silently executed against the stale instance — in the
+/// vendored linking/unit.wast, the middleman component fails validation
+/// (issue #321, line 799) yet the `run-1`/`run-2` invokes that follow it
+/// appeared to pass against the preceding dtor component's exports,
+/// which misdirected the #347 investigation toward alias resolution.
+///
+/// Each case runs through `run_component_testsuite_case` and pins the
+/// exact failure/check counts plus a distinctive substring of the
+/// recorded failures, so a case cannot pass by failing for the wrong
+/// reason.
+#[tokio::test]
+async fn upstream_harness_compile_failure_clears_instance() {
+    const VALID: &str = r#"
+(component
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 42)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+"#;
+    const INVALID: &str = r#"
+(component
+  (core module $M
+    (func (result i32) (i64.const 0)))
+  (core instance $m (instantiate $M)))
+"#;
+    // (name, wast, expected failures, expected checked, failure substring)
+    let cases: Vec<(&str, String, usize, usize, &str)> = vec![
+        (
+            // The current instance was already created from the valid
+            // component; after the failed directive, an unnamed invoke
+            // must fail instead of running against that instance.
+            "unnamed-invoke-after-compile-failure",
+            format!(
+                "{VALID}\n(assert_return (invoke \"answer\") (u32.const 42))\n{INVALID}\n(assert_return (invoke \"answer\") (u32.const 42))\n"
+            ),
+            2,
+            2,
+            "no component has been defined yet",
+        ),
+        (
+            // The valid component was never instantiated (still pending);
+            // the failed directive must drop the pending program too.
+            "pending-invoke-after-compile-failure",
+            format!(
+                "{VALID}\n{INVALID}\n(assert_return (invoke \"answer\") (u32.const 42))\n"
+            ),
+            2,
+            1,
+            "no component has been defined yet",
+        ),
+        (
+            // A failed redeclaration must not leave the previous binding
+            // of the same name resolvable.
+            "named-invoke-after-failed-redeclaration",
+            "(component $C\n  (core module $M\n    (func (export \"answer\") (result i32) (i32.const 42)))\n  (core instance $m (instantiate $M))\n  (func (export \"answer\") (result u32) (canon lift (core func $m \"answer\"))))\n(assert_return (invoke $C \"answer\") (u32.const 42))\n(component $C\n  (core module $M\n    (func (result i32) (i64.const 0)))\n  (core instance $m (instantiate $M)))\n(assert_return (invoke $C \"answer\") (u32.const 42))\n".to_string(),
+            2,
+            2,
+            "no instance named",
+        ),
+        (
+            // Implicit instantiation draws on the most recent definition;
+            // after a failed directive there is none, so it must fail
+            // rather than instantiate the failed component's predecessor.
+            "implicit-instance-after-compile-failure",
+            format!("{VALID}\n{INVALID}\n(component instance)\n"),
+            2,
+            1,
+            "no preceding component definition",
+        ),
+        (
+            // Control: the reset must not poison the file — a later valid
+            // component becomes current again and only the failed
+            // directive itself is recorded as a failure.
+            "valid-component-after-failure-recovers",
+            format!(
+                "{VALID}\n{INVALID}\n(component\n  (core module $M\n    (func (export \"answer\") (result i32) (i32.const 7)))\n  (core instance $m (instantiate $M))\n  (func (export \"answer\") (result u32) (canon lift (core func $m \"answer\"))))\n(assert_return (invoke \"answer\") (u32.const 7))\n"
+            ),
+            1,
+            3,
+            "component compile failed",
+        ),
+    ];
+
+    let mut problems = Vec::new();
+    for (name, text, expected_failures, expected_checked, substring) in &cases {
+        let path = PathBuf::from(format!("regressions-361/{name}.wast"));
+        let report = common::component_model::run_component_testsuite_case(&path, text).await;
+        let joined = report.failures.join("\n");
+        if report.failures.len() != *expected_failures
+            || report.directives_checked != *expected_checked
+            || !joined.contains(substring)
+        {
+            problems.push(format!(
+                "{name}: expected failures={expected_failures} checked={expected_checked} \
+                 containing `{substring}`, got failures={} checked={} failures={:?}",
+                report.failures.len(),
+                report.directives_checked,
+                report.failures
+            ));
+        }
+    }
+
+    if !problems.is_empty() {
+        panic!(
+            "upstream_harness_compile_failure_clears_instance failures\n\n{}",
+            problems.join("\n\n")
+        );
+    }
+    println!(
+        "upstream_harness_compile_failure_clears_instance completed: all cases behaved as expected"
+    );
+}
