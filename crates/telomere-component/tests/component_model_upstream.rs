@@ -82,22 +82,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          260, 292, 321, 323)",
     ),
     (
-        "validation/attributes.wast",
-        "the split extern-name encoding used for `implements` \
-         annotations (name prefix 0x02) is not supported by the decoder",
-    ),
-    (
-        "validation/version-suffix.wast",
-        "the split extern-name encoding used for `version-suffix` \
-         annotations (name prefix 0x02) is not supported by the decoder",
-    ),
-    (
-        "validation/extern-names.wast",
-        "malformed extern names are not rejected: the package-name \
-         grammar (expected `/` after package name, trailing characters) \
-         is not validated",
-    ),
-    (
         "binary/binary.wast",
         "malformed binaries are accepted: truncated sections and \
          invalid UTF-8 names decode successfully, and core-layer decode \

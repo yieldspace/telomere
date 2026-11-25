@@ -1,4 +1,4 @@
-use crate::decoder::name::{is_kebab_label, parse_export_name};
+use crate::decoder::name::{is_kebab_label, parse_export_name_dash, validate_name_attributes_sort};
 use crate::decoder::sort::parse_sort_with_idx;
 use crate::decoder::types::validate_annotated_export;
 use crate::decoder::{
@@ -178,11 +178,9 @@ fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResu
 fn name_sort(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<(ExportName, Sort)> {
     let start_count = ctx.reader.read_count();
     trace!("parse name_sort");
-    // FXIME: ここに0x00入れるの古い仕様な気がしている
-    if ctx.reader.read_exact_one()? != 0x00 {
-        return Err(ComponentParseError::EmptyVariant);
-    }
-    let name = parse_export_name(ctx)?;
+    // Inline instance exports use the same extern-name encoding as
+    // top-level exports, including the split form (prefix 0x02).
+    let name = parse_export_name_dash(ctx)?;
     let sort = parse_sort_with_idx(ctx)?;
     Ok((ctx.reader.read_count() - start_count, (name, sort)))
 }
@@ -193,6 +191,8 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
     let mut program = Vec::new();
     for (name, sort) in pairs {
         validate_inline_name(&name)?;
+        validate_name_attributes_sort(matches!(sort, Sort::Instance(_, _)), &name.attributes)
+            .map_err(ComponentParseError::InvalidExportName)?;
         if matches!(
             &name.parsed,
             ParsedExportName::Plain(
