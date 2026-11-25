@@ -95,6 +95,101 @@ impl ComponentEngine {
 
         crate::decoder::parse_component(&mut reader, &mut state, &mut validator)?;
 
+        self.build_program(&state, &mut validator, bytes)
+    }
+
+    /// Decodes `bytes` with a bundle substitution session (#201)
+    /// installed on the parse state, returning the program and the
+    /// consumed session so the caller can key the opened artifacts to
+    /// the program's core module indices.
+    #[cfg(feature = "aot-bundle")]
+    pub(crate) fn compile_with_substitution(
+        &self,
+        bytes: &[u8],
+        substitution: crate::bundle::CoreModuleSubstitution,
+    ) -> Result<(ComponentProgram, crate::bundle::CoreModuleSubstitution), ComponentError> {
+        let mut reader = IoReadBinaryReader::from(bytes);
+        let state_arena = typed_arena::Arena::new();
+        let mut state = ParseState::new(&state_arena);
+        state.set_core_module_substitution(substitution);
+        let validator_arena = typed_arena::Arena::new();
+        let mut validator = Validator::new(&validator_arena);
+
+        crate::decoder::parse_component(&mut reader, &mut state, &mut validator)?;
+
+        let program = self.build_program(&state, &mut validator, bytes)?;
+        let substitution = state
+            .take_core_module_substitution()
+            .expect("substitution session installed above");
+        Ok((program, substitution))
+    }
+
+    /// Loads a component bundle (#201): verifies the bundle
+    /// signature, pre-checks the keyed artifact set against the
+    /// embedded component's core module sections, opens the
+    /// artifacts, and decodes the component with per-section
+    /// `parse_module` calls substituted by the artifacts'
+    /// deserialized modules. See [`crate::bundle`] for the format
+    /// and the fail-closed load order.
+    #[cfg(feature = "aot-bundle")]
+    pub fn compile_bundle(
+        &self,
+        bytes: &[u8],
+        verifier: Option<&dyn telomere::AotVerifier>,
+        policy: telomere::AotLoadPolicy,
+    ) -> Result<crate::bundle::LoadedComponentBundle, crate::bundle::BundleError> {
+        let envelope = crate::bundle::parse_bundle_envelope(bytes)?;
+        crate::bundle::verify_bundle_signature(bytes, &envelope, verifier, policy)?;
+        let opened = crate::bundle::open_bundle_artifacts(&envelope)?;
+        let sections = crate::bundle::enumerate_core_module_sections(envelope.component)?;
+        let substitution = crate::bundle::CoreModuleSubstitution::new(opened);
+        let (program, substitution) =
+            self.compile_with_substitution(envelope.component, substitution)?;
+        let (used, substituted_ordinals) = substitution.into_outcome();
+        let parsed_ordinals = sections
+            .iter()
+            .map(|section| section.ordinal)
+            .filter(|ordinal| !substituted_ordinals.contains(ordinal))
+            .collect();
+        let report = crate::bundle::BundleLoadReport {
+            core_module_sections: sections.len() as u32,
+            substituted_ordinals,
+            parsed_ordinals,
+        };
+        Ok(crate::bundle::LoadedComponentBundle::new(
+            program,
+            crate::bundle::ComponentBundleArtifacts::new(used),
+            report,
+        ))
+    }
+
+    /// Instantiates a component loaded from a bundle (#201) with the
+    /// supplied store and linker. Defined core instances created from
+    /// substituted modules get their bundle artifacts installed into
+    /// the store's JIT cache; the reports accumulate on
+    /// [`crate::bundle::LoadedComponentBundle::artifacts`].
+    #[cfg(feature = "aot-bundle")]
+    pub async fn instantiate_bundle(
+        &self,
+        bundle: &crate::bundle::LoadedComponentBundle,
+        store: &Store,
+        linker: &ComponentLinker,
+    ) -> Result<ComponentInstance, ComponentError> {
+        runtime::instantiate_with_artifacts(
+            bundle.program().clone(),
+            bundle.artifacts(),
+            store,
+            linker,
+        )
+        .await
+    }
+
+    fn build_program(
+        &self,
+        state: &ParseState,
+        validator: &mut Validator,
+        bytes: &[u8],
+    ) -> Result<ComponentProgram, ComponentError> {
         let scope = state.scope();
         let root = scope.make_component();
 

@@ -9,7 +9,27 @@ pub async fn instantiate(
     store: &Store,
     linker: &ComponentLinker,
 ) -> Result<ComponentInstance, ComponentError> {
-    let runtime = instantiate_sync(program.clone(), store, linker)?;
+    let runtime = instantiate_sync(program.clone(), store, linker, SharedState::default())?;
+    Ok(ComponentInstance::new(program, runtime))
+}
+
+/// Bundle instantiation (#201): like [`instantiate`], but the shared
+/// state carries the bundle's opened artifacts, so each defined core
+/// instance created from a substituted module gets its artifact
+/// installed into the store's JIT cache (see
+/// [`crate::bundle::ComponentBundleArtifacts`]).
+#[cfg(feature = "aot-bundle")]
+pub async fn instantiate_with_artifacts(
+    program: ComponentProgram,
+    artifacts: &crate::bundle::ComponentBundleArtifacts,
+    store: &Store,
+    linker: &ComponentLinker,
+) -> Result<ComponentInstance, ComponentError> {
+    let shared = SharedState {
+        aot_artifacts: Some(artifacts.set()),
+        ..SharedState::default()
+    };
+    let runtime = instantiate_sync(program.clone(), store, linker, shared)?;
     Ok(ComponentInstance::new(program, runtime))
 }
 
@@ -17,9 +37,10 @@ fn instantiate_sync(
     program: ComponentProgram,
     store: &Store,
     linker: &ComponentLinker,
+    shared: SharedState,
 ) -> Result<RuntimeInstance, ComponentError> {
     let program = Rc::new(program);
-    let shared = Rc::new(SharedState::default());
+    let shared = Rc::new(shared);
     register_host_resource_drops(&program, linker, &shared);
     let env = Rc::new(RuntimeEnv::new(
         program.clone(),
@@ -425,6 +446,22 @@ impl RuntimeEnv {
         Ok(module)
     }
 
+    /// Installs the bundle artifact keyed to `module_idx` (if any)
+    /// into a freshly created defined core instance (#201). Ordinary
+    /// instantiation carries no artifact set and skips this entirely.
+    #[cfg(feature = "aot-bundle")]
+    fn install_bundle_artifact(
+        &self,
+        store: &Store,
+        module_idx: GlobalIdx<crate::ir::CoreModule>,
+        instance: &InstanceHandle,
+    ) -> Result<(), ComponentError> {
+        if let Some(set) = &self.shared.aot_artifacts {
+            set.install_for(store, module_idx, instance)?;
+        }
+        Ok(())
+    }
+
     fn resolve_core_instance(
         &self,
         idx: GlobalIdx<CoreInstance>,
@@ -447,7 +484,11 @@ impl RuntimeEnv {
                     );
                 }
                 match block_on(crate::support::instantiate(module, store, &registry)) {
-                    CoreVMResult::Success(instance) => instance,
+                    CoreVMResult::Success(instance) => {
+                        #[cfg(feature = "aot-bundle")]
+                        self.install_bundle_artifact(store, *module_idx, &instance)?;
+                        instance
+                    }
                     other => {
                         return Err(vm_result_to_component_error(
                             other,

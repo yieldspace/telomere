@@ -11,6 +11,7 @@ license.workspace = true
 
 [dependencies]
 telomere = { path = "../telomere", default-features = false, features = ["unstable-internals"] }
+sha2 = "0.10.9"
 thiserror = "2.0.11"
 tracing = { version = "0.1.41" }
 num-derive = "0.4.2"
@@ -27,7 +28,6 @@ wat = "1.243.0"
 anyhow = { version = "1.0.98", features = ["backtrace"] }
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
-sha2 = "0.10.9"
 # Enables the feature-gated canonical ABI fuzz adapter for this crate's own
 # tests, so `cargo test --workspace` replays the committed `canon_lift_args`
 # corpus without anyone having to remember `--features fuzzing`. Normal builds
@@ -38,11 +38,21 @@ telomere-component = { path = ".", features = ["fuzzing"] }
 name = "telomere_component_bench"
 harness = false
 
+[[example]]
+name = "component_bundle_load"
+required-features = ["aot-bundle"]
+
 [features]
 default = ["simd", "threads"]
 simd = ["telomere/simd"]
 threads = ["telomere/threads"]
 fuzzing = []
+# Component bundles (#201): hash-keyed AoT artifacts for the core
+# modules embedded in a component, with a signed bundle container and
+# install-at-instantiate. Building artifacts needs the core producer
+# and installing them needs the emit-gated patching backends, so this
+# turns on the core `jit` feature (which includes `aot-load`).
+aot-bundle = ["telomere/jit"]
 component-gated-feature-nested-namespaces-and-packages = []
 component-gated-feature-async = []
 component-gated-feature-threading-builtins = []

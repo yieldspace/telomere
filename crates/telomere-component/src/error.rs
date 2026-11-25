@@ -59,6 +59,8 @@ impl From<ComponentParseError> for ComponentError {
                 let message = value.to_string();
                 match value {
                     Unsupported(_) => Self::Unsupported(message),
+                    #[cfg(feature = "aot-bundle")]
+                    BundleSubstitutionMissing { .. } => Self::Decode(message),
                     InvalidMagic(_, _, _)
                     | WrongMagic(_, _)
                     | InvalidVersion(_)
