@@ -65,17 +65,10 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "resources/borrows.wast",
-        "blocked by resource-handle defects: the guest self-check \
-         traps on handle/rep state at line 158 (issue #317 family), \
-         and dropping an owned resource that is currently borrowed is \
-         not rejected (line 161: the expected trap `cannot remove \
-         owned resource while borrowed` does not happen)",
-    ),
-    (
-        "resources/multiple-resources.wast",
-        "blocked by issue #317: resource handle state is shared \
-         across instances instead of per-instance, so the \
-         self-checking guest traps at line 169",
+        "blocked by issue #334: dropping an owned resource that is \
+         currently borrowed is not rejected (line 161: the expected \
+         trap `cannot remove owned resource while borrowed` does not \
+         happen)",
     ),
     (
         "values/alignment.wast",
@@ -109,25 +102,22 @@ const EXCLUDED: &[(&str, &str)] = &[
         "blocked by several known defects: nested component instances \
          are instantiated lazily in resolution order rather than \
          eagerly in definition order, so core start functions observe \
-         ticket ranks 2, 3, 1 instead of 1, 2, 3 (lines 645-647); \
-         resource handle indices and destructor counts are shared \
-         across instances instead of per-instance (issue #317; lines \
-         724-729, 787-792, 863-866, 930-933, 994-997, 1020-1022); a \
+         ticket ranks 2, 3, 1 instead of 1, 2, 3 (lines 645-647); a \
          valid func import whose surface type is an unnamed generic \
          type is rejected (issue #321; line 799); inline core \
          instances exporting globals are not supported by the runtime \
-         (issue #324; lines 2010, 2043)",
+         (issue #324; lines 2010, 2043); the definer instances' \
+         `count` exports cannot be invoked through the outer \
+         component's aliases (lines 865-866: export not found, a \
+         pre-existing failure unrelated to handle tables)",
     ),
     (
         "resources/handle-table.wast",
-        "blocked by resource-handle defects (issue #317 family): \
-         handle index allocation/reuse order diverges from the spec, \
-         so the self-checking guest traps (lines 48, 105); \
-         additionally canonical handle operations do not validate \
-         indices, so unknown, already-dropped, zero, and wrong-type \
-         handles reach the guest or silently succeed instead of \
-         trapping `unknown handle index` (lines 200-212, 260, 292, \
-         321, 323)",
+        "blocked by issue #335: canonical handle operations do not \
+         validate indices, so unknown, already-dropped, zero, and \
+         wrong-type handles reach the guest or silently succeed \
+         instead of trapping `unknown handle index` (lines 200-212, \
+         260, 292, 321, 323)",
     ),
     (
         "validation/attributes.wast",

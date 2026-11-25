@@ -444,6 +444,7 @@ impl RuntimeEnv {
                     func_type,
                     options: Box::new(options),
                     program: self.program.clone(),
+                    handles: self.handles.clone(),
                 })
             }
             Some(Relation::Import(name)) => self.lookup_import_func(name)?,
@@ -714,6 +715,7 @@ impl RuntimeEnv {
                     program: self.program.clone(),
                     signature: signature.clone(),
                     shared: self.shared.clone(),
+                    handles: self.handles.clone(),
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceNew { type_id })) => {
