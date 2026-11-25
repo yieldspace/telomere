@@ -111,9 +111,7 @@ const EXCLUDED: &[(&str, &str)] = &[
     (
         "validation/indicies.wast",
         "uses async/threads canonical operations (waitable-set, \
-         thread.new-indirect, future), which are documented non-goals, \
-         and a valid core-module import/alias shape is rejected with \
-         `type idx not found` (line 340)",
+         thread.new-indirect, future), which are documented non-goals",
     ),
 ];
 
