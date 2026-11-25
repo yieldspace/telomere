@@ -2,7 +2,7 @@ use super::canonical::{
     component_value_to_direct_wasm, direct_wasm_to_component_value, lift_component_args,
     lift_component_results, lower_component_args, lower_component_results,
     lowered_indirect_result_area, retire_lent_handles, track_host_owned_results, transfer_handles,
-    HandleTransfer,
+    validate_lifted_handle_results, validate_lowered_borrow_args, HandleTransfer,
 };
 use super::*;
 
@@ -37,12 +37,14 @@ impl ResolvedCallable {
                 func_type,
                 options,
                 program,
-                ..
+                shared,
+                handles,
             } => {
                 let core_args = lower_component_args(func_type, args, options, program, store)?;
                 let core_results = core.call_sync(store, &core_args)?;
                 let lifted =
                     lift_component_results(func_type, &core_results, options, program, store)?;
+                validate_lifted_handle_results(func_type, &lifted, program, shared, handles)?;
                 if let Some(post_return) = &options.post_return {
                     post_return.call_sync(store, &core_results)?;
                 }
@@ -97,6 +99,10 @@ impl HostBinding {
                 let result_area = lowered_indirect_result_area(func_type, args, program)?;
                 let mut component_args =
                     lift_component_args(func_type, args, options, program, store)?;
+                // The caller's own borrow arguments are validated against
+                // the caller's table before any transfer rewrites the
+                // indices into the callee's table (#335).
+                validate_lowered_borrow_args(func_type, &component_args, program, shared, handles)?;
                 // When the callee is another component instance's lifted
                 // function, the call crosses a handle-table boundary:
                 // handles in the argument values are indices into this
@@ -227,13 +233,25 @@ impl HostBinding {
                         Ok(Vec::new())
                     }
                     Err(error) => {
-                        // Not a locally created resource. If this is a
-                        // tracked host-provided handle with a registered
-                        // destructor, release it through the host; a double
-                        // drop or a handle that was never issued is not
-                        // tracked and traps with the same error as a local
-                        // one.
-                        if shared.drop_host_resource(store, *resource, handle)? {
+                        // The local drop released nothing. When this
+                        // table holds the index for the declared resource
+                        // itself, the failure is about that local entry
+                        // (for example an owned resource that is still
+                        // borrowed) and `drop_resource`'s trap stands.
+                        // Otherwise the index may name a host-provided
+                        // handle colliding with an unrelated local entry
+                        // — the local and host allocators both start at
+                        // 1 — so try the host-provided path: if this is
+                        // a tracked host handle with a registered
+                        // destructor, release it through the host. A
+                        // double drop or a handle that was never issued
+                        // is not tracked and traps with the same error as
+                        // a local one.
+                        let names_local_entry =
+                            handles.borrow().resource_of(handle) == Some(*resource);
+                        if !names_local_entry
+                            && shared.drop_host_resource(store, *resource, handle)?
+                        {
                             Ok(Vec::new())
                         } else {
                             Err(error)
@@ -306,6 +324,35 @@ impl HandleTable {
         handle
     }
 
+    /// The resource identity the entry for `handle` was keyed under,
+    /// or `None` when this table holds no such handle.
+    pub(super) fn resource_of(&self, handle: u32) -> Option<ResourceId> {
+        self.entries.get(&handle).map(|entry| entry.resource)
+    }
+
+    /// Validates a handle index against this table with the canonical
+    /// ABI's trap texts (#335): an index the table does not hold (never
+    /// allocated, already dropped, zero, or out of range) traps
+    /// `unknown handle index N`, and an index held for a different
+    /// resource type traps the canonical wrong-type text. Table entries
+    /// are all created by a component's `resource.new`, so the found
+    /// side of the wrong-type text is always a guest-defined resource.
+    pub(super) fn validate_handle(
+        &self,
+        resource: ResourceId,
+        handle: u32,
+    ) -> Result<(), ComponentError> {
+        match self.entries.get(&handle) {
+            Some(entry) if entry.resource == resource => Ok(()),
+            Some(_) => Err(ComponentError::Trap(format!(
+                "handle index {handle} used with the wrong type, expected \
+                 guest-defined resource but found a different guest-defined resource"
+            ))),
+            None => Err(ComponentError::Trap(format!(
+                "unknown handle index {handle}"
+            ))),
+        }
+    }
     /// Removes the entry for `handle`, freeing its index for LIFO
     /// reuse, and returns its record; `None` when this instance's table
     /// holds no such handle. Ownership transfers at a call boundary use
@@ -341,12 +388,11 @@ impl HandleTable {
         resource: ResourceId,
         handle: u32,
     ) -> Result<(i32, Option<RuntimeCoreFunc>), ComponentError> {
-        let invalid = || ComponentError::Trap(format!("resource handle {handle} is invalid"));
-        match self.entries.get(&handle) {
-            Some(entry) if entry.resource == resource => {}
-            _ => return Err(invalid()),
-        }
-        let entry = self.entries.remove(&handle).ok_or_else(invalid)?;
+        self.validate_handle(resource, handle)?;
+        let entry = self
+            .entries
+            .remove(&handle)
+            .expect("handle validated against this table above");
         self.free_list.push(handle);
         // A borrowed entry only registers another instance's resource
         // for the duration of a call: dropping it removes the
@@ -360,11 +406,8 @@ impl HandleTable {
     }
 
     fn resource_rep(&self, resource: ResourceId, handle: u32) -> Result<i32, ComponentError> {
-        self.entries
-            .get(&handle)
-            .filter(|entry| entry.resource == resource)
-            .map(|entry| entry.record.rep)
-            .ok_or_else(|| ComponentError::Trap(format!("resource handle {handle} is invalid")))
+        self.validate_handle(resource, handle)?;
+        Ok(self.entries[&handle].record.rep)
     }
 }
 
@@ -389,6 +432,45 @@ impl SharedState {
 
     fn host_resource_drop(&self, resource: ResourceId) -> Option<ResourceDropFn> {
         self.host_resource_drops.borrow().get(&resource).cloned()
+    }
+
+    /// Whether `handle` is a live host-provided handle under any tracked
+    /// resource type. The declared type a handle was tracked under is not
+    /// necessarily the identity a later canon op names (see
+    /// `track_host_resource_handle`), so this lookup is by index alone.
+    pub(super) fn tracks_host_resource(&self, handle: u32) -> bool {
+        self.host_resources
+            .borrow()
+            .values()
+            .any(|handles| handles.contains(&handle))
+    }
+
+    /// Records a handle the embedder lent to guest code as an argument
+    /// of a public call. Registrations are counted: nested public
+    /// calls may lend the same index, and each registration is
+    /// released when its call returns.
+    pub(super) fn track_host_borrow(&self, handle: u32) {
+        *self.host_borrows.borrow_mut().entry(handle).or_default() += 1;
+    }
+
+    /// Releases one registration made by
+    /// [`SharedState::track_host_borrow`].
+    pub(super) fn release_host_borrow(&self, handle: u32) {
+        let mut borrows = self.host_borrows.borrow_mut();
+        if let Some(count) = borrows.get_mut(&handle) {
+            *count -= 1;
+            if *count == 0 {
+                borrows.remove(&handle);
+            }
+        }
+    }
+
+    /// Whether `handle` is a live host-provided handle in either
+    /// namespace: owned by the guest (entered through a lowered call
+    /// or as an `own` argument of a public call), or lent for the
+    /// duration of a public call as a `borrow` argument.
+    pub(super) fn tracks_host_handle(&self, handle: u32) -> bool {
+        self.tracks_host_resource(handle) || self.host_borrows.borrow().contains_key(&handle)
     }
 
     /// Removes a live host-provided handle, returning whether it was live.
