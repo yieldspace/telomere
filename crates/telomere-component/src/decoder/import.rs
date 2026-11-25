@@ -1,4 +1,4 @@
-use crate::decoder::name::parse_import_name_dash;
+use crate::decoder::name::{parse_import_name_dash, validate_name_attributes_sort};
 use crate::decoder::types::parse_externdesc;
 use crate::decoder::types::validate_annotated_import;
 use crate::decoder::{ParseContext, ParseResult};
@@ -25,6 +25,8 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
     }
     focus.import_names.push(name.clone());
     let desc = parse_externdesc(ctx)?;
+    validate_name_attributes_sort(matches!(desc, ExternDesc::Instance(_)), &name.attributes)
+        .map_err(ComponentParseError::InvalidImportName)?;
     validate_annotated_import(ctx, &name, &desc)?;
     if matches!(desc, ExternDesc::Instance(_)) {
         ensure_concrete_surface_name(&name)?;

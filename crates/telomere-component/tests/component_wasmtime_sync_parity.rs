@@ -629,19 +629,37 @@ async fn component_fixed_length_lists_roundtrip_and_reject_wrong_length() {
 }
 
 #[test]
-fn component_nested_names_match_wasmtime_supported_import_forms() {
+fn component_nested_names_follow_the_extern_name_grammar() {
     let engine = ComponentEngine::new();
+    // Dependency names have their own grammar, which does admit
+    // nested package paths.
     let ok = compile_component(
         r#"
 (component
-  (import "a:b:c:d/e" (func))
-  (import "a:b-c:d-e:f-g/h-i/j-k/l-m/n/o/p@1.0.0" (func))
   (import "unlocked-dep=<a:b:c:d/e/f/g@{>=1.2.3 <2.0.0}>" (func))
   (import "locked-dep=<a:b:c:d/e/f/g@1.2.3>,integrity=<sha256-a>" (func))
 )
 "#,
     );
-    engine.compile(&ok).expect("nested names should compile");
+    engine
+        .compile(&ok)
+        .expect("nested dependency names should compile");
+
+    // Nested interface names are gated future syntax (the
+    // nested-namespaces-and-packages proposal); the extern-name
+    // grammar admits exactly one namespace segment and one package
+    // segment, so these are rejected (issue #318, upstream
+    // validation/extern-names.wast).
+    for name in ["a:b:c:d/e", "a:b-c:d-e:f-g/h-i/j-k/l-m/n/o/p@1.0.0"] {
+        let bad = compile_component(&format!("(component (import \"{name}\" (func)))"));
+        let error = engine
+            .compile(&bad)
+            .expect_err("nested interface name should fail");
+        assert!(
+            matches!(&error, ComponentError::Validation(message) if message.contains("expected `/` after package name")),
+            "expected the package-name error for {name}, got {error}"
+        );
+    }
 
     let bad = compile_component(
         r#"
