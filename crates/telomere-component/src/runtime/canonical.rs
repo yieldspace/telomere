@@ -978,10 +978,9 @@ fn lift_primitive(
         PrimValType::U64 => ComponentValue::U64(cursor.next_i64()? as u64),
         PrimValType::F32 => ComponentValue::F32(cursor.next_f32()?),
         PrimValType::F64 => ComponentValue::F64(cursor.next_f64()?),
-        PrimValType::Char => ComponentValue::Char(
-            char::from_u32(cursor.next_i32()? as u32)
-                .ok_or_else(|| ComponentError::Trap("invalid char scalar".to_owned()))?,
-        ),
+        PrimValType::Char => {
+            ComponentValue::Char(char_from_canonical_bits(cursor.next_i32()? as u32)?)
+        }
         PrimValType::String => {
             let memory = options.memory.as_ref().ok_or_else(|| {
                 ComponentError::Runtime("canonical option `memory` is required".to_owned())
@@ -1596,10 +1595,9 @@ fn read_primitive_from_memory(
         PrimValType::F64 => ComponentValue::F64(f64::from_le_bytes(read_memory_array::<8>(
             store, memory, ptr,
         )?)),
-        PrimValType::Char => ComponentValue::Char(
-            char::from_u32(read_i32_from_memory(store, memory, ptr)? as u32)
-                .ok_or_else(|| ComponentError::Trap("invalid char scalar".to_owned()))?,
-        ),
+        PrimValType::Char => ComponentValue::Char(char_from_canonical_bits(read_i32_from_memory(
+            store, memory, ptr,
+        )? as u32)?),
         PrimValType::String => {
             let string_ptr = read_i32_from_memory(store, memory, ptr)? as u32;
             let len = read_i32_from_memory(store, memory, ptr + 4)? as u32;
@@ -2966,6 +2964,16 @@ fn expect_f64(value: &ComponentValue) -> Result<f64, ComponentError> {
         ComponentValue::F64(v) => Ok(*v),
         _ => Err(ComponentError::InvalidArgument("expected f64".to_owned())),
     }
+}
+
+/// Converts a raw canonical-ABI bit pattern to a `char`, trapping with
+/// the canonical message when the pattern is not a Unicode scalar value
+/// (a surrogate, or above U+10FFFF). Every core-to-component `char`
+/// conversion funnels through here: the flat lift path and the memory
+/// read path.
+fn char_from_canonical_bits(bits: u32) -> Result<char, ComponentError> {
+    char::from_u32(bits)
+        .ok_or_else(|| ComponentError::Trap("invalid `char` bit pattern".to_owned()))
 }
 
 fn expect_char(value: &ComponentValue) -> Result<char, ComponentError> {
