@@ -1,21 +1,21 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #357 (branch fix/320-resource-validation at head b875a3196ba36583d4fd4e49b80fcf3891d75119 \u2014 the Codex P2 fix on top of the #320 change: a sub-ascribed type export now registers its fresh face identity in the type index space and in the export info, so a later (type $face) reference to the export denotes the face rather than the underlying resource; the tree also contains the #320 change merged with current main b20ed79513bbb12f6e4447158fd4028808ac129b (PR #353); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45606680284, 45606698309 and 45606714950 against the branch and pull-request run 45605539246, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "b875a3196ba36583d4fd4e49b80fcf3891d75119",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #357 (branch fix/320-resource-validation at head 8a0e41d3639ccce08d2e352dc7cb9e2a1fd83cd4 \u2014 the Codex P2 round-2 fix on top of the Codex P2 fix and the #320 change: the export (sub resource) ascription check accepts abstract resource faces (a sub resource-bounded generic, possibly behind an eq alias), so a named sub-ascribed export can itself be re-exported with a further (sub resource) ascription; the tree also contains the #320 change merged with current main b20ed79513bbb12f6e4447158fd4028808ac129b (PR #353); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45613949341, 45613966977 and 45613982565 against the branch and pull-request run 45612656036, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "8a0e41d3639ccce08d2e352dc7cb9e2a1fd83cd4",
     "date": "2026-11-25",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45606680284,
-      45606698309,
-      45606714950
+      45613949341,
+      45613966977,
+      45613982565
     ],
     "cross_check_run_ids": [
-      45605539246
+      45612656036
     ],
-    "derivation": "Re-baseline for PR #357 (Codex P2 fix: register the fresh resource identity of a sub-ascribed type export in the type index and export info). The fix commit b875a31 sits on top of the tree re-baselined for #320 in c719506; its CI run tripped the gate on six series. Attribution was isolated two ways. Against the previous branch head\u2019s measurements (workflow_dispatch runs 45598730533, 45598745727 and 45598759671 on head daf55480a32bd26e89c499644a2044cbc425cd64, the tree the checked-in baseline was taken from), the delta is confined to the six release-size series of the three configurations that link telomere-component: stripped file and stripped .text +48 B in each of component, wasi and wasi-threads; every other series is byte-identical. Against unmodified main (workflow_dispatch runs 45598772332, 45598789232 and 45598803018 on main at b20ed79513bbb12f6e4447158fd4028808ac129b, unchanged since those runs), the delta remains the twelve series recorded for #320, with the release-size component-linking series a further +48 B. All six series exceed the checked-in baseline, so those six are re-baselined to the branch measurements. Run-to-run spread was 0 B for every gated series across the four branch samples. Against the original #164 baseline, the largest cumulative growth is unchanged: the release component stripped file series at +11.14% (2,433,656 B to 2,704,688 B); the release core-nosimd stripped file series is unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
+    "derivation": "Re-baseline for PR #357 (Codex P2 round-2 fix: accept abstract resource faces in the export (sub resource) ascription check). The fix commit 8a0e41d sits on top of the tree re-baselined for the Codex P2 fix in 0c16fdc; its CI run tripped the gate on twelve series. Attribution was isolated two ways. Against the previous branch head\u2019s checked-in baseline (the tree of 0c16fdc), the delta is confined to the stripped file and stripped .text of the three configurations that link telomere-component, in both profiles: in release, stripped file +600 B (component), +616 B (wasi) and +600 B (wasi-threads) and stripped .text +496 B in each; in release-size, stripped file +496 B / +512 B / +512 B and stripped .text +416 B / +432 B / +432 B; every other series is byte-identical. Against unmodified main (workflow_dispatch runs 45598772332, 45598789232 and 45598803018 on main at b20ed79513bbb12f6e4447158fd4028808ac129b, unchanged since those runs), the delta remains confined to the component-linking configurations recorded for #320 and the two Codex fixes. All twelve series exceed the checked-in baseline, so those twelve are re-baselined to the branch measurements. Run-to-run spread was 0 B for every gated series across the four branch samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.16% (2,433,656 B to 2,705,288 B); the release core-nosimd stripped file series is unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -41,22 +41,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2704688,
-          "threshold": 2704688
+          "baseline": 2705288,
+          "threshold": 2705288
         },
         "stripped_text_bytes": {
-          "baseline": 2145927,
-          "threshold": 2145927
+          "baseline": 2146423,
+          "threshold": 2146423
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2932168,
-          "threshold": 2932168
+          "baseline": 2932784,
+          "threshold": 2932784
         },
         "stripped_text_bytes": {
-          "baseline": 2320295,
-          "threshold": 2320295
+          "baseline": 2320791,
+          "threshold": 2320791
         }
       },
       "core-nosimd": {
@@ -91,12 +91,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3147872,
-          "threshold": 3147872
+          "baseline": 3148472,
+          "threshold": 3148472
         },
         "stripped_text_bytes": {
-          "baseline": 2487607,
-          "threshold": 2487607
+          "baseline": 2488103,
+          "threshold": 2488103
         }
       }
     },
@@ -123,22 +123,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1694600,
-          "threshold": 1694600
+          "baseline": 1695096,
+          "threshold": 1695096
         },
         "stripped_text_bytes": {
-          "baseline": 1252119,
-          "threshold": 1252119
+          "baseline": 1252535,
+          "threshold": 1252535
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1815832,
-          "threshold": 1815832
+          "baseline": 1816344,
+          "threshold": 1816344
         },
         "stripped_text_bytes": {
-          "baseline": 1333895,
-          "threshold": 1333895
+          "baseline": 1334327,
+          "threshold": 1334327
         }
       },
       "core-nosimd": {
@@ -173,12 +173,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1958552,
-          "threshold": 1958552
+          "baseline": 1959064,
+          "threshold": 1959064
         },
         "stripped_text_bytes": {
-          "baseline": 1428599,
-          "threshold": 1428599
+          "baseline": 1429031,
+          "threshold": 1429031
         }
       }
     }
