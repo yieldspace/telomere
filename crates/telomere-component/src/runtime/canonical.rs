@@ -385,6 +385,14 @@ pub(super) struct HandleTransfer<'a> {
     pub(super) src: &'a RefCell<HandleTable>,
     pub(super) dst: &'a RefCell<HandleTable>,
     pub(super) lent: Option<&'a mut Vec<u32>>,
+    /// When `Some` (the argument direction), receives the destination
+    /// resource identity and the resource identity (`ResourceRecord::id`)
+    /// of every borrow the walk carries across, so the caller can
+    /// register each borrow against the very owned entry it belongs
+    /// to in the destination table (#334). The rewritten borrow value
+    /// alone — a rep or a registration index — cannot identify that
+    /// entry: reps are guest-chosen and may collide across resources.
+    pub(super) borrowed: Option<&'a mut Vec<(ResourceId, u64)>>,
     /// Whether borrowed values coming from the source were produced by
     /// lifting in the source component, in which case a borrow of a
     /// resource the source defines already holds the resource's rep
@@ -571,13 +579,24 @@ impl HandleTransfer<'_> {
         };
         // Resolve the borrowed resource's record. A value the source
         // produced by lifting, for a resource the source defines,
-        // already holds the rep; every other value is a handle in the
-        // source table. A handle the source table does not hold is a
+        // already holds the rep; the record (and with it the resource
+        // identity) is recovered from the source table by that rep,
+        // falling back to a bare record when the source table holds no
+        // such entry. Every other value is a handle in the source
+        // table. A handle the source table does not hold is a
         // host-provided resource and passes through unchanged.
         let record = if self.src_reps && resource_is_local_definition(src_resource) {
-            ResourceRecord {
-                rep: *handle as i32,
-                destructor: None,
+            match self
+                .src
+                .borrow()
+                .record_by_rep(src_resource, *handle as i32)
+            {
+                Some(record) => record,
+                None => ResourceRecord {
+                    id: next_resource_id(),
+                    rep: *handle as i32,
+                    destructor: None,
+                },
             }
         } else {
             let Some(record) = self.src.borrow().record_of(*handle) else {
@@ -585,6 +604,12 @@ impl HandleTransfer<'_> {
             };
             record
         };
+        // Report the borrowed resource's identity so the caller can
+        // register the borrow against the owned entry it belongs to
+        // in the destination table (#334).
+        if let Some(borrowed) = &mut self.borrowed {
+            borrowed.push((dst_resource, record.id));
+        }
         // The component defining the resource receives the rep itself;
         // any other destination gets a borrowed entry in its own table.
         if resource_is_local_definition(dst_resource) {

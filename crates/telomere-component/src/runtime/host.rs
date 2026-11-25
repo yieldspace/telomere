@@ -1,8 +1,8 @@
 use super::canonical::{
     collect_borrowed_handles, component_value_to_direct_wasm, direct_wasm_to_component_value,
     lift_component_args, lift_component_results, lower_component_args, lower_component_results,
-    lowered_indirect_result_area, resource_is_local_definition, retire_lent_handles,
-    track_host_owned_results, transfer_handles, HandleTransfer,
+    lowered_indirect_result_area, retire_lent_handles, track_host_owned_results, transfer_handles,
+    HandleTransfer,
 };
 use super::*;
 
@@ -177,6 +177,10 @@ impl HostBinding {
                     _ => None,
                 };
                 let mut lent: Vec<u32> = Vec::new();
+                // The resource identity of every borrow this call
+                // lends to the callee, as reported by the argument
+                // transfer (#334).
+                let mut borrowed: Vec<(ResourceId, u64)> = Vec::new();
                 // Borrows this call lends to the callee, registered
                 // against the callee's table for the call's duration
                 // and released when it returns (#334).
@@ -188,6 +192,7 @@ impl HostBinding {
                         src: handles,
                         dst: callee_handles,
                         lent: Some(&mut lent),
+                        borrowed: Some(&mut borrowed),
                         src_reps: false,
                     };
                     if let Err(error) = transfer_handles(
@@ -200,27 +205,22 @@ impl HostBinding {
                         return Err(error);
                     }
                     // Register the borrows lent to the callee against
-                    // its table. The transfer has just rewritten every
-                    // borrow argument, and its provenance decides how
-                    // the value resolves: a borrow of a resource the
-                    // callee defines crossed as the rep and resolves
-                    // by rep only — the same integer may also be an
-                    // unrelated live handle index in the callee's
-                    // table — while any other borrow crossed as a
-                    // borrowed registration in the callee's table and
-                    // resolves through that registration.
+                    // its table. The transfer rewrote every borrow
+                    // argument — into the rep, when the callee defines
+                    // the resource, or into a borrowed registration in
+                    // the callee's table — and reported each borrowed
+                    // resource's identity as it did. Resolving by that
+                    // identity registers the borrow against exactly
+                    // the owned entry it belongs to (which crossed in
+                    // this same call or was already in the callee's
+                    // table); neither the rep nor the rewritten value
+                    // could do that, since a rep may collide with an
+                    // unrelated resource's rep or handle index.
                     {
                         let mut table = callee_handles.borrow_mut();
-                        for (resource, handle) in
-                            collect_borrowed_handles(callee_type, &component_args, program, shared)
-                        {
-                            let entry = if resource_is_local_definition(resource) {
-                                table.note_borrow_rep(resource, handle as i32)
-                            } else {
-                                table.note_borrow(resource, handle)
-                            };
-                            if let Some(entry) = entry {
-                                registered.push((resource, entry));
+                        for (resource, id) in &borrowed {
+                            if let Some(entry) = table.note_borrow_id(*resource, *id) {
+                                registered.push((*resource, entry));
                             }
                         }
                     }
@@ -256,6 +256,7 @@ impl HostBinding {
                                 src: callee_handles,
                                 dst: handles,
                                 lent: None,
+                                borrowed: None,
                                 src_reps: true,
                             };
                             if let Err(error) = transfer_handles(
@@ -381,7 +382,15 @@ impl HandleTable {
         rep: i32,
         destructor: Option<RuntimeCoreFunc>,
     ) -> u32 {
-        self.insert_entry(resource, ResourceRecord { rep, destructor }, false)
+        self.insert_entry(
+            resource,
+            ResourceRecord {
+                id: next_resource_id(),
+                rep,
+                destructor,
+            },
+            false,
+        )
     }
 
     /// Inserts an entry under a fresh or LIFO-reused index and returns
@@ -442,6 +451,21 @@ impl HandleTable {
         self.entries.get(&handle).map(|entry| entry.record.clone())
     }
 
+    /// Returns a copy of the record of a live owned entry holding
+    /// `rep`, if any. Reps are guest-chosen and may collide between
+    /// distinct resources, so this is only a fallback for recovering a
+    /// record (identity included) where a boundary crossing carried
+    /// nothing but the rep; borrow bookkeeping never resolves by rep.
+    pub(super) fn record_by_rep(&self, resource: ResourceId, rep: i32) -> Option<ResourceRecord> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry.resource == resource && !entry.borrowed && entry.record.rep == rep
+            })
+            .min_by_key(|(index, _)| *index)
+            .map(|(_, entry)| entry.record.clone())
+    }
+
     /// Removes the entry for `handle` if present, freeing its index.
     /// Used to retire borrow entries registered for a single call
     /// (#342); a borrow the callee already dropped is simply absent.
@@ -493,52 +517,50 @@ impl HandleTable {
     /// index of the owned entry it was registered against, if any.
     ///
     /// The `handle` a borrow argument carries names the borrowed
-    /// resource in one of three ways, depending on how the value
-    /// reached this instance: directly, when it is an index of an
-    /// owned entry in this table (the same-instance path); through a
-    /// borrowed registration (#342), when a call boundary lent the
-    /// resource into this table and the argument names that
-    /// registration, whose record carries the rep; or as the rep
-    /// itself, when the borrowed resource is defined by this instance
-    /// and a boundary crossing passed the rep in place of a handle.
-    /// In the latter two shapes the borrow is registered against the
-    /// live owned entry holding that rep, since that is the entry a
-    /// `resource.drop` during the call would remove. A borrow that
-    /// resolves to no owned entry in this table belongs to another
-    /// instance's table (or to the host) and is not registered here;
-    /// it cannot be dropped through this table either.
+    /// resource in one of two ways, depending on how the value reached
+    /// this instance: directly, when it is an index of an owned entry
+    /// in this table (the same-instance path); or through a borrowed
+    /// registration (#342), when a call boundary lent the resource
+    /// into this table and the argument names that registration. In
+    /// the registration shape the borrow is registered against the
+    /// owned entry carrying the same resource identity as the
+    /// registration's record, since that is the entry a
+    /// `resource.drop` during the call would remove. Resolving by
+    /// identity rather than by rep matters: two distinct resources
+    /// may share one rep, and an unrelated entry must neither gain
+    /// protection it does not have nor lend it to another. A borrow
+    /// that resolves to no owned entry in this table belongs to
+    /// another instance's table (or to the host) and is not registered
+    /// here; it cannot be dropped through this table either.
     fn note_borrow(&mut self, resource: ResourceId, handle: u32) -> Option<u32> {
-        let rep = match self.entries.get(&handle) {
+        match self.entries.get(&handle) {
             Some(entry) if entry.resource == resource && !entry.borrowed => {
                 let entry = self.entries.get_mut(&handle)?;
                 entry.borrows = entry.borrows.saturating_add(1);
-                return Some(handle);
+                Some(handle)
             }
-            Some(entry) if entry.resource == resource => entry.record.rep,
-            Some(_) => return None,
-            None => handle as i32,
-        };
-        self.note_borrow_on_rep(resource, rep)
+            Some(entry) if entry.resource == resource => {
+                let id = entry.record.id;
+                self.note_borrow_id(resource, id)
+            }
+            _ => None,
+        }
     }
 
-    /// Registers one borrow that crossed a call boundary into the
-    /// instance defining its resource, where the argument carries the
-    /// rep rather than a handle index (#342). The borrow registers
-    /// against the owned entry holding that rep; the integer is never
-    /// interpreted as a handle index, since the same value may also be
-    /// a live index of an unrelated entry in this table.
-    fn note_borrow_rep(&mut self, resource: ResourceId, rep: i32) -> Option<u32> {
-        self.note_borrow_on_rep(resource, rep)
-    }
-
-    /// Registers one borrow against the live owned entry holding
-    /// `rep` and returns that entry's index, if such an entry exists.
-    fn note_borrow_on_rep(&mut self, resource: ResourceId, rep: i32) -> Option<u32> {
+    /// Registers one borrow against the live owned entry carrying
+    /// resource identity `id` and returns that entry's index, if such
+    /// an entry exists. Call-boundary transfers report the identity of
+    /// every borrow they carry (#342), so a borrow lent into the
+    /// instance that holds the corresponding own — whether the own
+    /// crossed in the same call or was already there — is registered
+    /// against exactly that entry, regardless of any rep collisions
+    /// with unrelated entries.
+    fn note_borrow_id(&mut self, resource: ResourceId, id: u64) -> Option<u32> {
         let target = self
             .entries
             .iter()
             .filter(|(_, entry)| {
-                entry.resource == resource && !entry.borrowed && entry.record.rep == rep
+                entry.resource == resource && !entry.borrowed && entry.record.id == id
             })
             .map(|(index, _)| *index)
             .min()?;
@@ -990,28 +1012,29 @@ mod tests {
     }
 
     #[test]
-    fn borrow_reaching_the_defining_instance_registers_by_rep_not_by_index() {
-        // The rep a boundary-crossed borrow carries may equal the
-        // index of an unrelated owned entry in the defining table:
-        // registration by rep must protect the entry holding the rep
-        // and leave the entry at that index alone.
+    fn borrow_registration_resolves_by_identity_not_by_rep() {
+        // Two distinct resources may share one rep: registration by
+        // the borrowed resource's identity must protect exactly its
+        // own entry and leave the same-rep entry alone (a rep-based
+        // lookup cannot tell the two apart at all).
         let resource = ResourceId::synthetic();
         let mut table = HandleTable::default();
-        let decoy = table.alloc_resource(resource, 100, None);
-        let lent = table.alloc_resource(resource, 1, None);
+        let decoy = table.alloc_resource(resource, 7, None);
+        let lent = table.alloc_resource(resource, 7, None);
         assert_eq!((decoy, lent), (1, 2));
-        assert_eq!(table.note_borrow_rep(resource, 1), Some(lent));
+        let lent_id = table.record_of(lent).expect("lent entry exists").id;
+        assert_eq!(table.note_borrow_id(resource, lent_id), Some(lent));
         // The borrowed entry cannot be dropped while borrowed...
         assert!(table.drop_resource(resource, lent).is_err());
-        // ...while the unrelated entry at index 1 drops fine.
+        // ...while the unrelated same-rep entry drops fine.
         let (rep, _) = table
             .drop_resource(resource, decoy)
-            .expect("the decoy entry at the rep's index is not borrowed");
-        assert_eq!(rep, 100);
+            .expect("the same-rep decoy entry is not borrowed");
+        assert_eq!(rep, 7);
         table.release_borrow(resource, lent);
         assert!(table.drop_resource(resource, lent).is_ok());
-        // A rep no live entry holds registers nothing.
-        assert_eq!(table.note_borrow_rep(resource, 555), None);
+        // An identity no live entry carries registers nothing.
+        assert_eq!(table.note_borrow_id(resource, u64::MAX), None);
     }
 
     #[test]

@@ -154,8 +154,24 @@ struct SharedState {
 
 #[derive(Clone)]
 struct ResourceRecord {
+    /// Identity of the resource this record belongs to, minted when
+    /// the resource is created and carried with the record as it moves
+    /// between handle tables (ownership transfers) or is copied into
+    /// borrow registrations. A rep is guest-chosen data and two
+    /// distinct resources may share one, so borrow bookkeeping
+    /// resolves the lent resource by this identity, never by rep
+    /// (#334).
+    id: u64,
     rep: i32,
     destructor: Option<RuntimeCoreFunc>,
+}
+
+/// Mints a fresh resource identity for [`ResourceRecord::id`].
+/// Identities are only ever compared within one handle table, but a
+/// process-wide counter keeps them unique across instances as well.
+fn next_resource_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// One component instance's resource handle table (#317).
