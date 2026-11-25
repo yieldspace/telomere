@@ -1,4 +1,5 @@
 use super::*;
+use crate::ir::types::PrimValType;
 
 pub(super) struct VisitTracker {
     epoch: u32,
@@ -29,16 +30,41 @@ impl VisitTracker {
 
 impl<'a> Validator<'a> {
     pub fn validate_effective_type_size(&self, type_id: TypeId) -> ParseResult<()> {
-        const EFFECTIVE_TYPE_SIZE_LIMIT: u64 = 1_000_000;
-
+        // The Canonical ABI bound (`elem_size` < 2^28) applies to value
+        // types (defvaltypes). Other type kinds (func / component /
+        // instance / resource / abstract generics) have no `elem_size`
+        // and are not gated here: the defvaltypes they contain are gated
+        // at their own definitions, and substituted defvaltypes are
+        // gated when instantiation creates them.
+        if !self.resolves_to_defval(type_id)? {
+            return Ok(());
+        }
         let mut visiting = VisitTracker::new(self.types.len());
         let size = self.compute_effective_type_size(type_id, &mut visiting)?;
-        if size > EFFECTIVE_TYPE_SIZE_LIMIT {
+        if size >= EFFECTIVE_TYPE_SIZE_LIMIT {
             return Err(ComponentParseError::TypeMismatch(
-                "effective type size exceeds the limit".to_owned(),
+                "effective type size exceeds the maximum byte size".to_owned(),
             ));
         }
         Ok(())
+    }
+
+    fn resolves_to_defval(&self, type_id: TypeId) -> ParseResult<bool> {
+        let mut seen = std::collections::HashSet::new();
+        let mut current = type_id;
+        loop {
+            if !seen.insert(current) {
+                return Ok(false);
+            }
+            match self.get_type(current)? {
+                Type::DefVal(_) => return Ok(true),
+                Type::Generic(Generic {
+                    bound: GenericBound::Eq(inner),
+                    ..
+                }) => current = *inner,
+                _ => return Ok(false),
+            }
+        }
     }
 
     pub(super) fn contains_resource_handle(&self, type_id: TypeId) -> ParseResult<bool> {
@@ -397,60 +423,213 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// Canonical ABI `elem_size` of a defined value type, computed for
+    /// a 64-bit pointer (`ptr_size() == 8`): validation requires the
+    /// 2^28 bound to hold for every `cx`, `elem_size` is monotonically
+    /// non-decreasing in the pointer size, and the upstream
+    /// `validation/max-value-size.wast` boundaries are calibrated to
+    /// the 64-bit layout, so that layout is the one to check. Results
+    /// saturate at `EFFECTIVE_TYPE_SIZE_CEILING` (= 2^28): a computed
+    /// value equal to the ceiling means "at least 2^28".
     fn compute_defval_size(
         &self,
         def: &DefValType,
         visiting: &mut VisitTracker,
     ) -> ParseResult<u64> {
         match def {
-            DefValType::Primitive(_) => Ok(1),
+            DefValType::Primitive(prim) => Ok(primitive_elem_size(prim)),
             DefValType::Record(fields) => {
-                let mut total = 1;
+                // C-like layout: each field starts at the next offset
+                // aligned to the field's alignment, and the record's
+                // size is rounded up to the record's alignment.
+                let mut aligning = VisitTracker::new(self.types.len());
+                let mut total = 0;
+                let mut record_alignment = 1;
                 for field in fields {
+                    let field_alignment =
+                        self.compute_valtype_alignment(&field.ty, &mut aligning)?;
+                    record_alignment = record_alignment.max(field_alignment);
+                    total = align_to(total, field_alignment);
                     total = saturating_add(total, self.compute_valtype_size(&field.ty, visiting)?);
                     if total >= EFFECTIVE_TYPE_SIZE_CEILING {
                         return Ok(EFFECTIVE_TYPE_SIZE_CEILING);
                     }
                 }
-                Ok(total)
+                Ok(align_to(total, record_alignment))
             }
             DefValType::Variant(cases) => {
-                let mut total = 1;
+                // Discriminant first, then the largest payload at its
+                // alignment; the total is rounded up to the variant's
+                // alignment.
+                let mut aligning = VisitTracker::new(self.types.len());
+                let discriminant = discriminant_elem_size(cases.len());
+                let mut max_case_alignment = 1;
+                let mut max_payload = 0;
                 for case in cases {
                     if let Some(ty) = &case.ty {
-                        total = saturating_add(total, self.compute_valtype_size(ty, visiting)?);
-                    } else {
-                        total = saturating_add(total, 1);
-                    }
-                    if total >= EFFECTIVE_TYPE_SIZE_CEILING {
-                        return Ok(EFFECTIVE_TYPE_SIZE_CEILING);
+                        max_case_alignment = max_case_alignment
+                            .max(self.compute_valtype_alignment(ty, &mut aligning)?);
+                        max_payload = max_payload.max(self.compute_valtype_size(ty, visiting)?);
                     }
                 }
-                Ok(total)
+                let total = saturating_add(align_to(discriminant, max_case_alignment), max_payload);
+                Ok(align_to(total, discriminant.max(max_case_alignment)))
             }
-            DefValType::Flags(labels) => Ok((labels.len() as u64).div_ceil(32).max(1)),
-            DefValType::List(ty, maybe_len) => {
-                let elem = self.compute_valtype_size(ty, visiting)?;
-                Ok(match maybe_len {
-                    Some(len) => saturating_mul(elem, *len as u64),
-                    None => saturating_add(elem, 1),
-                })
+            DefValType::Flags(labels) => Ok(flags_elem_size(labels.len())),
+            DefValType::List(ty, maybe_len) => Ok(match maybe_len {
+                Some(len) => {
+                    let elem = self.compute_valtype_size(ty, visiting)?;
+                    saturating_mul(elem, *len as u64)
+                }
+                // A dynamically-sized list is stored as a (pointer,
+                // length) pair; the element type does not contribute.
+                None => 2 * ELEM_POINTER_SIZE,
+            }),
+            // Handles are stored as `i32` table indices. For `borrow`,
+            // the Canonical ABI may substitute the resource's
+            // representation when lowering into the defining component,
+            // but the representation is not part of the arena type, so
+            // the handle size is used here.
+            DefValType::Own(_) | DefValType::Borrow(_) => Ok(4),
+        }
+    }
+
+    fn compute_type_alignment(
+        &self,
+        type_id: TypeId,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<u64> {
+        if !visiting.enter(type_id) {
+            return Ok(1);
+        }
+        let ty = self.get_type(type_id)?.clone();
+        let result = match &ty {
+            Type::DefVal(def) => self.compute_defval_alignment(def, visiting),
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => self.compute_type_alignment(*inner, visiting),
+            Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            })
+            | Type::Resource(_)
+            | Type::Func(_)
+            | Type::Component(_)
+            | Type::Instance(_) => Ok(1),
+        };
+        visiting.leave(type_id);
+        result
+    }
+
+    fn compute_defval_alignment(
+        &self,
+        def: &DefValType,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<u64> {
+        match def {
+            DefValType::Primitive(prim) => Ok(primitive_alignment(prim)),
+            DefValType::Record(fields) => {
+                let mut alignment = 1;
+                for field in fields {
+                    alignment = alignment.max(self.compute_valtype_alignment(&field.ty, visiting)?);
+                }
+                Ok(alignment)
             }
-            DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
-                self.compute_effective_type_size(*type_id, visiting)
+            DefValType::Variant(cases) => {
+                let mut alignment = discriminant_elem_size(cases.len());
+                for case in cases {
+                    if let Some(ty) = &case.ty {
+                        alignment = alignment.max(self.compute_valtype_alignment(ty, visiting)?);
+                    }
+                }
+                Ok(alignment)
             }
+            DefValType::Flags(labels) => Ok(flags_elem_size(labels.len())),
+            DefValType::List(ty, maybe_len) => match maybe_len {
+                Some(_) => self.compute_valtype_alignment(ty, visiting),
+                None => Ok(ELEM_POINTER_SIZE),
+            },
+            DefValType::Own(_) | DefValType::Borrow(_) => Ok(4),
+        }
+    }
+
+    fn compute_valtype_alignment(
+        &self,
+        ty: &ValType,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<u64> {
+        match ty {
+            ValType::Primitive(prim) => Ok(primitive_alignment(prim)),
+            ValType::Type(type_id) => self.compute_type_alignment(*type_id, visiting),
         }
     }
 
     fn compute_valtype_size(&self, ty: &ValType, visiting: &mut VisitTracker) -> ParseResult<u64> {
         match ty {
-            ValType::Primitive(_) => Ok(1),
+            ValType::Primitive(prim) => Ok(primitive_elem_size(prim)),
             ValType::Type(type_id) => self.compute_effective_type_size(*type_id, visiting),
         }
     }
 }
 
-pub(super) const EFFECTIVE_TYPE_SIZE_CEILING: u64 = 1_000_001;
+/// The spec bound: `elem_size` of a defined value type must be less
+/// than 2^28 (Canonical ABI, "Element Size").
+pub(super) const EFFECTIVE_TYPE_SIZE_LIMIT: u64 = 1 << 28;
+
+/// Saturation cap for size computations. Any value that reaches the
+/// cap is at least 2^28 and therefore over the limit; capping keeps
+/// products of nested fixed-size lists from overflowing `u64`.
+pub(super) const EFFECTIVE_TYPE_SIZE_CEILING: u64 = 1 << 28;
+
+/// Pointer size used for `elem_size` / alignment computations (the
+/// 64-bit layout; see `compute_defval_size`).
+pub(super) const ELEM_POINTER_SIZE: u64 = 8;
+
+pub(super) fn align_to(value: u64, alignment: u64) -> u64 {
+    value.div_ceil(alignment) * alignment
+}
+
+pub(super) fn primitive_elem_size(prim: &PrimValType) -> u64 {
+    match prim {
+        PrimValType::Bool | PrimValType::S8 | PrimValType::U8 => 1,
+        PrimValType::S16 | PrimValType::U16 => 2,
+        PrimValType::S32 | PrimValType::U32 | PrimValType::F32 | PrimValType::Char => 4,
+        PrimValType::S64 | PrimValType::U64 | PrimValType::F64 => 8,
+        PrimValType::String => 2 * ELEM_POINTER_SIZE,
+        #[cfg(feature = "component-gated-feature-async")]
+        PrimValType::ErrorContext => 4,
+    }
+}
+
+pub(super) fn primitive_alignment(prim: &PrimValType) -> u64 {
+    match prim {
+        // A string is a (pointer, length) pair: pointer-aligned, two
+        // pointers wide.
+        PrimValType::String => ELEM_POINTER_SIZE,
+        _ => primitive_elem_size(prim),
+    }
+}
+
+pub(super) fn flags_elem_size(label_count: usize) -> u64 {
+    // Flags use the smallest integer that fits all the bits. The
+    // decoder rejects more than 32 labels, so three cases suffice.
+    match label_count {
+        0..=8 => 1,
+        9..=16 => 2,
+        _ => 4,
+    }
+}
+
+pub(super) fn discriminant_elem_size(case_count: usize) -> u64 {
+    // The variant discriminant is the smallest integer covering the
+    // number of cases.
+    match case_count {
+        0..=256 => 1,
+        257..=65_536 => 2,
+        _ => 4,
+    }
+}
 
 pub(super) fn saturating_add(lhs: u64, rhs: u64) -> u64 {
     lhs.saturating_add(rhs).min(EFFECTIVE_TYPE_SIZE_CEILING)

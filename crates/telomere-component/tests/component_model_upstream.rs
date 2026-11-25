@@ -106,9 +106,11 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "validation/max-value-size.wast",
-        "the validator's effective type size limit (1_000_000) is \
-         stricter than the spec's elem_size < 2^28 rule and rejects the \
-         valid boundary types at line 5",
+        "the effective type size limit now follows the spec's \
+         elem_size < 2^28 rule (issue #323; pinned locally by \
+         tests/component_type_size.rs), but the file's valid-boundary \
+         component also uses map types (CM_MAP) and stream/future \
+         types (async), which are documented non-goals",
     ),
     (
         "validation/indicies.wast",
