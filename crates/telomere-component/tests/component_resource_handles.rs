@@ -468,13 +468,12 @@ async fn resource_drop_of_borrowed_owned_resource_traps() {
         )
         .await
         .expect_err("dropping an owned resource while it is borrowed must trap");
-    // Canon-op failures inside a core module surface as an unreachable
-    // guest trap (the same shape the sibling-instance drop test pins);
-    // the canonical message `cannot remove owned resource while
-    // borrowed` is produced by the drop itself and is pinned at the
-    // handle-table level in the runtime unit tests.
+    // With #312's trampoline trap-cause preservation in the tree, the
+    // canonical message produced by the drop itself now surfaces at the
+    // public API (it is also pinned at the handle-table level in the
+    // runtime unit tests).
     assert!(
-        matches!(error, telomere_component::ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
+        matches!(error, telomere_component::ComponentError::Trap(ref message) if message.contains("cannot remove owned resource while borrowed")),
         "dropping a borrowed resource should trap, got {error:?}"
     );
 

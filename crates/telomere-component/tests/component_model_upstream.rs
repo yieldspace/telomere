@@ -68,8 +68,9 @@ const EXCLUDED: &[(&str, &str)] = &[
         "blocked by issue #342: the guest self-check traps on \
          handle/rep state at line 158 when a handle created by the \
          defining instance is used from the client instance (the \
-         line-161 borrowed-drop rejection is implemented by #334; \
-         its canonical trap message surfaces once #312 lands)",
+         line-161 borrowed-drop rejection is implemented by #334 \
+         and its canonical trap message surfaces via #312; line \
+         158 is the only remaining failure in this file)",
     ),
     (
         "resources/multiple-resources.wast",
