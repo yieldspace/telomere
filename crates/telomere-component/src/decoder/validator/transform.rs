@@ -148,7 +148,40 @@ impl<'a> Validator<'a> {
         }
 
         let ty = self.get_type(type_id)?.clone();
-        let cloned = self.freshen_import_type(&ty, context)?;
+        // A `(sub resource)` generic is freshened only when a type
+        // on the current walk declares it. A generic that belongs to
+        // an enclosing component and is merely referenced through
+        // the imported type (e.g. an instance type declared in the
+        // enclosing component whose methods mention the enclosing
+        // component's imported abstract resource) keeps its
+        // identity, so surfaces mentioning it still resolve to the
+        // enclosing component's name for it.
+        if let Type::Generic(Generic {
+            bound: GenericBound::Sub,
+            ..
+        }) = &ty
+        {
+            if context.freshen_declares(type_id) {
+                let new_type_id = self.new_type(Type::Generic(Generic::new(GenericBound::Sub)));
+                self.validate_effective_type_size(new_type_id)?;
+                self.types.record_transform(
+                    type_id,
+                    TypeTransformKind::FreshenImport,
+                    context.generation(),
+                    env_id,
+                    new_type_id,
+                );
+                context.insert(type_id, new_type_id);
+                return Ok(new_type_id);
+            }
+            context.insert(type_id, type_id);
+            return Ok(type_id);
+        }
+        let declared = self.declared_freshen_generics(&ty);
+        context.push_freshen_declared(declared);
+        let result = self.freshen_import_type(&ty, context);
+        context.pop_freshen_declared();
+        let cloned = result?;
         let new_type_id = self.new_type(cloned);
         self.validate_effective_type_size(new_type_id)?;
         self.types.record_transform(
@@ -160,6 +193,102 @@ impl<'a> Validator<'a> {
         );
         context.insert(type_id, new_type_id);
         Ok(new_type_id)
+    }
+
+    /// The `(sub resource)` generics a component or instance type
+    /// declares through its type import/export entries, together
+    /// with the generics declared by the component/instance types
+    /// nested inside it. The nested declarations are determined up
+    /// front, before any reference is traversed: an entry that
+    /// references a nested declaration (e.g. a func whose parameter
+    /// mentions a resource declared by a nested instance) may be
+    /// visited before the nested type itself — the entry maps do
+    /// not iterate in a fixed order — and a reference visited first
+    /// must not pin the declaration to its template identity before
+    /// the declaration itself has been freshened.
+    fn declared_freshen_generics(&self, ty: &Type) -> std::collections::HashSet<TypeId> {
+        let mut declared = std::collections::HashSet::new();
+        let mut visited = std::collections::HashSet::new();
+        self.collect_declared_freshen_generics(ty, &mut declared, &mut visited);
+        declared
+    }
+
+    fn collect_declared_freshen_generics(
+        &self,
+        ty: &Type,
+        declared: &mut std::collections::HashSet<TypeId>,
+        visited: &mut std::collections::HashSet<TypeId>,
+    ) {
+        match ty {
+            Type::Component(component) => {
+                for import in component.imports.values() {
+                    if let ComponentImportType::Type { type_id, .. } = import {
+                        self.note_declared_freshen_generic(*type_id, declared, visited);
+                    }
+                }
+                for export in component.exports.values() {
+                    match export {
+                        ComponentExportType::Type(type_id)
+                        | ComponentExportType::Component(type_id)
+                        | ComponentExportType::Instance(type_id) => {
+                            self.note_declared_freshen_generic(*type_id, declared, visited);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Type::Instance(instance) => {
+                for export in instance.exports.values() {
+                    match export {
+                        InstanceExportType::Type(type_id)
+                        | InstanceExportType::Component(type_id)
+                        | InstanceExportType::Instance(type_id) => {
+                            self.note_declared_freshen_generic(*type_id, declared, visited);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Note `type_id` in `declared` when it is a `(sub resource)`
+    /// generic, and collect the declarations of the component or
+    /// instance type the entry ultimately denotes (following any
+    /// `(eq ...)` faces) when that type has not been collected yet.
+    fn note_declared_freshen_generic(
+        &self,
+        type_id: TypeId,
+        declared: &mut std::collections::HashSet<TypeId>,
+        visited: &mut std::collections::HashSet<TypeId>,
+    ) {
+        if let Ok(Type::Generic(Generic {
+            bound: GenericBound::Sub,
+            ..
+        })) = self.get_type(type_id)
+        {
+            declared.insert(type_id);
+        }
+        let mut target = type_id;
+        let target_ty = loop {
+            match self.get_type(target) {
+                Ok(Type::Generic(Generic {
+                    bound: GenericBound::Eq(inner),
+                    ..
+                })) => {
+                    if !visited.insert(target) {
+                        return;
+                    }
+                    target = *inner;
+                }
+                Ok(ty) => break ty,
+                Err(_) => return,
+            }
+        };
+        if matches!(target_ty, Type::Component(_) | Type::Instance(_)) && visited.insert(target) {
+            self.collect_declared_freshen_generics(target_ty, declared, visited);
+        }
     }
 
     fn instantiate_type(&mut self, ty: &Type, context: &mut TransformContext) -> ParseResult<Type> {
