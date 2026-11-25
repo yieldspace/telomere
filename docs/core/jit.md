@@ -27,15 +27,16 @@ Compile-only:
   riscv64gc F/D floating-point ISA. CI type-checks and links this backend but
   does not execute it.
 
-  The one attempt to execute it, under `qemu-riscv64-static`, segfaulted on
-  entering the first JIT-compiled function. Non-JIT riscv64 tests passed under
-  the same emulator, linker and sysroot, which isolates the failure to the JIT
-  path — but it does not distinguish a backend defect from a limitation of
-  user-mode emulation, since the JIT maps W^X executable memory and depends on
-  instruction-cache behaviour that qemu-user need not reproduce faithfully.
+  The segfault that the one execution attempt hit under `qemu-riscv64` was
+  diagnosed in #161 as two backend defects, not an emulator limitation: the
+  virtual-register frame overlapped the saved return address, and the W32
+  bitwise ops used unassigned encodings. Both are fixed, and the JIT test
+  suite passes under qemu-user.
 
-  Treat riscv64 JIT execution as **unverified**: not known-good, and not known
-  broken. It has not been run on riscv64 hardware.
+  Treat riscv64 JIT execution as **verified under emulation only**: the
+  strict WAST JIT acceptance lane still fails on riscv64 (multi-lane
+  `select` compilation panics, and a few float cases differ), and the
+  backend has not been run on riscv64 hardware.
 
 Runtime use is additionally gated by `telomere::jit_supported()`. The CLI fails
 closed if `--jit` is requested on an unsupported build or target.
@@ -141,8 +142,8 @@ Known gaps:
   metadata;
 - broader executable-memory policy and cache tuning outside the supported
   Unix-like targets.
-- execution verification for the riscv64 backend, which is compile-checked
-  only.
+- full WAST JIT acceptance and hardware verification for the riscv64
+  backend (the JIT test suite passes under qemu-user; see above).
 
 Benchmark-specific whole-function rewrites are intentionally not enabled. JIT
 work should improve reusable Wasm instruction patterns rather than recognizing a
