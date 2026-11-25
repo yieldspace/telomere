@@ -1,7 +1,7 @@
 use crate::ir::types::ValType;
 use crate::ir::{
-    CoreModule, ExportNameString, Func, GlobalIdx, ImportNameString, Instance, ResourceId, TypeId,
-    Value,
+    CoreInstance, CoreModule, ExportNameString, Func, GlobalIdx, ImportNameString, Instance,
+    ResourceId, TypeId, Value,
 };
 use std::collections::HashMap;
 
@@ -10,6 +10,13 @@ use std::collections::HashMap;
 pub struct Component {
     pub(crate) imports: HashMap<ImportNameString, ComponentImport>,
     pub(crate) exports: HashMap<ExportNameString, ComponentExport>,
+    /// Global indices of the core instances *defined* in this component
+    /// (both the instantiate and inline-export forms), in definition order.
+    /// Aliased core instances are not listed: they are never materialised.
+    /// The runtime materialises these in the environment of each instance
+    /// of this component, so that `(with ...)` instantiation arguments are
+    /// honoured when the core instances are created (#316).
+    pub(crate) core_instances: Vec<GlobalIdx<CoreInstance>>,
 }
 
 #[derive(Debug, Clone)]

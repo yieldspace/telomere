@@ -98,7 +98,10 @@ fn _parse_component(
                     _parse_component(&mut ctx, depth + 1)?;
                 }
                 let component_ty = ctx.validator.make_component();
-                let component = ctx.state.scope().make_component();
+                let component = ctx
+                    .state
+                    .scope()
+                    .make_component(&ctx.state.core_instance_store);
 
                 ctx.validator.pop_scope();
                 ctx.state.pop_scope();
