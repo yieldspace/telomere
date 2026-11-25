@@ -560,3 +560,156 @@ async fn upstream_harness_runtime_directives_smoke() {
     }
     println!("upstream_harness_runtime_directives_smoke completed: checked={checked}");
 }
+
+/// Regression coverage for the four Codex P2 findings on PR #326, all in
+/// the shared harness (`tests/common/component_model.rs`):
+///
+/// 1. Trap matching must not accept a trap raised for a different reason:
+///    an unconditional `unreachable` must not satisfy an out-of-bounds
+///    `assert_trap` through a shared error category.
+/// 2. Payloadless `result` values must keep their discriminant: the
+///    runtime represents a payloadless case with an empty-tuple payload,
+///    so `(result.ok)` and `(result.err)` are distinct expected values
+///    and are accepted as invoke arguments.
+/// 3. `register` immediately after a `(component ...)` definition must
+///    resolve the instance through the lazy instantiation path instead
+///    of failing with "no instance to register".
+/// 4. `assert_unlinkable` must not be satisfiable by an encode or
+///    compilation failure: only an instantiation (link) failure counts.
+///
+/// Each case runs through `run_component_testsuite_case` and asserts
+/// whether the harness records a failure for it.
+#[tokio::test]
+async fn upstream_harness_codex_p2_regressions() {
+    // (name, wast, expect_failure_recorded)
+    let cases: &[(&str, &str, bool)] = &[
+        (
+            "trap-wrong-cause-must-not-match",
+            r#"
+(component
+  (core module $M
+    (func (export "boom") unreachable))
+  (core instance $m (instantiate $M))
+  (func (export "boom") (canon lift (core func $m "boom"))))
+(assert_trap (invoke "boom") "string pointer/length out of bounds of memory")
+"#,
+            true,
+        ),
+        (
+            "trap-genuine-out-of-bounds-matches",
+            r#"
+(component
+  (core module $M
+    (memory (export "mem") 1)
+    (func (export "f") (result i32)
+      (i32.store (i32.const 0) (i32.const 0xdeadbeef))
+      (i32.store (i32.const 4) (i32.const 0))
+      (i32.const 0)))
+  (core instance $m (instantiate $M))
+  (func (export "f") (result string) (canon lift (core func $m "f") (memory (core memory $m "mem")))))
+(assert_trap (invoke "f") "string pointer/length out of bounds of memory")
+"#,
+            false,
+        ),
+        (
+            "payloadless-result-return",
+            r#"
+(component
+  (core module $M
+    (func (export "ok") (result i32) (i32.const 0))
+    (func (export "err") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M))
+  (func (export "ok") (result (result)) (canon lift (core func $m "ok")))
+  (func (export "err") (result (result)) (canon lift (core func $m "err"))))
+(assert_return (invoke "ok") (result.ok))
+(assert_return (invoke "err") (result.err))
+"#,
+            false,
+        ),
+        (
+            "payloadless-result-wrong-branch-must-not-match",
+            r#"
+(component
+  (core module $M
+    (func (export "ok") (result i32) (i32.const 0)))
+  (core instance $m (instantiate $M))
+  (func (export "ok") (result (result)) (canon lift (core func $m "ok"))))
+(assert_return (invoke "ok") (result.err))
+"#,
+            true,
+        ),
+        (
+            "payloadless-result-argument",
+            r#"
+(component
+  (core module $M
+    (func (export "which") (param i32) (result i32) (local.get 0)))
+  (core instance $m (instantiate $M))
+  (func (export "which") (param "r" (result)) (result u32) (canon lift (core func $m "which"))))
+(assert_return (invoke "which" (result.ok)) (u32.const 0))
+(assert_return (invoke "which" (result.err)) (u32.const 1))
+"#,
+            false,
+        ),
+        (
+            "register-right-after-component",
+            r#"
+(component
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 42)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(register "reg")
+(assert_return (invoke $reg "answer") (u32.const 42))
+"#,
+            false,
+        ),
+        (
+            "unlinkable-compile-failure-must-not-satisfy",
+            r#"
+(assert_unlinkable
+  (component
+    (core module $M
+      (func (result i32) i64.const 0))
+    (core instance $m (instantiate $M)))
+  "type mismatch")
+"#,
+            true,
+        ),
+        (
+            "unlinkable-genuine-link-failure",
+            r#"
+(assert_unlinkable
+  (component
+    (import "missing" (func (param "x" u32) (result u32)))
+    (core func $lf (canon lower (func 0)))
+    (core module $M (import "" "f" (func (param i32) (result i32))))
+    (core instance $m (instantiate $M (with "" (instance (export "f" (func $lf)))))))
+  "unresolved")
+"#,
+            false,
+        ),
+    ];
+
+    let mut problems = Vec::new();
+    for (name, text, expect_failure) in cases {
+        let path = PathBuf::from(format!("regressions/{name}.wast"));
+        let report = common::component_model::run_component_testsuite_case(&path, text).await;
+        let recorded_failure = !report.failures.is_empty();
+        if recorded_failure != *expect_failure {
+            problems.push(format!(
+                "{name}: expected failure_recorded={expect_failure}, got {recorded_failure} \
+                 (checked={}, failures={:?})",
+                report.directives_checked, report.failures
+            ));
+        }
+    }
+
+    if !problems.is_empty() {
+        panic!(
+            "upstream_harness_codex_p2_regressions failures\n\n{}",
+            problems.join("\n\n")
+        );
+    }
+    println!("upstream_harness_codex_p2_regressions completed: all cases behaved as expected");
+}

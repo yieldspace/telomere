@@ -809,21 +809,31 @@ async fn handle_register(
     name: &str,
     module: Option<wast::token::Id<'_>>,
 ) {
-    let instance = match module {
-        Some(id) => runtime.instances.get(id.name()).cloned(),
-        None => runtime.current.clone(),
+    // With no module operand, `register` names the current instance.
+    // Resolve it through the lazy instantiation path: a `(component ...)`
+    // directive only records the pending program, so reading `current`
+    // directly would report "no instance to register" for the normal
+    // define-then-register sequence.
+    let resolved = match module {
+        Some(id) => runtime
+            .instances
+            .get(id.name())
+            .or_else(|| runtime.registered.get(id.name()))
+            .cloned()
+            .ok_or_else(|| format!("no instance named `${}` has been created", id.name())),
+        None => runtime.current_instance().await,
     };
-    match instance {
-        Some(instance) => {
+    match resolved {
+        Ok(instance) => {
             runtime.registered.insert(name.to_owned(), instance);
             report.directives_checked += 1;
         }
-        None => fail_at(
+        Err(error) => fail_at(
             path,
             text,
             report,
             span,
-            "register directive has no instance to register".to_owned(),
+            format!("register directive could not resolve an instance: {error}"),
         ),
     }
 }
@@ -1051,20 +1061,55 @@ async fn handle_assert_unlinkable(
         return;
     }
 
+    // `assert_unlinkable` asserts a *link* failure: the component must
+    // first encode and compile successfully, and only the instantiation
+    // error is matched against the expected message. Feeding encode or
+    // compilation errors into the same success path would let a
+    // validator regression masquerade as the expected linking failure.
     let mut wat = module;
-    let actual = match wat.encode() {
-        Ok(source) => match runtime.engine.compile(&source) {
-            Ok(program) => match runtime.instantiate(&program).await {
-                Ok(_) => None,
-                Err(error) => Some(error.to_string()),
-            },
-            Err(error) => Some(error.to_string()),
-        },
-        Err(error) => Some(error.to_string()),
+    let source = match wat.encode() {
+        Ok(source) => source,
+        Err(error) => {
+            fail_at(
+                path,
+                text,
+                report,
+                span,
+                format!(
+                    "assert_unlinkable expected an instantiation error containing `{message}`, but WAT encoding failed first: {error}"
+                ),
+            );
+            return;
+        }
+    };
+    let program = match runtime.engine.compile(&source) {
+        Ok(program) => program,
+        Err(error) => {
+            fail_at(
+                path,
+                text,
+                report,
+                span,
+                format!(
+                    "assert_unlinkable expected an instantiation error containing `{message}`, but compilation failed first: {error}"
+                ),
+            );
+            return;
+        }
     };
 
-    match actual {
-        Some(actual) => {
+    match runtime.instantiate(&program).await {
+        Ok(_) => fail_at(
+            path,
+            text,
+            report,
+            span,
+            format!(
+                "assert_unlinkable expected an error containing `{message}`, but instantiation succeeded"
+            ),
+        ),
+        Err(error) => {
+            let actual = error.to_string();
             if !semantic_error_match(message, &actual) {
                 fail_at(
                     path,
@@ -1079,15 +1124,6 @@ async fn handle_assert_unlinkable(
             }
             report.directives_checked += 1;
         }
-        None => fail_at(
-            path,
-            text,
-            report,
-            span,
-            format!(
-                "assert_unlinkable expected an error containing `{message}`, but instantiation succeeded"
-            ),
-        ),
     }
 }
 
@@ -1096,11 +1132,14 @@ async fn handle_assert_unlinkable(
 /// Trap wording is part of neither the binary format nor the validation
 /// contract, and telomere phrases canonical-ABI traps differently from the
 /// reference text (e.g. "latin1+utf16 string pointer .. is not aligned to
-/// 2 bytes" for the spec's "unaligned pointer"). Matching therefore starts
-/// with containment, then a small table of spec-phrase aliases, and finally
-/// falls back to the same semantic matcher used for invalid/malformed
-/// messages. Aliases are added only for wording differences, never to
-/// accept a trap raised for a different reason.
+/// 2 bytes" for the spec's "unaligned pointer"). Matching is therefore
+/// containment plus a small table of spec-phrase aliases — and nothing
+/// else. Unlike invalid/malformed messages, trap messages are *not*
+/// matched by shared error category or token overlap: a trap raised for
+/// the wrong reason (an unconditional `unreachable`, say) must never
+/// satisfy an `assert_trap` that names a different cause (a memory
+/// bounds check). Aliases are added only for wording differences, never
+/// to accept a trap raised for a different reason.
 fn trap_message_match(expected: &str, actual: &str) -> bool {
     let expected_normalized = normalize_message(expected);
     let actual_normalized = normalize_message(actual);
@@ -1118,7 +1157,7 @@ fn trap_message_match(expected: &str, actual: &str) -> bool {
         return true;
     }
 
-    semantic_error_match(expected, actual)
+    false
 }
 
 fn wast_arg_to_value(arg: &WastArg<'_>) -> Result<ComponentValue, String> {
@@ -1175,6 +1214,22 @@ fn nan_pattern_f64(pattern: &wast::core::NanPattern<wast::token::F64>) -> f64 {
     }
 }
 
+/// Converts the payload of a `result` value. A payloadless case must
+/// keep its discriminant: converting `(result.ok)` and `(result.err)`
+/// alike to an unset branch would make the two indistinguishable as
+/// expected values and unusable as arguments (canonical lowering
+/// requires exactly one branch to be set). Mirror the runtime's own
+/// convention (`runtime/canonical.rs`): a payloadless case is
+/// represented by an empty-tuple payload in the selected branch.
+fn result_payload_to_value(
+    payload: &Option<Box<WastVal<'_>>>,
+) -> Result<Box<ComponentValue>, String> {
+    match payload {
+        Some(payload) => Ok(Box::new(wast_val_to_value(payload)?)),
+        None => Ok(Box::new(ComponentValue::Tuple(Vec::new()))),
+    }
+}
+
 fn wast_val_to_value(value: &WastVal<'_>) -> Result<ComponentValue, String> {
     Ok(match value {
         WastVal::Bool(value) => ComponentValue::Bool(*value),
@@ -1222,18 +1277,12 @@ fn wast_val_to_value(value: &WastVal<'_>) -> Result<ComponentValue, String> {
         }),
         WastVal::Result(result) => match result {
             Ok(payload) => ComponentValue::Result {
-                ok: match payload {
-                    Some(payload) => Some(Box::new(wast_val_to_value(payload)?)),
-                    None => None,
-                },
+                ok: Some(result_payload_to_value(payload)?),
                 err: None,
             },
             Err(payload) => ComponentValue::Result {
                 ok: None,
-                err: match payload {
-                    Some(payload) => Some(Box::new(wast_val_to_value(payload)?)),
-                    None => None,
-                },
+                err: Some(result_payload_to_value(payload)?),
             },
         },
         WastVal::Flags(names) => {
