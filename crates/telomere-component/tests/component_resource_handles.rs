@@ -168,10 +168,12 @@ async fn resource_handle_from_sibling_instance_is_unknown() {
         .call(&store, "drop-in2", &[])
         .await
         .expect_err("index 1 is unknown in instance 2 and must trap");
-    // Canon-op failures inside a core module surface as an unreachable
-    // guest trap (the same shape the host-resource drop tests pin).
+    // Canon-op failures inside a core module used to surface as an
+    // unreachable guest trap; since #312 the canon-lower trampoline
+    // preserves the trap cause, so the runtime's own message reaches the
+    // caller. What #317 pins is that the drop traps at all.
     assert!(
-        matches!(error, telomere_component::ComponentError::GuestTrap { kind: telomere::TrapKind::Unreachable, ref message } if message.contains("unreachable")),
+        matches!(&error, telomere_component::ComponentError::Trap(message) if message.contains("resource handle 1 is invalid")),
         "dropping a sibling instance's handle should trap, got {error:?}"
     );
     instance
