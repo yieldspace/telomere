@@ -1566,6 +1566,110 @@ async fn direct_list_lowering_rejects_a_misaligned_realloc_result() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// #330: canonical ABI `char` validation.
+//
+// Core code hands the canonical ABI raw i32 bit patterns for `char`
+// values. Patterns that are not Unicode scalar values (surrogates, values
+// above U+10FFFF) must trap with the canonical `invalid `char` bit
+// pattern` message instead of reaching the guest, where the failure
+// degenerates into a bare `unreachable`. The upstream pin is
+// `values/numerics.wast` lines 193/195/197 in the vendored component-model
+// testsuite.
+// ---------------------------------------------------------------------------
+
+const INVALID_CHAR_TRAP: &str = "invalid `char` bit pattern";
+
+#[tokio::test]
+async fn lowered_char_args_trap_on_invalid_bit_patterns() {
+    // The `values/numerics.wast` $CharTraps shape: a core caller passes
+    // raw i32 patterns through `canon lower` into a `char` parameter.
+    let component = r#"
+(component
+  (component $C
+    (core module $M (func (export "take") (param i32)))
+    (core instance $m (instantiate $M))
+    (func (export "take") (param "x" char) (canon lift (core func $m "take")))
+  )
+  (component $D
+    (import "take" (func $take (param "x" char)))
+    (core func $take' (canon lower (func $take)))
+    (core module $M
+      (import "" "take" (func $take (param i32)))
+      (func (export "run-d800") (call $take (i32.const 0xd800)))
+      (func (export "run-dfff") (call $take (i32.const 0xdfff)))
+      (func (export "run-too-big") (call $take (i32.const 0x110000)))
+      (func (export "run-valid") (call $take (i32.const 0x1f370)))
+    )
+    (core instance $m (instantiate $M (with "" (instance (export "take" (func $take'))))))
+    (func (export "run-d800") (canon lift (core func $m "run-d800")))
+    (func (export "run-dfff") (canon lift (core func $m "run-dfff")))
+    (func (export "run-too-big") (canon lift (core func $m "run-too-big")))
+    (func (export "run-valid") (canon lift (core func $m "run-valid")))
+  )
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "take" (func $c "take"))))
+  (func (export "run-d800") (alias export $d "run-d800"))
+  (func (export "run-dfff") (alias export $d "run-dfff"))
+  (func (export "run-too-big") (alias export $d "run-too-big"))
+  (func (export "run-valid") (alias export $d "run-valid"))
+)
+"#;
+    let (store, instance) = instantiate(component, &ComponentLinker::new()).await;
+    for name in ["run-d800", "run-dfff", "run-too-big"] {
+        let error = instance
+            .call(&store, name, &[])
+            .await
+            .expect_err("invalid char bit pattern must trap at canon lower");
+        assert!(
+            error.to_string().contains(INVALID_CHAR_TRAP),
+            "{name}: unexpected error: {error}"
+        );
+    }
+    instance
+        .call(&store, "run-valid", &[])
+        .await
+        .expect("valid char bit pattern must be accepted");
+}
+
+#[tokio::test]
+async fn lowered_char_list_elements_trap_on_invalid_bit_patterns() {
+    // A `(list char)` argument crosses `canon lower` through the caller's
+    // memory, so its elements are lifted by the memory read path.
+    let component = r#"
+(component
+  (type $host-type (func (param "xs" (list char))))
+  (import "host" (func $host (type $host-type)))
+  (core module $guest
+    (memory (export "memory") 1)
+    (data (i32.const 0) "\00\d8\00\00")
+  )
+  (core instance $guest (instantiate $guest))
+  (core func $host-lower
+    (canon lower (func $host) (memory (core memory $guest "memory"))))
+  (core module $caller
+    (import "" "host" (func $host (param i32 i32)))
+    (func (export "run") (call $host (i32.const 0) (i32.const 1)))
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance (export "host" (func $host-lower))))))
+  (func (export "run") (canon lift (core func $caller "run")))
+)
+"#;
+    let mut linker = ComponentLinker::new();
+    linker.register_import("host", |_store, _args| Ok(Vec::new()));
+    let (store, instance) = instantiate(component, &linker).await;
+    let error = instance
+        .call(&store, "run", &[])
+        .await
+        .expect_err("invalid char element must trap at canon lower");
+    assert!(
+        error.to_string().contains(INVALID_CHAR_TRAP),
+        "unexpected error: {error}"
+    );
+}
+
 #[tokio::test]
 async fn direct_empty_u8_list_lowering_still_calls_realloc_with_zero_size() {
     let (store, instance) = instantiate(
@@ -1602,6 +1706,68 @@ async fn direct_empty_u8_list_lowering_still_calls_realloc_with_zero_size() {
         scalar_u32(&instance, &store, "captured-len", &[]).await,
         0,
         "the lowered list length must be zero"
+    );
+}
+
+#[tokio::test]
+async fn lifted_char_results_trap_on_invalid_bit_patterns() {
+    // A core function returning a raw i32 for a `char` result crosses
+    // `canon lift`, which must validate the pattern the same way.
+    let component = r#"
+(component
+  (core module $M
+    (func (export "give-d800") (result i32) (i32.const 0xd800))
+    (func (export "give-valid") (result i32) (i32.const 0x2b50))
+  )
+  (core instance $m (instantiate $M))
+  (func (export "give-d800") (result char) (canon lift (core func $m "give-d800")))
+  (func (export "give-valid") (result char) (canon lift (core func $m "give-valid")))
+)
+"#;
+    let (store, instance) = instantiate(component, &ComponentLinker::new()).await;
+    let error = instance
+        .call(&store, "give-d800", &[])
+        .await
+        .expect_err("invalid char bit pattern must trap at canon lift");
+    assert!(
+        error.to_string().contains(INVALID_CHAR_TRAP),
+        "unexpected error: {error}"
+    );
+    let values = instance
+        .call(&store, "give-valid", &[])
+        .await
+        .expect("valid char bit pattern must be accepted");
+    assert_eq!(values, vec![ComponentValue::Char('\u{2b50}')]);
+}
+
+#[tokio::test]
+async fn lifted_char_record_results_from_memory_trap_on_invalid_bit_patterns() {
+    // A record result with two `char` fields is too wide for the flat
+    // result slot, so `canon lift` reads it back from the guest's memory;
+    // the memory read path must validate each field's pattern.
+    let component = r#"
+(component
+  (type $pair (record (field "a" char) (field "b" char)))
+  (export "pair" (type $pair))
+  (core module $M
+    (memory (export "memory") 1)
+    (func (export "give") (result i32)
+      (i32.store (i32.const 0) (i32.const 0x61))
+      (i32.store (i32.const 4) (i32.const 0xdfff))
+      (i32.const 0))
+  )
+  (core instance $m (instantiate $M))
+  (func (export "give") (result $pair) (canon lift (core func $m "give") (memory (core memory $m "memory"))))
+)
+"#;
+    let (store, instance) = instantiate(component, &ComponentLinker::new()).await;
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("invalid char field must trap at canon lift");
+    assert!(
+        error.to_string().contains(INVALID_CHAR_TRAP),
+        "unexpected error: {error}"
     );
 }
 
@@ -1692,4 +1858,165 @@ async fn indirect_empty_list_lowering_still_calls_realloc_with_zero_size() {
         0,
         "the list length stored in the area must be zero"
     );
+}
+
+// Issue #331: canonical ABI `lift` must reject out-of-range variant/enum
+// discriminants with the canonical trap text `invalid variant discriminant`
+// (CanonicalABI.md `lift` for variant/enum), on both the flat and the
+// memory-backed paths.
+fn assert_invalid_variant_discriminant(error: &ComponentError) {
+    match error {
+        ComponentError::Trap(message) => assert!(
+            message.contains("invalid variant discriminant"),
+            "trap message must be the canonical `invalid variant discriminant`, got: {message}"
+        ),
+        other => panic!("expected a canonical discriminant trap, got: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn flat_variant_result_with_out_of_range_discriminant_traps_canonically() {
+    let (store, instance) = instantiate(
+        r#"
+(component
+  (type $v (variant (case "x")))
+  (export "v" (type $v))
+  (core module $M
+    (func (export "give") (result i32) (i32.const 1))
+    (func (export "give-ok") (result i32) (i32.const 0)))
+  (core instance $m (instantiate $M))
+  (func (export "give") (result $v) (canon lift (core func $m "give")))
+  (func (export "give-ok") (result $v) (canon lift (core func $m "give-ok"))))
+"#,
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let values = instance
+        .call(&store, "give-ok", &[])
+        .await
+        .expect("in-range discriminant must lift");
+    // A variant whose cases are all payloadless lifts to
+    // `ComponentValue::Enum` (the runtime's enum representation).
+    assert_eq!(values, vec![ComponentValue::Enum("x".to_owned())]);
+
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("discriminant 1 for a 1-case variant must trap");
+    assert_invalid_variant_discriminant(&error);
+}
+
+#[tokio::test]
+async fn flat_enum_result_with_out_of_range_discriminant_traps_canonically() {
+    let (store, instance) = instantiate(
+        r#"
+(component
+  (type $e (enum "a" "b"))
+  (export "e" (type $e))
+  (core module $M
+    (func (export "give") (result i32) (i32.const 2))
+    (func (export "give-ok") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M))
+  (func (export "give") (result $e) (canon lift (core func $m "give")))
+  (func (export "give-ok") (result $e) (canon lift (core func $m "give-ok"))))
+"#,
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let values = instance
+        .call(&store, "give-ok", &[])
+        .await
+        .expect("in-range discriminant must lift");
+    assert_eq!(values, vec![ComponentValue::Enum("b".to_owned())]);
+
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("discriminant 2 for a 2-case enum must trap");
+    assert_invalid_variant_discriminant(&error);
+}
+
+#[tokio::test]
+async fn memory_variant_result_with_out_of_range_discriminant_traps_canonically() {
+    // A variant with a string payload has more than one flat result slot, so
+    // the result crosses through memory: the discriminant byte at the result
+    // area is read by the memory-backed lift.
+    let (store, instance) = instantiate(
+        r#"
+(component
+  (type $v (variant (case "a" string) (case "b" u32)))
+  (export "v" (type $v))
+  (core module $M
+    (memory (export "mem") 1)
+    (func (export "give") (result i32)
+      (i32.store8 (i32.const 64) (i32.const 2))
+      (i32.store (i32.const 68) (i32.const 200))
+      (i32.store (i32.const 72) (i32.const 3))
+      (i32.const 64))
+    (func (export "give-ok") (result i32)
+      (i32.store8 (i32.const 64) (i32.const 1))
+      (i32.store (i32.const 68) (i32.const 42))
+      (i32.const 64)))
+  (core instance $m (instantiate $M))
+  (func (export "give") (result $v)
+    (canon lift (core func $m "give") (memory (core memory $m "mem"))))
+  (func (export "give-ok") (result $v)
+    (canon lift (core func $m "give-ok") (memory (core memory $m "mem")))))
+"#,
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let values = instance
+        .call(&store, "give-ok", &[])
+        .await
+        .expect("in-range discriminant must lift");
+    assert_eq!(
+        values,
+        vec![ComponentValue::Variant {
+            case: "b".to_owned(),
+            value: Some(Box::new(ComponentValue::U32(42))),
+        }]
+    );
+
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("discriminant 2 for a 2-case variant must trap");
+    assert_invalid_variant_discriminant(&error);
+}
+
+#[tokio::test]
+async fn list_of_variants_with_out_of_range_discriminant_traps_canonically() {
+    // Variants nested inside a list cross through memory element-by-element;
+    // the second element's discriminant (1) is out of range for a 1-case
+    // variant.
+    let (store, instance) = instantiate(
+        r#"
+(component
+  (type $v (variant (case "x")))
+  (export "v" (type $v))
+  (core module $M
+    (memory (export "mem") 1)
+    (func (export "give") (result i32)
+      (i32.store8 (i32.const 100) (i32.const 0))
+      (i32.store8 (i32.const 101) (i32.const 1))
+      (i32.store (i32.const 64) (i32.const 100))
+      (i32.store (i32.const 68) (i32.const 2))
+      (i32.const 64)))
+  (core instance $m (instantiate $M))
+  (func (export "give") (result (list $v))
+    (canon lift (core func $m "give") (memory (core memory $m "mem")))))
+"#,
+        &ComponentLinker::new(),
+    )
+    .await;
+
+    let error = instance
+        .call(&store, "give", &[])
+        .await
+        .expect_err("out-of-range discriminant inside a list must trap");
+    assert_invalid_variant_discriminant(&error);
 }

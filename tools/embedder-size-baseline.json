@@ -1,21 +1,21 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #340 (branch fix/312-unaligned-canon-load at head 72c02cd7d00953f47df43bf706a4b8e0c75479f4 \u2014 the #312 change (canonical ABI loads and stores trap on unaligned pointers, and the canon-lower trampoline preserves the trap cause instead of flattening it to unreachable) merged with current main bf8de4597b16df23cfb6f5a8b10e71d47faae429 (PRs #326, #336, #337, #338, #339, #341, #343 and #346), with the conflict in canonical.rs resolved by keeping #312's validate_pointer_alignment alongside #322's centralised validate_realloc_result and two test assertions updated to the preserved trap cause; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45565413189, 45565424892 and 45565437460 against the branch and pull-request run 45565338789, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "72c02cd7d00953f47df43bf706a4b8e0c75479f4",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #350 (branch fix/330-char-validation at head 3f20c2e074dff12d5eb393ef75b2e40779d11ab6 \u2014 the #330 change (core-to-component char conversions trap with the canonical \u2018invalid `char` bit pattern\u2019 message, funnelled through the shared char_from_canonical_bits helper in the flat lift and memory read paths) merged with current main 21edef0f0b147af7a43dcbec002673227ff8516d (PRs #348 and #351), with no merge conflicts; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45581296266, 45581315051 and 45581332674 against the branch and pull-request run 45581280272, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "3f20c2e074dff12d5eb393ef75b2e40779d11ab6",
     "date": "2026-11-25",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45565413189,
-      45565424892,
-      45565437460
+      45581296266,
+      45581315051,
+      45581332674
     ],
     "cross_check_run_ids": [
-      45565338789
+      45581280272
     ],
-    "derivation": "Second re-baseline for PR #340 (#312, canonical ABI loads and stores trap on unaligned pointers, and the canon-lower trampoline preserves the trap cause instead of flattening it to unreachable). After the first re-baseline, PRs #341 (#317, per-instance resource handle tables), #343 (#322, bounds-checked canonical realloc results) and #346 (#333, defined instances materialised in definition order) landed on main, so the branch merged current main again (merge commits 825f42f and 72c02cd, main at bf8de4597b16df23cfb6f5a8b10e71d47faae429) and its CI run on the merged tree tripped the gate again. The merge conflicted in crates/telomere-component/src/runtime/canonical.rs, where #312 added validate_pointer_alignment next to the helper #322 replaced: the resolution keeps #312's validate_pointer_alignment and #322's centralised validate_realloc_result (both function bodies byte-identical to their respective sources), and drops the superseded validate_realloc_pointer_alignment, whose call sites all moved into call_realloc. Two test assertions written against the flattened trampoline behaviour were updated to the preserved trap cause #312 establishes (the latin1+utf16 out-of-bounds shrink test in component_canonical_abi.rs now pins the \u2018realloc return: beyond end of memory\u2019 message, and the sibling-handle drop test in component_resource_handles.rs now pins the \u2018resource handle 1 is invalid\u2019 message); both tests still require the trap. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45565216579, 45565225662 and 45565239398 on main at bf8de4597b16df23cfb6f5a8b10e71d47faae429; all three runs pass the gate against main's checked-in baseline). Against this branch's previously checked-in baseline, the main control is byte-identical on 20 of the 32 gated series; on the 12 series of the three configurations that link telomere-component, main measures above that baseline in release (stripped file +1,264 B in component and +1,184 B in wasi and wasi-threads; stripped .text +1,104 B in component and +1,024 B in wasi and wasi-threads) from the #317/#322/#333 code that landed after the baseline snapshot, and below it in release-size (stripped file \u22122,384/\u22122,512/\u22122,528 B and stripped .text \u22122,256/\u22122,368/\u22122,384 B in component/wasi/wasi-threads). This PR's own delta against the main control is confined to the same 12 series: in release, stripped file +1,520 B and stripped .text +224 B in each of component, wasi and wasi-threads; in release-size, stripped file +1,312 B and stripped .text +1,008 B in each. Every other configuration is byte-identical to main in both profiles. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +10.01% (2,433,656 B to 2,677,280 B), up from +9.90% because the intervening main growth is now reflected in the baseline; the release core-nosimd stripped file series stays at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
+    "derivation": "Re-baseline for PR #350 (#330, core-to-component char conversions trap with the canonical \u2018invalid `char` bit pattern\u2019 message). The branch merged current main (merge commit 3f20c2e, main at 21edef0f0b147af7a43dcbec002673227ff8516d \u2014 PR #348 (#342, canonical lift/lower transfers resource handles across component call boundaries) and PR #351 (#331, trap invalid variant discriminants with the canonical message) on top of the main at 90f1437b1445b8523daa2f78eecb366de415ed11 the branch had merged during integration); the merge was conflict-free, and its CI run on the merged tree tripped the gate on six series, all in the release-size profile. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45581400712, 45581419487 and 45581439929 on main at 21edef0f0b147af7a43dcbec002673227ff8516d; all three runs pass the gate against main's checked-in baseline). Against the checked-in baseline, the main control is byte-identical on 25 of the 32 gated series; on seven series it measures below that baseline \u2014 stripped file and stripped .text \u221232 B in release for component, stripped file \u221248 B and stripped .text \u221232 B in release for wasi and wasi-threads, and stripped file \u221216 B in release-size for wasi-threads \u2014 because that baseline was snapshotted from PR #348's branch tree and the squash-merged main measures slightly smaller (the gate passes shrinkage, so the staleness was inert). This PR's own delta against the main control is confined to the series of the three configurations that link telomere-component: in release, stripped .text +32 B in each of component, wasi and wasi-threads and stripped file +16 B in each of wasi and wasi-threads (component stripped file is unchanged); in release-size, stripped file +128 B (component), +128 B (wasi) and +144 B (wasi-threads) and stripped .text +80 B, +80 B and +96 B. Every other configuration is byte-identical to main in both profiles. In release the growth is absorbed by the staleness headroom, so only the six release-size series exceed the checked-in baseline; those six are re-baselined to the branch measurements. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is unchanged: the release component stripped file series at +10.29% (2,433,656 B to 2,683,928 B), whose baseline does not move in this re-baseline; the release core-nosimd stripped file series is likewise unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -41,22 +41,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2677280,
-          "threshold": 2677280
+          "baseline": 2683928,
+          "threshold": 2683928
         },
         "stripped_text_bytes": {
-          "baseline": 2121511,
-          "threshold": 2121511
+          "baseline": 2126967,
+          "threshold": 2126967
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2904760,
-          "threshold": 2904760
+          "baseline": 2911408,
+          "threshold": 2911408
         },
         "stripped_text_bytes": {
-          "baseline": 2295879,
-          "threshold": 2295879
+          "baseline": 2301335,
+          "threshold": 2301335
         }
       },
       "core-nosimd": {
@@ -91,12 +91,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3120480,
-          "threshold": 3120480
+          "baseline": 3127112,
+          "threshold": 3127112
         },
         "stripped_text_bytes": {
-          "baseline": 2463191,
-          "threshold": 2463191
+          "baseline": 2468647,
+          "threshold": 2468647
         }
       }
     },
@@ -123,22 +123,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1677848,
-          "threshold": 1677848
+          "baseline": 1682592,
+          "threshold": 1682592
         },
         "stripped_text_bytes": {
-          "baseline": 1237943,
-          "threshold": 1237943
+          "baseline": 1241655,
+          "threshold": 1241655
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1799064,
-          "threshold": 1799064
+          "baseline": 1803808,
+          "threshold": 1803808
         },
         "stripped_text_bytes": {
-          "baseline": 1319719,
-          "threshold": 1319719
+          "baseline": 1323431,
+          "threshold": 1323431
         }
       },
       "core-nosimd": {
@@ -173,12 +173,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1941784,
-          "threshold": 1941784
+          "baseline": 1946544,
+          "threshold": 1946544
         },
         "stripped_text_bytes": {
-          "baseline": 1414423,
-          "threshold": 1414423
+          "baseline": 1418151,
+          "threshold": 1418151
         }
       }
     }
