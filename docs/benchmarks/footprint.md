@@ -563,42 +563,44 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-25, the `Embedder footprint` workflow was run four
-times against the code of PR #348: workflow_dispatch runs
-45574460897, 45574476400 and 45574496024 against the PR branch at
-head `01bbf1e3fdb04413d08214ef421921305714c39b` (the #342 change —
-canonical lift/lower transfers resource handles across component
-call boundaries — merged with current `main` at
-`90f1437` (PRs #340, #345 and #346)), and pull-request run
-45573469477, which
-built the same tree (`ubuntu-24.04`, Rust 1.96.0). A three-run
-control against unmodified `main` at `90f1437` (workflow_dispatch
-runs 45574513443, 45574531337 and 45574550157) isolates the
-attribution recorded in the re-baseline history below. Every run
-produced byte-identical sizes: for all sixteen
-profile/configuration rows, the raw file size, the `.text` size,
-the stripped file size, and the stripped `.text` size each have a
-run-to-run spread of **0 B** across the samples. The observed
-values are the baselines in the table below (stripped file /
-stripped `.text`, in bytes).
+times against the code of PR #352: workflow_dispatch runs
+45580882166, 45580896817 and 45580914068 against the PR branch at
+head `2587f4a2b7e115e9e433076554830fb5fd99156f` (the #334 change
+— `resource.drop` rejects dropping an owned resource while it
+is borrowed — merged with current `main` at `4cdb5ae` (PR #348,
+#342) on top of PR #340 (#312)), and pull-request run
+45580884917, which built the merge tree (`ubuntu-24.04`, Rust
+1.96.0). A one-run control against unmodified `main` at
+`4cdb5ae` (workflow_dispatch run 45580929310) isolates the
+attribution recorded in the re-baseline history below. The
+three dispatch samples produced byte-identical sizes: for all
+sixteen profile/configuration rows, the raw file size, the
+`.text` size, the stripped file size, and the stripped `.text`
+size each have a run-to-run spread of **0 B** across them; the
+pull-request sample measured 32–48 B below them on six
+`release` series of the component-linking configurations and
+identical on the other 26. The observed values are the
+baselines in the table below (stripped file / stripped
+`.text`, in bytes).
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,683,928 | 2,126,967 |
-| `release` | `wasi` | 2,911,408 | 2,301,335 |
+| `release` | `component` | 2,689,448 | 2,132,071 |
+| `release` | `wasi` | 2,916,912 | 2,306,439 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,127,112 | 2,468,647 |
+| `release` | `wasi-threads` | 3,132,616 | 2,473,751 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,682,464 | 1,241,575 |
-| `release-size` | `wasi` | 1,803,680 | 1,323,351 |
+| `release-size` | `component` | 1,685,856 | 1,244,311 |
+| `release-size` | `wasi` | 1,807,072 | 1,326,087 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,946,416 | 1,418,055 |
+| `release-size` | `wasi-threads` | 1,949,792 | 1,420,791 |
 
 #### Re-baseline history
 
@@ -2136,6 +2138,49 @@ the largest cumulative growth is now the `release`
 stripped file series is unchanged at +9.83% (1,275,448 B to
 1,400,840 B). The baseline was re-measured on the branch and
 updated as recorded above, following the procedure below.
+
+PR #352 (#334, `resource.drop` of an owned resource that is
+currently borrowed is rejected) merged current `main` into its
+branch twice: first `90f1437` (PR #340, #312), whose
+trampoline trap-cause preservation made the PR's regression
+test observe the canonical message at the public API (its
+assertion was updated to pin exactly that), and then `4cdb5ae`
+(PR #348, #342), which conflicted in the runtime and test
+files. The resolutions are unions of the two sides'
+insertions (each added block verified byte-identical to its
+source); `HandleEntry` keeps both new fields (the #334 borrow
+count and the #342 borrowed flag), and the borrowed-drop
+check applies only to owned entries, since a borrowed entry
+is a #342 registration rather than an owned resource. One
+semantic adaptation was needed where the two features meet:
+#342's transfer rewrites a borrow argument at a call boundary
+— to a borrowed registration in the callee table, or to the
+rep itself when the callee defines the resource — so the
+handle a borrow argument carries no longer names the owned
+entry a drop would remove; `HandleTable::note_borrow` now
+resolves the borrow to that owned entry (directly, through
+the registration's rep, or by rep) and registers the count
+there. With both changes in the tree, the vendored
+`resources/borrows.wast` passes in full (line 158 via #342,
+line 161 via #334) and its exclusion entry is removed.
+Attribution was isolated by measuring current `main` alone
+(workflow_dispatch run 45580929310 on `main` at `4cdb5ae`;
+the run passes the gate against `main`'s checked-in baseline,
+measuring byte-identical on 25 of the 32 gated series and
+16–48 B below it on the remaining 7). Against that control,
+this PR's own delta is confined to the 12 series of the three
+configurations that link `telomere-component`: in `release`,
+stripped file +5,552 B and stripped `.text` +5,136 B in each
+of `component`, `wasi` and `wasi-threads`; in `release-size`,
+stripped file +3,392 B and stripped `.text` +2,736 B in each.
+Every other configuration is byte-identical to `main` in both
+profiles. Against the original #164 baseline, the largest
+cumulative growth is now the `release` `component` stripped
+file series at +10.51% (2,433,656 B to 2,689,448 B), up from
++10.29%; the `release` `core-nosimd` stripped file series is
+unchanged at +9.83% (1,275,448 B to 1,400,840 B). The
+baseline was re-measured on the branch and updated as
+recorded above, following the procedure below.
 
 ### Threshold derivation
 

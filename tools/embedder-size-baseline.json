@@ -1,21 +1,21 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #348 (branch fix/342-handle-transfer at head 01bbf1e3fdb04413d08214ef421921305714c39b \u2014 the #342 change (canonical lift/lower transfers resource handles across component call boundaries: own handles move between the per-instance handle tables introduced by #317, and borrows register in the destination table for the duration of the call) merged with current main 90f1437b1445b8523daa2f78eecb366de415ed11 (PRs #340, #345 and #346), with the single exclusion-table conflict in component_model_upstream.rs resolved by dropping both the #333 clause (fixed by #346) and the #317 clause (superseded by #317 and this PR) from linking/unit.wast's exclusion reason, and one test assertion updated to the trap cause #312's preservation now surfaces; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45574460897, 45574476400 and 45574496024 against the branch and pull-request run 45573469477, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "01bbf1e3fdb04413d08214ef421921305714c39b",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #352 (branch fix/334-borrowed-drop at head 2587f4a2b7e115e9e433076554830fb5fd99156f \u2014 the #334 change (resource.drop rejects dropping an owned resource while it is borrowed: per-entry borrow counts in the per-instance handle table, with the borrows lent to a lifted call registered against the owned entry they name for the duration of the call) merged with current main 4cdb5ae4ec7cb9e64252743ffb86588bd13b3468 (PR #348, #342) on top of PR #340 (#312); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45580882166, 45580896817 and 45580914068 against the branch produced byte-identical sizes for every gated series, and pull-request run 45580884917, which built the merge tree, measured within 48 B of them (32\u201348 B below on six release series of the component-linking configurations, identical on the other 26)",
+    "commit": "2587f4a2b7e115e9e433076554830fb5fd99156f",
     "date": "2026-11-25",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45574460897,
-      45574476400,
-      45574496024
+      45580882166,
+      45580896817,
+      45580914068
     ],
     "cross_check_run_ids": [
-      45573469477
+      45580884917
     ],
-    "derivation": "Re-baseline for PR #348 (#342, canonical lift/lower transfers resource handles across component call boundaries). The branch merged current main (merge commit 634bfd3, main at 90f1437b1445b8523daa2f78eecb366de415ed11 \u2014 PRs #340 (#312, trap on unaligned canonical ABI pointers), #345 (#332, realloc called when lowering empty lists) and #346 (#333, defined instances materialised in definition order) on top of the #341/#343 base the branch started from) and its CI run on the merged tree tripped the gate on the 12 series of the three configurations that link telomere-component. The merge conflicted only in the vendored-suite exclusion table (component_model_upstream.rs, the linking/unit.wast reason): main had dropped the #333 clause (fixed by #346) while this branch dropped the #317 clause (superseded by #317 and this PR); the resolution drops both clauses, leaving #321 (line 799), #324 (lines 2010, 2043) and the alias export-resolution failure at lines 865-866, filed as #347. One test assertion was updated for the trap cause #312's preservation now surfaces \u2014 the wrong-type drop test in component_resource_handles.rs pins the \u2018resource handle 2 is invalid\u2019 message; the test still requires the trap. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45574513443, 45574531337 and 45574550157 on main at 90f1437b1445b8523daa2f78eecb366de415ed11; all three runs pass the gate against main's checked-in baseline). Against the checked-in baseline, the main control is byte-identical on 20 of the 32 gated series; on the 12 series of the three configurations that link telomere-component it measures uniformly below that baseline \u2014 stripped file and stripped .text \u221296 B in release and \u221232 B in release-size, in each of component, wasi and wasi-threads \u2014 because that baseline was snapshotted from PR #340's branch tree and the squash-merged main measures slightly smaller (the gate passes shrinkage, so the staleness was inert). This PR's own delta against the main control is confined to the same 12 series: in release, stripped file +6,744 B (component), +6,744 B (wasi) and +6,728 B (wasi-threads) and stripped .text +5,552 B in each; in release-size, stripped file +4,648 B / +4,648 B / +4,664 B and stripped .text +3,664 B in each. Every other configuration is byte-identical to main in both profiles. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +10.29% (2,433,656 B to 2,683,928 B), up from +10.01%; the release core-nosimd stripped file series is unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
+    "derivation": "Re-baseline for PR #352 (#334, resource.drop of an owned resource that is currently borrowed is rejected with the canonical trap `cannot remove owned resource while borrowed`). The branch merged current main twice: first 90f1437 (PR #340, #312), whose trampoline trap-cause preservation made the PR's regression test observe the canonical message at the public API (its assertion was updated to pin exactly that), and then 4cdb5ae (PR #348, #342), which conflicted in the runtime and test files. The resolutions are unions of the two sides' insertions (each added block verified byte-identical to its source); HandleEntry keeps both new fields (the #334 borrow count and the #342 borrowed flag), and the borrowed-drop check applies only to owned entries, since a borrowed entry is a #342 registration rather than an owned resource. One semantic adaptation was needed where the two features meet: #342's transfer rewrites a borrow argument at a call boundary \u2014 to a borrowed registration in the callee table, or to the rep itself when the callee defines the resource \u2014 so the handle a borrow argument carries no longer names the owned entry a drop would remove; HandleTable::note_borrow now resolves the borrow to that owned entry (directly, through the registration's rep, or by rep) and registers the count there. With both changes in the tree, the vendored resources/borrows.wast passes in full (line 158 via #342, line 161 via #334) and its exclusion entry is removed. The PR's CI run on the merged tree tripped the gate on the 12 series of the three configurations that link telomere-component. Attribution was isolated by measuring current main alone (workflow_dispatch run 45580929310 on main at 4cdb5ae4ec7cb9e64252743ffb86588bd13b3468; the run passes the gate against main's checked-in baseline, measuring byte-identical on 25 of the 32 gated series and 16\u201348 B below it on the remaining 7). This PR's own delta against the main control is confined to the same 12 series: in release, stripped file +5,552 B and stripped .text +5,136 B in each of component, wasi and wasi-threads; in release-size, stripped file +3,392 B and stripped .text +2,736 B in each. Every other configuration is byte-identical to main in both profiles. Run-to-run spread was 0 B for every gated series across the three branch samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +10.51% (2,433,656 B to 2,689,448 B), up from +10.29%; the release core-nosimd stripped file series stays at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -41,22 +41,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2683928,
-          "threshold": 2683928
+          "baseline": 2689448,
+          "threshold": 2689448
         },
         "stripped_text_bytes": {
-          "baseline": 2126967,
-          "threshold": 2126967
+          "baseline": 2132071,
+          "threshold": 2132071
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2911408,
-          "threshold": 2911408
+          "baseline": 2916912,
+          "threshold": 2916912
         },
         "stripped_text_bytes": {
-          "baseline": 2301335,
-          "threshold": 2301335
+          "baseline": 2306439,
+          "threshold": 2306439
         }
       },
       "core-nosimd": {
@@ -91,12 +91,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3127112,
-          "threshold": 3127112
+          "baseline": 3132616,
+          "threshold": 3132616
         },
         "stripped_text_bytes": {
-          "baseline": 2468647,
-          "threshold": 2468647
+          "baseline": 2473751,
+          "threshold": 2473751
         }
       }
     },
@@ -123,22 +123,22 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1682464,
-          "threshold": 1682464
+          "baseline": 1685856,
+          "threshold": 1685856
         },
         "stripped_text_bytes": {
-          "baseline": 1241575,
-          "threshold": 1241575
+          "baseline": 1244311,
+          "threshold": 1244311
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1803680,
-          "threshold": 1803680
+          "baseline": 1807072,
+          "threshold": 1807072
         },
         "stripped_text_bytes": {
-          "baseline": 1323351,
-          "threshold": 1323351
+          "baseline": 1326087,
+          "threshold": 1326087
         }
       },
       "core-nosimd": {
@@ -173,12 +173,12 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1946416,
-          "threshold": 1946416
+          "baseline": 1949792,
+          "threshold": 1949792
         },
         "stripped_text_bytes": {
-          "baseline": 1418055,
-          "threshold": 1418055
+          "baseline": 1420791,
+          "threshold": 1420791
         }
       }
     }
