@@ -85,11 +85,10 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "values/realloc.wast",
-        "blocked by issue #322 (the result of realloc is not \
-         bounds-checked: line 110 does not trap, and lines 66, 108, 123 \
-         trap with a different error than the spec text) and issue #312 \
-         (line 93: an unaligned pointer does not trap in the canonical \
-         layer)",
+        "blocked by issue #312 (lines 66 and 93 trap with the \
+         flattened `unreachable` message instead of the canonical trap \
+         text: the canon-lower trampoline erases the trap cause, and \
+         the canonical layer does not check pointer alignment)",
     ),
     (
         "values/variants.wast",
