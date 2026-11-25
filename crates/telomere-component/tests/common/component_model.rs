@@ -1,12 +1,17 @@
 #![allow(dead_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
-use telomere::{IoReadBinaryReader, WasmParser};
-use telomere_component::{ComponentEngine, ComponentError};
+use telomere::{IoReadBinaryReader, Store, WasmParser};
+use telomere_component::{
+    ComponentEngine, ComponentError, ComponentInstance, ComponentLinker, ComponentProgram,
+    ComponentValue,
+};
+use wast::component::WastVal;
+use wast::core::WastRetCore;
 use wast::parser::ParseBuffer;
-use wast::{QuoteWat, Wast, WastDirective, Wat};
+use wast::{QuoteWat, Wast, WastArg, WastDirective, WastExecute, WastInvoke, WastRet, Wat};
 
 #[derive(Debug, Default)]
 pub struct TestsuiteCaseReport {
@@ -14,7 +19,7 @@ pub struct TestsuiteCaseReport {
     pub failures: Vec<String>,
 }
 
-pub fn run_component_testsuite_case(path: &Path, text: &str) -> TestsuiteCaseReport {
+pub async fn run_component_testsuite_case(path: &Path, text: &str) -> TestsuiteCaseReport {
     let buf = match ParseBuffer::new(text) {
         Ok(buf) => buf,
         Err(error) => {
@@ -38,79 +43,90 @@ pub fn run_component_testsuite_case(path: &Path, text: &str) -> TestsuiteCaseRep
         }
     };
 
-    let engine = ComponentEngine::new();
     let mut report = TestsuiteCaseReport::default();
+    let mut runtime = RuntimeState::new();
 
     for directive in wast.directives {
         match directive {
-            WastDirective::Module(mut module) | WastDirective::ModuleDefinition(mut module) => {
-                handle_module(path, text, &engine, &mut report, &mut module);
+            WastDirective::Module(mut module) => {
+                handle_module(path, text, &mut report, &mut runtime, &mut module, false);
+            }
+            WastDirective::ModuleDefinition(mut module) => {
+                handle_module(path, text, &mut report, &mut runtime, &mut module, true);
             }
             WastDirective::AssertInvalid {
                 span,
                 mut module,
                 message,
-            } => {
-                handle_assert_invalid(path, text, &engine, &mut report, span, &mut module, message)
             }
+            | WastDirective::AssertInvalidCustom {
+                span,
+                mut module,
+                message,
+            } => handle_assert_invalid(
+                path,
+                text,
+                &runtime.engine,
+                &mut report,
+                span,
+                &mut module,
+                message,
+            ),
             WastDirective::AssertMalformed {
+                span,
+                mut module,
+                message,
+            }
+            | WastDirective::AssertMalformedCustom {
                 span,
                 mut module,
                 message,
             } => handle_assert_malformed(
                 path,
                 text,
-                &engine,
+                &runtime.engine,
                 &mut report,
                 span,
                 &mut module,
                 message,
             ),
-            WastDirective::ModuleInstance { span, .. } => {
-                fail_at(
+            WastDirective::ModuleInstance {
+                span,
+                instance,
+                module,
+            } => {
+                handle_module_instance(
                     path,
                     text,
                     &mut report,
+                    &mut runtime,
                     span,
-                    "unsupported directive `module instance` in component_model_testsuite"
-                        .to_owned(),
-                );
+                    instance,
+                    module,
+                )
+                .await;
             }
-            WastDirective::Register { span, .. } => {
-                fail_at(
-                    path,
-                    text,
-                    &mut report,
-                    span,
-                    "unsupported directive `register` in component_model_testsuite".to_owned(),
-                );
+            WastDirective::Register { span, name, module } => {
+                handle_register(path, text, &mut report, &mut runtime, span, name, module).await;
             }
             WastDirective::Invoke(invoke) => {
-                fail_at(
-                    path,
-                    text,
-                    &mut report,
-                    invoke.span,
-                    "unsupported directive `invoke` in component_model_testsuite".to_owned(),
-                );
+                handle_invoke(path, text, &mut report, &mut runtime, &invoke).await;
             }
-            WastDirective::AssertTrap { span, .. } => {
-                fail_at(
-                    path,
-                    text,
-                    &mut report,
-                    span,
-                    "unsupported directive `assert_trap` in component_model_testsuite".to_owned(),
-                );
+            WastDirective::AssertTrap {
+                span,
+                exec,
+                message,
+            } => {
+                handle_assert_trap(path, text, &mut report, &mut runtime, span, &exec, message)
+                    .await;
             }
-            WastDirective::AssertReturn { span, .. } => {
-                fail_at(
-                    path,
-                    text,
-                    &mut report,
-                    span,
-                    "unsupported directive `assert_return` in component_model_testsuite".to_owned(),
-                );
+            WastDirective::AssertReturn {
+                span,
+                exec,
+                results,
+            } => {
+                handle_assert_return(path, text, &mut report, &mut runtime, span, &exec, &results)
+                    .await;
             }
             WastDirective::AssertExhaustion { span, .. } => {
                 fail_at(
@@ -122,15 +138,21 @@ pub fn run_component_testsuite_case(path: &Path, text: &str) -> TestsuiteCaseRep
                         .to_owned(),
                 );
             }
-            WastDirective::AssertUnlinkable { span, .. } => {
-                fail_at(
+            WastDirective::AssertUnlinkable {
+                span,
+                module,
+                message,
+            } => {
+                handle_assert_unlinkable(
                     path,
                     text,
                     &mut report,
+                    &mut runtime,
                     span,
-                    "unsupported directive `assert_unlinkable` in component_model_testsuite"
-                        .to_owned(),
-                );
+                    module,
+                    message,
+                )
+                .await;
             }
             WastDirective::AssertException { span, .. } => {
                 fail_at(
@@ -179,9 +201,10 @@ pub fn run_component_testsuite_case(path: &Path, text: &str) -> TestsuiteCaseRep
 fn handle_module(
     path: &Path,
     text: &str,
-    engine: &ComponentEngine,
     report: &mut TestsuiteCaseReport,
+    runtime: &mut RuntimeState,
     module: &mut QuoteWat<'_>,
+    definition_only: bool,
 ) {
     let span = module.span();
     if !is_component_quote(module) {
@@ -196,18 +219,35 @@ fn handle_module(
         return;
     }
 
-    if let Err(error) = compile_component_quote(engine, module) {
-        fail_at(
-            path,
-            text,
-            report,
-            span,
-            format!("component compile failed: {error}"),
-        );
-        return;
-    }
+    let program = match compile_component_program(&runtime.engine, module) {
+        Ok(program) => program,
+        Err(error) => {
+            fail_at(
+                path,
+                text,
+                report,
+                span,
+                format!("component compile failed: {error}"),
+            );
+            return;
+        }
+    };
 
     report.directives_checked += 1;
+
+    if let Some(id) = module.name() {
+        runtime
+            .definitions
+            .insert(id.name().to_owned(), program.clone());
+    }
+    if !definition_only {
+        // A plain `(component ...)` becomes the current definition; it is
+        // instantiated lazily when a runtime directive first needs an
+        // instance, so compile/validate-only files never pay for (or fail
+        // on) instantiation.
+        runtime.pending = Some(program);
+        runtime.current = None;
+    }
 }
 
 fn handle_assert_invalid(
@@ -336,10 +376,17 @@ fn compile_component_quote(
     engine: &ComponentEngine,
     module: &mut QuoteWat<'_>,
 ) -> Result<(), ComponentError> {
+    compile_component_program(engine, module).map(|_| ())
+}
+
+fn compile_component_program(
+    engine: &ComponentEngine,
+    module: &mut QuoteWat<'_>,
+) -> Result<ComponentProgram, ComponentError> {
     let source = module
         .encode()
         .map_err(|error| ComponentError::Decode(error.to_string()))?;
-    engine.compile(&source).map(|_| ())
+    engine.compile(&source)
 }
 
 fn fail_at(
@@ -592,4 +639,696 @@ fn error_categories(input: &str) -> BTreeSet<&'static str> {
         }
     }
     categories
+}
+
+// ---------------------------------------------------------------------------
+// Runtime directive execution
+//
+// The harness executes `invoke` / `assert_return` / `assert_trap` /
+// `assert_unlinkable` / `register` / `(component instance ...)` against real
+// component instances, so the vendored upstream suite checks canonical ABI
+// behaviour at runtime instead of compile/validate only. One `Store` is
+// shared by every instance created while running a single file (matching
+// the reference wast runner); a fresh state is created per file.
+//
+// Instantiation is lazy: a `(component ...)` directive only compiles and
+// records the program. The instance is created when a runtime directive
+// first needs one, or eagerly by `(component instance $i $Definition)`.
+
+struct RuntimeState {
+    engine: ComponentEngine,
+    store: Store,
+    linker: ComponentLinker,
+    /// Programs recorded under their `$id` by `(component $id ...)` and
+    /// `(component definition $id ...)`.
+    definitions: HashMap<String, ComponentProgram>,
+    /// Instances recorded under their `$id` by `(component instance $id ...)`.
+    instances: HashMap<String, ComponentInstance>,
+    /// Instances named by `register`, kept for `(invoke $name ...)`
+    /// resolution. The component linker has no API to bridge a live
+    /// instance's exports into a later component's imports, so a registered
+    /// instance cannot satisfy another component's imports from here; no
+    /// vendored file relies on that (linking is expressed inside the
+    /// component text itself).
+    registered: HashMap<String, ComponentInstance>,
+    /// The instance runtime directives act on when they name no module.
+    current: Option<ComponentInstance>,
+    /// The most recent non-definition component, awaiting lazy
+    /// instantiation.
+    pending: Option<ComponentProgram>,
+}
+
+impl RuntimeState {
+    fn new() -> Self {
+        Self {
+            engine: ComponentEngine::new(),
+            store: Store::new(),
+            linker: ComponentLinker::new(),
+            definitions: HashMap::new(),
+            instances: HashMap::new(),
+            registered: HashMap::new(),
+            current: None,
+            pending: None,
+        }
+    }
+
+    async fn instantiate(
+        &mut self,
+        program: &ComponentProgram,
+    ) -> Result<ComponentInstance, ComponentError> {
+        self.engine
+            .instantiate(program, &self.store, &self.linker)
+            .await
+    }
+
+    /// Returns the current instance, instantiating the pending component
+    /// first if necessary.
+    async fn current_instance(&mut self) -> Result<ComponentInstance, String> {
+        if let Some(instance) = &self.current {
+            return Ok(instance.clone());
+        }
+        let program = self
+            .pending
+            .take()
+            .ok_or_else(|| "no component has been defined yet".to_owned())?;
+        let instance = self
+            .instantiate(&program)
+            .await
+            .map_err(|error| format!("component instantiation failed: {error}"))?;
+        self.current = Some(instance.clone());
+        Ok(instance)
+    }
+
+    /// Resolves the instance an invoke targets: a named instance when the
+    /// directive carries one, otherwise the current instance.
+    async fn resolve_instance(
+        &mut self,
+        module: Option<wast::token::Id<'_>>,
+    ) -> Result<ComponentInstance, String> {
+        match module {
+            Some(id) => {
+                let name = id.name();
+                self.instances
+                    .get(name)
+                    .or_else(|| self.registered.get(name))
+                    .cloned()
+                    .ok_or_else(|| format!("no instance named `${name}` has been created"))
+            }
+            None => self.current_instance().await,
+        }
+    }
+}
+
+async fn handle_module_instance(
+    path: &Path,
+    text: &str,
+    report: &mut TestsuiteCaseReport,
+    runtime: &mut RuntimeState,
+    span: wast::token::Span,
+    instance: Option<wast::token::Id<'_>>,
+    module: Option<wast::token::Id<'_>>,
+) {
+    let program = match module {
+        Some(id) => match runtime.definitions.get(id.name()) {
+            Some(program) => program.clone(),
+            None => {
+                fail_at(
+                    path,
+                    text,
+                    report,
+                    span,
+                    format!(
+                        "component instance references unknown definition `${}`",
+                        id.name()
+                    ),
+                );
+                return;
+            }
+        },
+        None => match runtime.pending.take() {
+            Some(program) => program,
+            None => {
+                fail_at(
+                    path,
+                    text,
+                    report,
+                    span,
+                    "component instance directive has no preceding component definition".to_owned(),
+                );
+                return;
+            }
+        },
+    };
+
+    match runtime.instantiate(&program).await {
+        Ok(created) => {
+            report.directives_checked += 1;
+            if let Some(id) = instance {
+                runtime
+                    .instances
+                    .insert(id.name().to_owned(), created.clone());
+            }
+            runtime.current = Some(created);
+        }
+        Err(error) => fail_at(
+            path,
+            text,
+            report,
+            span,
+            format!("component instantiation failed: {error}"),
+        ),
+    }
+}
+
+async fn handle_register(
+    path: &Path,
+    text: &str,
+    report: &mut TestsuiteCaseReport,
+    runtime: &mut RuntimeState,
+    span: wast::token::Span,
+    name: &str,
+    module: Option<wast::token::Id<'_>>,
+) {
+    let instance = match module {
+        Some(id) => runtime.instances.get(id.name()).cloned(),
+        None => runtime.current.clone(),
+    };
+    match instance {
+        Some(instance) => {
+            runtime.registered.insert(name.to_owned(), instance);
+            report.directives_checked += 1;
+        }
+        None => fail_at(
+            path,
+            text,
+            report,
+            span,
+            "register directive has no instance to register".to_owned(),
+        ),
+    }
+}
+
+async fn execute_invoke(
+    runtime: &mut RuntimeState,
+    invoke: &WastInvoke<'_>,
+) -> Result<Vec<ComponentValue>, String> {
+    let instance = runtime.resolve_instance(invoke.module).await?;
+    let mut args = Vec::with_capacity(invoke.args.len());
+    for arg in &invoke.args {
+        args.push(wast_arg_to_value(arg)?);
+    }
+    instance
+        .call(&runtime.store, invoke.name, &args)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn handle_invoke(
+    path: &Path,
+    text: &str,
+    report: &mut TestsuiteCaseReport,
+    runtime: &mut RuntimeState,
+    invoke: &WastInvoke<'_>,
+) {
+    match execute_invoke(runtime, invoke).await {
+        Ok(_) => report.directives_checked += 1,
+        Err(error) => fail_at(
+            path,
+            text,
+            report,
+            invoke.span,
+            format!("invoke \"{}\" failed: {error}", invoke.name),
+        ),
+    }
+}
+
+async fn handle_assert_return(
+    path: &Path,
+    text: &str,
+    report: &mut TestsuiteCaseReport,
+    runtime: &mut RuntimeState,
+    span: wast::token::Span,
+    exec: &WastExecute<'_>,
+    results: &[WastRet<'_>],
+) {
+    let actual = match exec {
+        WastExecute::Invoke(invoke) => match execute_invoke(runtime, invoke).await {
+            Ok(values) => values,
+            Err(error) => {
+                fail_at(
+                    path,
+                    text,
+                    report,
+                    span,
+                    format!(
+                        "assert_return expected success but invoke \"{}\" failed: {error}",
+                        invoke.name
+                    ),
+                );
+                return;
+            }
+        },
+        WastExecute::Get { module, global, .. } => {
+            let instance = match runtime.resolve_instance(*module).await {
+                Ok(instance) => instance,
+                Err(error) => {
+                    fail_at(path, text, report, span, error);
+                    return;
+                }
+            };
+            match instance.get_value(&runtime.store, global) {
+                Ok(value) => vec![value],
+                Err(error) => {
+                    fail_at(
+                        path,
+                        text,
+                        report,
+                        span,
+                        format!("assert_return get \"{global}\" failed: {error}"),
+                    );
+                    return;
+                }
+            }
+        }
+        WastExecute::Wat(_) => {
+            fail_at(
+                path,
+                text,
+                report,
+                span,
+                "assert_return of a module definition is not supported by component_model_testsuite"
+                    .to_owned(),
+            );
+            return;
+        }
+    };
+
+    if actual.len() != results.len() {
+        fail_at(
+            path,
+            text,
+            report,
+            span,
+            format!(
+                "assert_return arity mismatch: expected {} value(s), got {}",
+                results.len(),
+                actual.len()
+            ),
+        );
+        return;
+    }
+
+    for (expected, actual) in results.iter().zip(actual.iter()) {
+        let expected = match wast_ret_to_value(expected) {
+            Ok(value) => value,
+            Err(error) => {
+                fail_at(path, text, report, span, error);
+                return;
+            }
+        };
+        if !component_values_match(&expected, actual) {
+            fail_at(
+                path,
+                text,
+                report,
+                span,
+                format!("assert_return value mismatch: expected {expected:?}, got {actual:?}"),
+            );
+            return;
+        }
+    }
+
+    report.directives_checked += 1;
+}
+
+async fn handle_assert_trap(
+    path: &Path,
+    text: &str,
+    report: &mut TestsuiteCaseReport,
+    runtime: &mut RuntimeState,
+    span: wast::token::Span,
+    exec: &WastExecute<'_>,
+    message: &str,
+) {
+    let outcome = match exec {
+        WastExecute::Invoke(invoke) => execute_invoke(runtime, invoke).await.map(|_| ()),
+        WastExecute::Wat(_) => {
+            // Harness limitation: the `wast` AST is not `Clone`, and
+            // encoding a `Wat` needs `&mut` access the directive borrow
+            // does not provide, so an inline module operand cannot be
+            // instantiated from here. No vendored file uses this form
+            // (every upstream assert_trap wraps an invoke); a file that
+            // does must be excluded with this reason.
+            fail_at(
+                path,
+                text,
+                report,
+                span,
+                "assert_trap of an inline module is not supported by component_model_testsuite"
+                    .to_owned(),
+            );
+            return;
+        }
+        WastExecute::Get { .. } => {
+            fail_at(
+                path,
+                text,
+                report,
+                span,
+                "assert_trap of a global get is not supported by component_model_testsuite"
+                    .to_owned(),
+            );
+            return;
+        }
+    };
+
+    match outcome {
+        Ok(()) => fail_at(
+            path,
+            text,
+            report,
+            span,
+            format!(
+                "assert_trap expected an error containing `{message}`, but execution succeeded"
+            ),
+        ),
+        Err(actual) => {
+            if !trap_message_match(message, &actual) {
+                fail_at(
+                    path,
+                    text,
+                    report,
+                    span,
+                    format!(
+                        "assert_trap message mismatch: expected semantic match for `{message}`, got `{actual}`"
+                    ),
+                );
+                return;
+            }
+            report.directives_checked += 1;
+        }
+    }
+}
+
+async fn handle_assert_unlinkable(
+    path: &Path,
+    text: &str,
+    report: &mut TestsuiteCaseReport,
+    runtime: &mut RuntimeState,
+    span: wast::token::Span,
+    module: Wat<'_>,
+    message: &str,
+) {
+    if !matches!(module, Wat::Component(_)) {
+        fail_at(
+            path,
+            text,
+            report,
+            span,
+            "assert_unlinkable for a core module is outside component_model_testsuite coverage"
+                .to_owned(),
+        );
+        return;
+    }
+
+    let mut wat = module;
+    let actual = match wat.encode() {
+        Ok(source) => match runtime.engine.compile(&source) {
+            Ok(program) => match runtime.instantiate(&program).await {
+                Ok(_) => None,
+                Err(error) => Some(error.to_string()),
+            },
+            Err(error) => Some(error.to_string()),
+        },
+        Err(error) => Some(error.to_string()),
+    };
+
+    match actual {
+        Some(actual) => {
+            if !semantic_error_match(message, &actual) {
+                fail_at(
+                    path,
+                    text,
+                    report,
+                    span,
+                    format!(
+                        "assert_unlinkable message mismatch: expected semantic match for `{message}`, got `{actual}`"
+                    ),
+                );
+                return;
+            }
+            report.directives_checked += 1;
+        }
+        None => fail_at(
+            path,
+            text,
+            report,
+            span,
+            format!(
+                "assert_unlinkable expected an error containing `{message}`, but instantiation succeeded"
+            ),
+        ),
+    }
+}
+
+/// Matches an expected trap message against telomere's error text.
+///
+/// Trap wording is part of neither the binary format nor the validation
+/// contract, and telomere phrases canonical-ABI traps differently from the
+/// reference text (e.g. "latin1+utf16 string pointer .. is not aligned to
+/// 2 bytes" for the spec's "unaligned pointer"). Matching therefore starts
+/// with containment, then a small table of spec-phrase aliases, and finally
+/// falls back to the same semantic matcher used for invalid/malformed
+/// messages. Aliases are added only for wording differences, never to
+/// accept a trap raised for a different reason.
+fn trap_message_match(expected: &str, actual: &str) -> bool {
+    let expected_normalized = normalize_message(expected);
+    let actual_normalized = normalize_message(actual);
+    if expected_normalized.is_empty() || actual_normalized.contains(&expected_normalized) {
+        return true;
+    }
+
+    if expected_normalized.contains("unaligned pointer")
+        && actual_normalized.contains("not aligned")
+    {
+        return true;
+    }
+    if expected_normalized.contains("out of bounds") && actual_normalized.contains("out of bounds")
+    {
+        return true;
+    }
+
+    semantic_error_match(expected, actual)
+}
+
+fn wast_arg_to_value(arg: &WastArg<'_>) -> Result<ComponentValue, String> {
+    match arg {
+        WastArg::Component(value) => wast_val_to_value(value),
+        WastArg::Core(core) => match core {
+            wast::core::WastArgCore::I32(value) => Ok(ComponentValue::I32(*value)),
+            wast::core::WastArgCore::I64(value) => Ok(ComponentValue::I64(*value)),
+            wast::core::WastArgCore::F32(value) => {
+                Ok(ComponentValue::F32(f32::from_bits(value.bits)))
+            }
+            wast::core::WastArgCore::F64(value) => {
+                Ok(ComponentValue::F64(f64::from_bits(value.bits)))
+            }
+            other => Err(format!(
+                "unsupported core argument in component invoke: {other:?}"
+            )),
+        },
+        other => Err(format!(
+            "unsupported argument in component invoke: {other:?}"
+        )),
+    }
+}
+
+fn wast_ret_to_value(ret: &WastRet<'_>) -> Result<ComponentValue, String> {
+    match ret {
+        WastRet::Component(value) => wast_val_to_value(value),
+        WastRet::Core(core) => match core {
+            WastRetCore::I32(value) => Ok(ComponentValue::I32(*value)),
+            WastRetCore::I64(value) => Ok(ComponentValue::I64(*value)),
+            WastRetCore::F32(pattern) => Ok(ComponentValue::F32(nan_pattern_f32(pattern))),
+            WastRetCore::F64(pattern) => Ok(ComponentValue::F64(nan_pattern_f64(pattern))),
+            other => Err(format!(
+                "unsupported core expected value in assert_return: {other:?}"
+            )),
+        },
+        other => Err(format!(
+            "unsupported expected value in assert_return: {other:?}"
+        )),
+    }
+}
+
+fn nan_pattern_f32(pattern: &wast::core::NanPattern<wast::token::F32>) -> f32 {
+    match pattern {
+        wast::core::NanPattern::CanonicalNan | wast::core::NanPattern::ArithmeticNan => f32::NAN,
+        wast::core::NanPattern::Value(value) => f32::from_bits(value.bits),
+    }
+}
+
+fn nan_pattern_f64(pattern: &wast::core::NanPattern<wast::token::F64>) -> f64 {
+    match pattern {
+        wast::core::NanPattern::CanonicalNan | wast::core::NanPattern::ArithmeticNan => f64::NAN,
+        wast::core::NanPattern::Value(value) => f64::from_bits(value.bits),
+    }
+}
+
+fn wast_val_to_value(value: &WastVal<'_>) -> Result<ComponentValue, String> {
+    Ok(match value {
+        WastVal::Bool(value) => ComponentValue::Bool(*value),
+        WastVal::U8(value) => ComponentValue::U8(*value),
+        WastVal::S8(value) => ComponentValue::S8(*value),
+        WastVal::U16(value) => ComponentValue::U16(*value),
+        WastVal::S16(value) => ComponentValue::S16(*value),
+        WastVal::U32(value) => ComponentValue::U32(*value),
+        WastVal::S32(value) => ComponentValue::S32(*value),
+        WastVal::U64(value) => ComponentValue::U64(*value),
+        WastVal::S64(value) => ComponentValue::S64(*value),
+        WastVal::F32(value) => ComponentValue::F32(f32::from_bits(value.bits)),
+        WastVal::F64(value) => ComponentValue::F64(f64::from_bits(value.bits)),
+        WastVal::Char(value) => ComponentValue::Char(*value),
+        WastVal::String(value) => ComponentValue::String((*value).to_owned()),
+        WastVal::List(values) => ComponentValue::List(
+            values
+                .iter()
+                .map(wast_val_to_value)
+                .collect::<Result<_, _>>()?,
+        ),
+        WastVal::Record(fields) => ComponentValue::Record(
+            fields
+                .iter()
+                .map(|(name, value)| Ok(((*name).to_owned(), wast_val_to_value(value)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        WastVal::Tuple(values) => ComponentValue::Tuple(
+            values
+                .iter()
+                .map(wast_val_to_value)
+                .collect::<Result<_, _>>()?,
+        ),
+        WastVal::Variant(case, payload) => ComponentValue::Variant {
+            case: (*case).to_owned(),
+            value: match payload {
+                Some(payload) => Some(Box::new(wast_val_to_value(payload)?)),
+                None => None,
+            },
+        },
+        WastVal::Enum(case) => ComponentValue::Enum((*case).to_owned()),
+        WastVal::Option(value) => ComponentValue::Option(match value {
+            Some(value) => Some(Box::new(wast_val_to_value(value)?)),
+            None => None,
+        }),
+        WastVal::Result(result) => match result {
+            Ok(payload) => ComponentValue::Result {
+                ok: match payload {
+                    Some(payload) => Some(Box::new(wast_val_to_value(payload)?)),
+                    None => None,
+                },
+                err: None,
+            },
+            Err(payload) => ComponentValue::Result {
+                ok: None,
+                err: match payload {
+                    Some(payload) => Some(Box::new(wast_val_to_value(payload)?)),
+                    None => None,
+                },
+            },
+        },
+        WastVal::Flags(names) => {
+            ComponentValue::Flags(names.iter().map(|name| (*name).to_owned()).collect())
+        }
+        WastVal::Map(_) => {
+            return Err(
+                "map values are a documented non-goal (CM_MAP) and cannot be expected here"
+                    .to_owned(),
+            );
+        }
+    })
+}
+
+/// Structural equality for expected vs. actual component values, with the
+/// two relaxations wast semantics require: NaN equals NaN (any payload),
+/// and record fields / flags compare by name rather than position.
+fn component_values_match(expected: &ComponentValue, actual: &ComponentValue) -> bool {
+    match (expected, actual) {
+        (ComponentValue::F32(expected), ComponentValue::F32(actual)) => {
+            expected.to_bits() == actual.to_bits() || (expected.is_nan() && actual.is_nan())
+        }
+        (ComponentValue::F64(expected), ComponentValue::F64(actual)) => {
+            expected.to_bits() == actual.to_bits() || (expected.is_nan() && actual.is_nan())
+        }
+        (ComponentValue::List(expected), ComponentValue::List(actual))
+        | (ComponentValue::Tuple(expected), ComponentValue::Tuple(actual)) => {
+            expected.len() == actual.len()
+                && expected
+                    .iter()
+                    .zip(actual.iter())
+                    .all(|(expected, actual)| component_values_match(expected, actual))
+        }
+        (ComponentValue::Record(expected), ComponentValue::Record(actual)) => {
+            expected.len() == actual.len()
+                && expected.iter().all(|(name, expected_value)| {
+                    actual
+                        .iter()
+                        .find(|(actual_name, _)| actual_name == name)
+                        .is_some_and(|(_, actual_value)| {
+                            component_values_match(expected_value, actual_value)
+                        })
+                })
+        }
+        (
+            ComponentValue::Variant {
+                case: expected_case,
+                value: expected_value,
+            },
+            ComponentValue::Variant {
+                case: actual_case,
+                value: actual_value,
+            },
+        ) => {
+            expected_case == actual_case
+                && match (expected_value, actual_value) {
+                    (None, None) => true,
+                    (Some(expected), Some(actual)) => component_values_match(expected, actual),
+                    _ => false,
+                }
+        }
+        (ComponentValue::Option(expected), ComponentValue::Option(actual)) => {
+            match (expected, actual) {
+                (None, None) => true,
+                (Some(expected), Some(actual)) => component_values_match(expected, actual),
+                _ => false,
+            }
+        }
+        (
+            ComponentValue::Result {
+                ok: expected_ok,
+                err: expected_err,
+            },
+            ComponentValue::Result {
+                ok: actual_ok,
+                err: actual_err,
+            },
+        ) => {
+            let payload_matches =
+                |expected: &Option<Box<ComponentValue>>, actual: &Option<Box<ComponentValue>>| {
+                    match (expected, actual) {
+                        (None, None) => true,
+                        (Some(expected), Some(actual)) => component_values_match(expected, actual),
+                        _ => false,
+                    }
+                };
+            payload_matches(expected_ok, actual_ok) && payload_matches(expected_err, actual_err)
+        }
+        (ComponentValue::Flags(expected), ComponentValue::Flags(actual)) => {
+            let mut expected: Vec<&String> = expected.iter().collect();
+            let mut actual: Vec<&String> = actual.iter().collect();
+            expected.sort();
+            actual.sort();
+            expected == actual
+        }
+        _ => expected == actual,
+    }
 }
