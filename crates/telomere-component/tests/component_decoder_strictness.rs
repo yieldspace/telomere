@@ -95,6 +95,12 @@ fn section_with_unconsumed_bytes_is_rejected() {
         error.contains("invalid section size"),
         "unexpected error: {error}"
     );
+    // The framing itself is malformed, so the public category is a
+    // decode error, not a validation error (PR #354 Codex P2).
+    assert!(
+        error.starts_with("decode error:"),
+        "expected a decode error, got: {error}"
+    );
 }
 
 #[test]
