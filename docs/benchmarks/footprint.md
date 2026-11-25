@@ -564,15 +564,15 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 On 2026-11-25, the `Embedder footprint` workflow was run three
 times against the code of PR #349: workflow_dispatch runs
-45596285864 and 45596292563 against the PR branch at head
-`695d95648431e72da3349a072e7684d7e4651aef` (the #335 change —
+45604539314 and 45604546843 against the PR branch at head
+`9ec422c993f7b2e292cbedba720e6328be600628` (the #335 change —
 canonical handle operations validate handle indices against the
 instance table, with the Codex-review follow-up — merged with
 current `main` at `b20ed79` (PRs #350 and #353)), and
-pull-request run 45596294067, which built the same tree
+pull-request run 45603104312, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). A three-run control against
 unmodified `main` at `b20ed79` (workflow_dispatch runs
-45596237962, 45596246881 and 45596255577) isolates the
+45604554539, 45604561643 and 45604568688) isolates the
 attribution recorded in the re-baseline history below. Every
 run produced byte-identical sizes for its tree: for all
 sixteen profile/configuration rows, the raw file size, the
@@ -591,22 +591,53 @@ checked-in baseline on all 32 gated series.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,706,384 | 2,146,839 |
-| `release` | `wasi` | 2,933,880 | 2,321,207 |
+| `release` | `component` | 2,711,616 | 2,151,543 |
+| `release` | `wasi` | 2,939,112 | 2,325,927 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,131,288 | 1,638,871 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,149,584 | 2,488,519 |
+| `release` | `wasi-threads` | 3,154,816 | 2,493,239 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,696,288 | 1,252,983 |
-| `release-size` | `wasi` | 1,817,504 | 1,334,759 |
+| `release-size` | `component` | 1,698,920 | 1,255,271 |
+| `release-size` | `wasi` | 1,820,152 | 1,337,047 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,400 | 1,091,895 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,960,208 | 1,429,463 |
+| `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+PR #349 (#335, canonical handle operations validate handle
+indices against the instance table) was re-baselined a fourth
+time after its second Codex-review follow-up (commit
+`9ec422c`: the public call boundary registers host-supplied
+argument handles — `own` arguments as host-provided
+handles, `borrow` arguments for the duration of the call —
+and `canon resource.drop` falls back to the host-provided
+path when the index names a host handle colliding with an
+unrelated local entry). Attribution was isolated by
+measuring current `main` alone three times
+(workflow_dispatch runs 45604554539, 45604561643 and
+45604568688 on `main` at `b20ed79`; all three runs pass the
+gate, and the main control is byte-identical to the
+checked-in baseline on all 32 gated series). This PR's own
+delta against the main control is confined to the series of
+the three configurations that link `telomere-component`: in
+`release`, stripped file +9,760 B in each of `component`,
+`wasi` and `wasi-threads` and stripped `.text` +8,160 B
+(`component`) / +8,176 B (`wasi`, `wasi-threads`); in
+`release-size`, stripped file +6,000 B (`component`) /
++6,016 B (`wasi`, `wasi-threads`) and stripped `.text`
++4,560 B in each. Every other configuration is
+byte-identical to `main` in both profiles. All twelve
+series exceed the checked-in baseline, so all twelve are
+re-baselined to the branch measurements. Against the
+original #164 baseline, the largest cumulative growth is
+the `release` `component` stripped file series at +11.42%
+(2,433,656 B to 2,711,616 B). The baseline was re-measured
+on the branch and updated as recorded above, following the
+procedure below.
 
 The original baseline was measured on 2026-11-23 against commit
 `6c43ca67ae7c975fa52641b2eeaca3ca26f8f4ca` (nine dispatches, spread 0 B).
