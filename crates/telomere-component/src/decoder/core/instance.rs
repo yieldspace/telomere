@@ -5,7 +5,9 @@ use crate::decoder::{
     ParseResult, SizedResult,
 };
 use crate::ir::types::{CoreInstanceType, CoreModuleExportType, CoreSortType};
-use crate::ir::{CoreInstance, CoreInstanceInlineExport, CoreRelation, GlobalIdx, LocalIdx};
+use crate::ir::{
+    CoreInstance, CoreInstanceInlineExport, CoreRelation, DefinedInstance, GlobalIdx, LocalIdx,
+};
 use crate::support::binary::BinaryReader;
 use crate::support::parser::core::{parse_name, parse_u32};
 use std::collections::HashMap;
@@ -69,6 +71,10 @@ pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
         .core_instance_store
         .register(CoreRelation::Defined(inst));
     ctx.state.scope_mut().core_instances.register(instance_gidx);
+    ctx.state
+        .scope_mut()
+        .instance_defs
+        .push(DefinedInstance::Core(instance_gidx));
     ctx.validator.scope_mut().core_instances.add(inst_ty);
     Ok(())
 }

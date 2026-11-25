@@ -58,7 +58,7 @@ pub(super) fn lower_component_args(
     }
     let total_flat_len = function_params_flat_len(func_type, program)?;
     if total_flat_len > MAX_FLAT_PARAMS {
-        options.memory.clone().ok_or_else(|| {
+        let memory = options.memory.clone().ok_or_else(|| {
             ComponentError::Runtime("canonical option `memory` is required".to_owned())
         })?;
         let realloc = options.realloc.as_ref().ok_or_else(|| {
@@ -66,16 +66,19 @@ pub(super) fn lower_component_args(
         })?;
         let layout = value_area_layout(&func_type.params, program)?;
         // Canonical ABI `lower_flat_values` allocates the indirect area by
-        // calling realloc unconditionally, with no zero-size shortcut.
+        // calling realloc unconditionally, with no zero-size shortcut. The
+        // returned pointer is validated (alignment and bounds) inside
+        // `call_realloc`.
         let ptr = call_realloc(
             realloc,
             store,
+            &memory,
             0,
             0,
             layout.align as i32,
             layout.size as i32,
+            "indirect canonical parameter area",
         )? as u32;
-        validate_realloc_pointer_alignment(ptr, layout.align, "indirect canonical parameter area")?;
         for ((value, ty), offset) in args
             .iter()
             .zip(func_type.params.iter())
@@ -542,8 +545,16 @@ fn lower_string(
     match encoding {
         CanonicalStringEncoding::Utf8 => {
             let bytes = string.as_bytes();
-            let ptr = call_realloc(realloc, store, 0, 0, 1, bytes.len() as i32)? as u32;
-            validate_realloc_pointer_alignment(ptr, 1, "UTF-8 string")?;
+            let ptr = call_realloc(
+                realloc,
+                store,
+                &memory,
+                0,
+                0,
+                1,
+                bytes.len() as i32,
+                "UTF-8 string",
+            )? as u32;
             write_memory(store, &memory, ptr, bytes)?;
             Ok(vec![
                 WasmValue::I32(ptr as i32),
@@ -552,8 +563,16 @@ fn lower_string(
         }
         CanonicalStringEncoding::Utf16 => {
             let bytes = encode_string_utf16(string);
-            let ptr = call_realloc(realloc, store, 0, 0, 2, bytes.len() as i32)? as u32;
-            validate_realloc_pointer_alignment(ptr, 2, "UTF-16 string")?;
+            let ptr = call_realloc(
+                realloc,
+                store,
+                &memory,
+                0,
+                0,
+                2,
+                bytes.len() as i32,
+                "UTF-16 string",
+            )? as u32;
             write_memory(store, &memory, ptr, &bytes)?;
             Ok(vec![
                 WasmValue::I32(ptr as i32),
@@ -577,8 +596,16 @@ fn lower_compact_utf16_string(
     store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     let src_code_units = string.len();
-    let mut ptr = call_realloc(realloc, store, 0, 0, 2, src_code_units as i32)? as u32;
-    validate_realloc_pointer_alignment(ptr, 2, "latin1+utf16 string")?;
+    let mut ptr = call_realloc(
+        realloc,
+        store,
+        memory,
+        0,
+        0,
+        2,
+        src_code_units as i32,
+        "latin1+utf16 string",
+    )? as u32;
 
     let mut dst_len = 0usize;
     for character in string.chars() {
@@ -587,12 +614,13 @@ fn lower_compact_utf16_string(
             ptr = call_realloc(
                 realloc,
                 store,
+                memory,
                 ptr as i32,
                 src_code_units as i32,
                 2,
                 worst_case_len as i32,
+                "latin1+utf16 string",
             )? as u32;
-            validate_realloc_pointer_alignment(ptr, 2, "latin1+utf16 string")?;
 
             let encoded = encode_string_utf16(string);
             write_memory(store, memory, ptr, &encoded)?;
@@ -600,12 +628,13 @@ fn lower_compact_utf16_string(
                 ptr = call_realloc(
                     realloc,
                     store,
+                    memory,
                     ptr as i32,
                     worst_case_len as i32,
                     2,
                     encoded.len() as i32,
+                    "latin1+utf16 string",
                 )? as u32;
-                validate_realloc_pointer_alignment(ptr, 2, "latin1+utf16 string")?;
             }
             let tagged_len = ((encoded.len() / 2) as u32) | COMPACT_UTF16_TAG;
             return Ok(vec![
@@ -622,12 +651,13 @@ fn lower_compact_utf16_string(
         ptr = call_realloc(
             realloc,
             store,
+            memory,
             ptr as i32,
             src_code_units as i32,
             2,
             dst_len as i32,
+            "latin1+utf16 string",
         )? as u32;
-        validate_realloc_pointer_alignment(ptr, 2, "latin1+utf16 string")?;
     }
     Ok(vec![
         WasmValue::I32(ptr as i32),
@@ -1860,9 +1890,21 @@ fn lower_list_value(
     let total_len = stride.saturating_mul(values.len() as u32);
     // Canonical ABI `lower_list` calls realloc unconditionally: even an
     // empty list allocates with (0, 0, align, 0) and uses the returned
-    // pointer, so there is no zero-size shortcut here.
-    let ptr = call_realloc(realloc, store, 0, 0, elem_align as i32, total_len as i32)? as u32;
-    validate_realloc_pointer_alignment(ptr, elem_align, "canonical list")?;
+    // pointer, so there is no zero-size shortcut here. The returned pointer
+    // is validated (alignment and bounds) inside `call_realloc`.
+    let memory = options.memory.clone().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    let ptr = call_realloc(
+        realloc,
+        store,
+        &memory,
+        0,
+        0,
+        elem_align as i32,
+        total_len as i32,
+        "canonical list",
+    )? as u32;
     for (index, value) in values.iter().enumerate() {
         write_value_to_memory(
             value,
@@ -2179,13 +2221,16 @@ fn memory_addr(
         .map_err(ComponentError::Link)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn call_realloc(
     realloc: &RuntimeCoreFunc,
     store: &Store,
+    memory: &CoreExportRef,
     old_ptr: i32,
     old_len: i32,
     align: i32,
     new_len: i32,
+    allocation: &str,
 ) -> Result<i32, ComponentError> {
     let result = realloc.call_sync(
         store,
@@ -2197,21 +2242,50 @@ fn call_realloc(
         ],
     )?;
     match result.as_slice() {
-        [WasmValue::I32(ptr)] => Ok(*ptr),
+        [WasmValue::I32(ptr)] => {
+            validate_realloc_result(
+                store,
+                memory,
+                *ptr as u32,
+                align as u32,
+                new_len as u32,
+                allocation,
+            )?;
+            Ok(*ptr)
+        }
         _ => Err(ComponentError::Runtime(
             "realloc returned an unexpected result".to_owned(),
         )),
     }
 }
 
-fn validate_realloc_pointer_alignment(
+/// Validates a pointer returned by a canonical `realloc` against the
+/// canonical ABI contract: the pointer must be aligned to the requested
+/// alignment, and the whole allocation `[ptr, ptr + size)` must lie inside
+/// the memory. The result is validated here, at the `realloc` site, rather
+/// than relying on the writes that follow it: some results are never
+/// written through afterwards (a shrunk latin1+utf16 string is returned to
+/// the guest as-is), and others are only partially written (the indirect
+/// parameter area's alignment padding), so a write-side check alone would
+/// let an out-of-bounds allocation through.
+fn validate_realloc_result(
+    store: &Store,
+    memory: &CoreExportRef,
     ptr: u32,
     align: u32,
+    size: u32,
     allocation: &str,
 ) -> Result<(), ComponentError> {
     if ptr % align != 0 {
         return Err(ComponentError::Trap(format!(
-            "canonical realloc returned pointer {ptr:#x} for {allocation}, which is not aligned to {align} bytes"
+            "realloc return: result not aligned: canonical realloc returned pointer {ptr:#x} for {allocation}, which is not aligned to {align} bytes"
+        )));
+    }
+    let handle = memory_addr(store, memory)?;
+    let memory_len = crate::support::common::memory_len(store, &handle);
+    if u64::from(ptr) + u64::from(size) > memory_len as u64 {
+        return Err(ComponentError::Trap(format!(
+            "realloc return: beyond end of memory: canonical realloc returned pointer {ptr:#x} for {allocation}, and the {size}-byte allocation at {ptr:#x} is out of bounds of the {memory_len}-byte memory"
         )));
     }
     Ok(())
@@ -2442,8 +2516,7 @@ mod tests {
             root: Component {
                 imports: HashMap::new(),
                 exports: HashMap::new(),
-                core_instances: Vec::new(),
-                instances: Vec::new(),
+                defined_instances: Vec::new(),
             },
             types: Vec::new().into_boxed_slice(),
             component_store: HashMap::new(),

@@ -104,11 +104,8 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "linking/unit.wast",
-        "blocked by several known defects: nested component instances \
-         are instantiated lazily in resolution order rather than \
-         eagerly in definition order, so core start functions observe \
-         ticket ranks 2, 3, 1 instead of 1, 2, 3 (lines 645-647); \
-         resource handle indices and destructor counts are shared \
+        "blocked by several known defects: resource handle indices \
+         and destructor counts are shared \
          across instances instead of per-instance (issue #317; lines \
          724-729, 787-792, 863-866, 930-933, 994-997, 1020-1022); a \
          valid func import whose surface type is an unnamed generic \
