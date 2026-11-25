@@ -178,6 +178,16 @@ compile/validate coverage は `crates/telomere-component/tests/component_model_t
   - `values/post-return.wast` / `validation/kebab.wast`: upstream `test/nyi.txt` 掲載（reference 実装でも未実装）
   - `linking/tags.wast`: `tags` は Non-goals
   - `validation/map.wast`: `CM_MAP` は Non-goals
+  - 欠陥で blocked（実走で切り分け済み。修正され次第 re-enable する）:
+    - 入れ子 component の `(with ...)` instantiation 引数が、内側 component の core instance 生成時に効かない欠陥: `values/alignment.wast` / `values/numerics.wast` / `values/realloc.wast` / `values/transcode.wast` / `values/variants.wast` / `linking/unit.wast` / `linking/shared-everything-dynamic-linking.wast` / `linking/link-time-virtualization.wast` / `resources/borrows.wast` / `resources/multiple-resources.wast` / `resources/handle-table.wast`
+    - resource handle table の意味論（instance 毎の table でない・割当/再利用順）: `resources/handle-table.wast` / `linking/unit.wast`
+    - extern name の分割 encoding（`implements` / `version-suffix`、prefix 0x02）未対応と名前文法の検証漏れ: `validation/attributes.wast` / `validation/version-suffix.wast` / `validation/extern-names.wast`
+    - malformed binary の受理（切り詰め・不正 UTF-8）: `binary/binary.wast`
+    - validator の検証漏れ・過剰拒否（resource 型 / outer alias / export 可否 / 型サイズ上限 / index 解決）: `validation/resources.wast` / `validation/outer-alias.wast` / `validation/external-visibility.wast` / `validation/max-value-size.wast` / `validation/indicies.wast` / `linking/unit.wast`
+    - `values/realloc.wast`: realloc 戻り値の境界検査漏れも含む
+  - Non-goals を含むため blocked:
+    - `values/concat.wast`: 後半の map 節が `CM_MAP` を使う（前半の string/list 節は pass）
+    - `values/variants.wast` / `validation/indicies.wast`: async / threads 系 canon op を含む
 - 制約:
   - `assert_trap` の inline module 形式は `wast` AST が `Clone` でなく encode に `&mut` が必要なため未対応（vendored file は全件 invoke 形式）
   - `register` した instance の export を後続 component の import へ橋渡しする linker API は無いため、register は名前解決の記録まで（vendored file は linking を component text 内で完結させており依存しない）

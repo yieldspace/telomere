@@ -27,6 +27,18 @@ mod common;
 const ASYNC_NON_GOAL: &str = "async component-model proposals are a documented \
     non-goal (docs/component-model/new-component-runtime.md, Non-goals)";
 
+/// Reason shared by the files blocked on the nested-instantiation
+/// defect found while vendoring this suite (triage recorded with issue
+/// #136): instantiating a nested component with `(with ...)` arguments
+/// fails whenever the inner component's core instances depend on those
+/// arguments, because the arguments are resolved in an environment
+/// that does not carry them.
+const NESTED_INSTANTIATION_ARGS: &str = "blocked by a known runtime defect: \
+    instantiating a nested component with (with ...) arguments fails when \
+    the inner component's core instances depend on those arguments \
+    (instantiation reports the import unresolved / not supported by the \
+    linker)";
+
 /// Per-file exclusions outside `test/async/`, each with its reason.
 const EXCLUDED: &[(&str, &str)] = &[
     (
@@ -48,6 +60,127 @@ const EXCLUDED: &[(&str, &str)] = &[
         "validation/map.wast",
         "CM_MAP is a documented non-goal \
          (docs/component-model/new-component-runtime.md, Non-goals)",
+    ),
+    (
+        "values/concat.wast",
+        "the map cases (from line 462) use CM_MAP types, a documented \
+         non-goal (docs/component-model/new-component-runtime.md, \
+         Non-goals); the string/list cases before them pass",
+    ),
+    ("values/numerics.wast", NESTED_INSTANTIATION_ARGS),
+    ("values/transcode.wast", NESTED_INSTANTIATION_ARGS),
+    (
+        "linking/shared-everything-dynamic-linking.wast",
+        NESTED_INSTANTIATION_ARGS,
+    ),
+    (
+        "linking/link-time-virtualization.wast",
+        NESTED_INSTANTIATION_ARGS,
+    ),
+    ("resources/borrows.wast", NESTED_INSTANTIATION_ARGS),
+    (
+        "resources/multiple-resources.wast",
+        NESTED_INSTANTIATION_ARGS,
+    ),
+    (
+        "values/alignment.wast",
+        "blocked by a known runtime defect: instantiating a nested \
+         component with (with ...) arguments fails when the inner \
+         component's core instances depend on those arguments; once that \
+         is fixed, issue #312 (canonical ABI loads do not trap on \
+         unaligned pointers) is expected to block the assert_trap cases",
+    ),
+    (
+        "values/realloc.wast",
+        "blocked by a known runtime defect: instantiating a nested \
+         component with (with ...) arguments fails when the inner \
+         component's core instances depend on those arguments; \
+         additionally the result of realloc is not bounds-checked, so \
+         the assert_trap at line 110 (realloc return: beyond end of \
+         memory) does not trap",
+    ),
+    (
+        "values/variants.wast",
+        "blocked by a known runtime defect: instantiating a nested \
+         component with (with ...) arguments fails when the inner \
+         component's core instances depend on those arguments; \
+         additionally the component at line 82 uses async canonical \
+         operations (canon task.return, async lift/lower), a documented \
+         non-goal",
+    ),
+    (
+        "linking/unit.wast",
+        "blocked by several known defects: nested-component \
+         instantiation arguments are not honoured (line 494 onwards); \
+         resource handle indices come from a table shared across \
+         instances instead of a per-instance table (line 1020); a valid \
+         func import whose surface type is an unnamed generic type is \
+         rejected (line 799); inline core instances exporting globals \
+         are not supported by the runtime (line 2010)",
+    ),
+    (
+        "resources/handle-table.wast",
+        "blocked by known resource-handle defects: handle index \
+         allocation/reuse order diverges from the spec (indices allocate \
+         sequentially from 1 and freed indices are reused LIFO), so the \
+         self-checking guest traps (line 48); later sections are \
+         additionally blocked by the nested-component \
+         instantiation-argument defect (line 105)",
+    ),
+    (
+        "validation/attributes.wast",
+        "the split extern-name encoding used for `implements` \
+         annotations (name prefix 0x02) is not supported by the decoder",
+    ),
+    (
+        "validation/version-suffix.wast",
+        "the split extern-name encoding used for `version-suffix` \
+         annotations (name prefix 0x02) is not supported by the decoder",
+    ),
+    (
+        "validation/extern-names.wast",
+        "malformed extern names are not rejected: the package-name \
+         grammar (expected `/` after package name, trailing characters) \
+         is not validated",
+    ),
+    (
+        "binary/binary.wast",
+        "malformed binaries are accepted: truncated sections and \
+         invalid UTF-8 names decode successfully, and core-layer decode \
+         errors are wrapped without the specific reason the suite \
+         matches on",
+    ),
+    (
+        "validation/resources.wast",
+        "resource type validation gaps: valid resource types are \
+         rejected as imports (lines 270, 291, 312), a resource-identity \
+         mismatch is accepted (line 576), and own/borrow mismatches are \
+         reported only as a generic defvaltype mismatch (lines 101, 179)",
+    ),
+    (
+        "validation/outer-alias.wast",
+        "outer-alias validation is not enforced: aliases that \
+         transitively refer to resources (line 68) and aliases to items \
+         other than types or instances (line 172) are accepted",
+    ),
+    (
+        "validation/external-visibility.wast",
+        "func exportability is not validated: funcs that are not valid \
+         to be used as exports are accepted (lines 27, 69, 129), and one \
+         valid case is rejected instead (line 79)",
+    ),
+    (
+        "validation/max-value-size.wast",
+        "the validator's effective type size limit (1_000_000) is \
+         stricter than the spec's elem_size < 2^28 rule and rejects the \
+         valid boundary types at line 5",
+    ),
+    (
+        "validation/indicies.wast",
+        "uses async/threads canonical operations (waitable-set, \
+         thread.new-indirect, future), which are documented non-goals, \
+         and a valid core-module import/alias shape is rejected with \
+         `type idx not found` (line 340)",
     ),
 ];
 
