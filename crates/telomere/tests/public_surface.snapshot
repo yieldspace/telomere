@@ -98,6 +98,7 @@ telomere::component_support::common::ValType | always
 telomere::component_support::common::WasmValue | always
 telomere::component_support::common::instance_id | always
 telomere::component_support::common::memory_export | always
+telomere::component_support::common::memory_len | always
 telomere::component_support::common::module_exports | always
 telomere::component_support::common::module_function_types | always
 telomere::component_support::common::module_functions | always
