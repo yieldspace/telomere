@@ -800,7 +800,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     ) -> Result<Func> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
         let slice = &locals[..];
-        let mut locals_data = LocalsData::from(slice);
+        let mut locals_data = LocalsData::try_from(slice)?;
         locals_data.set_param_bytes(functype.0.iter().map(|ty| ty.stack_size().u32()).sum());
         let local_reassign = locals_data.create_reassignment_table(&locals)?;
         validate_locals(&locals)?;
