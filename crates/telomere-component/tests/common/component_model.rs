@@ -240,6 +240,12 @@ fn handle_module(
         runtime.definitions.insert(name.clone(), program.clone());
         if !definition_only {
             runtime.plain_names.insert(name.clone());
+            // A redeclaration replaces the program this name denotes,
+            // so an instance cached under it from the earlier
+            // declaration is stale: drop the binding, or named
+            // directives would keep resolving the previous component
+            // while unnamed ones instantiate the new one.
+            runtime.instances.remove(name);
         }
     }
     // Every component directive, plain or definition-only, is the most

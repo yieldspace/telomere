@@ -879,3 +879,107 @@ async fn upstream_harness_codex_p2_round2_regressions() {
         "upstream_harness_codex_p2_round2_regressions completed: all cases behaved as expected"
     );
 }
+
+/// Regression coverage for the Codex P2 finding on the re-review of
+/// PR #326 (head 713563b), in the shared harness
+/// (`tests/common/component_model.rs`): redeclaring a plain component
+/// under the same `$id` must invalidate the instance cached under that
+/// name. Before the fix, `handle_module` updated `definitions` and
+/// `pending` for the new declaration but left the first instance in
+/// `instances`, so named `invoke`/`register` resolved the previous
+/// component while an unnamed `invoke` instantiated the new one —
+/// assertions could exercise the wrong component.
+///
+/// Each case runs through `run_component_testsuite_case` and asserts
+/// whether the harness records a failure for it.
+#[tokio::test]
+async fn upstream_harness_codex_p2_round3_regressions() {
+    // (name, wast, expect_failure_recorded)
+    let cases: &[(&str, &str, bool)] = &[
+        (
+            "redeclared-plain-component-named-invoke-uses-new-instance",
+            r#"
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(assert_return (invoke $C "answer") (u32.const 1))
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 2)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(assert_return (invoke $C "answer") (u32.const 2))
+(assert_return (invoke "answer") (u32.const 2))
+"#,
+            false,
+        ),
+        (
+            "redeclared-plain-component-named-register-uses-new-instance",
+            r#"
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(assert_return (invoke $C "answer") (u32.const 1))
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 2)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(register "reg" $C)
+(assert_return (invoke $reg "answer") (u32.const 2))
+"#,
+            false,
+        ),
+        (
+            "redeclared-plain-component-after-fallback-invoke-uses-new-instance",
+            r#"
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 1)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(component $D
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 9)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(assert_return (invoke $C "answer") (u32.const 1))
+(component $C
+  (core module $M
+    (func (export "answer") (result i32) (i32.const 2)))
+  (core instance $m (instantiate $M))
+  (func (export "answer") (result u32) (canon lift (core func $m "answer"))))
+(assert_return (invoke $C "answer") (u32.const 2))
+"#,
+            false,
+        ),
+    ];
+
+    let mut problems = Vec::new();
+    for (name, text, expect_failure) in cases {
+        let path = PathBuf::from(format!("regressions-round3/{name}.wast"));
+        let report = common::component_model::run_component_testsuite_case(&path, text).await;
+        let recorded_failure = !report.failures.is_empty();
+        if recorded_failure != *expect_failure {
+            problems.push(format!(
+                "{name}: expected failure_recorded={expect_failure}, got {recorded_failure} \
+                 (checked={}, failures={:?})",
+                report.directives_checked, report.failures
+            ));
+        }
+    }
+
+    if !problems.is_empty() {
+        panic!(
+            "upstream_harness_codex_p2_round3_regressions failures\n\n{}",
+            problems.join("\n\n")
+        );
+    }
+    println!(
+        "upstream_harness_codex_p2_round3_regressions completed: all cases behaved as expected"
+    );
+}
