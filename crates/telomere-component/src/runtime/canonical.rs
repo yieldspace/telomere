@@ -917,10 +917,9 @@ fn lift_primitive(
         PrimValType::U64 => ComponentValue::U64(cursor.next_i64()? as u64),
         PrimValType::F32 => ComponentValue::F32(cursor.next_f32()?),
         PrimValType::F64 => ComponentValue::F64(cursor.next_f64()?),
-        PrimValType::Char => ComponentValue::Char(
-            char::from_u32(cursor.next_i32()? as u32)
-                .ok_or_else(|| ComponentError::Trap("invalid char scalar".to_owned()))?,
-        ),
+        PrimValType::Char => {
+            ComponentValue::Char(char_from_canonical_bits(cursor.next_i32()? as u32)?)
+        }
         PrimValType::String => {
             let memory = options.memory.as_ref().ok_or_else(|| {
                 ComponentError::Runtime("canonical option `memory` is required".to_owned())
@@ -1535,10 +1534,9 @@ fn read_primitive_from_memory(
         PrimValType::F64 => ComponentValue::F64(f64::from_le_bytes(read_memory_array::<8>(
             store, memory, ptr,
         )?)),
-        PrimValType::Char => ComponentValue::Char(
-            char::from_u32(read_i32_from_memory(store, memory, ptr)? as u32)
-                .ok_or_else(|| ComponentError::Trap("invalid char scalar".to_owned()))?,
-        ),
+        PrimValType::Char => ComponentValue::Char(char_from_canonical_bits(read_i32_from_memory(
+            store, memory, ptr,
+        )? as u32)?),
         PrimValType::String => {
             let string_ptr = read_i32_from_memory(store, memory, ptr)? as u32;
             let len = read_i32_from_memory(store, memory, ptr + 4)? as u32;
@@ -1742,7 +1740,7 @@ fn read_variant_value_from_memory(
     let discriminant = read_variant_discriminant_from_memory(store, memory, ptr, cases.len())?;
     let case = cases
         .get(discriminant)
-        .ok_or_else(|| ComponentError::Trap("variant discriminant is out of bounds".to_owned()))?;
+        .ok_or_else(|| ComponentError::Trap("invalid variant discriminant".to_owned()))?;
     let (payload_offset, _) = variant_payload_offset_and_size(cases, program)?;
     let payload = if let Some(ty) = &case.ty {
         Some(Box::new(read_value_from_memory(
@@ -2169,7 +2167,7 @@ fn lift_variant_value(
     let case_index = cursor.next_i32()? as usize;
     let case = cases
         .get(case_index)
-        .ok_or_else(|| ComponentError::Trap("variant discriminant is out of bounds".to_owned()))?;
+        .ok_or_else(|| ComponentError::Trap("invalid variant discriminant".to_owned()))?;
     let payload_types = variant_payload_flat_types(cases, program)?;
     let raw_payload = payload_types
         .iter()
@@ -2905,6 +2903,16 @@ fn expect_f64(value: &ComponentValue) -> Result<f64, ComponentError> {
         ComponentValue::F64(v) => Ok(*v),
         _ => Err(ComponentError::InvalidArgument("expected f64".to_owned())),
     }
+}
+
+/// Converts a raw canonical-ABI bit pattern to a `char`, trapping with
+/// the canonical message when the pattern is not a Unicode scalar value
+/// (a surrogate, or above U+10FFFF). Every core-to-component `char`
+/// conversion funnels through here: the flat lift path and the memory
+/// read path.
+fn char_from_canonical_bits(bits: u32) -> Result<char, ComponentError> {
+    char::from_u32(bits)
+        .ok_or_else(|| ComponentError::Trap("invalid `char` bit pattern".to_owned()))
 }
 
 fn expect_char(value: &ComponentValue) -> Result<char, ComponentError> {

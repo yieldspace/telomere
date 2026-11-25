@@ -56,23 +56,11 @@ const EXCLUDED: &[(&str, &str)] = &[
          Non-goals); the string/list cases before them pass",
     ),
     (
-        "values/numerics.wast",
-        "blocked by a canonical-ABI validation defect: `char` arguments \
-         are not validated when lowering, so invalid code points \
-         (surrogates, values above U+10FFFF) reach the guest, which \
-         traps `unreachable`, instead of the canonical `invalid char \
-         bit pattern` trap (lines 193, 195, 197)",
-    ),
-    (
         "values/variants.wast",
-        "blocked by a canonical-ABI validation defect: variant/enum \
-         discriminants are not validated when lowering, so invalid \
-         discriminants reach the guest, which traps `unreachable`, \
-         instead of the canonical `invalid variant discriminant` trap \
-         (lines 72-78); additionally the component at line 82 uses \
-         async canonical operations (canon task.return, async \
-         lift/lower), a documented non-goal, which also removes the \
-         exports used at lines 182-185",
+        "the component at line 82 uses async canonical operations \
+         (canon task.return, async lift/lower), a documented \
+         non-goal, which also removes the exports used at lines \
+         182-185",
     ),
     (
         "linking/unit.wast",
