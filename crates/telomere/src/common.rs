@@ -2282,7 +2282,7 @@ impl LocalsData {
                         checked_add(
                             checked_add(
                                 checked_mul(totals_four_byte, 4)?,
-                                checked_mul(checked_add(self.count_i64, count_f64)?, 8)?,
+                                checked_mul(checked_add(self.count_i64, self.count_f64)?, 8)?,
                             )?,
                             checked_mul(count_v128, 16)?,
                         )?,
@@ -2394,6 +2394,58 @@ mod tests {
         assert_eq!(data.count_i32, 5);
         assert_eq!(data.count_f64, 1);
         assert_eq!(data.count_v128, 4);
+    }
+
+    #[test]
+    fn reassignment_table_places_v128_after_all_eight_byte_locals() {
+        // The v128 region starts after *every* i64/f64 local, so the v128
+        // arm must use the total f64 count: with a running count, a v128
+        // group declared before an f64 group would be placed at offset 0
+        // and overlap the f64 storage (Codex P1 on PR #360).
+        let groups = [
+            Locals {
+                n: 1,
+                t: ValType::V128,
+            },
+            Locals {
+                n: 1,
+                t: ValType::F64,
+            },
+        ];
+        let data = LocalsData::try_from(&groups[..]).expect("counts fit in u32");
+        let table = data
+            .create_reassignment_table(&groups)
+            .expect("offsets fit in u32");
+        let offsets: Vec<(ValType, u32)> =
+            table.0.iter().map(|&(_, t, offset)| (t, offset)).collect();
+        assert_eq!(offsets, [(ValType::V128, 8), (ValType::F64, 0)]);
+
+        // Interleaved: f64 groups land at 0 and 16, the v128 group after
+        // all three f64 slots at 24.
+        let groups = [
+            Locals {
+                n: 2,
+                t: ValType::F64,
+            },
+            Locals {
+                n: 1,
+                t: ValType::V128,
+            },
+            Locals {
+                n: 1,
+                t: ValType::F64,
+            },
+        ];
+        let data = LocalsData::try_from(&groups[..]).expect("counts fit in u32");
+        let table = data
+            .create_reassignment_table(&groups)
+            .expect("offsets fit in u32");
+        let offsets: Vec<(ValType, u32)> =
+            table.0.iter().map(|&(_, t, offset)| (t, offset)).collect();
+        assert_eq!(
+            offsets,
+            [(ValType::F64, 0), (ValType::V128, 24), (ValType::F64, 16)]
+        );
     }
 
     #[test]
