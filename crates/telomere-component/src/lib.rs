@@ -10,6 +10,11 @@
 
 #![warn(missing_docs)]
 
+/// Component bundles: hash-keyed AoT artifacts for the core modules
+/// embedded in a component (#201).
+#[cfg(feature = "aot-bundle")]
+#[warn(missing_docs)]
+pub mod bundle;
 // The decoder is shared by the compiler and runtime, but is not an embedder API.
 pub(crate) mod decoder;
 /// The high-level component compiler and instantiator.
@@ -60,6 +65,12 @@ pub const MAX_COMPONENT_NESTING_DEPTH: u32 = 100;
 use std::future::Future;
 use std::pin::Pin;
 
+#[cfg(feature = "aot-bundle")]
+#[doc(inline)]
+pub use bundle::{
+    build_component_bundle, is_component_bundle, BundleError, BundleLoadReport,
+    ComponentBundleArtifacts, LoadedComponentBundle,
+};
 #[doc(inline)]
 pub use engine::ComponentEngine;
 #[doc(inline)]

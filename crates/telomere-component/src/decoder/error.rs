@@ -9,6 +9,17 @@ pub enum ComponentParseError {
     /// Error occurring in the core WASM module.
     #[error("error at core wasm module: {0}")]
     CoreWasmError(#[from] WasmParserError),
+    /// A bundle-driven decode (#201) reached a core module section
+    /// for which no AoT artifact substitution was supplied. Bundle
+    /// loads pre-verify completeness before decoding, so this is a
+    /// fail-closed guard against a broken substitution invariant —
+    /// the decoder never falls back to parsing in its place.
+    #[cfg(feature = "aot-bundle")]
+    #[error("component bundle substitution missing for core module section {ordinal}")]
+    BundleSubstitutionMissing {
+        /// Ordinal of the core module section without a substitution.
+        ordinal: u32,
+    },
     /// Error from the underlying layer.
     #[error("error from underlying layer: {0:?}")]
     IoError(#[from] std::io::Error),

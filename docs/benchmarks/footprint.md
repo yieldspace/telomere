@@ -563,17 +563,17 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-25, the `Embedder footprint` workflow was run three times
-against the code of PR #306: workflow_dispatch runs 45522121233 and
-45522128552 against the PR branch at head
-`eef51447f4e4f29c9ab2efbdb69c87bc0302a96c` (the #199 change —
-offline AoT artifact producer for `telomere compile`, fail-closed
-CLI load path, library frontend phase counters, and the AoT wast
-lane on both targets; commit `1c93b4b` — merged with current
-`main` at `bfc30e4` (PRs #305 and #307)),
-and pull-request run 45522077059, which built the same tree
+against the code of PR #315: workflow_dispatch runs 45534017783,
+45534029382 and 45534039628 against the PR branch at head
+`9bdd30033dfbff2eece920ed0e22fa9ae04b22a6` (the #201 change —
+component bundles: hash-keyed AoT artifacts for the core modules
+embedded in a component, including the alias-identity fix in
+commit `6ffbfd8` — merged with current `main` at `b868802`
+(PR #329)),
+and pull-request run 45533984355, which built the same tree
 (`ubuntu-24.04`, Rust 1.96.0). A three-run control against
-unmodified `main` at `bfc30e4` (workflow_dispatch runs
-45522134432, 45522139809 and 45522144666) isolates the
+unmodified `main` at `b868802` (workflow_dispatch runs
+45534050177, 45534060121 and 45534068404) isolates the
 attribution recorded in the re-baseline history below. Every run produced
 byte-identical sizes: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
@@ -586,20 +586,20 @@ stripped `.text`, in bytes).
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,591,952 | 1,204,487 |
-| `release` | `component` | 2,671,912 | 2,118,935 |
-| `release` | `wasi` | 2,899,472 | 2,293,383 |
+| `release` | `component` | 2,673,368 | 2,120,183 |
+| `release` | `wasi` | 2,900,928 | 2,294,631 |
 | `release` | `core-nosimd` | 1,400,840 | 1,059,319 |
 | `release` | `core-jit` | 2,130,712 | 1,638,487 |
 | `release` | `core-aot` | 1,637,928 | 1,237,751 |
-| `release` | `wasi-threads` | 3,115,176 | 2,460,695 |
+| `release` | `wasi-threads` | 3,116,632 | 2,461,943 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,115,544 | 787,159 |
-| `release-size` | `component` | 1,676,952 | 1,237,687 |
-| `release-size` | `wasi` | 1,798,136 | 1,319,415 |
+| `release-size` | `component` | 1,677,144 | 1,237,831 |
+| `release-size` | `wasi` | 1,798,344 | 1,319,575 |
 | `release-size` | `core-nosimd` | 1,000,752 | 707,607 |
 | `release-size` | `core-jit` | 1,538,464 | 1,091,783 |
 | `release-size` | `core-aot` | 1,154,608 | 812,359 |
-| `release-size` | `wasi-threads` | 1,940,856 | 1,414,135 |
+| `release-size` | `wasi-threads` | 1,941,048 | 1,414,279 |
 
 #### Re-baseline history
 
@@ -1872,6 +1872,48 @@ by the `release` `component` stripped file series at
 +9.79% (2,433,656 B to 2,671,912 B). The baseline was
 re-measured on the branch and updated as recorded above,
 following the procedure below.
+
+PR #315 (#201, component bundles: hash-keyed AoT artifacts for
+the core modules embedded in a component) merged current
+`main` into its branch first; its CI run on the merged tree
+then tripped the gate on 12 of the 32 gated series.
+Attribution was isolated by measuring current `main` alone
+three times (workflow_dispatch runs 45534050177, 45534060121
+and 45534068404 on `main` at
+`b868802f3ae377dccc28d54ba73560bb5e55bd79`; all three runs
+pass the gate). The main control reproduces the checked-in
+baseline exactly on all 32 gated series, so no part of the
+gate failure is main-side staleness. This PR's own delta
+against the main control is confined to the three
+configurations that link `telomere-component` (`component`,
+`wasi`, `wasi-threads`): in `release`, stripped file
++1,456 B and stripped `.text` +1,248 B in each; in
+`release-size`, stripped file +192 B / stripped `.text`
++144 B in `component` and `wasi-threads`, and +208 B /
++160 B in `wasi`. Every other configuration is
+byte-identical to `main` in both profiles. The bundle
+implementation proper (`bundle.rs`, the substitution decode
+session, the instantiate-time install path) is gated behind
+`telomere-component`'s `aot-bundle` feature, which the
+minimal embedder does not enable, so the linked delta is
+the code-layout effect of the PR's component-layer changes
+on those configurations; the core library is untouched.
+The delta covers the whole PR, including the Codex
+follow-ups on it: the bundle load harness moved to
+`benches/`, the checked length arithmetic in the bundle
+reader, and the alias-identity resolution in
+`runtime/env.rs` (a core instance instantiated through an
+`alias export` of a nested component's module now resolves
+to the module's definition index before the artifact
+lookup, so aliased modules receive their AoT code instead
+of silently running interpreted). Against the original
+#164 baseline, the largest cumulative growth is now the
+`release` `component` stripped file series at +9.85%
+(2,433,656 B to 2,673,368 B), overtaking the `release`
+`core-nosimd` stripped file series at +9.83% (1,275,448 B
+to 1,400,840 B), which this PR does not change. The
+baseline was re-measured on the branch and updated as
+recorded above, following the procedure below.
 
 ### Threshold derivation
 
