@@ -203,7 +203,9 @@ fn extract_directives(
             WastDirective::Module(module)
             | WastDirective::ModuleDefinition(module)
             | WastDirective::AssertMalformed { module, .. }
-            | WastDirective::AssertInvalid { module, .. } => {
+            | WastDirective::AssertMalformedCustom { module, .. }
+            | WastDirective::AssertInvalid { module, .. }
+            | WastDirective::AssertInvalidCustom { module, .. } => {
                 extract_quote_wat(module, corpus, report);
             }
             WastDirective::AssertUnlinkable { module, .. } => {

@@ -23,8 +23,8 @@ smallvec.workspace = true
 [dev-dependencies]
 futures = "0.3.31"
 tracing-subscriber = { version = "0.3.19" }
-wast = { version = "243.0.0", features = ["component-model"] }
-wat = "1.243.0"
+wast = { version = "263.0.0", features = ["component-model"] }
+wat = "1.263.0"
 anyhow = { version = "1.0.98", features = ["backtrace"] }
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }

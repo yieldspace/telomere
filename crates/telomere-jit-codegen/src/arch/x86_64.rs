@@ -3,6 +3,8 @@ use crate::{
     target::{TargetArch, TargetInfo, TargetOs},
 };
 
+pub use crate::masm::{BranchKind, Cond};
+
 const VREGS: usize = 32;
 const SLOT_SIZE: i32 = 8;
 const FRAME_SIZE: i32 = ((VREGS as i32 + 2) * SLOT_SIZE + 15) & !15;
@@ -20,29 +22,6 @@ const R9: u8 = 9;
 const R10: u8 = 10;
 const R11: u8 = 11;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cond {
-    Eq = 0x4,
-    Ne = 0x5,
-    Hs = 0x3,
-    Lo = 0x2,
-    Hi = 0x7,
-    Ls = 0x6,
-    Ge = 0xd,
-    Lt = 0xc,
-    Gt = 0xf,
-    Le = 0xe,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BranchKind {
-    B,
-    BCond(Cond),
-    CbnzX(u8),
-    CbnzW(u8),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FloatWidth {
     F32,
@@ -52,23 +31,6 @@ enum FloatWidth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LastCmp {
     Float { width: FloatWidth, lhs: u8, rhs: u8 },
-}
-
-impl Cond {
-    pub const fn inverted(self) -> Self {
-        match self {
-            Self::Eq => Self::Ne,
-            Self::Ne => Self::Eq,
-            Self::Lo => Self::Hs,
-            Self::Hs => Self::Lo,
-            Self::Hi => Self::Ls,
-            Self::Ls => Self::Hi,
-            Self::Lt => Self::Ge,
-            Self::Ge => Self::Lt,
-            Self::Gt => Self::Le,
-            Self::Le => Self::Gt,
-        }
-    }
 }
 
 pub fn target_info() -> TargetInfo {
@@ -111,12 +73,31 @@ const fn target_os() -> TargetOs {
     }
 }
 
+/// The x86 condition-code encoding of a semantic [`Cond`] (the
+/// values the removed per-module `Cond` discriminants carried).
+fn cond_code(cond: Cond) -> u8 {
+    match cond {
+        Cond::Eq => 0x4,
+        Cond::Ne => 0x5,
+        Cond::Hs => 0x3,
+        Cond::Lo => 0x2,
+        Cond::Hi => 0x7,
+        Cond::Ls => 0x6,
+        Cond::Ge => 0xd,
+        Cond::Lt => 0xc,
+        Cond::Gt => 0xf,
+        Cond::Le => 0xe,
+    }
+}
+
 pub fn patch_branch(bytes: &mut [u8], at: usize, target: usize, kind: BranchKind) -> AsmResult {
     let (disp_at, insn_len) = match kind {
         BranchKind::B => (at.checked_add(1).ok_or(AsmError::InvalidImmediate)?, 5usize),
         BranchKind::BCond(_) | BranchKind::CbnzX(_) | BranchKind::CbnzW(_) => {
             (at.checked_add(2).ok_or(AsmError::InvalidImmediate)?, 6usize)
         }
+        // CbzW is an aarch64-only placeholder shape.
+        BranchKind::CbzW(_) => return Err(AsmError::UnsupportedFeature),
     };
     let after = at.checked_add(insn_len).ok_or(AsmError::InvalidImmediate)?;
     let disp = (target as isize)
@@ -175,7 +156,7 @@ impl X64BaselineMasm {
             }
             BranchKind::BCond(cond) => {
                 let at = self.offset();
-                self.emit(&[0x0f, 0x80 | cond as u8, 0, 0, 0, 0]);
+                self.emit(&[0x0f, 0x80 | cond_code(cond), 0, 0, 0, 0]);
                 Ok(at)
             }
             BranchKind::CbnzX(reg) => {
@@ -192,6 +173,8 @@ impl X64BaselineMasm {
                 self.emit(&[0x0f, 0x85, 0, 0, 0, 0]);
                 Ok(at)
             }
+            // CbzW is an aarch64-only placeholder shape.
+            BranchKind::CbzW(_) => Err(AsmError::UnsupportedFeature),
         }
     }
 
@@ -528,7 +511,7 @@ impl X64BaselineMasm {
                 .expect("virtual register fits");
             return;
         }
-        self.emit(&[0x0f, 0x90 | cond as u8, 0xc0]);
+        self.emit(&[0x0f, 0x90 | cond_code(cond), 0xc0]);
         self.emit(&[0x0f, 0xb6, 0xc0]);
         self.store_slot32(rd, RAX).expect("virtual register fits");
     }
@@ -537,7 +520,7 @@ impl X64BaselineMasm {
         self.load_slot32(RAX, rm).expect("virtual register fits");
         self.load_slot32(RCX, rn).expect("virtual register fits");
         self.emit_rex(false, RCX, RAX);
-        self.emit(&[0x0f, 0x40 | cond as u8]);
+        self.emit(&[0x0f, 0x40 | cond_code(cond)]);
         self.modrm_rr(RCX, RAX);
         self.store_slot32(rd, RAX).expect("virtual register fits");
     }
@@ -1116,7 +1099,7 @@ impl X64BaselineMasm {
 
     fn emit_jcc_placeholder(&mut self, cond: Cond) -> usize {
         let at = self.offset();
-        self.emit(&[0x0f, 0x80 | cond as u8, 0, 0, 0, 0]);
+        self.emit(&[0x0f, 0x80 | cond_code(cond), 0, 0, 0, 0]);
         at
     }
 
@@ -1397,6 +1380,8 @@ impl X64BaselineMasm {
         self.modrm_mem_disp32(RAX, RCX, 0);
     }
 }
+
+crate::impl_baseline_masm!(X64BaselineMasm);
 
 #[cfg(test)]
 mod tests {
