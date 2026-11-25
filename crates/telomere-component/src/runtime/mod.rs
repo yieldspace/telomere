@@ -1,5 +1,4 @@
 use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
-use crate::ir::AnyGlobalIdx;
 use crate::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
     CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
