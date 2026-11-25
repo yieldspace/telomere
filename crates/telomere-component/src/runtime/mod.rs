@@ -190,6 +190,11 @@ struct HandleEntry {
     /// non-zero; the count is registered by the callee-side lift for the
     /// duration of the call and released when the call returns.
     borrows: u32,
+    /// Whether this entry only registers a borrow of another instance's
+    /// resource for the duration of one call (#342). Dropping a borrowed
+    /// entry removes the registration without running the destructor:
+    /// ownership stays with the lending instance.
+    borrowed: bool,
 }
 
 #[derive(Clone)]
@@ -225,6 +230,9 @@ enum ResolvedCallable {
         options: Box<RuntimeCanonicalOptions>,
         program: Rc<ComponentProgram>,
         shared: Rc<SharedState>,
+        /// The handle table of the instance this function was lifted in;
+        /// canon-lower bindings in other instances transfer handles
+        /// to and from it at the call boundary (#342).
         handles: Rc<RefCell<HandleTable>>,
     },
 }
@@ -238,6 +246,9 @@ enum HostBinding {
         program: Rc<ComponentProgram>,
         signature: CoreFuncType,
         shared: Rc<SharedState>,
+        /// The handle table of the instance this binding was lowered in
+        /// (#342).
+        handles: Rc<RefCell<HandleTable>>,
     },
     ResourceNew {
         resource: ResourceId,
