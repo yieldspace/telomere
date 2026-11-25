@@ -172,6 +172,55 @@ fn export_sub_ascription_creates_distinct_resource_identity() {
 }
 
 #[test]
+fn named_sub_ascribed_export_reexported_by_index_keeps_face_identity() {
+    // Regression (Codex review of PR #357): a named sub-ascribed export
+    // `(export $face "r1" (type $r) (type (sub resource)))` must register the
+    // fresh face identity in the type index space, so that a later
+    // `(export "r2" (type $face))` exports the very same resource as `r1`.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $face "r1" (type $r) (type (sub resource)))
+    (export "r2" (type $face)))
+  (instance $c (instantiate $C))
+  (alias export $c "r1" (type $r1))
+  (alias export $c "r2" (type $r2))
+  (component $eq
+    (import "a" (type $a (sub resource)))
+    (import "b" (type (eq $a))))
+  (instance (instantiate $eq (with "a" (type $r1)) (with "b" (type $r2)))))
+"#,
+    )
+    .expect("re-exporting a named sub-ascribed export by type index must keep the face identity");
+}
+
+#[test]
+fn named_sub_ascribed_export_reexport_differs_from_underlying_resource() {
+    // Companion control: the re-exported face must still differ from the
+    // underlying resource itself (the #320 ascription semantics).
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export "r0" (type $r))
+    (export $face "r1" (type $r) (type (sub resource)))
+    (export "r2" (type $face)))
+  (instance $c (instantiate $C))
+  (alias export $c "r0" (type $r0))
+  (alias export $c "r2" (type $r2))
+  (component $eq
+    (import "a" (type $a (sub resource)))
+    (import "b" (type (eq $a))))
+  (instance (instantiate $eq (with "a" (type $r0)) (with "b" (type $r2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
 fn borrow_provided_for_own_import_reports_expected_own_found_borrow() {
     expect_invalid_with(
         r#"

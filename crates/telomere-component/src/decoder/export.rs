@@ -74,10 +74,13 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             // A `(sub resource)` ascription gives the export a fresh
             // abstract identity, distinct from the underlying resource
             // (and from any other ascription of it). Like a sub-bounded
-            // import, the export therefore gets its own generic type id;
-            // the generics-replace program keys the per-instantiation
-            // fresh resource on that id, while `ExportInfo` keeps the
-            // underlying type for surface/annotated checks.
+            // import, the export therefore gets its own generic type id,
+            // and that face id is registered consistently: the
+            // generics-replace program keys the per-instantiation fresh
+            // resource on it, `ExportInfo` carries it as the export's
+            // type, and the type index space maps the export's index to
+            // it -- so a later `(type $face)` reference to this export
+            // denotes the face identity, not the underlying resource.
             let mut sub_face_id = None;
             let info = match desc {
                 None => crate::decoder::validator::ExportInfo::TypeEq(type_id),
@@ -93,11 +96,11 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                             "export kind mismatch".to_owned(),
                         ))?;
                     }
-                    sub_face_id = Some(
-                        ctx.validator
-                            .new_type(Type::Generic(Generic::new(GenericBound::Sub))),
-                    );
-                    crate::decoder::validator::ExportInfo::TypeSub(type_id)
+                    let face_id = ctx
+                        .validator
+                        .new_type(Type::Generic(Generic::new(GenericBound::Sub)));
+                    sub_face_id = Some(face_id);
+                    crate::decoder::validator::ExportInfo::TypeSub(face_id)
                 }
                 _ => Err(ComponentParseError::TypeMismatch(
                     "export kind mismatch".to_owned(),
@@ -116,7 +119,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 _ => unreachable!(),
             };
             let focus = ctx.validator.scope_mut();
-            focus.type_indexes.add(type_id);
+            focus.type_indexes.add(sub_face_id.unwrap_or(type_id));
             focus.exports.insert(name.original.clone(), info);
             focus.generics_replace_program.push(instr);
             Ok(())
