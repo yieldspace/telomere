@@ -911,3 +911,140 @@ async fn transferred_handles_keep_their_resource_type() {
         "wrong-type drop should trap, got {error:?}"
     );
 }
+
+/// A host-provided handle and a locally created resource can carry the
+/// same index: the local table's allocator and the host allocator both
+/// start at 1, in separate namespaces. Returning the host handle
+/// upward through a canon lift must not be judged against the
+/// unrelated local entry (Codex review on PR #349).
+#[tokio::test]
+async fn host_handle_colliding_with_local_index_passes_through_lift() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type $iface
+    (instance
+      (export "H" (type (sub resource)))
+      (export "get" (func (result (own 0))))
+    )
+  )
+  (import "host" (instance $host (type $iface)))
+  (alias export $host "H" (type $H))
+  (alias export $host "get" (func $get))
+  (type $L (resource (rep i32)))
+  (canon resource.new $L (core func $L.resource.new))
+  (core func $get' (canon lower (func $get)))
+  (core module $M
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "get" (func $get (result i32)))
+    (func (export "run") (result i32)
+      ;; a local resource takes this instance's table index 1
+      (drop (call $new (i32.const 7)))
+      ;; the host-provided handle is also 1, in the SharedState namespace
+      (call $get))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "new" (func $L.resource.new))
+    (export "get" (func $get'))
+  ))))
+  (func (export "run") (result (own $H)) (canon lift (core func $m "run")))
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut host_instance = telomere_component::ComponentLinkerInstance::new();
+    host_instance.register_func("get", |_store, _args| Ok(vec![ComponentValue::Own(1)]));
+    let mut linker = ComponentLinker::new();
+    linker.register_import_instance("host", host_instance);
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("returning a host-provided handle through lift should succeed");
+    assert_eq!(result, vec![ComponentValue::Own(1)]);
+}
+
+/// The same provider instance imported under two names: the decoder
+/// freshens each import declaration independently, so the resource
+/// carries a distinct synthetic identity along each import path. A
+/// resource created through the first import must still validate when
+/// borrowed through the second (Codex review on PR #349; the
+/// two-import variant of `borrow_handle_crosses_to_defining_instance_as_rep`).
+#[tokio::test]
+async fn borrow_through_second_import_of_same_instance() {
+    let bytes = compile_component(
+        r#"
+(component
+  (component $C
+    (core module $M
+      (global $dtor-count (mut i32) (i32.const 0))
+      (func (export "dtor") (param i32)
+        (global.set $dtor-count (i32.add (global.get $dtor-count) (i32.const 1))))
+      (func (export "dtor-count") (result i32) (global.get $dtor-count)))
+    (core instance $m (instantiate $M))
+    (type $R' (resource (rep i32) (dtor (core func $m "dtor"))))
+    (export $R "R" (type $R'))
+    (canon resource.new $R' (core func $R.resource.new))
+    (core module $CM
+      (import "" "new" (func $new (param i32) (result i32)))
+      (func (export "make") (result i32) (call $new (i32.const 0x41)))
+      (func (export "get-rep") (param $rep i32) (result i32) (local.get $rep)))
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "new" (func $R.resource.new))))))
+    (func (export "make") (result (own $R)) (canon lift (core func $cm "make")))
+    (func (export "get-rep") (param "r" (borrow $R)) (result u32) (canon lift (core func $cm "get-rep")))
+    (func (export "dtor-count") (result u32) (canon lift (core func $m "dtor-count"))))
+  (component $D
+    (import "c1" (instance $c1
+      (export "R" (type $R1 (sub resource)))
+      (export "make" (func (result (own $R1))))
+      (export "get-rep" (func (param "r" (borrow $R1)) (result u32)))))
+    (import "c2" (instance $c2
+      (export "R" (type $R2 (sub resource)))
+      (export "make" (func (result (own $R2))))
+      (export "get-rep" (func (param "r" (borrow $R2)) (result u32)))))
+    (alias export $c1 "R" (type $R))
+    (canon resource.drop $R (core func $R.resource.drop))
+    (canon lower (func $c1 "make") (core func $make'))
+    (canon lower (func $c2 "get-rep") (core func $get-rep'))
+    (core module $DM
+      (import "" "make" (func $make (result i32)))
+      (import "" "get-rep" (func $get-rep (param i32) (result i32)))
+      (import "" "drop" (func $drop (param i32)))
+      (func (export "run") (result i32)
+        (local $h i32)
+        (local.set $h (call $make))
+        (if (i32.ne (i32.const 1) (local.get $h)) (then unreachable))
+        (if (i32.ne (i32.const 0x41) (call $get-rep (local.get $h))) (then unreachable))
+        (call $drop (local.get $h))
+        (i32.const 44)))
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "make" (func $make'))
+      (export "get-rep" (func $get-rep'))
+      (export "drop" (func $R.resource.drop))))))
+    (func (export "run") (result u32) (canon lift (core func $dm "run"))))
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c1" (instance $c)) (with "c2" (instance $c))))
+  (func (export "run") (alias export $d "run"))
+  (func (export "dtor-count") (alias export $c "dtor-count")))
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance
+        .call(&store, "run", &[])
+        .await
+        .expect("borrowing through the second import of the same instance should succeed");
+    assert_eq!(result, vec![ComponentValue::U32(44)]);
+    let count = instance
+        .call(&store, "dtor-count", &[])
+        .await
+        .expect("dtor-count should succeed");
+    assert_eq!(count, vec![ComponentValue::U32(1)]);
+}

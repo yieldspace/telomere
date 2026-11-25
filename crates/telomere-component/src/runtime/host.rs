@@ -326,6 +326,12 @@ impl HandleTable {
         self.entries.contains_key(&handle)
     }
 
+    /// The resource identity the entry for `handle` was keyed under,
+    /// or `None` when this table holds no such handle.
+    pub(super) fn resource_of(&self, handle: u32) -> Option<ResourceId> {
+        self.entries.get(&handle).map(|entry| entry.resource)
+    }
+
     /// Validates a handle index against this table with the canonical
     /// ABI's trap texts (#335): an index the table does not hold (never
     /// allocated, already dropped, zero, or out of range) traps

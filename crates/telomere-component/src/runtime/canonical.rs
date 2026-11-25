@@ -432,11 +432,35 @@ fn collect_defined_handle_leaves(
 }
 
 /// Checks one handle leaf crossing a canonical boundary (#335). An
-/// index the instance's table holds is validated against the declared
-/// resource type (the wrong-type trap fires there); a live
-/// host-provided handle, which is tracked in `SharedState` rather than
-/// in any instance table, is valid pass-through; any other index is
-/// the canonical `unknown handle index N` trap.
+/// index the instance's table holds for the declared resource type is
+/// valid; a live host-provided handle, which is tracked in
+/// `SharedState` rather than in any instance table, is valid
+/// pass-through; any other index the table does not hold is the
+/// canonical `unknown handle index N` trap, and an index held for a
+/// different resource type is the canonical wrong-type trap.
+///
+/// Two shapes make an index held under a *different* identity than
+/// the declared type legitimate, because a bare index does not say
+/// which namespace produced it:
+///
+/// - the local table's allocator and the host allocator both start
+///   at 1, so a live host-provided handle can collide with an
+///   unrelated local entry; if `SharedState` tracks the index, the
+///   value may be that host handle passing through, and trapping it
+///   would reject a valid program;
+/// - the decoder freshens every import declaration independently,
+///   so one provider resource carries a distinct synthetic identity
+///   along each import path of a consumer (the handle transfers pair
+///   the two sides' types positionally for the same reason; see
+///   `HandleTransfer::own`). An entry keyed under one import path
+///   therefore cannot match another path's identity exactly.
+///
+/// The wrong-type trap is reserved for mismatches that involve a
+/// resource *defined* in this program: those identities are the
+/// definition sites themselves, so a mismatch there is unambiguous.
+/// Two synthetic (imported) identities are not distinguished at this
+/// boundary; the canon `resource.rep` / `resource.drop` operations
+/// keep comparing their table entries exactly.
 fn check_boundary_handle(
     program: &ComponentProgram,
     shared: &SharedState,
@@ -446,14 +470,27 @@ fn check_boundary_handle(
 ) -> Result<(), ComponentError> {
     let resource = runtime_resource_id(program, shared, type_id)?;
     let table = handles.borrow();
-    if table.contains_handle(handle) {
-        table.validate_handle(resource, handle)
-    } else if shared.tracks_host_resource(handle) {
-        Ok(())
-    } else {
-        Err(ComponentError::Trap(format!(
-            "unknown handle index {handle}"
-        )))
+    match table.resource_of(handle) {
+        Some(entry_resource) if entry_resource == resource => Ok(()),
+        Some(entry_resource) => {
+            if shared.tracks_host_resource(handle)
+                || (!resource_is_local_definition(entry_resource)
+                    && !resource_is_local_definition(resource))
+            {
+                Ok(())
+            } else {
+                table.validate_handle(resource, handle)
+            }
+        }
+        None => {
+            if shared.tracks_host_resource(handle) {
+                Ok(())
+            } else {
+                Err(ComponentError::Trap(format!(
+                    "unknown handle index {handle}"
+                )))
+            }
+        }
     }
 }
 
