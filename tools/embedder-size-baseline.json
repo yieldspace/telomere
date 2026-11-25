@@ -1,21 +1,21 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #357 (branch fix/320-resource-validation at head 3ec45760193cfa608c075230c4f46706dc8c1ff5 \u2014 the #320 change with its three Codex P2 fixes (a sub-ascribed type export registers its fresh face identity in the type index and export info; the export (sub resource) ascription check accepts abstract resource faces; and export (eq ...) ascriptions over resource faces require nominal identity), on current main 98e93a3 (PR #349); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45626770085, 45626777366 and 45626784798 against the branch and pull-request run 45625724782, which built the same tree, produced byte-identical sizes for every gated series",
-    "commit": "3ec45760193cfa608c075230c4f46706dc8c1ff5",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #354 (branch fix/319-decoder-strictness at head 0bccf23bc6750a8e821872649841fb29125e62b2 \u2014 the #319 change (the component decoder enforces section sizes and core decode reasons are preserved) with the Codex-review follow-up (the InvalidSectionSize variant is classified as a decode error in the public ComponentError conversion), merged with current main 98e93a3d10354bee4a4a27e9b77252d69f066777 (PR #349); ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45619016372, 45619023713 and 45619030678 against the branch and pull-request run 45619001703, which built the same tree, produced byte-identical sizes for every gated series",
+    "commit": "0bccf23bc6750a8e821872649841fb29125e62b2",
     "date": "2026-11-25",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
-    "sample_size": 3,
+    "sample_size": 4,
     "run_ids": [
-      45626770085,
-      45626777366,
-      45626784798
+      45619016372,
+      45619023713,
+      45619030678
     ],
     "cross_check_run_ids": [
-      45625724782
+      45619001703
     ],
-    "derivation": "Re-baseline for PR #357\u2019s Codex round-3 fix (nominal identity for export eq ascriptions over resource faces). Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45626794894, 45626804707 and 45626813591 on main at 98e93a3; all three runs pass the gate). The main control reproduces the checked-in baseline byte-identically on the 24 series of the baseline and telomere-component-linking configurations and sits slightly below it on the eight core-only series (by 256\u2013512 B stripped file and 144\u2013320 B stripped .text \u2014 pre-existing baseline staleness; no core series is re-baselined, as the branch is byte-identical to the main control there). This PR\u2019s own delta against the main control is confined to the series of the three configurations that link telomere-component: in release, stripped file +5,184 B (component), +5,200 B (wasi) and +5,200 B (wasi-threads) and stripped .text +4,688 B in each; in release-size, stripped file +4,032 B / +4,032 B / +4,016 B and stripped .text +3,520 B in each. Every other configuration is byte-identical to main in both profiles. Twelve series exceed the checked-in baseline (by +1,752\u2013+1,784 B stripped file and +1,648 B stripped .text in release; by +1,808 B and +1,680 B in release-size), so those twelve are re-baselined to the branch measurements. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.64% (2,433,656 B to 2,716,832 B); the release core-nosimd stripped file series is unchanged at +9.83% (1,275,448 B to 1,400,840 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
+    "derivation": "Second re-baseline for PR #354 (#319, the component decoder enforces section sizes and preserves core decode reasons), after PR #349 (#335) landed on main and the branch merged it (merge commit 0bccf23; the baseline files conflicted and were resolved by taking main's baseline as this campaign's base). The Codex-review follow-up on this PR (InvalidSectionSize classified as a decode error, commit 9bd4d1e) is part of the measured tree. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45619036427, 45619042423 and 45619050607 on main at 98e93a3d10354bee4a4a27e9b77252d69f066777; all three runs pass the gate, and the main control is byte-identical to the checked-in baseline on all 32 gated series). This PR's own delta against the main control is identical in shape and size to its first re-baseline campaign: the four core configurations grow slightly in both profiles (release stripped file +304 B (core), +320 B (core-nosimd), +272 B (core-jit), +256 B (core-aot) and stripped .text +176/+176/+144/+144 B; release-size stripped file +512/+512/+416/+432 B and stripped .text +304/+320/+240/+240 B \u2014 the new WasmParserError::IntegerTooLarge variant and the format_io_error helper in the telomere library), and the three configurations that link telomere-component shrink substantially (release stripped file \u2212123,976 B (component), \u2212123,976 B (wasi), \u2212123,992 B (wasi-threads) and stripped .text \u2212112,064 B in each; release-size stripped file \u221269,160/\u221269,160/\u221269,128 B and stripped .text \u221263,232/\u221263,216/\u221263,184 B \u2014 every section body now parses through a take() size-limited reader, collapsing the generic section parsers to a single monomorphization). Following the established practice of re-baselining growth only, the sixteen core series are re-baselined to the branch measurements and the component-linking baselines are retained, so the retained baselines sit above the branch measurements by the shrinkage amounts above. Run-to-run spread was 0 B for every gated series across the four branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series at +11.42% (2,433,656 B to 2,711,648 B), unchanged because that series' baseline is retained. The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -31,72 +31,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1591952,
-          "threshold": 1591952
+          "baseline": 1592256,
+          "threshold": 1592256
         },
         "stripped_text_bytes": {
-          "baseline": 1204487,
-          "threshold": 1204487
+          "baseline": 1204663,
+          "threshold": 1204663
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2716832,
-          "threshold": 2716832
+          "baseline": 2711648,
+          "threshold": 2711648
         },
         "stripped_text_bytes": {
-          "baseline": 2156263,
-          "threshold": 2156263
+          "baseline": 2151575,
+          "threshold": 2151575
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2944344,
-          "threshold": 2944344
+          "baseline": 2939144,
+          "threshold": 2939144
         },
         "stripped_text_bytes": {
-          "baseline": 2330647,
-          "threshold": 2330647
+          "baseline": 2325959,
+          "threshold": 2325959
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1400840,
-          "threshold": 1400840
+          "baseline": 1401160,
+          "threshold": 1401160
         },
         "stripped_text_bytes": {
-          "baseline": 1059319,
-          "threshold": 1059319
+          "baseline": 1059495,
+          "threshold": 1059495
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2131288,
-          "threshold": 2131288
+          "baseline": 2131560,
+          "threshold": 2131560
         },
         "stripped_text_bytes": {
-          "baseline": 1638871,
-          "threshold": 1638871
+          "baseline": 1639015,
+          "threshold": 1639015
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1637928,
-          "threshold": 1637928
+          "baseline": 1638184,
+          "threshold": 1638184
         },
         "stripped_text_bytes": {
-          "baseline": 1237751,
-          "threshold": 1237751
+          "baseline": 1237895,
+          "threshold": 1237895
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3160048,
-          "threshold": 3160048
+          "baseline": 3154848,
+          "threshold": 3154848
         },
         "stripped_text_bytes": {
-          "baseline": 2497959,
-          "threshold": 2497959
+          "baseline": 2493271,
+          "threshold": 2493271
         }
       }
     },
@@ -113,72 +113,72 @@
       },
       "core": {
         "stripped_file_bytes": {
-          "baseline": 1115544,
-          "threshold": 1115544
+          "baseline": 1116056,
+          "threshold": 1116056
         },
         "stripped_text_bytes": {
-          "baseline": 787159,
-          "threshold": 787159
+          "baseline": 787463,
+          "threshold": 787463
         }
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 1702936,
-          "threshold": 1702936
+          "baseline": 1698904,
+          "threshold": 1698904
         },
         "stripped_text_bytes": {
-          "baseline": 1258791,
-          "threshold": 1258791
+          "baseline": 1255271,
+          "threshold": 1255271
         }
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 1824168,
-          "threshold": 1824168
+          "baseline": 1820136,
+          "threshold": 1820136
         },
         "stripped_text_bytes": {
-          "baseline": 1340567,
-          "threshold": 1340567
+          "baseline": 1337047,
+          "threshold": 1337047
         }
       },
       "core-nosimd": {
         "stripped_file_bytes": {
-          "baseline": 1000752,
-          "threshold": 1000752
+          "baseline": 1001264,
+          "threshold": 1001264
         },
         "stripped_text_bytes": {
-          "baseline": 707607,
-          "threshold": 707607
+          "baseline": 707927,
+          "threshold": 707927
         }
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1538400,
-          "threshold": 1538400
+          "baseline": 1538816,
+          "threshold": 1538816
         },
         "stripped_text_bytes": {
-          "baseline": 1091895,
-          "threshold": 1091895
+          "baseline": 1092135,
+          "threshold": 1092135
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1154608,
-          "threshold": 1154608
+          "baseline": 1155040,
+          "threshold": 1155040
         },
         "stripped_text_bytes": {
-          "baseline": 812359,
-          "threshold": 812359
+          "baseline": 812599,
+          "threshold": 812599
         }
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 1966872,
-          "threshold": 1966872
+          "baseline": 1962856,
+          "threshold": 1962856
         },
         "stripped_text_bytes": {
-          "baseline": 1435271,
-          "threshold": 1435271
+          "baseline": 1431751,
+          "threshold": 1431751
         }
       }
     }

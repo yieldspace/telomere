@@ -3,6 +3,18 @@ use crate::ir::TypeId;
 use telomere::WasmParserError;
 use thiserror::Error;
 
+/// Formats an I/O failure from the component source, keeping the
+/// specific reason instead of flattening every failure into one generic
+/// line: an exhausted source is the spec's `unexpected end-of-file`,
+/// which is the text malformed-input diagnostics name.
+fn format_io_error(error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+        "unexpected end-of-file".to_string()
+    } else {
+        format!("error from underlying layer: {error}")
+    }
+}
+
 /// `ComponentParseError` represents the possible errors that can occur in the component model parser.
 #[derive(Error, Debug)]
 pub enum ComponentParseError {
@@ -20,8 +32,9 @@ pub enum ComponentParseError {
         /// Ordinal of the core module section without a substitution.
         ordinal: u32,
     },
-    /// Error from the underlying layer.
-    #[error("error from underlying layer: {0:?}")]
+    /// Error from the underlying layer; the message keeps the specific
+    /// reason (see [`format_io_error`]).
+    #[error("{}", format_io_error(.0))]
     IoError(#[from] std::io::Error),
     /// Error for invalid magic number with expected and actual values.
     #[error("invalid {2} magic: {0:?} != {1:?}")]
@@ -38,6 +51,9 @@ pub enum ComponentParseError {
     /// Error for invalid section type.
     #[error("invalid section type: {0:?}")]
     InvalidSectionType(u8),
+    /// A section body did not consume exactly its declared size.
+    #[error("invalid section size")]
+    InvalidSectionSize,
     /// Error for invalid core sort.
     #[error("invalid core sort: {0:?}")]
     InvalidCoreSort(u8),

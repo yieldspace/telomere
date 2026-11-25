@@ -82,10 +82,22 @@ const EXCLUDED: &[(&str, &str)] = &[
     ),
     (
         "binary/binary.wast",
-        "malformed binaries are accepted: truncated sections and \
-         invalid UTF-8 names decode successfully, and core-layer decode \
-         errors are wrapped without the specific reason the suite \
-         matches on",
+        "malformed-binary strictness is fixed (#319: section sizes \
+         are enforced and core decode reasons are preserved), but the \
+         file still fails on other defects: two binary extern-name \
+         cases (lines 1467, 1481 - a malformed name is accepted, and \
+         another is rejected with a non-canonical message) remain \
+         after the split extern-name encoding fix (issue #318; the \
+         lines 1297, 1316 cases now pass); async type encodings the \
+         decoder \
+         does not know - stream (0x66) and async func (0x43) types, \
+         async being a documented non-goal (lines 556, 742, 754, \
+         993); the CM_MAP map type (0x63), a documented non-goal \
+         (line 984); core rectype/moduletype encodings (the 0x50 \
+         `sub` prefix wart; issue #355; lines 891, 948); and alias \
+         sort validation - an invalid component outer-alias sort is \
+         accepted and a core alias sort is rejected with a \
+         non-canonical message (issue #356; lines 460, 924)",
     ),
     (
         "validation/outer-alias.wast",

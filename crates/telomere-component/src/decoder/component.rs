@@ -14,7 +14,7 @@ use crate::ir::types::{CoreModuleType, Type};
 use crate::ir::{ComponentSection, CoreModule, CoreRelation, Relation};
 use crate::support::binary::BinaryReader;
 use crate::support::common::{module_exports, module_imports};
-use crate::support::parser::core::parse_u32;
+use crate::support::parser::core::{parse_name, parse_u32};
 use std::collections::HashSet;
 use telomere::WasmParser;
 
@@ -50,19 +50,36 @@ fn _parse_component(
 
     while let Some(st) = parse_section_type(ctx.reader)? {
         let (_, section_size) = parse_u32(ctx.reader)?;
+        let section_size = section_size as usize;
+        let section_start = ctx.reader.read_count();
+        // Every section body is parsed through a reader limited to the
+        // declared size and must consume it exactly: contents may not
+        // spill into the following sections, and a body that ends early
+        // (or a declared size that runs past the end of the input) is
+        // malformed instead of being silently resynchronised.
         match st {
-            ComponentSection::Custom => parse_custom_section(ctx.reader, section_size as usize)?,
+            ComponentSection::Custom => {
+                let mut sized_reader = ctx.reader.take(section_size);
+                parse_custom_section(&mut sized_reader, section_size)?;
+                finish_section(&mut sized_reader, section_start, section_size)?;
+            }
             ComponentSection::Type => {
-                for _ in parse_vec_range(ctx)? {
-                    let ty = parse_type(ctx, depth)?;
-                    let id = ctx.validator.new_type(ty);
-                    ctx.validator.validate_effective_type_size(id)?;
-                    ctx.validator.scope_mut().type_indexes.add(id);
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        let ty = parse_type(&mut ctx, depth)?;
+                        let id = ctx.validator.new_type(ty);
+                        ctx.validator.validate_effective_type_size(id)?;
+                        ctx.validator.scope_mut().type_indexes.add(id);
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::CoreModule => {
-                let mut sized_reader = ctx.reader.take(section_size as usize);
+                let mut sized_reader = ctx.reader.take(section_size);
                 let module = parse_core_module_section(ctx.state, &mut sized_reader)?;
+                finish_section(&mut sized_reader, section_start, section_size)?;
                 validate_core_module_contract(&module)?;
                 let ty = CoreModuleType::from(&module);
                 let idx = ctx
@@ -75,28 +92,42 @@ fn _parse_component(
                 ctx.validator.scope_mut().core_modules.add(ty);
             }
             ComponentSection::CoreType => {
-                for _ in parse_vec_range(ctx)? {
-                    let (_, ty) = parse_core_type(ctx)?;
-                    let idx = ctx
-                        .state
-                        .core_type_store
-                        .register(CoreRelation::Defined(ty.clone()));
-                    ctx.state.scope_mut().core_types.register(idx);
-                    ctx.validator.scope_mut().core_types.add(ty);
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        let (_, ty) = parse_core_type(&mut ctx)?;
+                        let idx = ctx
+                            .state
+                            .core_type_store
+                            .register(CoreRelation::Defined(ty.clone()));
+                        ctx.state.scope_mut().core_types.register(idx);
+                        ctx.validator.scope_mut().core_types.add(ty);
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::CoreInstance => {
-                for _ in parse_vec_range(ctx)? {
-                    parse_core_instance(ctx)?;
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        parse_core_instance(&mut ctx)?;
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Component => {
                 ctx.state.push_scope();
                 ctx.validator.push_scope();
                 {
-                    let mut sized_reader = ctx.reader.take(section_size as usize);
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    _parse_component(&mut ctx, depth + 1)?;
+                    let mut sized_reader = ctx.reader.take(section_size);
+                    {
+                        let mut ctx =
+                            ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                        _parse_component(&mut ctx, depth + 1)?;
+                    }
+                    finish_section(&mut sized_reader, section_start, section_size)?;
                 }
                 let component_ty = ctx.validator.make_component();
                 let component = ctx
@@ -124,34 +155,64 @@ fn _parse_component(
                 ctx.state.scope_mut().components.register(idx);
             }
             ComponentSection::Export => {
-                for _ in parse_vec_range(ctx)? {
-                    parse_export(ctx)?;
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        parse_export(&mut ctx)?;
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Import => {
-                for _ in parse_vec_range(ctx)? {
-                    parse_import(ctx)?;
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        parse_import(&mut ctx)?;
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Instance => {
-                for _ in parse_vec_range(ctx)? {
-                    parse_instance(ctx)?;
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        parse_instance(&mut ctx)?;
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Alias => {
-                for _ in parse_vec_range(ctx)? {
-                    parse_alias(ctx)?;
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        parse_alias(&mut ctx)?;
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Canon => {
-                for _ in parse_vec_range(ctx)? {
-                    parse_canon(ctx)?;
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        parse_canon(&mut ctx)?;
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Value => {
-                for _ in parse_vec_range(ctx)? {
-                    parse_value_def(ctx)?;
+                let mut sized_reader = ctx.reader.take(section_size);
+                {
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+                    for _ in parse_vec_range(&mut ctx)? {
+                        parse_value_def(&mut ctx)?;
+                    }
                 }
+                finish_section(&mut sized_reader, section_start, section_size)?;
             }
             v => {
                 return Err(ComponentParseError::Unsupported(format!(
@@ -159,6 +220,39 @@ fn _parse_component(
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+/// Verifies that a section parsed through a size-limited reader
+/// consumed exactly its declared size.
+///
+/// The limiting reader caps every read at the declared size, so a
+/// section body can only under-consume. The remainder is discarded to
+/// tell the two malformations apart: if the underlying input ends
+/// first, the declared size itself ran past the end of the input
+/// (`unexpected end-of-file`); if the bytes are present but were not
+/// consumed, the section body did not fill its declared size.
+fn finish_section<R: BinaryReader>(
+    sized_reader: &mut R,
+    section_start: usize,
+    section_size: usize,
+) -> ParseResult<()> {
+    let consumed = sized_reader.read_count().saturating_sub(section_start);
+    let mut remaining = section_size.saturating_sub(consumed);
+    while remaining > 0 {
+        match sized_reader.read_one()? {
+            Some(_) => remaining -= 1,
+            None => {
+                return Err(ComponentParseError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "unexpected end-of-file",
+                )));
+            }
+        }
+    }
+    if consumed != section_size {
+        return Err(ComponentParseError::InvalidSectionSize);
     }
     Ok(())
 }
@@ -214,9 +308,26 @@ fn parse_custom_section<R: BinaryReader>(
     reader: &mut R,
     size: usize,
 ) -> Result<(), ComponentParseError> {
-    // Custom section parsing logic
-    for _ in 0..size {
-        reader.read_exact_one()?;
+    // A custom section is a name followed by opaque bytes. The name is
+    // part of the binary grammar, so it must be well-formed — a length
+    // running past the section or invalid UTF-8 makes the whole
+    // component malformed — while the remaining bytes are not
+    // interpreted at all.
+    let (name_len, _name) = parse_name(reader)?;
+    let mut remaining = size
+        .checked_sub(name_len)
+        .ok_or(ComponentParseError::InvalidSectionSize)?;
+    let mut scratch = [0u8; 4096];
+    while remaining > 0 {
+        let chunk = remaining.min(scratch.len());
+        let read = reader.read_slice(&mut scratch[..chunk])?;
+        if read == 0 {
+            return Err(ComponentParseError::IoError(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "unexpected end-of-file",
+            )));
+        }
+        remaining -= read;
     }
     Ok(())
 }
