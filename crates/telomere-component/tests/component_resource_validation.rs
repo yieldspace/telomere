@@ -1,0 +1,1413 @@
+//! Regression tests for issue #320: resource type validation gaps found by
+//! the vendored upstream conformance suite (`validation/resources.wast`).
+//!
+//! - Valid components whose nested component imports a `(type (eq ...))`
+//!   definition mentioning `own`/`borrow` of an imported abstract resource
+//!   were rejected with `type not valid to be used as import`
+//!   (resources.wast lines 270, 291, 312).
+//! - Exporting a resource with a `(type (sub resource))` ascription must
+//!   produce a fresh resource identity; treating it as the underlying
+//!   resource let an identity mismatch through (line 576).
+//! - own/borrow mismatches were reported as a generic
+//!   `defvaltype mismatch` instead of `expected own, found borrow`
+//!   (lines 101, 179).
+
+use telomere_component::ComponentEngine;
+
+fn compile_component(text: &str) -> Result<(), telomere_component::ComponentError> {
+    let bytes = wat::parse_str(text).expect("component wat must be valid");
+    let engine = ComponentEngine::new();
+    engine.compile(&bytes).map(|_| ())
+}
+
+fn expect_invalid_with(text: &str, needle: &str) {
+    let error = compile_component(text).expect_err("component must be rejected");
+    let message = error.to_string();
+    assert!(
+        message.contains(needle),
+        "expected error containing `{needle}`, got `{message}`"
+    );
+}
+
+#[test]
+fn eq_import_of_record_with_own_of_imported_resource_is_valid() {
+    compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (type $Rec (record (field "h" (own $R))))
+  (component $c
+    (import "T" (type $t (sub resource)))
+    (type $expected (record (field "h" (own $t))))
+    (import "a" (type (eq $expected))))
+  (instance (instantiate $c (with "T" (type $R)) (with "a" (type $Rec)))))
+"#,
+    )
+    .expect("record with own of an imported resource is a valid import type");
+}
+
+#[test]
+fn eq_import_of_variant_with_own_of_imported_resource_is_valid() {
+    compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (type $Var (variant (case "c" (own $R))))
+  (component $c
+    (import "T" (type $t (sub resource)))
+    (type $expected (variant (case "c" (own $t))))
+    (import "a" (type (eq $expected))))
+  (instance (instantiate $c (with "T" (type $R)) (with "a" (type $Var)))))
+"#,
+    )
+    .expect("variant with own of an imported resource is a valid import type");
+}
+
+#[test]
+fn eq_import_of_multi_resource_record_is_valid() {
+    compile_component(
+        r#"
+(component
+  (type $R1 (resource (rep i32)))
+  (type $R2 (resource (rep i32)))
+  (type $Rec (record (field "f1" (own $R1))
+    (field "f2" (borrow $R2))
+    (field "f3" (own $R1))
+    (field "f4" (borrow $R2))
+    (field "f5" (list (own $R1)))
+    (field "f6" (option (borrow $R2)))
+    (field "f7" (own $R1))
+    (field "f8" (borrow $R2))))
+  (component $c
+    (import "T1" (type $t1 (sub resource)))
+    (import "T2" (type $t2 (sub resource)))
+    (import "T3" (type $t3 (sub resource)))
+    (import "T4" (type $t4 (sub resource)))
+    (import "T5" (type $t5 (eq $t1)))
+    (import "T6" (type $t6 (eq $t2)))
+    (import "T7" (type $t7 (eq $t1)))
+    (import "T8" (type $t8 (eq $t4)))
+    (type $expected (record (field "f1" (own $t1))
+      (field "f2" (borrow $t2))
+      (field "f3" (own $t3))
+      (field "f4" (borrow $t4))
+      (field "f5" (list (own $t5)))
+      (field "f6" (option (borrow $t6)))
+      (field "f7" (own $t7))
+      (field "f8" (borrow $t8))))
+    (import "a" (type (eq $expected))))
+  (instance (instantiate $c
+    (with "T1" (type $R1))
+    (with "T2" (type $R2))
+    (with "T3" (type $R1))
+    (with "T4" (type $R2))
+    (with "T5" (type $R1))
+    (with "T6" (type $R2))
+    (with "T7" (type $R1))
+    (with "T8" (type $R2))
+    (with "a" (type $Rec)))))
+"#,
+    )
+    .expect("multi-resource record is a valid import type");
+}
+
+#[test]
+fn eq_import_with_mismatched_resource_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (type $R1 (resource (rep i32)))
+  (type $R2 (resource (rep i32)))
+  (type $RecU (record (field "h" (own $R2))))
+  (component $c
+    (import "T" (type $t (sub resource)))
+    (type $expected (record (field "h" (own $t))))
+    (import "a" (type (eq $expected))))
+  (instance (instantiate $c (with "T" (type $R1)) (with "a" (type $RecU)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn multiple_exports_of_one_resource_share_identity_without_ascription() {
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export "r1" (type $r))
+    (export "r2" (type $r)))
+  (instance $c (instantiate $C))
+  (alias export $c "r1" (type $r1))
+  (alias export $c "r2" (type $r2))
+  (component $eq
+    (import "a" (type $a (sub resource)))
+    (import "b" (type (eq $a))))
+  (instance (instantiate $eq (with "a" (type $r1)) (with "b" (type $r2)))))
+"#,
+    )
+    .expect("two plain exports of one resource have the same identity");
+}
+
+#[test]
+fn export_sub_ascription_creates_distinct_resource_identity() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export "r1" (type $r))
+    (export "r2" (type $r) (type (sub resource))))
+  (instance $c (instantiate $C))
+  (alias export $c "r1" (type $r1))
+  (alias export $c "r2" (type $r2))
+  (component $eq
+    (import "a" (type $a (sub resource)))
+    (import "b" (type (eq $a))))
+  (instance (instantiate $eq (with "a" (type $r1)) (with "b" (type $r2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn named_sub_ascribed_export_reexported_by_index_keeps_face_identity() {
+    // Regression (Codex review of PR #357): a named sub-ascribed export
+    // `(export $face "r1" (type $r) (type (sub resource)))` must register the
+    // fresh face identity in the type index space, so that a later
+    // `(export "r2" (type $face))` exports the very same resource as `r1`.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $face "r1" (type $r) (type (sub resource)))
+    (export "r2" (type $face)))
+  (instance $c (instantiate $C))
+  (alias export $c "r1" (type $r1))
+  (alias export $c "r2" (type $r2))
+  (component $eq
+    (import "a" (type $a (sub resource)))
+    (import "b" (type (eq $a))))
+  (instance (instantiate $eq (with "a" (type $r1)) (with "b" (type $r2)))))
+"#,
+    )
+    .expect("re-exporting a named sub-ascribed export by type index must keep the face identity");
+}
+
+#[test]
+fn named_sub_ascribed_export_reexport_differs_from_underlying_resource() {
+    // Companion control: the re-exported face must still differ from the
+    // underlying resource itself (the #320 ascription semantics).
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export "r0" (type $r))
+    (export $face "r1" (type $r) (type (sub resource)))
+    (export "r2" (type $face)))
+  (instance $c (instantiate $C))
+  (alias export $c "r0" (type $r0))
+  (alias export $c "r2" (type $r2))
+  (component $eq
+    (import "a" (type $a (sub resource)))
+    (import "b" (type (eq $a))))
+  (instance (instantiate $eq (with "a" (type $r0)) (with "b" (type $r2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn borrow_provided_for_own_import_reports_expected_own_found_borrow() {
+    expect_invalid_with(
+        r#"
+(component
+  (import "T" (type $T (sub resource)))
+  (import "f" (func $f (param "x" (borrow $T))))
+  (component $c
+    (import "T" (type $T (sub resource)))
+    (import "g" (func (param "x" (own $T)))))
+  (instance (instantiate $c (with "T" (type $T)) (with "g" (func $f)))))
+"#,
+        "expected own, found borrow",
+    );
+}
+
+#[test]
+fn list_borrow_provided_for_list_own_import_reports_expected_own_found_borrow() {
+    expect_invalid_with(
+        r#"
+(component
+  (import "T" (type $T (sub resource)))
+  (type $LB (list (borrow $T)))
+  (import "f" (func $f (param "x" $LB)))
+  (component $c
+    (import "T" (type $T (sub resource)))
+    (type $LO (list (own $T)))
+    (import "g" (func (param "x" $LO))))
+  (instance (instantiate $c (with "T" (type $T)) (with "g" (func $f)))))
+"#,
+        "expected own, found borrow",
+    );
+}
+
+#[test]
+fn chained_sub_ascription_on_named_sub_ascribed_export_compiles() {
+    // Regression (Codex review of PR #357, round 2): a named sub-ascribed
+    // export must itself accept a further `(type (sub resource))`
+    // ascription. Round 1 registered the face as `Type::Generic(Sub)` in
+    // the type index space, but the export sub-ascription check only
+    // accepted `Type::Resource`, so this sequence failed with
+    // `export kind mismatch` even though it compiled before #320.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $face "r1" (type $r) (type (sub resource)))
+    (export "r2" (type $face) (type (sub resource)))))
+"#,
+    )
+    .expect("a sub ascription over a sub-ascribed export face must be accepted");
+}
+
+#[test]
+fn chained_sub_ascription_mints_identity_distinct_from_face() {
+    // Companion control: the chained ascription still mints a fresh
+    // identity, distinct from the face it ascribes (and from the
+    // underlying resource) -- it must not silently alias the face.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $face "r1" (type $r) (type (sub resource)))
+    (export "r2" (type $face) (type (sub resource))))
+  (instance $c (instantiate $C))
+  (alias export $c "r1" (type $r1))
+  (alias export $c "r2" (type $r2))
+  (component $eq
+    (import "a" (type $a (sub resource)))
+    (import "b" (type (eq $a))))
+  (instance (instantiate $eq (with "a" (type $r1)) (with "b" (type $r2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_distinct_sub_ascribed_faces_is_invalid() {
+    // Regression (Codex review of PR #357, round 3): an `(eq ...)`
+    // ascription on a type export asserts identity, but the check used
+    // the generic subtype relation, which accepts any two `Sub`-bounded
+    // generics without comparing identities. Two faces minted from
+    // distinct resources could therefore be equated, and the export
+    // would denote the second face externally while its local type
+    // index still denotes the first.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_of_face_to_itself_is_valid() {
+    // Positive control: an eq ascription naming the very same face is
+    // an identity assertion that holds.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (export "c" (type $a) (type (eq $a)))))
+"#,
+    )
+    .expect("an eq ascription of a face to itself must be accepted");
+}
+
+#[test]
+fn eq_ascription_between_resource_and_its_own_face_is_invalid() {
+    // Sibling direction of the round-3 finding: the concrete resource
+    // equated to a face minted from it. The subtype relation accepted
+    // this (a resource is a subtype of any `Sub` generic), but the
+    // face is a distinct identity from the underlying resource.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (export "c" (type $r) (type (eq $a)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_face_and_its_underlying_resource_is_invalid() {
+    // Companion direction: a face equated to its underlying resource
+    // must also be rejected as an identity mismatch.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (export "c" (type $a) (type (eq $r)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_own_of_distinct_faces_is_invalid() {
+    // Regression (Codex review of PR #357, round 4): the round-3
+    // identity check only looked at the top-level type, so wrapping
+    // two distinct faces in `own` made both sides structural types
+    // that return `None` from `resource_face_id`, bypassing the check;
+    // the subtype relation then accepted the distinct sub-bounded
+    // handle targets inside.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (export "c" (type $oa) (type (eq $ob)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_borrow_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $ba (borrow $a))
+    (type $bb (borrow $b))
+    (export "c" (type $ba) (type (eq $bb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_own_of_same_face_is_valid() {
+    // Positive control: structurally wrapped references to the very
+    // same face still satisfy the identity assertion.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (type $oa (own $a))
+    (export "c" (type $oa) (type (eq $oa)))))
+"#,
+    )
+    .expect("an eq ascription between own of the same face must be accepted");
+}
+
+#[test]
+fn eq_ascription_between_list_of_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $la (list $oa))
+    (type $lb (list $ob))
+    (export "c" (type $la) (type (eq $lb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_record_with_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $ra (record (field "h" $oa)))
+    (type $rb (record (field "h" $ob)))
+    (export "c" (type $ra) (type (eq $rb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_variant_with_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $va (variant (case "h" $oa)))
+    (type $vb (variant (case "h" $ob)))
+    (export "c" (type $va) (type (eq $vb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_option_of_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $pa (option $oa))
+    (type $pb (option $ob))
+    (export "c" (type $pa) (type (eq $pb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_result_with_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $ra (result $oa))
+    (type $rb (result $ob))
+    (export "c" (type $ra) (type (eq $rb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_tuple_with_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $ta (tuple $oa))
+    (type $tb (tuple $ob))
+    (export "c" (type $ta) (type (eq $tb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_func_param_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $fa (func (param "x" $oa)))
+    (type $fb (func (param "x" $ob)))
+    (export "c" (type $fa) (type (eq $fb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_func_result_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $fa (func (result $oa)))
+    (type $fb (func (result $ob)))
+    (export "c" (type $fa) (type (eq $fb)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_record_with_own_of_face_and_resource_is_invalid() {
+    // Nested form of the round-3 sibling direction: a face on one
+    // side, its underlying concrete resource on the other, both
+    // wrapped in `own` inside a record.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (type $oa (own $a))
+    (type $or (own $r))
+    (type $ra (record (field "h" $oa)))
+    (type $rr (record (field "h" $or)))
+    (export "c" (type $ra) (type (eq $rr)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_own_of_distinct_concrete_resources_is_invalid() {
+    // Baseline control without faces: distinct concrete resources
+    // were already rejected before this PR's face machinery, at any
+    // nesting depth, and must stay rejected with the same message.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (type $o1 (own $r1))
+    (type $o2 (own $r2))
+    (export "c" (type $o1) (type (eq $o2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_record_with_own_of_same_face_is_valid() {
+    // Positive control at depth: the same face referenced from both
+    // sides inside a record satisfies the identity assertion.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ra (record (field "h" $oa)))
+    (export "c" (type $ra) (type (eq $ra)))))
+"#,
+    )
+    .expect("an eq ascription between records over own of the same face must be accepted");
+}
+
+#[test]
+fn eq_ascription_between_instance_types_exporting_distinct_faces_is_invalid() {
+    // The identity assertion applies through instance types too: an
+    // instance type whose type export is pinned to one face is not
+    // the same type as one pinned to a different face.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $i1 (instance (export "x" (type (eq $a)))))
+    (type $i2 (instance (export "x" (type (eq $b)))))
+    (export "c" (type $i1) (type (eq $i2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_instance_types_with_func_own_of_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $oa (own $a))
+    (type $ob (own $b))
+    (type $i1 (instance (export "f" (func (param "x" $oa)))))
+    (type $i2 (instance (export "f" (func (param "x" $ob)))))
+    (export "c" (type $i1) (type (eq $i2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_component_types_exporting_distinct_faces_is_invalid() {
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $a "a" (type $r1) (type (sub resource)))
+    (export $b "b" (type $r2) (type (sub resource)))
+    (type $ct1 (component (export "x" (type (eq $a)))))
+    (type $ct2 (component (export "x" (type (eq $b)))))
+    (export "c" (type $ct1) (type (eq $ct2)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn eq_ascription_between_instance_types_exporting_same_face_is_valid() {
+    // Positive control at the instance-type level: both sides pin
+    // the export to the very same face.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r (resource (rep i32)))
+    (export $a "a" (type $r) (type (sub resource)))
+    (type $i1 (instance (export "x" (type (eq $a)))))
+    (type $i2 (instance (export "x" (type (eq $a)))))
+    (export "c" (type $i1) (type (eq $i2)))))
+"#,
+    )
+    .expect("instance types pinning the same face must satisfy the eq ascription");
+}
+
+#[test]
+fn eq_ascription_between_instance_types_with_inline_sub_exports_is_valid() {
+    // Alpha-equivalence control: abstract types declared *inside*
+    // an instance type are bound by that type, not denoted by it, so
+    // two separately written instance types exporting an abstract
+    // resource are the same type -- as they were before faces.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $i1 (instance (export "x" (type (sub resource)))))
+    (type $i2 (instance (export "x" (type (sub resource)))))
+    (export "c" (type $i1) (type (eq $i2)))))
+"#,
+    )
+    .expect("inline abstract exports of two instance types must alpha-match");
+}
+
+#[test]
+fn eq_ascription_between_component_types_with_independent_sub_imports_is_valid() {
+    // Alpha-equivalence control at the component-type level: two
+    // component types whose imports are independent `(sub resource)`
+    // generics matched by bound before this change and must keep
+    // matching; only identities denoted from the enclosing scope are
+    // nominal.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $ct1 (component (import "x" (type (sub resource)))))
+    (type $ct2 (component (import "x" (type (sub resource)))))
+    (export "c" (type $ct1) (type (eq $ct2)))))
+"#,
+    )
+    .expect("independent abstract imports of two component types must alpha-match");
+}
+
+// ---------------------------------------------------------------------------
+// Codex round 5 (PR #357): two identity leaks around the round-4 walk and
+// the annotated-name validation.
+
+#[test]
+fn eq_ascription_between_component_types_reusing_one_instance_type_is_valid() {
+    // Alpha mappings belong to the comparison that established them:
+    // when a component type reuses one instance type for two exports,
+    // each nested instance comparison must alpha-rename independently.
+    // Here export "a" pairs $i1's inline abstract with $i2's, and
+    // export "b" pairs the same $i1 abstract with $i3's; both pairings
+    // are legitimate, so the ascription is valid (wasmparser accepts
+    // this component).
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $i1 (instance (export "x" (type (sub resource)))))
+    (type $i2 (instance (export "x" (type (sub resource)))))
+    (type $i3 (instance (export "x" (type (sub resource)))))
+    (type $ct1 (component
+      (export "a" (instance (type $i1)))
+      (export "b" (instance (type $i1)))))
+    (type $ct2 (component
+      (export "a" (instance (type $i2)))
+      (export "b" (instance (type $i3)))))
+    (export "c" (type $ct1) (type (eq $ct2)))))
+"#,
+    )
+    .expect("independent nested instance comparisons must alpha-rename independently");
+}
+
+#[test]
+fn constructor_of_other_resource_for_sub_ascribed_export_name_is_invalid() {
+    // The name "r" denotes the face minted from $r1; a constructor
+    // returning an own of the distinct resource $r2 does not construct
+    // that resource, even though the face's `Sub` bound would accept
+    // any resource by subtyping.
+    expect_invalid_with(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (type $r2 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $ctor (result (own $r2)) (canon lift (core func $i "mk")))
+  (export "r" (type $r1) (type (sub resource)))
+  (export "s" (type $r2))
+  (export "[constructor]r" (func $ctor)))
+"#,
+        "resource used in function does not have a name in this context",
+    );
+}
+
+#[test]
+fn method_of_other_resource_for_sub_ascribed_export_name_is_invalid() {
+    // Same mismatch through a method: the borrowed self type must be
+    // the resource the annotated name denotes.
+    expect_invalid_with(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (type $r2 (resource (rep i32)))
+  (core module $m
+    (func (export "use") (param i32)))
+  (core instance $i (instantiate $m))
+  (func $meth (param "self" (borrow $r2)) (canon lift (core func $i "use")))
+  (export "r" (type $r1) (type (sub resource)))
+  (export "s" (type $r2))
+  (export "[method]r.f" (func $meth)))
+"#,
+        "resource used in function does not have a name in this context",
+    );
+}
+
+#[test]
+fn constructor_of_underlying_resource_for_sub_ascribed_export_name_is_valid() {
+    // Positive control: inside the component, the face's resource is
+    // the underlying $r1, so a constructor returning `(own $r1)` does
+    // construct the resource exported as "r".
+    compile_component(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $ctor (result (own $r1)) (canon lift (core func $i "mk")))
+  (export "r" (type $r1) (type (sub resource)))
+  (export "[constructor]r" (func $ctor)))
+"#,
+    )
+    .expect("a constructor over the face's underlying resource must be accepted");
+}
+
+#[test]
+fn constructor_of_other_resource_for_chained_face_name_is_invalid() {
+    // Chained faces resolve to the same root: the name "q" denotes a
+    // face minted over the face of $r1, so a constructor over $r2 is
+    // just as much a mismatch as for the first face's name.
+    expect_invalid_with(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (type $r2 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $ctor (result (own $r2)) (canon lift (core func $i "mk")))
+  (export $face "r" (type $r1) (type (sub resource)))
+  (export "q" (type $face) (type (sub resource)))
+  (export "s" (type $r2))
+  (export "[constructor]q" (func $ctor)))
+"#,
+        "resource used in function does not have a name in this context",
+    );
+}
+
+#[test]
+fn constructor_of_root_resource_for_chained_face_name_is_valid() {
+    // Positive control for the chain: a constructor over $r1 itself
+    // constructs the resource behind both faces.
+    compile_component(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $ctor (result (own $r1)) (canon lift (core func $i "mk")))
+  (export $face "r" (type $r1) (type (sub resource)))
+  (export "q" (type $face) (type (sub resource)))
+  (export "[constructor]q" (func $ctor)))
+"#,
+    )
+    .expect("a constructor over the chained faces' root resource must be accepted");
+}
+
+#[test]
+fn plain_func_over_underlying_resource_of_sub_ascribed_export_is_valid() {
+    // The visibility side of the same registration change: a face
+    // export must leave its underlying resource visible at the
+    // surface, or no exported func could mention the resource the
+    // face denotes (this compiled before faces were registered).
+    compile_component(
+        r#"
+(component
+  (type $r1 (resource (rep i32)))
+  (core module $m
+    (func (export "mk") (result i32) unreachable))
+  (core instance $i (instantiate $m))
+  (func $f (result (own $r1)) (canon lift (core func $i "mk")))
+  (export "r" (type $r1) (type (sub resource)))
+  (export "make" (func $f)))
+"#,
+    )
+    .expect("a plain exported func over the face's underlying resource must be accepted");
+}
+
+#[test]
+fn eq_ascription_with_instance_types_declared_inside_is_valid() {
+    // Round 6 (PR #357): the instance types are declared *inside* the
+    // component types being compared. Their abstract binders belong to
+    // the nested instance scope, not to the enclosing comparison, so
+    // each nested instance comparison must still alpha-rename
+    // independently: export "a" pairs $i1's abstract with $i2's and
+    // export "b" pairs the same $i1 abstract with $i3's.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $ct1 (component
+      (type $i1 (instance (export "x" (type (sub resource)))))
+      (export "a" (instance (type $i1)))
+      (export "b" (instance (type $i1)))))
+    (type $ct2 (component
+      (type $i2 (instance (export "x" (type (sub resource)))))
+      (type $i3 (instance (export "x" (type (sub resource)))))
+      (export "a" (instance (type $i2)))
+      (export "b" (instance (type $i3)))))
+    (export "c" (type $ct1) (type (eq $ct2)))))
+"#,
+    )
+    .expect("binders declared inside the compared types keep their own scope");
+}
+
+// ---------------------------------------------------------------------------
+// Codex round 7 (PR #357): a bound abstract identity matched against a
+// free identity is an instantiation, not an identity equation.
+
+#[test]
+fn eq_ascription_between_component_types_with_bound_export_matched_by_imported_resource_is_valid() {
+    // The ascribed component type $b exports an abstract resource
+    // bound inside $b; the actual component type $a exports the
+    // enclosing scope's imported resource $r at the same position.
+    // The abstract export is satisfied by $r -- it does not require
+    // $a to declare a corresponding fresh binder (wasmparser accepts
+    // this component).
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (type $a (component (export "x" (type (eq $r)))))
+    (type $b (component (export "x" (type (sub resource)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("a bound abstract export must be instantiable by a free resource identity");
+}
+
+#[test]
+fn eq_ascription_between_component_types_with_bound_on_left_matched_by_imported_resource_is_valid()
+{
+    // Mirror image: the bound abstract export is on the actual side
+    // and the free imported resource on the ascribed side.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (type $a (component (export "x" (type (eq $r)))))
+    (type $b (component (export "x" (type (sub resource)))))
+    (export "c" (type $b) (type (eq $a)))))
+"#,
+    )
+    .expect("bound-to-free matching must work in both directions");
+}
+
+#[test]
+fn eq_ascription_between_instance_types_with_bound_export_matched_by_imported_resource_is_valid() {
+    // The same instantiation at the instance-type level.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (type $a (instance (export "x" (type (eq $r)))))
+    (type $b (instance (export "x" (type (sub resource)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("a bound abstract export of an instance type must be instantiable by a free identity");
+}
+
+#[test]
+fn eq_ascription_with_import_declared_bound_identity_matched_by_imported_resource_is_valid() {
+    // The bound identity is declared by an import inside the compared
+    // component type and re-exported; a free identity instantiates it
+    // just like an inline `(sub resource)` export.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (type $a (component (export "x" (type (eq $r)))))
+    (type $b (component (import "bx" (type $bx (sub resource))) (export "x" (type (eq $bx)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("an import-declared bound identity must be instantiable by a free identity");
+}
+
+#[test]
+fn eq_ascription_with_bound_identity_instantiated_consistently_is_valid() {
+    // One bound identity matched at two positions must be
+    // instantiated the same way at both; here it is.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r1" (type $r1 (sub resource)))
+    (type $a (component (export "x" (type (eq $r1))) (export "y" (type (eq $r1)))))
+    (type $b (component (import "bx" (type $bx (sub resource))) (export "x" (type (eq $bx))) (export "y" (type (eq $bx)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("a bound identity instantiated consistently must satisfy the eq ascription");
+}
+
+#[test]
+fn eq_ascription_with_distinct_bound_identities_sharing_one_instantiation_is_valid() {
+    // Instantiation need not be injective: two distinct bound
+    // identities may both be instantiated by the same free identity.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (import "r1" (type $r1 (sub resource)))
+    (type $a (component (export "x" (type (eq $r1))) (export "y" (type (eq $r1)))))
+    (type $b (component (export "x" (type (sub resource))) (export "y" (type (sub resource)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("distinct bound identities may share one instantiating identity");
+}
+
+#[test]
+fn eq_ascription_with_bound_identity_instantiated_inconsistently_is_invalid() {
+    // The bound identity $bx is matched against $r1 at export "x" and
+    // against the distinct $r2 at export "y": no single instantiation
+    // of $bx makes the two component types equal.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (import "r1" (type $r1 (sub resource)))
+    (import "r2" (type $r2 (sub resource)))
+    (type $a (component (export "x" (type (eq $r1))) (export "y" (type (eq $r2)))))
+    (type $b (component (import "bx" (type $bx (sub resource))) (export "x" (type (eq $bx))) (export "y" (type (eq $bx)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn sub_ascribed_export_stays_tied_to_exported_func() {
+    // The instance type of $D must tie `make`'s result to the
+    // resource exported through the `(sub resource)` face: a
+    // consumer importing the two under one resource type has to
+    // accept them. Before the fix, instantiation materialised a
+    // second resource for `make`, unrelated to the face, and the
+    // consumer instantiation failed with "resource types are not
+    // the same".
+    compile_component(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (export $r2 "r" (type $r) (type (sub resource)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make"))))
+  (instance $d (instantiate $D))
+  (alias export $d "r" (type $r2))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $r2)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("exported func must stay tied to the sub-ascribed resource face");
+}
+
+#[test]
+fn sub_ascribed_export_stays_tied_to_exported_func_declared_first() {
+    // Same shape with the function export declared before the type
+    // export: the tie must not depend on declaration order.
+    compile_component(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make")))
+    (export $r2 "r" (type $r) (type (sub resource))))
+  (instance $d (instantiate $D))
+  (alias export $d "r" (type $r2))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $r2)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("exported func must stay tied to the face regardless of declaration order");
+}
+
+#[test]
+fn sub_ascribed_reexport_of_imported_resource_stays_tied() {
+    // The exported resource is imported here: once the component is
+    // instantiated with an actual resource, the `(sub resource)`
+    // re-export and the exported function both denote that same
+    // resource.
+    compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (component $D
+    (import "r" (type $r (sub resource)))
+    (export "r2" (type $r) (type (sub resource)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make"))))
+  (instance $d (instantiate $D (with "r" (type $R))))
+  (alias export $d "r2" (type $r2))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $r2)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("re-exported imported resource and func must denote the instantiated resource");
+}
+
+#[test]
+fn cross_assignments_through_alpha_pairing_are_invalid() {
+    // The x comparison alpha-pairs the two binders, so they denote
+    // one identity; y then instantiates the left binder by $r2 while
+    // z instantiates the right binder by $r1. Accepting would equate
+    // the distinct faces $r1 and $r2 through the pairing.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $f1 "f1" (type $r1) (type (sub resource)))
+    (export $f2 "f2" (type $r2) (type (sub resource)))
+    (type $a (component
+      (export "x" (type $xa (sub resource)))
+      (export "y" (type (eq $xa)))
+      (export "z" (type (eq $f1)))))
+    (type $b (component
+      (export "x" (type $xb (sub resource)))
+      (export "y" (type (eq $f2)))
+      (export "z" (type (eq $xb)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn cross_assignments_through_alpha_pairing_mirrored_are_invalid() {
+    // Mirror image: the cross assignments run the other way.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $f1 "f1" (type $r1) (type (sub resource)))
+    (export $f2 "f2" (type $r2) (type (sub resource)))
+    (type $a (component
+      (export "x" (type $xa (sub resource)))
+      (export "y" (type (eq $f2)))
+      (export "z" (type (eq $xa)))))
+    (type $b (component
+      (export "x" (type $xb (sub resource)))
+      (export "y" (type (eq $xb)))
+      (export "z" (type (eq $f1)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn cross_assignments_around_pairing_in_imports_are_invalid() {
+    // The pairing and both cross assignments all happen while the
+    // types' imports are compared; whichever entry is visited
+    // first, the inconsistency must surface.
+    expect_invalid_with(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $f1 "f1" (type $r1) (type (sub resource)))
+    (export $f2 "f2" (type $r2) (type (sub resource)))
+    (type $a (component
+      (import "x" (type $xa (sub resource)))
+      (import "w" (type (eq $xa)))
+      (import "v" (type (eq $f1)))))
+    (type $b (component
+      (import "x" (type $xb (sub resource)))
+      (import "w" (type (eq $f2)))
+      (import "v" (type (eq $xb)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+        "resource types are not the same",
+    );
+}
+
+#[test]
+fn consistent_cross_assignments_through_alpha_pairing_are_valid() {
+    // Both cross matches instantiate the paired binders by the same
+    // free identity $f1: consistent, so the types are equal.
+    compile_component(
+        r#"
+(component
+  (component $C
+    (type $r1 (resource (rep i32)))
+    (type $r2 (resource (rep i32)))
+    (export $f1 "f1" (type $r1) (type (sub resource)))
+    (export $f2 "f2" (type $r2) (type (sub resource)))
+    (type $a (component
+      (export "x" (type $xa (sub resource)))
+      (export "y" (type (eq $xa)))
+      (export "z" (type (eq $f1)))))
+    (type $b (component
+      (export "x" (type $xb (sub resource)))
+      (export "y" (type (eq $f1)))
+      (export "z" (type (eq $xb)))))
+    (export "c" (type $a) (type (eq $b)))))
+"#,
+    )
+    .expect("consistent cross assignments through a pairing are valid");
+}
+
+#[test]
+fn sub_ascribed_face_reexport_of_imported_resource_keeps_identity() {
+    // Regression (Codex review of PR #357, round 9): the component
+    // imports $r, exports it through a `(sub resource)` face as
+    // "r2", and re-exports the face plainly as "r3". Both exports
+    // denote the resource the component was instantiated with, so a
+    // consumer requiring the two to be equal must accept them.
+    // Before the fix, the plain re-export instantiated the face as
+    // a fresh generic and the consumer failed with "generic
+    // resource cannot assign to concrete type".
+    compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (component $D
+    (import "r" (type $r (sub resource)))
+    (export $face "r2" (type $r) (type (sub resource)))
+    (export "r3" (type $face)))
+  (instance $d (instantiate $D (with "r" (type $R))))
+  (alias export $d "r2" (type $r2))
+  (alias export $d "r3" (type $r3))
+  (component $consumer
+    (import "a" (type $ca (sub resource)))
+    (import "b" (type (eq $ca))))
+  (instance (instantiate $consumer (with "a" (type $r2)) (with "b" (type $r3)))))
+"#,
+    )
+    .expect("face re-export of an imported resource must keep the instantiated identity");
+}
+
+#[test]
+fn sub_ascribed_face_reexport_of_imported_resource_keeps_identity_swapped() {
+    // Same shape with the consumer's arguments swapped: the
+    // re-export supplies the `(sub resource)` import and the face
+    // export the `(eq ...)` one.
+    compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (component $D
+    (import "r" (type $r (sub resource)))
+    (export $face "r2" (type $r) (type (sub resource)))
+    (export "r3" (type $face)))
+  (instance $d (instantiate $D (with "r" (type $R))))
+  (alias export $d "r2" (type $r2))
+  (alias export $d "r3" (type $r3))
+  (component $consumer
+    (import "a" (type $ca (sub resource)))
+    (import "b" (type (eq $ca))))
+  (instance (instantiate $consumer (with "a" (type $r3)) (with "b" (type $r2)))))
+"#,
+    )
+    .expect("face re-export must keep the instantiated identity in either argument order");
+}
+
+#[test]
+fn plain_export_keeps_exported_func_on_plain_instantiation() {
+    // Regression (Codex review of PR #357, round 9): the component
+    // exports a local resource plainly as "r" and through a
+    // `(sub resource)` face as "r2", and exports `make` returning
+    // `(own $r)`. The plain export gives "r" its own instantiation,
+    // and `make` must stay tied to that plain instantiation -- the
+    // one a consumer pairs it with -- not be redirected to the
+    // face. Before the fix the unconditional tie redirected `make`
+    // to the face and this consumer failed with "resource types
+    // are not the same" (it compiled before the tie was added).
+    compile_component(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (export "r" (type $r))
+    (export "r2" (type $r) (type (sub resource)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make"))))
+  (instance $d (instantiate $D))
+  (alias export $d "r" (type $rp))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $rp)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("exported func must stay on the plain instantiation when a plain export exists");
+}
+
+#[test]
+fn plain_export_keeps_exported_func_on_plain_instantiation_func_first() {
+    // Same shape with the function export declared first: the
+    // exemption must not depend on declaration order.
+    compile_component(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make")))
+    (export "r2" (type $r) (type (sub resource)))
+    (export "r" (type $r)))
+  (instance $d (instantiate $D))
+  (alias export $d "r" (type $rp))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $rp)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("exported func must stay on the plain instantiation regardless of order");
+}
+
+#[test]
+fn plain_export_present_face_does_not_pair_with_exported_func() {
+    // Companion control: with a plain export present, `make`
+    // denotes the plain instantiation, so pairing the face "r2"
+    // with `make` is a mismatch (the behaviour before the tie was
+    // introduced). The face pairing only holds when the program
+    // has no plain export of the resource (see
+    // `sub_ascribed_export_stays_tied_to_exported_func`).
+    expect_invalid_with(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (export "r" (type $r))
+    (export "r2" (type $r) (type (sub resource)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make"))))
+  (instance $d (instantiate $D))
+  (alias export $d "r2" (type $r2))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $r2)) (with "make" (func $make2)))))
+"#,
+        "resource types are not the same",
+    );
+}

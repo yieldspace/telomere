@@ -441,10 +441,113 @@ impl<'a> Validator<'a> {
                     || self
                         .type_root_allows_visible_resource_alias_inner(*inner, visible, visiting)?
             }
-            _ => false,
+            Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            }) => contains_type_id(visible, type_id),
+            Type::DefVal(def) => {
+                let def = def.clone();
+                self.defval_resources_visible(&def, visible, visiting)?
+            }
+            Type::Func(func_ty) => {
+                let func_ty = func_ty.clone();
+                let mut all_visible = true;
+                for param in &func_ty.params {
+                    if !self.valtype_resources_visible(param, visible, visiting)? {
+                        all_visible = false;
+                    }
+                }
+                if let Some(result_ty) = &func_ty.result {
+                    if !self.valtype_resources_visible(result_ty, visible, visiting)? {
+                        all_visible = false;
+                    }
+                }
+                all_visible
+            }
+            Type::Component(_) | Type::Instance(_) => true,
         };
         visiting.leave(type_id);
         Ok(result)
+    }
+
+    /// Whether every resource a defvaltype refers to may appear in an
+    /// import/export surface: handle targets must be abstract resources
+    /// (sub-bounded generics, possibly through `eq` aliases) that are
+    /// themselves part of the surface. A handle to a concrete resource
+    /// defined in this component cannot cross the surface inside a
+    /// structural type.
+    fn defval_resources_visible(
+        &self,
+        def: &DefValType,
+        visible: &[TypeId],
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        match def {
+            DefValType::Primitive(_) | DefValType::Flags(_) => Ok(true),
+            DefValType::Record(fields) => {
+                for field in fields {
+                    if !self.valtype_resources_visible(&field.ty, visible, visiting)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            DefValType::Variant(cases) => {
+                for case in cases {
+                    if let Some(ty) = &case.ty {
+                        if !self.valtype_resources_visible(ty, visible, visiting)? {
+                            return Ok(false);
+                        }
+                    }
+                }
+                Ok(true)
+            }
+            DefValType::List(ty, _) => self.valtype_resources_visible(ty, visible, visiting),
+            DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
+                self.handle_target_visible(*type_id, visible, visiting)
+            }
+        }
+    }
+
+    fn valtype_resources_visible(
+        &self,
+        ty: &ValType,
+        visible: &[TypeId],
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        match ty {
+            ValType::Primitive(_) => Ok(true),
+            ValType::Type(type_id) => {
+                self.type_root_allows_visible_resource_alias_inner(*type_id, visible, visiting)
+            }
+        }
+    }
+
+    fn handle_target_visible(
+        &self,
+        type_id: TypeId,
+        visible: &[TypeId],
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        if !visiting.enter(type_id) {
+            return Ok(false);
+        }
+        let result = match self.get_type(type_id)? {
+            Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            }) => Ok(contains_type_id(visible, type_id)),
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => {
+                let inner = *inner;
+                self.handle_target_visible(inner, visible, visiting)
+            }
+            _ => Ok(false),
+        };
+        visiting.leave(type_id);
+        result
     }
 
     fn defval_visible_by_structure(
@@ -813,6 +916,16 @@ impl<'a> Validator<'a> {
         ) {
             visiting.leave(type_id);
             merge_type_ids(visible, &[type_id]);
+            // A `(sub resource)` export face denotes its underlying
+            // resource inside the component: wherever the face is
+            // visible, the resource it stands for counts as visible
+            // too, or surface types mentioning the underlying
+            // resource -- the shape every constructor and method of
+            // the exported resource takes -- could not be used at
+            // the surface at all.
+            if let Some(root) = self.sub_face_root(type_id) {
+                self.extend_visible_closure_into(root, visible, visiting)?;
+            }
             return Ok(());
         }
 

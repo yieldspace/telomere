@@ -117,6 +117,10 @@ impl<T> TypeStore<T> {
             .copied()
             .ok_or_else(|| crate::decoder::ComponentParseError::TypeIdxNotFound(idx.get()))
     }
+
+    pub fn contains(&self, type_id: TypeId) -> bool {
+        self.types.contains(&type_id)
+    }
 }
 
 impl ScopeGuard {

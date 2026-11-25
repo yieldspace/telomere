@@ -344,18 +344,40 @@ fn ensure_same_resource(
     expected: TypeId,
     context: AnnotatedContext,
 ) -> ParseResult<()> {
-    ctx.validator
-        .get_type(actual)?
-        .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator)
-        .map_err(|_| match context {
-            AnnotatedContext::Import => crate::decoder::ComponentParseError::TypeMismatch(format!(
-                "function does not match expected resource name `{}`",
-                resource_name_for_type(ctx, expected)
-            )),
-            AnnotatedContext::Export => crate::decoder::ComponentParseError::TypeMismatch(
-                "resource used in function does not have a name in this context".to_owned(),
-            ),
-        })
+    let checked = match ctx.validator.sub_face_root(expected) {
+        Some(root) => {
+            // The name denotes a `(sub resource)` export face, whose
+            // nominal identity inside this component is the underlying
+            // resource it was minted from (chained faces resolve to
+            // their root). Subtyping alone would accept any resource
+            // through the face's `Sub` bound, so require the
+            // function's resource to be that very resource -- or a
+            // face of it -- and keep the subtype check as the shape
+            // gate.
+            let actual_root = ctx.validator.sub_face_root(actual).unwrap_or(actual);
+            ctx.validator
+                .get_type(actual_root)?
+                .assert_same_resource_identities(ctx.validator.get_type(root)?, ctx.validator)
+                .and_then(|()| {
+                    ctx.validator
+                        .get_type(actual)?
+                        .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator)
+                })
+        }
+        None => ctx
+            .validator
+            .get_type(actual)?
+            .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator),
+    };
+    checked.map_err(|_| match context {
+        AnnotatedContext::Import => crate::decoder::ComponentParseError::TypeMismatch(format!(
+            "function does not match expected resource name `{}`",
+            resource_name_for_type(ctx, expected)
+        )),
+        AnnotatedContext::Export => crate::decoder::ComponentParseError::TypeMismatch(
+            "resource used in function does not have a name in this context".to_owned(),
+        ),
+    })
 }
 
 fn resource_name_for_type(ctx: &ParseContext<impl BinaryReader>, expected: TypeId) -> String {

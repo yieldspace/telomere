@@ -3,7 +3,7 @@ use crate::decoder::sort::parse_sort_with_idx;
 use crate::decoder::types::parse_externdesc;
 use crate::decoder::types::validate_annotated_export;
 use crate::decoder::{parse_option, ParseContext, ParseResult};
-use crate::ir::types::GenericsReplaceDSL;
+use crate::ir::types::{Generic, GenericBound, GenericsReplaceDSL, Type};
 use crate::ir::{
     ComponentExport, ExternDesc, ParsedExportName, PlainName, PlainNameShape, Sort, StrongUnique,
 };
@@ -71,21 +71,65 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             Ok(())
         }
         Sort::Type(type_id) => {
+            // A `(sub resource)` ascription gives the export a fresh
+            // abstract identity, distinct from the underlying resource
+            // (and from any other ascription of it). Like a sub-bounded
+            // import, the export therefore gets its own generic type id,
+            // and that face id is registered consistently: the
+            // generics-replace program keys the per-instantiation fresh
+            // resource on it, `ExportInfo` carries it as the export's
+            // type, and the type index space maps the export's index to
+            // it -- so a later `(type $face)` reference to this export
+            // denotes the face identity, not the underlying resource.
+            let mut sub_face_id = None;
             let info = match desc {
                 None => crate::decoder::validator::ExportInfo::TypeEq(type_id),
                 Some(ExternDesc::Eq(id)) => {
-                    ctx.validator
-                        .get_type(type_id)?
-                        .assert_subtype_of(ctx.validator.get_type(id)?, ctx.validator)?;
+                    let item_ty = ctx.validator.get_type(type_id)?;
+                    let ascribed_ty = ctx.validator.get_type(id)?;
+                    // An `(eq ...)` ascription asserts that the
+                    // exported type *is* the ascribed type, so resource
+                    // references need nominal identity, not mere
+                    // subtyping: the generic subtype relation accepts
+                    // any two `Sub`-bounded generics (and any resource
+                    // against a `Sub` generic) without comparing
+                    // identities, which would let this export denote a
+                    // different resource externally than its local type
+                    // index denotes -- at the top level, and equally
+                    // inside structural types (`own`/`borrow`, records,
+                    // variants, lists, function types) or the entries
+                    // of component/instance types built over the faces.
+                    // The identity walk checks every resource-reference
+                    // leaf; the subtype check below decides the rest.
+                    item_ty.assert_same_resource_identities(ascribed_ty, ctx.validator)?;
+                    item_ty.assert_subtype_of(ascribed_ty, ctx.validator)?;
                     crate::decoder::validator::ExportInfo::TypeEq(id)
                 }
                 Some(ExternDesc::Sub) => {
-                    if !ctx.validator.get_type(type_id)?.is_resource() {
+                    // The ascribed type may itself be an abstract
+                    // resource face minted by an earlier sub-ascribed
+                    // export and registered in the type index space
+                    // under its name; a chained ascription over it is
+                    // as valid as one over the concrete resource.
+                    if !ctx
+                        .validator
+                        .get_type(type_id)?
+                        .is_resource_or_face(ctx.validator)?
+                    {
                         Err(ComponentParseError::TypeMismatch(
                             "export kind mismatch".to_owned(),
                         ))?;
                     }
-                    crate::decoder::validator::ExportInfo::TypeSub(type_id)
+                    let face_id = ctx
+                        .validator
+                        .new_type(Type::Generic(Generic::new(GenericBound::Sub)));
+                    // The metadata keeps the face, but checks that
+                    // assert identity with the exported resource, or
+                    // that need the resource the face denotes, must
+                    // still be able to reach the underlying type.
+                    ctx.validator.note_sub_ascribed_face(face_id, type_id);
+                    sub_face_id = Some(face_id);
+                    crate::decoder::validator::ExportInfo::TypeSub(face_id)
                 }
                 _ => Err(ComponentParseError::TypeMismatch(
                     "export kind mismatch".to_owned(),
@@ -96,12 +140,15 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                     GenericsReplaceDSL::ExportTypeEq(name.original.clone(), id)
                 }
                 crate::decoder::validator::ExportInfo::TypeSub(_) => {
-                    GenericsReplaceDSL::ExportTypeSub(name.original.clone(), type_id)
+                    GenericsReplaceDSL::ExportTypeSub(
+                        name.original.clone(),
+                        sub_face_id.expect("sub export mints a face type id"),
+                    )
                 }
                 _ => unreachable!(),
             };
             let focus = ctx.validator.scope_mut();
-            focus.type_indexes.add(type_id);
+            focus.type_indexes.add(sub_face_id.unwrap_or(type_id));
             focus.exports.insert(name.original.clone(), info);
             focus.generics_replace_program.push(instr);
             Ok(())
