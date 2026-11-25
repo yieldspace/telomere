@@ -563,20 +563,21 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-25, the `Embedder footprint` workflow was run four
-times against the code of PR #354: workflow_dispatch runs
-45619016372, 45619023713 and 45619030678 against the PR branch at
-head `0bccf23bc6750a8e821872649841fb29125e62b2` (the #319 change —
-the component decoder enforces section sizes and core decode
-reasons are preserved, with the Codex-review follow-up that
-classifies `InvalidSectionSize` as a decode error — merged with
-current `main` at `98e93a3` (PR #349)), and pull-request run
-45619001703, which built the same tree
-(`ubuntu-24.04`, Rust 1.96.0). A three-run
-control against unmodified `main` at `98e93a3` (workflow_dispatch
-runs 45619036427, 45619042423 and 45619050607) isolates the
+times against the code of PR #362: workflow_dispatch runs
+45649719958, 45649915040 and 45649992051 against the PR branch at
+head `f7faf699736f55d848b258fb3934dd170e80e67a` (the #344 change —
+the core optimizer recomputes the local coalescing pairs after
+the GVN cache rewrite; the branch is current `main` at `6ec1ae1`
+(PR #352) plus that single commit, so no merge was needed), and
+pull-request run 45647683493, which built the same tree
+(`ubuntu-24.04`, Rust 1.96.0). A four-run
+control against unmodified `main` at `6ec1ae1` (workflow_dispatch
+runs 45649620006, 45649658859, 45649743600 and 45649763229) isolates the
 attribution recorded in the re-baseline history below; the
-control is byte-identical to the checked-in baseline on all 32
-gated series. Every run
+control is byte-identical to the checked-in baseline on the
+sixteen core series and below it on the twelve
+component-linking series, whose baselines were retained above
+the measurements when PR #354 shrank those configurations. Every run
 produced byte-identical sizes for its tree: for all sixteen
 profile/configuration rows, the raw file size, the `.text` size,
 the stripped file size, and the stripped `.text` size each have a
@@ -594,20 +595,20 @@ unchanged.
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
-| `release` | `core` | 1,592,256 | 1,204,663 |
+| `release` | `core` | 1,592,464 | 1,204,759 |
 | `release` | `component` | 2,711,648 | 2,151,575 |
 | `release` | `wasi` | 2,939,144 | 2,325,959 |
-| `release` | `core-nosimd` | 1,401,160 | 1,059,495 |
-| `release` | `core-jit` | 2,131,560 | 1,639,015 |
-| `release` | `core-aot` | 1,638,184 | 1,237,895 |
+| `release` | `core-nosimd` | 1,401,352 | 1,059,591 |
+| `release` | `core-jit` | 2,131,736 | 1,639,111 |
+| `release` | `core-aot` | 1,638,392 | 1,237,991 |
 | `release` | `wasi-threads` | 3,154,848 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
-| `release-size` | `core` | 1,116,056 | 787,463 |
+| `release-size` | `core` | 1,116,200 | 787,527 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
 | `release-size` | `wasi` | 1,820,136 | 1,337,047 |
-| `release-size` | `core-nosimd` | 1,001,264 | 707,927 |
-| `release-size` | `core-jit` | 1,538,816 | 1,092,135 |
-| `release-size` | `core-aot` | 1,155,040 | 812,599 |
+| `release-size` | `core-nosimd` | 1,001,408 | 707,991 |
+| `release-size` | `core-jit` | 1,538,960 | 1,092,199 |
+| `release-size` | `core-aot` | 1,155,184 | 812,663 |
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
@@ -2368,6 +2369,42 @@ stripped file series at +11.42% (2,433,656 B to 2,711,648 B),
 unchanged because that series' baseline is retained. The
 baseline was re-measured on the branch and updated as
 recorded above, following the procedure below.
+
+PR #362 (#344, the core optimizer recomputes the local
+coalescing pairs after the GVN cache rewrite) was
+re-baselined on its implementation head `f7faf69`; the branch
+is current `main` at `6ec1ae1` (PR #352) plus that single
+commit, so no merge was needed and the measured tree is the
+branch head itself. Attribution was isolated by measuring
+current `main` alone four times (workflow_dispatch runs
+45649620006, 45649658859, 45649743600 and 45649763229 on
+`main` at `6ec1ae1`; all four runs pass the gate, and the
+main control is byte-identical to the checked-in baseline on
+the sixteen core series and on the `baseline` configuration,
+and below it on the twelve component-linking series, whose
+baselines were retained above the measurements when PR #354
+shrank those configurations). This PR's own delta against
+the main control is present in every configuration that
+links the `telomere` library and absent from the `baseline`
+configuration, which retains no runtime code: in `release`,
+stripped file +208 B (`core`, `core-aot`), +192 B
+(`core-nosimd`, `wasi`, `wasi-threads`) and +176 B
+(`component`, `core-jit`) and stripped `.text` +96 B in each
+of the seven; in `release-size`, stripped file +144 B and
+stripped `.text` +64 B in each of the seven — the one added
+`compute_coalescible_local_pairs` call in the optimizer
+pipeline. Only the sixteen core series exceed the checked-in
+baseline, so only those sixteen are re-baselined to the
+branch measurements; the component-linking baselines are
+retained and still sit above the branch measurements
+(`release` stripped file by 112,552 B (`component`),
+112,536 B (`wasi`) and 112,520 B (`wasi-threads`)).
+Against the original #164 baseline, the largest cumulative
+growth remains the `release` `component` stripped file
+series at +11.42% (2,433,656 B to 2,711,648 B), unchanged
+because that series' baseline is retained. The baseline was
+re-measured on the branch and updated as recorded above,
+following the procedure below.
 
 ### Threshold derivation
 
