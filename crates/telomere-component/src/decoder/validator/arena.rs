@@ -3,7 +3,7 @@ use crate::ir::types::{
 };
 use crate::ir::{ScopeId, TypeId};
 use std::cell::{Ref, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct NameId(u32);
@@ -293,6 +293,11 @@ pub(crate) struct TransformContext {
     /// `map` so a plain export neither pre-empts nor is pre-empted
     /// by the tied instantiation the rest of the program uses.
     plain_roots: HashMap<TypeId, TypeId>,
+    /// Resources the program also exports plainly, marked by the
+    /// generics-replace evaluation at tie-seeding time. References
+    /// to such a resource follow its plain instantiation instead of
+    /// the tie, so signatures stay paired with the plain export.
+    plain_exported: HashSet<TypeId>,
 }
 
 impl TransformContext {
@@ -302,6 +307,7 @@ impl TransformContext {
             map: TransformMap::Empty,
             ties: HashMap::new(),
             plain_roots: HashMap::new(),
+            plain_exported: HashSet::new(),
         }
     }
 
@@ -341,6 +347,16 @@ impl TransformContext {
 
     pub(crate) fn restore_tie(&mut self, root: TypeId, face: TypeId) {
         self.ties.insert(root, face);
+    }
+
+    /// Mark a resource as also exported plainly by the program
+    /// being evaluated (see the `plain_exported` field).
+    pub(crate) fn mark_plain_exported(&mut self, root: TypeId) {
+        self.plain_exported.insert(root);
+    }
+
+    pub(crate) fn is_plain_exported(&self, type_id: TypeId) -> bool {
+        self.plain_exported.contains(&type_id)
     }
 
     pub(crate) fn plain_root(&self, root: TypeId) -> Option<TypeId> {

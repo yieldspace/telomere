@@ -23,9 +23,14 @@ impl<'a> Validator<'a> {
         // the generics-replace evaluation) makes a reference to the
         // underlying resource denote the face's instantiation, so an
         // exported function stays tied to the exported face instead
-        // of materialising a second, unrelated resource.
+        // of materialising a second, unrelated resource. A resource
+        // the program also exports plainly is exempt: references to
+        // it denote the plain export's instantiation, which a
+        // consumer pairs the signature with.
         if let Some(face) = context.tie_target(type_id) {
-            return self.instantiate_sub_resource_type(face, context);
+            if !context.is_plain_exported(type_id) {
+                return self.instantiate_sub_resource_type(face, context);
+            }
         }
         let env_id = self.types.subst_env_id(context);
         if let Some(mapped) = self.types.lookup_transform(
@@ -65,12 +70,13 @@ impl<'a> Validator<'a> {
         // -- an imported resource instantiated by an actual argument
         // -- denotes that same resource: the face is an abstract
         // view of the provider's resource, and the component cannot
-        // mint an identity distinct from it.
-        if let Some(root) = self.sub_face_root(type_id) {
-            if let Some(mapped) = context.get(root) {
-                return Ok(mapped);
-            }
-        }
+        // mint an identity distinct from it. That correspondence is
+        // recorded under the face itself by the generics-replace
+        // evaluation before the program runs (see
+        // `GenericsReplaceDSL::evaluate`), so it is covered by the
+        // lookup above; a mapping for the underlying resource that
+        // the evaluation itself produced must not collapse the face
+        // onto it -- the face is a distinct identity there.
 
         let ty = self.get_type(type_id)?;
         if !matches!(

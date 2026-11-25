@@ -138,20 +138,54 @@ impl GenericsReplaceDSL {
             result: HashMap::new(),
             unified: initial_unified,
         };
+        // Roots the program also exports plainly -- an
+        // `ExportTypeEq` of the resource itself, as opposed to one
+        // of its faces. A plain export keeps the resource's own
+        // instantiation (see `resolve_export_type_eq`), and
+        // references to the resource elsewhere in the program stay
+        // with that instantiation: redirecting a signature to a
+        // sub-ascribed face of the same resource would sever it
+        // from the plain export a consumer pairs it with. The
+        // context records the set so instantiation can exempt these
+        // roots from the tie (see `TransformContext::plain_exported`).
+        let mut plain_exported: Vec<TypeId> = Vec::new();
+        for instr in program {
+            if let GenericsReplaceDSL::ExportTypeEq(_, ty) = instr {
+                let mut root = *ty;
+                while let Ok(Type::Generic(Generic {
+                    bound: GenericBound::Eq(inner),
+                    ..
+                })) = validator.get_type(root)
+                {
+                    root = *inner;
+                }
+                if validator.sub_face_root(root).is_none() {
+                    plain_exported.push(root);
+                    env.unified.mark_plain_exported(root);
+                }
+            }
+        }
         // Seed the ties between `(sub resource)` export faces and
         // the resources they abstract before running the program, so
         // references to an underlying resource elsewhere in the
         // program instantiate as the face's resource regardless of
         // the order the exports are declared in. A resource the
         // context has already substituted -- an imported resource
-        // instantiated by an actual argument -- is exempt: its face
-        // denotes the substituted type itself (see
-        // `Validator::instantiate_sub_resource_type`).
+        // instantiated by an actual argument -- is exempt from the
+        // tie: its face denotes the substituted type itself, so the
+        // face is recorded as denoting it up front; otherwise a
+        // later reference to the face (a plain re-export, a
+        // signature) would instantiate it as a fresh generic
+        // unrelated to the resource the face export itself denotes.
         for instr in program {
             if let GenericsReplaceDSL::ExportTypeSub(_, face) = instr {
                 if let Some(root) = validator.sub_face_root(*face) {
-                    if env.unified.get(root).is_none() {
-                        env.unified.seed_tie(root, *face);
+                    if let Some(actual) = env.unified.get(root) {
+                        env.unified.insert(*face, actual);
+                    } else {
+                        if !plain_exported.contains(&root) {
+                            env.unified.seed_tie(root, *face);
+                        }
                         env.unified.seed_tie(*face, *face);
                     }
                 }

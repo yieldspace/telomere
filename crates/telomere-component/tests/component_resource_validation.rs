@@ -1267,3 +1267,147 @@ fn consistent_cross_assignments_through_alpha_pairing_are_valid() {
     )
     .expect("consistent cross assignments through a pairing are valid");
 }
+
+#[test]
+fn sub_ascribed_face_reexport_of_imported_resource_keeps_identity() {
+    // Regression (Codex review of PR #357, round 9): the component
+    // imports $r, exports it through a `(sub resource)` face as
+    // "r2", and re-exports the face plainly as "r3". Both exports
+    // denote the resource the component was instantiated with, so a
+    // consumer requiring the two to be equal must accept them.
+    // Before the fix, the plain re-export instantiated the face as
+    // a fresh generic and the consumer failed with "generic
+    // resource cannot assign to concrete type".
+    compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (component $D
+    (import "r" (type $r (sub resource)))
+    (export $face "r2" (type $r) (type (sub resource)))
+    (export "r3" (type $face)))
+  (instance $d (instantiate $D (with "r" (type $R))))
+  (alias export $d "r2" (type $r2))
+  (alias export $d "r3" (type $r3))
+  (component $consumer
+    (import "a" (type $ca (sub resource)))
+    (import "b" (type (eq $ca))))
+  (instance (instantiate $consumer (with "a" (type $r2)) (with "b" (type $r3)))))
+"#,
+    )
+    .expect("face re-export of an imported resource must keep the instantiated identity");
+}
+
+#[test]
+fn sub_ascribed_face_reexport_of_imported_resource_keeps_identity_swapped() {
+    // Same shape with the consumer's arguments swapped: the
+    // re-export supplies the `(sub resource)` import and the face
+    // export the `(eq ...)` one.
+    compile_component(
+        r#"
+(component
+  (type $R (resource (rep i32)))
+  (component $D
+    (import "r" (type $r (sub resource)))
+    (export $face "r2" (type $r) (type (sub resource)))
+    (export "r3" (type $face)))
+  (instance $d (instantiate $D (with "r" (type $R))))
+  (alias export $d "r2" (type $r2))
+  (alias export $d "r3" (type $r3))
+  (component $consumer
+    (import "a" (type $ca (sub resource)))
+    (import "b" (type (eq $ca))))
+  (instance (instantiate $consumer (with "a" (type $r3)) (with "b" (type $r2)))))
+"#,
+    )
+    .expect("face re-export must keep the instantiated identity in either argument order");
+}
+
+#[test]
+fn plain_export_keeps_exported_func_on_plain_instantiation() {
+    // Regression (Codex review of PR #357, round 9): the component
+    // exports a local resource plainly as "r" and through a
+    // `(sub resource)` face as "r2", and exports `make` returning
+    // `(own $r)`. The plain export gives "r" its own instantiation,
+    // and `make` must stay tied to that plain instantiation -- the
+    // one a consumer pairs it with -- not be redirected to the
+    // face. Before the fix the unconditional tie redirected `make`
+    // to the face and this consumer failed with "resource types
+    // are not the same" (it compiled before the tie was added).
+    compile_component(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (export "r" (type $r))
+    (export "r2" (type $r) (type (sub resource)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make"))))
+  (instance $d (instantiate $D))
+  (alias export $d "r" (type $rp))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $rp)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("exported func must stay on the plain instantiation when a plain export exists");
+}
+
+#[test]
+fn plain_export_keeps_exported_func_on_plain_instantiation_func_first() {
+    // Same shape with the function export declared first: the
+    // exemption must not depend on declaration order.
+    compile_component(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make")))
+    (export "r2" (type $r) (type (sub resource)))
+    (export "r" (type $r)))
+  (instance $d (instantiate $D))
+  (alias export $d "r" (type $rp))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $rp)) (with "make" (func $make2)))))
+"#,
+    )
+    .expect("exported func must stay on the plain instantiation regardless of order");
+}
+
+#[test]
+fn plain_export_present_face_does_not_pair_with_exported_func() {
+    // Companion control: with a plain export present, `make`
+    // denotes the plain instantiation, so pairing the face "r2"
+    // with `make` is a mismatch (the behaviour before the tie was
+    // introduced). The face pairing only holds when the program
+    // has no plain export of the resource (see
+    // `sub_ascribed_export_stays_tied_to_exported_func`).
+    expect_invalid_with(
+        r#"
+(component
+  (component $D
+    (type $r (resource (rep i32)))
+    (export "r" (type $r))
+    (export "r2" (type $r) (type (sub resource)))
+    (core module $m (func (export "make") (result i32) i32.const 0))
+    (core instance $i (instantiate $m))
+    (func (export "make") (result (own $r)) (canon lift (core func $i "make"))))
+  (instance $d (instantiate $D))
+  (alias export $d "r2" (type $r2))
+  (alias export $d "make" (func $make2))
+  (component $consumer
+    (import "r" (type $cr (sub resource)))
+    (import "make" (func (result (own $cr)))))
+  (instance (instantiate $consumer (with "r" (type $r2)) (with "make" (func $make2)))))
+"#,
+        "resource types are not the same",
+    );
+}
