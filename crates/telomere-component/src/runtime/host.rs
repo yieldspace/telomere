@@ -1,16 +1,77 @@
 use super::canonical::{
-    component_value_to_direct_wasm, direct_wasm_to_component_value, lift_component_args,
-    lift_component_results, lower_component_args, lower_component_results,
-    lowered_indirect_result_area, retire_lent_handles, track_host_owned_results, transfer_handles,
-    validate_lifted_handle_results, validate_lowered_borrow_args, HandleTransfer,
+    collect_borrowed_handles, component_value_to_direct_wasm, direct_wasm_to_component_value,
+    lift_component_args, lift_component_results, lower_component_args, lower_component_results,
+    lowered_indirect_result_area, resource_is_local_definition, retire_lent_handles,
+    track_host_owned_results, transfer_handles, validate_lifted_handle_results,
+    validate_lowered_borrow_args, HandleTransfer,
 };
 use super::*;
+
+/// How a call's argument borrows are registered against the
+/// callee's handle table for the duration of the call (#334). The
+/// borrow values alone do not say what they name — a handle index,
+/// or the representation of a resource the calling component
+/// defines — so the entry point that does know carries it in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BorrowRegistration {
+    /// The values name handles in the callee's table (calls through
+    /// the public API).
+    ByIndex,
+    /// The caller registered the borrows itself (the canon-lower
+    /// boundary path, after the handle transfer).
+    Preregistered,
+    /// The values were lifted from core arguments by a canon-lower
+    /// trampoline in the same instance: borrow leaves of locally
+    /// defined resources carry representations, the rest name handles
+    /// in the shared table.
+    LocalReps,
+}
 
 impl ResolvedCallable {
     pub(super) fn call_sync(
         &self,
         store: &Store,
         args: &[ComponentValue],
+    ) -> Result<Vec<ComponentValue>, ComponentError> {
+        self.call_sync_impl(store, args, BorrowRegistration::ByIndex)
+    }
+
+    /// Calls with the argument borrows already registered against the
+    /// callee's handle table by the caller. The canon-lower boundary
+    /// path registers them itself: after the handle transfer it knows
+    /// each borrow's provenance — the rep when the borrow crossed into
+    /// the defining instance, a borrowed registration otherwise — which
+    /// the transferred values alone no longer distinguish from a plain
+    /// handle index.
+    pub(super) fn call_sync_borrows_preregistered(
+        &self,
+        store: &Store,
+        args: &[ComponentValue],
+    ) -> Result<Vec<ComponentValue>, ComponentError> {
+        self.call_sync_impl(store, args, BorrowRegistration::Preregistered)
+    }
+
+    /// Calls whose argument values a canon-lower trampoline in the
+    /// same instance lifted from core arguments, crossing no
+    /// handle-table boundary. Borrow leaves of resources this program
+    /// defines carry representations on that path, not handle indices
+    /// (the defining component's core code works with reps, #335), so
+    /// the callee registers those borrows against the entry holding
+    /// the rep; every other borrow leaf still names a handle in the
+    /// shared table.
+    pub(super) fn call_sync_borrows_local_reps(
+        &self,
+        store: &Store,
+        args: &[ComponentValue],
+    ) -> Result<Vec<ComponentValue>, ComponentError> {
+        self.call_sync_impl(store, args, BorrowRegistration::LocalReps)
+    }
+
+    fn call_sync_impl(
+        &self,
+        store: &Store,
+        args: &[ComponentValue],
+        registration: BorrowRegistration,
     ) -> Result<Vec<ComponentValue>, ComponentError> {
         match self {
             ResolvedCallable::Host(func) => {
@@ -40,15 +101,59 @@ impl ResolvedCallable {
                 shared,
                 handles,
             } => {
-                let core_args = lower_component_args(func_type, args, options, program, store)?;
-                let core_results = core.call_sync(store, &core_args)?;
-                let lifted =
-                    lift_component_results(func_type, &core_results, options, program, store)?;
-                validate_lifted_handle_results(func_type, &lifted, program, shared, handles)?;
-                if let Some(post_return) = &options.post_return {
-                    post_return.call_sync(store, &core_results)?;
+                // Register the borrows lent to this call against this
+                // instance's handle table for the duration of the call:
+                // dropping the corresponding own handle while a borrow
+                // is outstanding traps (#334). What a borrow value
+                // names depends on how the call arrived (see
+                // `BorrowRegistration`): a handle index for public API
+                // calls; for a same-instance canon-lower call, the
+                // representation for a resource this program defines —
+                // registered against the entry holding that rep, never
+                // against the entry that happens to sit at that index.
+                // The canon-lower boundary path registers the borrows
+                // itself, with the transfer's provenance, and enters
+                // through `call_sync_borrows_preregistered` instead. A
+                // borrow that resolves to no owned entry here is not
+                // registered. The table borrow is never held across the
+                // call itself, since the called code re-enters this
+                // instance's canon resource ops.
+                let mut registered: Vec<(ResourceId, u32)> = Vec::new();
+                if !matches!(registration, BorrowRegistration::Preregistered) {
+                    let mut table = handles.borrow_mut();
+                    for (resource, handle) in
+                        collect_borrowed_handles(func_type, args, program, shared)
+                    {
+                        let entry = if matches!(registration, BorrowRegistration::LocalReps)
+                            && resource_is_local_definition(resource)
+                        {
+                            table.note_borrow_rep(resource, handle as i32)
+                        } else {
+                            table.note_borrow(resource, handle)
+                        };
+                        if let Some(entry) = entry {
+                            registered.push((resource, entry));
+                        }
+                    }
                 }
-                Ok(lifted)
+                let outcome = (|| {
+                    let core_args = lower_component_args(func_type, args, options, program, store)?;
+                    let core_results = core.call_sync(store, &core_args)?;
+                    let lifted =
+                        lift_component_results(func_type, &core_results, options, program, store)?;
+                    validate_lifted_handle_results(func_type, &lifted, program, shared, handles)?;
+                    if let Some(post_return) = &options.post_return {
+                        post_return.call_sync(store, &core_results)?;
+                    }
+                    Ok(lifted)
+                })();
+                {
+                    let mut table = handles.borrow_mut();
+                    for (resource, handle) in &registered {
+                        table.release_borrow(*resource, *handle);
+                    }
+                }
+                outcome
             }
         }
     }
@@ -123,6 +228,14 @@ impl HostBinding {
                     _ => None,
                 };
                 let mut lent: Vec<u32> = Vec::new();
+                // The resource identity of every borrow this call
+                // lends to the callee, as reported by the argument
+                // transfer (#334).
+                let mut borrowed: Vec<(ResourceId, u64)> = Vec::new();
+                // Borrows this call lends to the callee, registered
+                // against the callee's table for the call's duration
+                // and released when it returns (#334).
+                let mut registered: Vec<(ResourceId, u32)> = Vec::new();
                 if let Some((callee_type, callee_handles)) = boundary {
                     let mut transfer = HandleTransfer {
                         program,
@@ -130,16 +243,58 @@ impl HostBinding {
                         src: handles,
                         dst: callee_handles,
                         lent: Some(&mut lent),
+                        borrowed: Some(&mut borrowed),
                         src_reps: false,
+                        prewalk: false,
+                        resolved_borrows: Vec::new(),
+                        resolved_cursor: 0,
                     };
-                    transfer_handles(
+                    if let Err(error) = transfer_handles(
                         &mut component_args,
                         &func_type.params,
                         &callee_type.params,
                         &mut transfer,
-                    );
+                    ) {
+                        retire_lent_handles(callee_handles, &lent);
+                        return Err(error);
+                    }
+                    // Register the borrows lent to the callee against
+                    // its table. The transfer rewrote every borrow
+                    // argument — into the rep, when the callee defines
+                    // the resource, or into a borrowed registration in
+                    // the callee's table — and reported each borrowed
+                    // resource's identity as it did. Resolving by that
+                    // identity registers the borrow against exactly
+                    // the owned entry it belongs to (which crossed in
+                    // this same call or was already in the callee's
+                    // table); neither the rep nor the rewritten value
+                    // could do that, since a rep may collide with an
+                    // unrelated resource's rep or handle index.
+                    {
+                        let mut table = callee_handles.borrow_mut();
+                        for (resource, id) in &borrowed {
+                            if let Some(entry) = table.note_borrow_id(*resource, *id) {
+                                registered.push((*resource, entry));
+                            }
+                        }
+                    }
                 }
-                let mut results = match callable.call_sync(store, &component_args) {
+                let call_outcome = if boundary.is_some() {
+                    callable.call_sync_borrows_preregistered(store, &component_args)
+                } else {
+                    // No boundary: the argument values still carry
+                    // what this instance's core code passed — for a
+                    // resource this component defines, a borrow leaf
+                    // is the representation, not a handle index.
+                    callable.call_sync_borrows_local_reps(store, &component_args)
+                };
+                if let Some((_, callee_handles)) = boundary {
+                    let mut table = callee_handles.borrow_mut();
+                    for (resource, handle) in &registered {
+                        table.release_borrow(*resource, *handle);
+                    }
+                }
+                let mut results = match call_outcome {
                     Ok(results) => results,
                     Err(error) => {
                         if let Some((_, callee_handles)) = boundary {
@@ -159,14 +314,21 @@ impl HostBinding {
                                 src: callee_handles,
                                 dst: handles,
                                 lent: None,
+                                borrowed: None,
                                 src_reps: true,
+                                prewalk: false,
+                                resolved_borrows: Vec::new(),
+                                resolved_cursor: 0,
                             };
-                            transfer_handles(
+                            if let Err(error) = transfer_handles(
                                 std::slice::from_mut(result),
                                 std::slice::from_ref(callee_result_ty),
                                 std::slice::from_ref(result_ty),
                                 &mut transfer,
-                            );
+                            ) {
+                                retire_lent_handles(callee_handles, &lent);
+                                return Err(error);
+                            }
                         }
                     }
                     retire_lent_handles(callee_handles, &lent);
@@ -283,6 +445,25 @@ impl HostBinding {
     }
 }
 
+/// Whether two resource identities may name the same entry of one
+/// handle table. An entry is keyed under the identity a single
+/// declaration gave the resource, but the same underlying resource
+/// carries a distinct synthetic identity along each import path:
+/// importing one provider instance twice — or naming its resource
+/// through two aliases — mints one identity per path, and none of
+/// them is the defining identity. The boundary validation already
+/// judges a handle across such paths as naming the same resource
+/// (see `check_boundary_handle` in canonical.rs); the borrow
+/// bookkeeping must resolve entries the same way, or a borrow that
+/// validation accepted goes unregistered and the resource it lends
+/// is left unprotected. Identities of resources a component defines
+/// are exact: a defined resource is only ever keyed under its
+/// defining identity, and a synthetic identity never names one, so
+/// the aliasing only ever holds between two synthetic identities.
+fn resource_ids_may_alias(a: ResourceId, b: ResourceId) -> bool {
+    a == b || (!resource_is_local_definition(a) && !resource_is_local_definition(b))
+}
+
 impl HandleTable {
     /// Allocates a handle in this instance's table: the most recently
     /// freed index is reused first (LIFO); otherwise the next fresh
@@ -293,7 +474,15 @@ impl HandleTable {
         rep: i32,
         destructor: Option<RuntimeCoreFunc>,
     ) -> u32 {
-        self.insert_entry(resource, ResourceRecord { rep, destructor }, false)
+        self.insert_entry(
+            resource,
+            ResourceRecord {
+                id: next_resource_id(),
+                rep,
+                destructor,
+            },
+            false,
+        )
     }
 
     /// Inserts an entry under a fresh or LIFO-reused index and returns
@@ -318,6 +507,7 @@ impl HandleTable {
             HandleEntry {
                 resource,
                 record,
+                borrows: 0,
                 borrowed,
             },
         );
@@ -364,10 +554,39 @@ impl HandleTable {
         Some(entry.record)
     }
 
+    /// Whether `handle` names an owned entry of this table with
+    /// borrows currently lent to a call in flight (#334). Ownership
+    /// transfers at a call boundary consult this before taking the
+    /// entry: a transfer removes the entry from this table just as a
+    /// drop does, so a borrowed own cannot be transferred either.
+    pub(super) fn has_outstanding_borrows(&self, handle: u32) -> bool {
+        matches!(
+            self.entries.get(&handle),
+            Some(entry) if !entry.borrowed && entry.borrows > 0
+        )
+    }
+
     /// Returns a copy of the record for `handle`, or `None` when this
     /// instance's table holds no such handle.
     pub(super) fn record_of(&self, handle: u32) -> Option<ResourceRecord> {
         self.entries.get(&handle).map(|entry| entry.record.clone())
+    }
+
+    /// Returns a copy of the record of a live owned entry holding
+    /// `rep`, if any. Reps are guest-chosen and may collide between
+    /// distinct resources, so this is only a fallback for recovering a
+    /// record (identity included) where a crossing carried nothing
+    /// but the rep; the borrow bookkeeping that recovers a record
+    /// this way registers by the record's identity, never by rep
+    /// equality at registration time.
+    pub(super) fn record_by_rep(&self, resource: ResourceId, rep: i32) -> Option<ResourceRecord> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry.resource == resource && !entry.borrowed && entry.record.rep == rep
+            })
+            .min_by_key(|(index, _)| *index)
+            .map(|(_, entry)| entry.record.clone())
     }
 
     /// Removes the entry for `handle` if present, freeing its index.
@@ -389,6 +608,21 @@ impl HandleTable {
         handle: u32,
     ) -> Result<(i32, Option<RuntimeCoreFunc>), ComponentError> {
         self.validate_handle(resource, handle)?;
+        // The canonical ABI forbids removing an owned resource while a
+        // borrow of it is still lent to a call in flight (#334). A
+        // borrowed entry only registers another instance's resource
+        // (#342) and is not owned, so the check does not apply to it.
+        {
+            let entry = self
+                .entries
+                .get(&handle)
+                .expect("handle validated against this table above");
+            if !entry.borrowed && entry.borrows > 0 {
+                return Err(ComponentError::Trap(
+                    "cannot remove owned resource while borrowed".to_owned(),
+                ));
+            }
+        }
         let entry = self
             .entries
             .remove(&handle)
@@ -403,6 +637,104 @@ impl HandleTable {
             entry.record.destructor
         };
         Ok((entry.record.rep, destructor))
+    }
+
+    /// Registers one borrow lent to a call in flight and returns the
+    /// index of the owned entry it was registered against, if any.
+    ///
+    /// The `handle` a borrow argument carries names the borrowed
+    /// resource in one of two ways, depending on how the value reached
+    /// this instance: directly, when it is an index of an owned entry
+    /// in this table (the same-instance path); or through a borrowed
+    /// registration (#342), when a call boundary lent the resource
+    /// into this table and the argument names that registration. In
+    /// the registration shape the borrow is registered against the
+    /// owned entry carrying the same resource identity as the
+    /// registration's record, since that is the entry a
+    /// `resource.drop` during the call would remove. Resolving by
+    /// identity rather than by rep matters: two distinct resources
+    /// may share one rep, and an unrelated entry must neither gain
+    /// protection it does not have nor lend it to another. A borrow
+    /// that resolves to no owned entry in this table belongs to
+    /// another instance's table (or to the host) and is not registered
+    /// here; it cannot be dropped through this table either.
+    ///
+    /// The identity comparison is the aliasing-aware one
+    /// ([`resource_ids_may_alias`]): the entry may be keyed under
+    /// the identity of a different import path for the same
+    /// resource than the one the borrow parameter names.
+    fn note_borrow(&mut self, resource: ResourceId, handle: u32) -> Option<u32> {
+        match self.entries.get(&handle) {
+            Some(entry) if resource_ids_may_alias(entry.resource, resource) && !entry.borrowed => {
+                let entry = self.entries.get_mut(&handle)?;
+                entry.borrows = entry.borrows.saturating_add(1);
+                Some(handle)
+            }
+            Some(entry) if resource_ids_may_alias(entry.resource, resource) => {
+                let id = entry.record.id;
+                self.note_borrow_id(resource, id)
+            }
+            _ => None,
+        }
+    }
+
+    /// Registers one borrow against the live owned entry carrying
+    /// resource identity `id` and returns that entry's index, if such
+    /// an entry exists. Call-boundary transfers report the identity of
+    /// every borrow they carry (#342), so a borrow lent into the
+    /// instance that holds the corresponding own — whether the own
+    /// crossed in the same call or was already there — is registered
+    /// against exactly that entry, regardless of any rep collisions
+    /// with unrelated entries. The entry may be keyed under the
+    /// identity of another import path for the same resource than
+    /// the one the transfer reported (see
+    /// [`resource_ids_may_alias`]); the record identity is what
+    /// pins it.
+    fn note_borrow_id(&mut self, resource: ResourceId, id: u64) -> Option<u32> {
+        let target = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                resource_ids_may_alias(entry.resource, resource)
+                    && !entry.borrowed
+                    && entry.record.id == id
+            })
+            .map(|(index, _)| *index)
+            .min()?;
+        let entry = self.entries.get_mut(&target)?;
+        entry.borrows = entry.borrows.saturating_add(1);
+        Some(target)
+    }
+
+    /// Registers one borrow that arrived as a representation —
+    /// the same-instance canon-lower path carries nothing else for a
+    /// resource this instance defines (#335) — against the live owned
+    /// entry holding that rep, and returns that entry's index, if
+    /// such an entry exists. The rep only recovers the borrowed
+    /// resource's record; the registration itself is by the record's
+    /// identity, exactly as for a transferred borrow, so an unrelated
+    /// entry sitting at the index the rep happens to equal is never
+    /// marked.
+    fn note_borrow_rep(&mut self, resource: ResourceId, rep: i32) -> Option<u32> {
+        let record = self.record_by_rep(resource, rep)?;
+        self.note_borrow_id(resource, record.id)
+    }
+
+    /// Releases one borrow previously registered with
+    /// [`HandleTable::note_borrow`]. The entry may already be gone if
+    /// the resource was dropped through a path that does not consult
+    /// this table; the count simply has nothing to release then.
+    /// The identity comparison is the aliasing-aware one
+    /// ([`resource_ids_may_alias`]), matching the registration: the
+    /// entry may be keyed under the identity of a different import
+    /// path for the same resource than the one the borrow was
+    /// registered under.
+    fn release_borrow(&mut self, resource: ResourceId, handle: u32) {
+        if let Some(entry) = self.entries.get_mut(&handle) {
+            if resource_ids_may_alias(entry.resource, resource) {
+                entry.borrows = entry.borrows.saturating_sub(1);
+            }
+        }
     }
 
     fn resource_rep(&self, resource: ResourceId, handle: u32) -> Result<i32, ComponentError> {
@@ -845,6 +1177,106 @@ mod tests {
             assert_eq!(kind, expected_kind);
             assert_eq!(message, format!("export run trapped: {expected_message}"));
         }
+    }
+
+    #[test]
+    fn dropping_a_borrowed_resource_is_rejected_with_the_canonical_message() {
+        // #334: `resource.drop` of an owned resource that is currently
+        // borrowed traps with the canonical message; once the borrow is
+        // released, the same drop succeeds.
+        let resource = ResourceId::synthetic();
+        let mut table = HandleTable::default();
+        let handle = table.alloc_resource(resource, 7, None);
+        assert_eq!(table.note_borrow(resource, handle), Some(handle));
+        let error = match table.drop_resource(resource, handle) {
+            Ok(_) => panic!("dropping a borrowed resource must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, ComponentError::Trap(message) if message == "cannot remove owned resource while borrowed"),
+            "expected the canonical borrowed-drop trap, got {error:?}"
+        );
+        table.release_borrow(resource, handle);
+        let (rep, _) = table
+            .drop_resource(resource, handle)
+            .expect("dropping after the borrow is released should succeed");
+        assert_eq!(rep, 7);
+    }
+
+    #[test]
+    fn borrow_registration_resolves_by_identity_not_by_rep() {
+        // Two distinct resources may share one rep: registration by
+        // the borrowed resource's identity must protect exactly its
+        // own entry and leave the same-rep entry alone (a rep-based
+        // lookup cannot tell the two apart at all).
+        let resource = ResourceId::synthetic();
+        let mut table = HandleTable::default();
+        let decoy = table.alloc_resource(resource, 7, None);
+        let lent = table.alloc_resource(resource, 7, None);
+        assert_eq!((decoy, lent), (1, 2));
+        let lent_id = table.record_of(lent).expect("lent entry exists").id;
+        assert_eq!(table.note_borrow_id(resource, lent_id), Some(lent));
+        // The borrowed entry cannot be dropped while borrowed...
+        assert!(table.drop_resource(resource, lent).is_err());
+        // ...while the unrelated same-rep entry drops fine.
+        let (rep, _) = table
+            .drop_resource(resource, decoy)
+            .expect("the same-rep decoy entry is not borrowed");
+        assert_eq!(rep, 7);
+        table.release_borrow(resource, lent);
+        assert!(table.drop_resource(resource, lent).is_ok());
+        // An identity no live entry carries registers nothing.
+        assert_eq!(table.note_borrow_id(resource, u64::MAX), None);
+    }
+
+    #[test]
+    fn borrow_registration_spans_equivalent_import_path_identities() {
+        // The same underlying resource imported twice carries a
+        // distinct synthetic identity along each import path: an
+        // entry keyed under the first path's identity must still be
+        // registered — and released — when the borrow names it
+        // under the second path's identity, by handle and by record
+        // identity alike. Identities of defined resources are exact
+        // and never alias with a synthetic identity.
+        let first_path = ResourceId::synthetic();
+        let second_path = ResourceId::synthetic();
+        let defined = ResourceId::new(crate::ir::ScopeId::new(0));
+        let mut table = HandleTable::default();
+        let handle = table.alloc_resource(first_path, 7, None);
+        // By handle (the public-call registration).
+        assert_eq!(table.note_borrow(second_path, handle), Some(handle));
+        assert!(table.drop_resource(first_path, handle).is_err());
+        table.release_borrow(second_path, handle);
+        // By record identity (the call-boundary registration).
+        let id = table.record_of(handle).expect("entry exists").id;
+        assert_eq!(table.note_borrow_id(second_path, id), Some(handle));
+        assert!(table.has_outstanding_borrows(handle));
+        table.release_borrow(second_path, handle);
+        assert!(!table.has_outstanding_borrows(handle));
+        // A defined resource's identity never aliases: no borrow
+        // registration may cross between a synthetic identity and a
+        // defining one, in either direction.
+        assert_eq!(table.note_borrow(defined, handle), None);
+        let defined_handle = table.alloc_resource(defined, 9, None);
+        assert_eq!(table.note_borrow(first_path, defined_handle), None);
+        let defined_id = table
+            .record_of(defined_handle)
+            .expect("defined entry exists")
+            .id;
+        assert_eq!(table.note_borrow_id(first_path, defined_id), None);
+    }
+
+    #[test]
+    fn ownership_transfer_check_tracks_outstanding_borrows() {
+        let resource = ResourceId::synthetic();
+        let mut table = HandleTable::default();
+        let handle = table.alloc_resource(resource, 7, None);
+        assert!(!table.has_outstanding_borrows(handle));
+        assert_eq!(table.note_borrow(resource, handle), Some(handle));
+        assert!(table.has_outstanding_borrows(handle));
+        table.release_borrow(resource, handle);
+        assert!(!table.has_outstanding_borrows(handle));
+        assert!(!table.has_outstanding_borrows(999));
     }
 
     #[test]

@@ -56,13 +56,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          Non-goals); the string/list cases before them pass",
     ),
     (
-        "resources/borrows.wast",
-        "blocked by issue #334: dropping an owned resource that is \
-         currently borrowed is not rejected (line 161: the expected \
-         trap `cannot remove owned resource while borrowed` does not \
-         happen)",
-    ),
-    (
         "values/variants.wast",
         "the component at line 82 uses async canonical operations \
          (canon task.return, async lift/lower), a documented \

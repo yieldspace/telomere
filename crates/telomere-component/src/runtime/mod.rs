@@ -162,8 +162,24 @@ struct SharedState {
 
 #[derive(Clone)]
 struct ResourceRecord {
+    /// Identity of the resource this record belongs to, minted when
+    /// the resource is created and carried with the record as it moves
+    /// between handle tables (ownership transfers) or is copied into
+    /// borrow registrations. A rep is guest-chosen data and two
+    /// distinct resources may share one, so borrow bookkeeping
+    /// resolves the lent resource by this identity, never by rep
+    /// (#334).
+    id: u64,
     rep: i32,
     destructor: Option<RuntimeCoreFunc>,
+}
+
+/// Mints a fresh resource identity for [`ResourceRecord::id`].
+/// Identities are only ever compared within one handle table, but a
+/// process-wide counter keeps them unique across instances as well.
+fn next_resource_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// One component instance's resource handle table (#317).
@@ -193,6 +209,11 @@ impl Default for HandleTable {
 struct HandleEntry {
     resource: ResourceId,
     record: ResourceRecord,
+    /// Borrows of this entry currently lent to a call in flight (#334).
+    /// `resource.drop` of the own handle is rejected while this is
+    /// non-zero; the count is registered by the callee-side lift for the
+    /// duration of the call and released when the call returns.
+    borrows: u32,
     /// Whether this entry only registers a borrow of another instance's
     /// resource for the duration of one call (#342). Dropping a borrowed
     /// entry removes the registration without running the destructor:
