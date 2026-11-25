@@ -431,12 +431,40 @@ fn collect_defined_handle_leaves(
     }
 }
 
+/// Checks one handle leaf crossing a canonical boundary (#335). An
+/// index the instance's table holds is validated against the declared
+/// resource type (the wrong-type trap fires there); a live
+/// host-provided handle, which is tracked in `SharedState` rather than
+/// in any instance table, is valid pass-through; any other index is
+/// the canonical `unknown handle index N` trap.
+fn check_boundary_handle(
+    program: &ComponentProgram,
+    shared: &SharedState,
+    handles: &RefCell<HandleTable>,
+    type_id: TypeId,
+    handle: u32,
+) -> Result<(), ComponentError> {
+    let resource = runtime_resource_id(program, shared, type_id)?;
+    let table = handles.borrow();
+    if table.contains_handle(handle) {
+        table.validate_handle(resource, handle)
+    } else if shared.tracks_host_resource(handle) {
+        Ok(())
+    } else {
+        Err(ComponentError::Trap(format!(
+            "unknown handle index {handle}"
+        )))
+    }
+}
+
 /// Validates the handles in a canon-lifted function's results against
-/// the lifted instance's own handle table (#335). The core code behind a
-/// lift addresses that instance's table, so a result handle the table
-/// does not hold — or holds for a different resource type — is a
+/// the lifted instance's own handle table (#335). The core code behind
+/// a lift addresses that instance's table, so a result handle the
+/// table does not hold — or holds for a different resource type — is a
 /// canonical trap (`unknown handle index N` / the wrong-type text),
-/// not a value the caller may use.
+/// not a value the caller may use. Host-provided handles the guest is
+/// passing through (a lowered host call's result returned upward) are
+/// the one exception: they live in `SharedState`, not in the table.
 pub(super) fn validate_lifted_handle_results(
     func_type: &FuncType,
     results: &[ComponentValue],
@@ -449,13 +477,8 @@ pub(super) fn validate_lifted_handle_results(
     };
     let mut leaves = Vec::new();
     collect_handle_leaves(result_ty, value, program, &mut leaves);
-    if leaves.is_empty() {
-        return Ok(());
-    }
-    let table = handles.borrow();
     for (type_id, handle, _) in leaves {
-        let resource = runtime_resource_id(program, shared, type_id)?;
-        table.validate_handle(resource, handle)?;
+        check_boundary_handle(program, shared, handles, type_id, handle)?;
     }
     Ok(())
 }
@@ -484,15 +507,7 @@ pub(super) fn validate_lowered_borrow_args(
             if is_own {
                 continue;
             }
-            let resource = runtime_resource_id(program, shared, type_id)?;
-            let table = handles.borrow();
-            if table.contains_handle(handle) {
-                table.validate_handle(resource, handle)?;
-            } else if !shared.tracks_host_resource(handle) {
-                return Err(ComponentError::Trap(format!(
-                    "unknown handle index {handle}"
-                )));
-            }
+            check_boundary_handle(program, shared, handles, type_id, handle)?;
         }
     }
     Ok(())
