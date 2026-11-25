@@ -630,15 +630,37 @@ pub(super) fn register_host_argument_handles(
 /// `lent` when it is `Some` (the argument direction) so the caller can
 /// retire them when the call returns; result registrations belong to
 /// the receiving instance and are not recorded.
+///
+/// The walk is fallible for one reason: moving an `own` removes its
+/// entry from the source table, so an own whose borrows are still lent
+/// to a call in flight cannot be transferred (#334) — the destination
+/// would receive it with a zero borrow count and could destroy the
+/// resource while the original borrow is outstanding. Such a transfer
+/// is rejected with the canonical borrowed-removal trap, before the
+/// entry is taken.
 pub(super) fn transfer_handles(
     values: &mut [ComponentValue],
     src_tys: &[ValType],
     dst_tys: &[ValType],
     transfer: &mut HandleTransfer<'_>,
-) {
+) -> Result<(), ComponentError> {
+    // First pass: resolve every borrowed resource's record before
+    // any own moves its entry out of the source table. A call that
+    // passes the same resource as `(own R, borrow R)` would otherwise
+    // lose the borrow when the own is processed first: the source
+    // entry is already gone when the borrow is looked up, so its
+    // identity is never reported and the destination can destroy the
+    // resource while it is borrowed. The protection must not depend
+    // on parameter or field order (#334).
+    transfer.prewalk = true;
     for (value, (src_ty, dst_ty)) in values.iter_mut().zip(src_tys.iter().zip(dst_tys.iter())) {
-        transfer.value(value, src_ty, dst_ty);
+        transfer.value(value, src_ty, dst_ty)?;
     }
+    transfer.prewalk = false;
+    for (value, (src_ty, dst_ty)) in values.iter_mut().zip(src_tys.iter().zip(dst_tys.iter())) {
+        transfer.value(value, src_ty, dst_ty)?;
+    }
+    Ok(())
 }
 
 /// Removes borrow entries that [`transfer_handles`] registered for one
@@ -660,31 +682,62 @@ pub(super) struct HandleTransfer<'a> {
     pub(super) src: &'a RefCell<HandleTable>,
     pub(super) dst: &'a RefCell<HandleTable>,
     pub(super) lent: Option<&'a mut Vec<u32>>,
+    /// When `Some` (the argument direction), receives the destination
+    /// resource identity and the resource identity (`ResourceRecord::id`)
+    /// of every borrow the walk carries across, so the caller can
+    /// register each borrow against the very owned entry it belongs
+    /// to in the destination table (#334). The rewritten borrow value
+    /// alone — a rep or a registration index — cannot identify that
+    /// entry: reps are guest-chosen and may collide across resources.
+    pub(super) borrowed: Option<&'a mut Vec<(ResourceId, u64)>>,
     /// Whether borrowed values coming from the source were produced by
     /// lifting in the source component, in which case a borrow of a
     /// resource the source defines already holds the resource's rep
     /// rather than a source-table handle.
     pub(super) src_reps: bool,
+    /// Whether the walk is in its first pass (see
+    /// [`transfer_handles`]): owns do not move and borrows only
+    /// resolve their records in this pass.
+    pub(super) prewalk: bool,
+    /// The record each borrow position resolved to during the first
+    /// pass, in walk order (`None` where the borrow passes through
+    /// untransferred); the second pass consumes them in the same
+    /// order, so a borrow whose source entry an earlier own in the
+    /// same call already moved still resolves to its record.
+    pub(super) resolved_borrows: Vec<Option<ResourceRecord>>,
+    /// How many entries of `resolved_borrows` the second pass has
+    /// consumed.
+    pub(super) resolved_cursor: usize,
 }
 
 impl HandleTransfer<'_> {
-    fn value(&mut self, value: &mut ComponentValue, src_ty: &ValType, dst_ty: &ValType) {
+    fn value(
+        &mut self,
+        value: &mut ComponentValue,
+        src_ty: &ValType,
+        dst_ty: &ValType,
+    ) -> Result<(), ComponentError> {
         let (ValType::Type(src_id), ValType::Type(dst_id)) = (src_ty, dst_ty) else {
-            return;
+            return Ok(());
         };
-        self.defined(value, *src_id, *dst_id);
+        self.defined(value, *src_id, *dst_id)
     }
 
-    fn defined(&mut self, value: &mut ComponentValue, src_id: TypeId, dst_id: TypeId) {
+    fn defined(
+        &mut self,
+        value: &mut ComponentValue,
+        src_id: TypeId,
+        dst_id: TypeId,
+    ) -> Result<(), ComponentError> {
         let (Some(src_ty), Some(dst_ty)) =
             (self.program.get_type(src_id), self.program.get_type(dst_id))
         else {
-            return;
+            return Ok(());
         };
         match (src_ty, dst_ty) {
             (Type::Resource(_), Type::Resource(_)) => self.own(value, src_id, dst_id),
             (Type::DefVal(src_def), Type::DefVal(dst_def)) => {
-                self.defined_value(value, src_def, dst_def, src_id, dst_id);
+                self.defined_value(value, src_def, dst_def, src_id, dst_id)
             }
             (Type::Generic(src_generic), Type::Generic(dst_generic)) => {
                 match (&src_generic.bound, &dst_generic.bound) {
@@ -695,10 +748,10 @@ impl HandleTransfer<'_> {
                     (crate::ir::types::GenericBound::Sub, crate::ir::types::GenericBound::Sub) => {
                         self.own(value, src_id, dst_id)
                     }
-                    _ => {}
+                    _ => Ok(()),
                 }
             }
-            _ => {}
+            _ => Ok(()),
         }
     }
 
@@ -709,38 +762,42 @@ impl HandleTransfer<'_> {
         dst_def: &DefValType,
         src_id: TypeId,
         dst_id: TypeId,
-    ) {
+    ) -> Result<(), ComponentError> {
         match (src_def, dst_def) {
             (DefValType::Own(_), DefValType::Own(_)) => self.own(value, src_id, dst_id),
             (DefValType::Borrow(_), DefValType::Borrow(_)) => self.borrow(value, src_id, dst_id),
-            (DefValType::Record(src_fields), DefValType::Record(dst_fields)) => match value {
-                ComponentValue::Tuple(values) if is_tuple_fields(src_fields) => {
-                    for ((value, src_field), dst_field) in values
-                        .iter_mut()
-                        .zip(src_fields.iter())
-                        .zip(dst_fields.iter())
-                    {
-                        self.value(value, &src_field.ty, &dst_field.ty);
-                    }
-                }
-                ComponentValue::Record(entries) => {
-                    for (src_field, dst_field) in src_fields.iter().zip(dst_fields.iter()) {
-                        if let Some((_, field_value)) = entries
+            (DefValType::Record(src_fields), DefValType::Record(dst_fields)) => {
+                match value {
+                    ComponentValue::Tuple(values) if is_tuple_fields(src_fields) => {
+                        for ((value, src_field), dst_field) in values
                             .iter_mut()
-                            .find(|(name, _)| name == &src_field.label.0)
+                            .zip(src_fields.iter())
+                            .zip(dst_fields.iter())
                         {
-                            self.value(field_value, &src_field.ty, &dst_field.ty);
+                            self.value(value, &src_field.ty, &dst_field.ty)?;
                         }
                     }
+                    ComponentValue::Record(entries) => {
+                        for (src_field, dst_field) in src_fields.iter().zip(dst_fields.iter()) {
+                            if let Some((_, field_value)) = entries
+                                .iter_mut()
+                                .find(|(name, _)| name == &src_field.label.0)
+                            {
+                                self.value(field_value, &src_field.ty, &dst_field.ty)?;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+                Ok(())
+            }
             (DefValType::List(src_elem, _), DefValType::List(dst_elem, _)) => {
                 if let ComponentValue::List(items) = value {
                     for item in items.iter_mut() {
-                        self.value(item, src_elem, dst_elem);
+                        self.value(item, src_elem, dst_elem)?;
                     }
                 }
+                Ok(())
             }
             (DefValType::Variant(src_cases), DefValType::Variant(dst_cases)) => {
                 let (case, payload) = match value {
@@ -754,22 +811,23 @@ impl HandleTransfer<'_> {
                         match (ok.as_deref_mut(), err.as_deref_mut()) {
                             (Some(inner), None) => ("ok".to_owned(), Some(inner)),
                             (None, Some(inner)) => ("err".to_owned(), Some(inner)),
-                            _ => return,
+                            _ => return Ok(()),
                         }
                     }
-                    _ => return,
+                    _ => return Ok(()),
                 };
                 if let Some(payload) = payload {
                     let src_case = src_cases.iter().find(|c| c.label.0.as_str() == case);
                     let dst_case = dst_cases.iter().find(|c| c.label.0.as_str() == case);
                     if let (Some(src_case), Some(dst_case)) = (src_case, dst_case) {
                         if let (Some(src_ty), Some(dst_ty)) = (&src_case.ty, &dst_case.ty) {
-                            self.value(payload, src_ty, dst_ty);
+                            self.value(payload, src_ty, dst_ty)?;
                         }
                     }
                 }
+                Ok(())
             }
-            _ => {}
+            _ => Ok(()),
         }
     }
 
@@ -780,54 +838,93 @@ impl HandleTransfer<'_> {
     /// is not consulted: one resource legitimately carries different
     /// synthetic identities along different import paths of a single
     /// consumer.
-    fn own(&mut self, value: &mut ComponentValue, _src_id: TypeId, dst_id: TypeId) {
+    fn own(
+        &mut self,
+        value: &mut ComponentValue,
+        _src_id: TypeId,
+        dst_id: TypeId,
+    ) -> Result<(), ComponentError> {
+        if self.prewalk {
+            return Ok(());
+        }
         let ComponentValue::Own(handle) = value else {
-            return;
+            return Ok(());
         };
         let Ok(dst_resource) = runtime_resource_id(self.program, self.shared, dst_id) else {
-            return;
+            return Ok(());
         };
+        // Moving an own removes its entry from the source table, so an
+        // own whose borrows are still lent to a call in flight cannot
+        // be transferred either: the destination would receive the
+        // entry with its borrow count reset to zero and could destroy
+        // the resource while the original borrow is outstanding
+        // (#334). Reject before the entry is taken.
+        if self.src.borrow().has_outstanding_borrows(*handle) {
+            return Err(ComponentError::Trap(
+                "cannot remove owned resource while borrowed".to_owned(),
+            ));
+        }
         let Some(record) = self.src.borrow_mut().take_entry(*handle) else {
-            return;
+            return Ok(());
         };
         let new_handle = self
             .dst
             .borrow_mut()
             .insert_entry(dst_resource, record, false);
         *value = ComponentValue::Own(new_handle);
+        Ok(())
     }
 
-    fn borrow(&mut self, value: &mut ComponentValue, src_id: TypeId, dst_id: TypeId) {
-        let ComponentValue::Borrow(handle) = value else {
-            return;
-        };
-        let (Ok(src_resource), Ok(dst_resource)) = (
-            runtime_resource_id(self.program, self.shared, src_id),
-            runtime_resource_id(self.program, self.shared, dst_id),
-        ) else {
-            return;
-        };
-        // Resolve the borrowed resource's record. A value the source
-        // produced by lifting, for a resource the source defines,
-        // already holds the rep; every other value is a handle in the
-        // source table. A handle the source table does not hold is a
-        // host-provided resource and passes through unchanged.
-        let record = if self.src_reps && resource_is_local_definition(src_resource) {
-            ResourceRecord {
-                rep: *handle as i32,
-                destructor: None,
+    fn borrow(
+        &mut self,
+        value: &mut ComponentValue,
+        src_id: TypeId,
+        dst_id: TypeId,
+    ) -> Result<(), ComponentError> {
+        if self.prewalk {
+            // First pass: resolve the borrowed resource's record and
+            // report its identity, without moving or rewriting
+            // anything. The record is kept for the second pass, which
+            // can no longer look it up once an own earlier in the
+            // same call has moved the source entry (#334).
+            let record = self.lookup_borrow_record(value, src_id, dst_id);
+            if let Some(record) = &record {
+                if let Some(borrowed) = &mut self.borrowed {
+                    if let Ok(dst_resource) = runtime_resource_id(self.program, self.shared, dst_id)
+                    {
+                        borrowed.push((dst_resource, record.id));
+                    }
+                }
             }
-        } else {
-            let Some(record) = self.src.borrow().record_of(*handle) else {
-                return;
-            };
-            record
+            self.resolved_borrows.push(record);
+            return Ok(());
+        }
+        // Second pass: consume the record the first pass resolved
+        // for this borrow position. Every borrow position consumes
+        // exactly one entry, whatever value it holds, so the two
+        // passes stay aligned; a position that resolved to nothing
+        // (including a non-`Borrow` representation, which the
+        // transfer leaves alone) passes through unchanged.
+        let record = self
+            .resolved_borrows
+            .get(self.resolved_cursor)
+            .cloned()
+            .flatten();
+        self.resolved_cursor += 1;
+        if !matches!(value, ComponentValue::Borrow(_)) {
+            return Ok(());
+        }
+        let Some(record) = record else {
+            return Ok(());
+        };
+        let Ok(dst_resource) = runtime_resource_id(self.program, self.shared, dst_id) else {
+            return Ok(());
         };
         // The component defining the resource receives the rep itself;
         // any other destination gets a borrowed entry in its own table.
         if resource_is_local_definition(dst_resource) {
             *value = ComponentValue::Borrow(record.rep as u32);
-            return;
+            return Ok(());
         }
         let new_handle = self
             .dst
@@ -837,6 +934,51 @@ impl HandleTransfer<'_> {
             lent.push(new_handle);
         }
         *value = ComponentValue::Borrow(new_handle);
+        Ok(())
+    }
+
+    /// Resolves the record a borrowed value names, exactly as the
+    /// transfer's second pass needs it. A value the source produced
+    /// by lifting, for a resource the source defines, already holds
+    /// the rep; the record (and with it the resource identity) is
+    /// recovered from the source table by that rep, falling back to a
+    /// bare record when the source table holds no such entry. Every
+    /// other value is a handle in the source table. `None` covers
+    /// everything the transfer leaves alone: a non-handle value, an
+    /// unresolvable resource identity, and a handle the source table
+    /// does not hold (a host-provided resource, which passes through
+    /// unchanged).
+    fn lookup_borrow_record(
+        &self,
+        value: &ComponentValue,
+        src_id: TypeId,
+        dst_id: TypeId,
+    ) -> Option<ResourceRecord> {
+        let ComponentValue::Borrow(handle) = value else {
+            return None;
+        };
+        let (Ok(src_resource), Ok(_)) = (
+            runtime_resource_id(self.program, self.shared, src_id),
+            runtime_resource_id(self.program, self.shared, dst_id),
+        ) else {
+            return None;
+        };
+        if self.src_reps && resource_is_local_definition(src_resource) {
+            match self
+                .src
+                .borrow()
+                .record_by_rep(src_resource, *handle as i32)
+            {
+                Some(record) => Some(record),
+                None => Some(ResourceRecord {
+                    id: next_resource_id(),
+                    rep: *handle as i32,
+                    destructor: None,
+                }),
+            }
+        } else {
+            self.src.borrow().record_of(*handle)
+        }
     }
 }
 
@@ -847,8 +989,130 @@ impl HandleTransfer<'_> {
 /// `(sub resource)` types, freshened import types, generic resources)
 /// carry a synthetic identity minted by the decoder, whose scope
 /// depth is `u32::MAX` (see `ScopeId::synthetic`).
-fn resource_is_local_definition(resource: ResourceId) -> bool {
+pub(super) fn resource_is_local_definition(resource: ResourceId) -> bool {
     resource.owner().depth() != u32::MAX
+}
+
+/// Collects every `(resource, handle)` pair lent as a `borrow`
+/// anywhere in a call's arguments, so the callee can register the
+/// borrows against its handle table for the duration of the call
+/// (#334). Owns transfer ownership and are not collected. The traversal
+/// mirrors `track_host_owned_value`, with the opposite polarity: only
+/// `borrow` positions are visited.
+pub(super) fn collect_borrowed_handles(
+    func_type: &FuncType,
+    args: &[ComponentValue],
+    program: &ComponentProgram,
+    shared: &SharedState,
+) -> Vec<(ResourceId, u32)> {
+    let mut borrows = Vec::new();
+    for (ty, value) in func_type.params.iter().zip(args.iter()) {
+        collect_borrowed_value(ty, value, program, shared, &mut borrows);
+    }
+    borrows
+}
+
+fn collect_borrowed_value(
+    ty: &ValType,
+    value: &ComponentValue,
+    program: &ComponentProgram,
+    shared: &SharedState,
+    borrows: &mut Vec<(ResourceId, u32)>,
+) {
+    let ValType::Type(type_id) = ty else {
+        return;
+    };
+    collect_borrowed_defined(*type_id, value, program, shared, borrows);
+}
+
+fn collect_borrowed_defined(
+    type_id: TypeId,
+    value: &ComponentValue,
+    program: &ComponentProgram,
+    shared: &SharedState,
+    borrows: &mut Vec<(ResourceId, u32)>,
+) {
+    let Some(ty) = program.get_type(type_id) else {
+        return;
+    };
+    match ty {
+        Type::DefVal(def) => match def {
+            DefValType::Borrow(_) => {
+                // The handle extraction mirrors lowering's
+                // `expect_handle`: `Own` and `U32` values in a borrow
+                // position are accepted there and reach the callee as
+                // the same handle integer, so their borrows must be
+                // collected too (otherwise the borrowed resource is
+                // left unregistered and its drop goes unchecked).
+                if let Ok(handle) = expect_handle(value) {
+                    if let Ok(resource) = runtime_resource_id(program, shared, type_id) {
+                        borrows.push((resource, handle));
+                    }
+                }
+            }
+            DefValType::Record(fields) => {
+                let values: Vec<&ComponentValue> = match value {
+                    ComponentValue::Tuple(values) if is_tuple_fields(fields) => {
+                        values.iter().collect()
+                    }
+                    ComponentValue::Record(entries) => {
+                        let mut values = Vec::with_capacity(fields.len());
+                        for field in fields {
+                            match entries.iter().find(|(name, _)| name == &field.label.0) {
+                                Some((_, field_value)) => values.push(field_value),
+                                None => return,
+                            }
+                        }
+                        values
+                    }
+                    _ => return,
+                };
+                for (field, field_value) in fields.iter().zip(values) {
+                    collect_borrowed_value(&field.ty, field_value, program, shared, borrows);
+                }
+            }
+            DefValType::List(elem, _) => {
+                if let ComponentValue::List(items) = value {
+                    for item in items {
+                        collect_borrowed_value(elem, item, program, shared, borrows);
+                    }
+                }
+            }
+            DefValType::Variant(cases) => {
+                let (case, payload) = match value {
+                    ComponentValue::Variant { case, value } => (case.as_str(), value.as_deref()),
+                    ComponentValue::Enum(case) => (case.as_str(), None),
+                    ComponentValue::Option(value) if is_option_cases(cases) => match value {
+                        Some(inner) => ("some", Some(inner.as_ref())),
+                        None => ("none", None),
+                    },
+                    ComponentValue::Result { ok, err } if is_result_cases(cases) => {
+                        match (ok, err) {
+                            (Some(inner), None) => ("ok", Some(inner.as_ref())),
+                            (None, Some(inner)) => ("err", Some(inner.as_ref())),
+                            _ => return,
+                        }
+                    }
+                    _ => return,
+                };
+                if let Some(payload) = payload {
+                    if let Some(case) = cases.iter().find(|c| c.label.0.as_str() == case) {
+                        if let Some(case_ty) = &case.ty {
+                            collect_borrowed_value(case_ty, payload, program, shared, borrows);
+                        }
+                    }
+                }
+            }
+            DefValType::Primitive(_) | DefValType::Flags(_) | DefValType::Own(_) => {}
+        },
+        Type::Generic(generic) => match generic.bound {
+            crate::ir::types::GenericBound::Eq(inner) => {
+                collect_borrowed_defined(inner, value, program, shared, borrows);
+            }
+            crate::ir::types::GenericBound::Sub => {}
+        },
+        Type::Resource(_) | Type::Func(_) | Type::Component(_) | Type::Instance(_) => {}
+    }
 }
 
 pub(super) fn lowered_indirect_result_area(
