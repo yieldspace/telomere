@@ -1,10 +1,31 @@
 use super::canonical::{
     collect_borrowed_handles, component_value_to_direct_wasm, direct_wasm_to_component_value,
     lift_component_args, lift_component_results, lower_component_args, lower_component_results,
-    lowered_indirect_result_area, retire_lent_handles, track_host_owned_results, transfer_handles,
-    validate_lifted_handle_results, validate_lowered_borrow_args, HandleTransfer,
+    lowered_indirect_result_area, resource_is_local_definition, retire_lent_handles,
+    track_host_owned_results, transfer_handles, validate_lifted_handle_results,
+    validate_lowered_borrow_args, HandleTransfer,
 };
 use super::*;
+
+/// How a call's argument borrows are registered against the
+/// callee's handle table for the duration of the call (#334). The
+/// borrow values alone do not say what they name — a handle index,
+/// or the representation of a resource the calling component
+/// defines — so the entry point that does know carries it in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BorrowRegistration {
+    /// The values name handles in the callee's table (calls through
+    /// the public API).
+    ByIndex,
+    /// The caller registered the borrows itself (the canon-lower
+    /// boundary path, after the handle transfer).
+    Preregistered,
+    /// The values were lifted from core arguments by a canon-lower
+    /// trampoline in the same instance: borrow leaves of locally
+    /// defined resources carry representations, the rest name handles
+    /// in the shared table.
+    LocalReps,
+}
 
 impl ResolvedCallable {
     pub(super) fn call_sync(
@@ -12,7 +33,7 @@ impl ResolvedCallable {
         store: &Store,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
-        self.call_sync_impl(store, args, true)
+        self.call_sync_impl(store, args, BorrowRegistration::ByIndex)
     }
 
     /// Calls with the argument borrows already registered against the
@@ -27,14 +48,30 @@ impl ResolvedCallable {
         store: &Store,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
-        self.call_sync_impl(store, args, false)
+        self.call_sync_impl(store, args, BorrowRegistration::Preregistered)
+    }
+
+    /// Calls whose argument values a canon-lower trampoline in the
+    /// same instance lifted from core arguments, crossing no
+    /// handle-table boundary. Borrow leaves of resources this program
+    /// defines carry representations on that path, not handle indices
+    /// (the defining component's core code works with reps, #335), so
+    /// the callee registers those borrows against the entry holding
+    /// the rep; every other borrow leaf still names a handle in the
+    /// shared table.
+    pub(super) fn call_sync_borrows_local_reps(
+        &self,
+        store: &Store,
+        args: &[ComponentValue],
+    ) -> Result<Vec<ComponentValue>, ComponentError> {
+        self.call_sync_impl(store, args, BorrowRegistration::LocalReps)
     }
 
     fn call_sync_impl(
         &self,
         store: &Store,
         args: &[ComponentValue],
-        register_borrows: bool,
+        registration: BorrowRegistration,
     ) -> Result<Vec<ComponentValue>, ComponentError> {
         match self {
             ResolvedCallable::Host(func) => {
@@ -67,25 +104,34 @@ impl ResolvedCallable {
                 // Register the borrows lent to this call against this
                 // instance's handle table for the duration of the call:
                 // dropping the corresponding own handle while a borrow
-                // is outstanding traps (#334). Resolving the argument
-                // values against this table assumes they name handles
-                // in it, which holds when no call boundary rewrote
-                // them — direct calls through the public API and
-                // same-instance calls; the canon-lower boundary path
-                // registers the borrows itself, with the transfer's
-                // provenance, and enters through
-                // `call_sync_borrows_preregistered` instead. A borrow
-                // that resolves to no owned entry here is not
+                // is outstanding traps (#334). What a borrow value
+                // names depends on how the call arrived (see
+                // `BorrowRegistration`): a handle index for public API
+                // calls; for a same-instance canon-lower call, the
+                // representation for a resource this program defines —
+                // registered against the entry holding that rep, never
+                // against the entry that happens to sit at that index.
+                // The canon-lower boundary path registers the borrows
+                // itself, with the transfer's provenance, and enters
+                // through `call_sync_borrows_preregistered` instead. A
+                // borrow that resolves to no owned entry here is not
                 // registered. The table borrow is never held across the
                 // call itself, since the called code re-enters this
                 // instance's canon resource ops.
                 let mut registered: Vec<(ResourceId, u32)> = Vec::new();
-                if register_borrows {
+                if !matches!(registration, BorrowRegistration::Preregistered) {
                     let mut table = handles.borrow_mut();
                     for (resource, handle) in
                         collect_borrowed_handles(func_type, args, program, shared)
                     {
-                        if let Some(entry) = table.note_borrow(resource, handle) {
+                        let entry = if matches!(registration, BorrowRegistration::LocalReps)
+                            && resource_is_local_definition(resource)
+                        {
+                            table.note_borrow_rep(resource, handle as i32)
+                        } else {
+                            table.note_borrow(resource, handle)
+                        };
+                        if let Some(entry) = entry {
                             registered.push((resource, entry));
                         }
                     }
@@ -236,7 +282,11 @@ impl HostBinding {
                 let call_outcome = if boundary.is_some() {
                     callable.call_sync_borrows_preregistered(store, &component_args)
                 } else {
-                    callable.call_sync(store, &component_args)
+                    // No boundary: the argument values still carry
+                    // what this instance's core code passed — for a
+                    // resource this component defines, a borrow leaf
+                    // is the representation, not a handle index.
+                    callable.call_sync_borrows_local_reps(store, &component_args)
                 };
                 if let Some((_, callee_handles)) = boundary {
                     let mut table = callee_handles.borrow_mut();
@@ -506,8 +556,10 @@ impl HandleTable {
     /// Returns a copy of the record of a live owned entry holding
     /// `rep`, if any. Reps are guest-chosen and may collide between
     /// distinct resources, so this is only a fallback for recovering a
-    /// record (identity included) where a boundary crossing carried
-    /// nothing but the rep; borrow bookkeeping never resolves by rep.
+    /// record (identity included) where a crossing carried nothing
+    /// but the rep; the borrow bookkeeping that recovers a record
+    /// this way registers by the record's identity, never by rep
+    /// equality at registration time.
     pub(super) fn record_by_rep(&self, resource: ResourceId, rep: i32) -> Option<ResourceRecord> {
         self.entries
             .iter()
@@ -622,6 +674,20 @@ impl HandleTable {
         let entry = self.entries.get_mut(&target)?;
         entry.borrows = entry.borrows.saturating_add(1);
         Some(target)
+    }
+
+    /// Registers one borrow that arrived as a representation —
+    /// the same-instance canon-lower path carries nothing else for a
+    /// resource this instance defines (#335) — against the live owned
+    /// entry holding that rep, and returns that entry's index, if
+    /// such an entry exists. The rep only recovers the borrowed
+    /// resource's record; the registration itself is by the record's
+    /// identity, exactly as for a transferred borrow, so an unrelated
+    /// entry sitting at the index the rep happens to equal is never
+    /// marked.
+    fn note_borrow_rep(&mut self, resource: ResourceId, rep: i32) -> Option<u32> {
+        let record = self.record_by_rep(resource, rep)?;
+        self.note_borrow_id(resource, record.id)
     }
 
     /// Releases one borrow previously registered with

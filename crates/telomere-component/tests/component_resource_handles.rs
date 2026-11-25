@@ -2105,3 +2105,156 @@ async fn ownership_transfer_of_a_borrowed_resource_is_rejected_with_own_paramete
         .expect("dtor-reps should succeed");
     assert_eq!(reps, vec![ComponentValue::U32(7)]);
 }
+
+/// Codex review of PR #352 (finding 4): a `canon lower` that calls a
+/// lifted function of the *same* instance crosses no handle-table
+/// boundary, so no transfer rewrites the argument values — and for a
+/// resource the component itself defines, the caller's core code
+/// passes the representation, not a handle index (#335's boundary
+/// discipline). The callee-side borrow registration must therefore
+/// resolve the value as a rep: registering it as an index marks
+/// whichever unrelated entry sits at that index as borrowed, and
+/// dropping that entry during the call traps spuriously. Here handle
+/// 1 holds rep 100 while the call borrows rep 1 (handle 2); the
+/// callee drops handle 1, which must succeed.
+#[tokio::test]
+async fn same_instance_borrow_of_local_resource_does_not_mark_unrelated_handle() {
+    let bytes = compile_component(
+        r#"
+(component
+  (core module $DM
+    (global $dtor-reps (mut i32) (i32.const 0))
+    (global $dtor-count (mut i32) (i32.const 0))
+    (func (export "dtor") (param i32)
+      (global.set $dtor-reps (i32.add (global.get $dtor-reps) (local.get 0)))
+      (global.set $dtor-count (i32.add (global.get $dtor-count) (i32.const 1))))
+    (func (export "dtor-reps") (result i32) (global.get $dtor-reps))
+    (func (export "dtor-count") (result i32) (global.get $dtor-count)))
+  (core instance $dm (instantiate $DM))
+  (type $R (resource (rep i32) (dtor (core func $dm "dtor"))))
+  (canon resource.new $R (core func $R.resource.new))
+  (canon resource.drop $R (core func $R.resource.drop))
+  (core module $AM
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "use-borrow-impl") (param $rep i32) (result i32)
+      (call $drop (i32.const 1))
+      (i32.const 42)))
+  (core instance $am (instantiate $AM (with "" (instance
+    (export "drop" (func $R.resource.drop))))))
+  (func $use-borrow (param "b" (borrow $R)) (result u32) (canon lift (core func $am "use-borrow-impl")))
+  (canon lower (func $use-borrow) (core func $use-borrow'))
+  (core module $BM
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (import "" "use-borrow" (func $use-borrow (param i32) (result i32)))
+    (func (export "run") (result i32)
+      (local $h1 i32)
+      (local $h2 i32)
+      (local.set $h1 (call $new (i32.const 100)))
+      (if (i32.ne (local.get $h1) (i32.const 1)) (then unreachable))
+      (local.set $h2 (call $new (i32.const 1)))
+      (if (i32.ne (local.get $h2) (i32.const 2)) (then unreachable))
+      (if (i32.ne (call $use-borrow (i32.const 1)) (i32.const 42)) (then unreachable))
+      (call $drop (local.get $h2))
+      (i32.const 43)))
+  (core instance $bm (instantiate $BM (with "" (instance
+    (export "new" (func $R.resource.new))
+    (export "drop" (func $R.resource.drop))
+    (export "use-borrow" (func $use-borrow'))))))
+  (func (export "run") (result u32) (canon lift (core func $bm "run")))
+  (func (export "dtor-reps") (result u32) (canon lift (core func $dm "dtor-reps")))
+  (func (export "dtor-count") (result u32) (canon lift (core func $dm "dtor-count"))))
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let result = instance.call(&store, "run", &[]).await.expect(
+        "run should succeed: the rep-1 borrow must not mark handle 1 (rep 100) as borrowed",
+    );
+    assert_eq!(result, vec![ComponentValue::U32(43)]);
+    // Both resources were destroyed exactly once: rep 100 by the
+    // callee inside the call, rep 1 by `run` after it returned.
+    let count = instance
+        .call(&store, "dtor-count", &[])
+        .await
+        .expect("dtor-count should succeed");
+    assert_eq!(count, vec![ComponentValue::U32(2)]);
+    let reps = instance
+        .call(&store, "dtor-reps", &[])
+        .await
+        .expect("dtor-reps should succeed");
+    assert_eq!(reps, vec![ComponentValue::U32(101)]);
+}
+
+/// Codex review of PR #352 (finding 4, false negative): the mirror
+/// image of the previous test — the same-instance borrow of rep 1
+/// must protect the rep-1 entry (handle 2), so the callee dropping
+/// that very handle during the call traps, exactly as the
+/// cross-instance shape does in
+/// `borrow_into_defining_instance_protects_the_rep_entry_not_the_index`.
+/// Merely skipping the registration for rep-carrying borrows would
+/// fail this test.
+#[tokio::test]
+async fn same_instance_borrow_of_local_resource_protects_the_rep_entry() {
+    let bytes = compile_component(
+        r#"
+(component
+  (core module $DM
+    (global $dtor-reps (mut i32) (i32.const 0))
+    (global $dtor-count (mut i32) (i32.const 0))
+    (func (export "dtor") (param i32)
+      (global.set $dtor-reps (i32.add (global.get $dtor-reps) (local.get 0)))
+      (global.set $dtor-count (i32.add (global.get $dtor-count) (i32.const 1))))
+    (func (export "dtor-reps") (result i32) (global.get $dtor-reps))
+    (func (export "dtor-count") (result i32) (global.get $dtor-count)))
+  (core instance $dm (instantiate $DM))
+  (type $R (resource (rep i32) (dtor (core func $dm "dtor"))))
+  (canon resource.new $R (core func $R.resource.new))
+  (canon resource.drop $R (core func $R.resource.drop))
+  (core module $AM
+    (import "" "drop" (func $drop (param i32)))
+    (func (export "use-borrow-impl") (param $rep i32) (result i32)
+      (call $drop (i32.const 2))
+      (i32.const 42)))
+  (core instance $am (instantiate $AM (with "" (instance
+    (export "drop" (func $R.resource.drop))))))
+  (func $use-borrow (param "b" (borrow $R)) (result u32) (canon lift (core func $am "use-borrow-impl")))
+  (canon lower (func $use-borrow) (core func $use-borrow'))
+  (core module $BM
+    (import "" "new" (func $new (param i32) (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (import "" "use-borrow" (func $use-borrow (param i32) (result i32)))
+    (func (export "run") (result i32)
+      (local $h1 i32)
+      (local $h2 i32)
+      (local.set $h1 (call $new (i32.const 100)))
+      (if (i32.ne (local.get $h1) (i32.const 1)) (then unreachable))
+      (local.set $h2 (call $new (i32.const 1)))
+      (if (i32.ne (local.get $h2) (i32.const 2)) (then unreachable))
+      (drop (call $use-borrow (i32.const 1)))
+      (i32.const 43)))
+  (core instance $bm (instantiate $BM (with "" (instance
+    (export "new" (func $R.resource.new))
+    (export "drop" (func $R.resource.drop))
+    (export "use-borrow" (func $use-borrow'))))))
+  (func (export "run") (result u32) (canon lift (core func $bm "run")))
+  (func (export "dtor-reps") (result u32) (canon lift (core func $dm "dtor-reps")))
+  (func (export "dtor-count") (result u32) (canon lift (core func $dm "dtor-count"))))
+"#,
+    );
+    let (store, instance) = instantiate(&bytes).await;
+    let error = instance
+        .call(&store, "run", &[])
+        .await
+        .expect_err("dropping the borrowed resource inside the call must trap");
+    assert!(
+        matches!(&error, telomere_component::ComponentError::Trap(message) if message.contains("cannot remove owned resource while borrowed")),
+        "dropping a borrowed resource should trap, got {error:?}"
+    );
+    // Nothing was destroyed: the borrowed rep-1 resource survived,
+    // and the unrelated rep-100 decoy was never touched.
+    let count = instance
+        .call(&store, "dtor-count", &[])
+        .await
+        .expect("dtor-count should succeed");
+    assert_eq!(count, vec![ComponentValue::U32(0)]);
+}
