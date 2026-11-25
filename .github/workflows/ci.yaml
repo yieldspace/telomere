@@ -312,6 +312,12 @@ jobs:
           TELOMERE_WAST_JIT_REQUIRE_ACCEPT: "1"
         run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test wast
 
+      # #201: component bundles — hash-keyed AoT artifacts for the
+      # core modules embedded in components, loaded via the
+      # fail-closed bundle path, on both execution-verified targets.
+      - name: Component bundle tests
+        run: cargo test -p telomere-component --release --features aot-bundle --target ${{ matrix.target }} --test component_bundle
+
       # #199: the AoT artifact lane on both execution-verified
       # targets (this matrix is macOS arm64 + Linux x86_64). Every
       # corpus module is built into a signed artifact offline,

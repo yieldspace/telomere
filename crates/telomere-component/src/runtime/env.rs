@@ -9,7 +9,27 @@ pub async fn instantiate(
     store: &Store,
     linker: &ComponentLinker,
 ) -> Result<ComponentInstance, ComponentError> {
-    let runtime = instantiate_sync(program.clone(), store, linker)?;
+    let runtime = instantiate_sync(program.clone(), store, linker, SharedState::default())?;
+    Ok(ComponentInstance::new(program, runtime))
+}
+
+/// Bundle instantiation (#201): like [`instantiate`], but the shared
+/// state carries the bundle's opened artifacts, so each defined core
+/// instance created from a substituted module gets its artifact
+/// installed into the store's JIT cache (see
+/// [`crate::bundle::ComponentBundleArtifacts`]).
+#[cfg(feature = "aot-bundle")]
+pub async fn instantiate_with_artifacts(
+    program: ComponentProgram,
+    artifacts: &crate::bundle::ComponentBundleArtifacts,
+    store: &Store,
+    linker: &ComponentLinker,
+) -> Result<ComponentInstance, ComponentError> {
+    let shared = SharedState {
+        aot_artifacts: Some(artifacts.set()),
+        ..SharedState::default()
+    };
+    let runtime = instantiate_sync(program.clone(), store, linker, shared)?;
     Ok(ComponentInstance::new(program, runtime))
 }
 
@@ -17,9 +37,10 @@ fn instantiate_sync(
     program: ComponentProgram,
     store: &Store,
     linker: &ComponentLinker,
+    shared: SharedState,
 ) -> Result<RuntimeInstance, ComponentError> {
     let program = Rc::new(program);
-    let shared = Rc::new(SharedState::default());
+    let shared = Rc::new(shared);
     register_host_resource_drops(&program, linker, &shared);
     let env = Rc::new(RuntimeEnv::new(
         program.clone(),
@@ -493,6 +514,95 @@ impl RuntimeEnv {
         Ok(module)
     }
 
+    /// The component definition behind an instance index, following
+    /// instance aliases (`FromExport` chains) through the program's
+    /// static relations. Returns `None` for imported instances and for
+    /// chains that leave the program (linker-provided instances have
+    /// no static definition). Mirrors the traversal
+    /// [`RuntimeEnv::resolve_instance`] performs at runtime, but yields
+    /// the definition instead of a live instance.
+    #[cfg(feature = "aot-bundle")]
+    fn component_of_instance(&self, idx: GlobalIdx<Instance>) -> Option<crate::ir::Component> {
+        match self.program.instance_store.get(&idx)? {
+            Relation::Defined(instance) => {
+                let component_idx = instance.component_idx?;
+                match self.program.component_store.get(&component_idx)? {
+                    Relation::Defined(component) => Some(component.clone()),
+                    _ => None,
+                }
+            }
+            Relation::FromExport(parent_idx, name) => {
+                let parent = self.component_of_instance(*parent_idx)?;
+                let key = resolve_component_export_key(&parent, name).ok()?;
+                match parent.exports.get(&key)? {
+                    ComponentExport::Instance(inner) => self.component_of_instance(*inner),
+                    _ => None,
+                }
+            }
+            Relation::Import(_) => None,
+        }
+    }
+
+    /// The core module index a bundle artifact is keyed to for `idx`:
+    /// the index of the module's *definition*. A core instance may be
+    /// instantiated from an alias slot (`alias export` of a nested
+    /// component's exported module), whose index differs from the
+    /// definition the decoder registered the substituted module (and
+    /// its artifact) under; resolving through the alias chain
+    /// preserves the artifact's identity so aliased modules are
+    /// installed too. Indices that do not trace back to a definition
+    /// in this program (imports, unsupported alias forms) are returned
+    /// unchanged, so their lookup simply misses, as before.
+    #[cfg(feature = "aot-bundle")]
+    fn core_module_definition_idx(
+        &self,
+        idx: GlobalIdx<crate::ir::CoreModule>,
+    ) -> GlobalIdx<crate::ir::CoreModule> {
+        // Alias chains follow strictly earlier definitions in a
+        // well-formed program, so this walk terminates; the visited
+        // set is a defensive bound against a malformed relation graph.
+        let mut visited = std::collections::HashSet::new();
+        let mut current = idx;
+        while visited.insert(current) {
+            match self.program.core_module_store.get(&current) {
+                Some(CoreRelation::FromExport(instance_idx, name)) => {
+                    let Some(component) = self.component_of_instance(*instance_idx) else {
+                        return idx;
+                    };
+                    let Ok(key) = resolve_component_export_key(&component, name) else {
+                        return idx;
+                    };
+                    match component.exports.get(&key) {
+                        Some(ComponentExport::Module(inner)) => current = *inner,
+                        _ => return idx,
+                    }
+                }
+                _ => return current,
+            }
+        }
+        idx
+    }
+
+    /// Installs the bundle artifact keyed to `module_idx` (if any)
+    /// into a freshly created defined core instance (#201). Ordinary
+    /// instantiation carries no artifact set and skips this entirely.
+    /// `module_idx` may name an alias of the substituted module; the
+    /// artifact is keyed by the definition index, so the alias is
+    /// resolved first (see `core_module_definition_idx`).
+    #[cfg(feature = "aot-bundle")]
+    fn install_bundle_artifact(
+        &self,
+        store: &Store,
+        module_idx: GlobalIdx<crate::ir::CoreModule>,
+        instance: &InstanceHandle,
+    ) -> Result<(), ComponentError> {
+        if let Some(set) = &self.shared.aot_artifacts {
+            let definition_idx = self.core_module_definition_idx(module_idx);
+            set.install_for(store, definition_idx, instance)?;
+        }
+        Ok(())
+    }
+
     fn resolve_core_instance(
         &self,
         idx: GlobalIdx<CoreInstance>,
@@ -515,7 +625,11 @@ impl RuntimeEnv {
                     );
                 }
                 match block_on(crate::support::instantiate(module, store, &registry)) {
-                    CoreVMResult::Success(instance) => instance,
+                    CoreVMResult::Success(instance) => {
+                        #[cfg(feature = "aot-bundle")]
+                        self.install_bundle_artifact(store, *module_idx, &instance)?;
+                        instance
+                    }
                     other => {
                         return Err(vm_result_to_component_error(
                             other,

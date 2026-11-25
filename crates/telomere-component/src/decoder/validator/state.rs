@@ -52,6 +52,12 @@ pub struct ParseState<'a> {
     pub(crate) core_global_store: ValueStore<CoreGlobal, CoreRelation<CoreGlobal>>,
     pub(crate) core_table_store: ValueStore<CoreTable, CoreRelation<CoreTable>>,
     pub(crate) value_store: ValueStore<Value>,
+    /// Bundle decode session (#201): when a component is loaded from a
+    /// component bundle, this holds the opened AoT artifacts the
+    /// decoder substitutes for per-section core module parsing. Always
+    /// `None` for ordinary compilation.
+    #[cfg(feature = "aot-bundle")]
+    pub(crate) core_module_substitution: Option<crate::bundle::CoreModuleSubstitution>,
 }
 
 impl<T> Default for ValueLocalStore<T> {
@@ -120,6 +126,52 @@ impl<'a> ParseState<'a> {
             core_global_store: Default::default(),
             core_table_store: Default::default(),
             value_store: Default::default(),
+            #[cfg(feature = "aot-bundle")]
+            core_module_substitution: None,
+        }
+    }
+
+    /// Installs a bundle substitution session (#201) for the decode
+    /// that follows. Bundle loads only; ordinary compilation never
+    /// calls this.
+    #[cfg(feature = "aot-bundle")]
+    pub(crate) fn set_core_module_substitution(
+        &mut self,
+        substitution: crate::bundle::CoreModuleSubstitution,
+    ) {
+        self.core_module_substitution = Some(substitution);
+    }
+
+    /// Removes and returns the bundle substitution session, if any.
+    #[cfg(feature = "aot-bundle")]
+    pub(crate) fn take_core_module_substitution(
+        &mut self,
+    ) -> Option<crate::bundle::CoreModuleSubstitution> {
+        self.core_module_substitution.take()
+    }
+
+    /// If a bundle substitution session is active, consumes the
+    /// current CoreModule section from `reader` without parsing it
+    /// and returns the substituted module. Returns `Ok(None)` when no
+    /// session is active (the caller parses as usual).
+    #[cfg(feature = "aot-bundle")]
+    pub(crate) fn substitute_core_module(
+        &mut self,
+        reader: &mut impl crate::support::binary::BinaryReader,
+    ) -> ParseResult<Option<crate::support::Module>> {
+        match self.core_module_substitution.as_mut() {
+            Some(substitution) => substitution.take_for_section(reader),
+            None => Ok(None),
+        }
+    }
+
+    /// Records the artifact consumed for the most recent CoreModule
+    /// section against the global index the decoder registered the
+    /// substituted module under. No-op without a substitution session.
+    #[cfg(feature = "aot-bundle")]
+    pub(crate) fn bind_core_module_substitution(&mut self, idx: GlobalIdx<CoreModule>) {
+        if let Some(substitution) = self.core_module_substitution.as_mut() {
+            substitution.bind(idx);
         }
     }
 
