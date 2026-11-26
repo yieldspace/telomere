@@ -6,4 +6,4 @@
 
 pub use crate::error::ComponentError;
 pub use crate::func::ComponentReturn;
-pub use crate::ir::types::{DefValType, Type, ValType};
+pub use crate::ir::types::{DefValType, Type, ValType, VariantForm};

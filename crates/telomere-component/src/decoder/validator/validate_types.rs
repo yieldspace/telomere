@@ -506,7 +506,7 @@ impl<'a> Validator<'a> {
                 Ok(true)
             }
             DefValType::Variant(cases) => {
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         if !self.valtype_resources_visible(ty, visible, visiting)? {
                             return Ok(false);
@@ -664,7 +664,7 @@ impl<'a> Validator<'a> {
                 Ok(())
             }
             DefValType::Variant(cases) => {
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         self.validate_nested_valtype_ref(ty, visible, seen)?;
                     }
@@ -762,7 +762,7 @@ impl<'a> Validator<'a> {
                 if !self.variant_is_inline(cases) {
                     return Ok(true);
                 }
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         if self.nested_valtype_requires_name(ty, visiting)? {
                             return Ok(true);

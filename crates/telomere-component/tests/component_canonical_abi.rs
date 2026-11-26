@@ -1896,9 +1896,17 @@ async fn flat_variant_result_with_out_of_range_discriminant_traps_canonically() 
         .call(&store, "give-ok", &[])
         .await
         .expect("in-range discriminant must lift");
-    // A variant whose cases are all payloadless lifts to
-    // `ComponentValue::Enum` (the runtime's enum representation).
-    assert_eq!(values, vec![ComponentValue::Enum("x".to_owned())]);
+    // The type is declared with the `variant` constructor, so it lifts to
+    // `ComponentValue::Variant` even though all of its cases are
+    // payloadless; only a type declared with the `enum` constructor lifts
+    // to `ComponentValue::Enum` (issue #314).
+    assert_eq!(
+        values,
+        vec![ComponentValue::Variant {
+            case: "x".to_owned(),
+            value: None,
+        }]
+    );
 
     let error = instance
         .call(&store, "give", &[])

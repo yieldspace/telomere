@@ -640,7 +640,7 @@ fn collect_bound_defval(
             }
         }
         Variant(cases) => {
-            for case in cases {
+            for case in cases.iter() {
                 if let Some(ty) = &case.ty {
                     collect_bound_valtype(validator, ty, out, seen);
                 }
