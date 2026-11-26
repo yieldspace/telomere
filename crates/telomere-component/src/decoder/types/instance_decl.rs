@@ -24,11 +24,11 @@ pub fn _parse_instance_decl(
     match b {
         0x00 => {
             let (_, types) = parse_core_type(ctx)?;
-            for (ty, is_final) in types {
+            for (ty, is_final, identity) in types {
                 ctx.validator
                     .scope_mut()
                     .core_types
-                    .add_with_finality(ty, Some(is_final));
+                    .add_with_records(ty, Some(is_final), identity);
             }
         }
         0x01 => {

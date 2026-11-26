@@ -10,12 +10,89 @@ pub use crate::support::common::{
 };
 use crate::support::Module;
 use std::collections::HashMap;
+use std::rc::Rc;
+
+/// The canonical identity of a declared core func type: its
+/// signature, its finality, and the identity of its declared
+/// supertype, if any.
+///
+/// Core WebAssembly type matching is defined over canonical types:
+/// two defined types are the same type when their canonical forms
+/// agree, and a defined type is a subtype of exactly the types on
+/// its declared supertype chain. A bare comptype — like a `sub
+/// final` with no declared supertypes — is final and canonically
+/// identified by its signature alone; that is the identity produced
+/// by every signature-only construction site (a core module's own
+/// type space, the core func index space). A declared subtype keeps
+/// its ancestry here so that module import/export matching can
+/// apply the chain rule instead of comparing signatures alone: a
+/// plain `(func)` is not a subtype of a declared `(sub (func))`,
+/// even though the signatures agree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreFuncIdentity {
+    pub signature: CoreFuncType,
+    pub is_final: bool,
+    pub supertype: Option<Rc<CoreFuncIdentity>>,
+}
+
+impl CoreFuncIdentity {
+    /// The identity of a bare (final, supertype-less) func type
+    /// with the given signature.
+    pub fn bare(signature: CoreFuncType) -> Rc<Self> {
+        Rc::new(Self {
+            signature,
+            is_final: true,
+            supertype: None,
+        })
+    }
+
+    /// Whether this type is a subtype of `sup`: `sup` occurs on
+    /// the declared supertype chain of `self`, counting `self`
+    /// itself. The signature is part of the identity, so a chain
+    /// hit also establishes that the signatures agree at the
+    /// matched type; the rectype decoder only lets a subtype be
+    /// declared with a signature matching its supertype's, so every
+    /// type on a chain shares the chain head's signature.
+    pub fn is_subtype_of(&self, sup: &Self) -> bool {
+        let mut current = self;
+        loop {
+            if current == sup {
+                return true;
+            }
+            match &current.supertype {
+                Some(supertype) => current = supertype,
+                None => return false,
+            }
+        }
+    }
+}
+
+/// A func type as recorded in a core module import/export
+/// descriptor: the signature, plus the canonical identity of the
+/// declared type it came from, which matching needs in addition to
+/// the signature (see `CoreFuncIdentity`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreModuleFuncType {
+    pub signature: CoreFuncType,
+    pub identity: Rc<CoreFuncIdentity>,
+}
+
+impl CoreModuleFuncType {
+    /// A descriptor for a bare func type (see
+    /// `CoreFuncIdentity::bare`).
+    pub fn bare(signature: CoreFuncType) -> Self {
+        Self {
+            identity: CoreFuncIdentity::bare(signature.clone()),
+            signature,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreModuleExportType {
     Memory(CoreMemoryType),
     Table(CoreTableType),
-    Func(CoreFuncType),
+    Func(CoreModuleFuncType),
     Global(CoreGlobalType),
     Type(CoreType),
     Module(CoreModuleType),
@@ -24,7 +101,7 @@ pub enum CoreModuleExportType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreModuleImportType {
-    Func(CoreFuncType),
+    Func(CoreModuleFuncType),
     Memory(CoreMemoryType),
     Table(CoreTableType),
     Global(CoreGlobalType),
@@ -67,7 +144,7 @@ impl From<&Module> for CoreModuleType {
             let value = match x.desc {
                 ImportDesc::TypeIdx(ref idx) => {
                     let ty = function_types.get(idx.0 as usize).unwrap();
-                    CoreModuleImportType::Func(ty.clone())
+                    CoreModuleImportType::Func(CoreModuleFuncType::bare(ty.clone()))
                 }
                 ImportDesc::TableType(ref ty) => CoreModuleImportType::Table(*ty),
                 ImportDesc::MemType(ref ty) => CoreModuleImportType::Memory(*ty),
@@ -89,7 +166,7 @@ impl From<&Module> for CoreModuleType {
                         ExportDesc::Func(ref idx) => {
                             let tidx = functions.get(idx.0 as usize).unwrap();
                             let ty = function_types.get(tidx.0 as usize).unwrap();
-                            CoreModuleExportType::Func(ty.clone())
+                            CoreModuleExportType::Func(CoreModuleFuncType::bare(ty.clone()))
                         }
                         ExportDesc::Table(ref idx) => {
                             let ty = tables.get(idx.0 as usize).unwrap();
@@ -168,7 +245,15 @@ impl CoreModuleImportType {
     pub fn assert_satisfied_by(&self, actual: &CoreModuleExportType) -> ParseResult<()> {
         match (self, actual) {
             (CoreModuleImportType::Func(expected), CoreModuleExportType::Func(actual)) => {
-                if actual == expected {
+                // The provided func's type must be a subtype of the
+                // import's declared type: the signatures must agree
+                // and the declared type must occur on the provided
+                // type's declared supertype chain, so a plain
+                // `(func)` does not satisfy an import declared with
+                // a non-final `(sub (func))` type.
+                if actual.signature == expected.signature
+                    && actual.identity.is_subtype_of(&expected.identity)
+                {
                     Ok(())
                 } else {
                     Err(ComponentParseError::TypeMismatch(
@@ -194,7 +279,15 @@ impl CoreModuleImportType {
     pub fn assert_satisfies_import(&self, actual: &CoreModuleImportType) -> ParseResult<()> {
         match (self, actual) {
             (CoreModuleImportType::Func(expected), CoreModuleImportType::Func(actual)) => {
-                if actual == expected {
+                // Module-type subtyping is contravariant in the
+                // imports: the parent's import type must be a
+                // subtype of this module's import type, so the
+                // chain walk runs from `expected` (the parent's)
+                // towards `actual` — the table and memory arms
+                // below swap their arguments the same way.
+                if actual.signature == expected.signature
+                    && expected.identity.is_subtype_of(&actual.identity)
+                {
                     Ok(())
                 } else {
                     Err(ComponentParseError::TypeMismatch(
@@ -309,6 +402,12 @@ impl From<CoreModuleExportType> for CoreSortType {
 
 impl From<CoreFuncType> for CoreModuleExportType {
     fn from(value: CoreFuncType) -> Self {
+        CoreModuleExportType::Func(CoreModuleFuncType::bare(value))
+    }
+}
+
+impl From<CoreModuleFuncType> for CoreModuleExportType {
+    fn from(value: CoreModuleFuncType) -> Self {
         CoreModuleExportType::Func(value)
     }
 }

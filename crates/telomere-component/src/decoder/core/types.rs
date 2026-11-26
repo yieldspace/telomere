@@ -1,6 +1,7 @@
 use crate::decoder::{ComponentParseError, ParseContext, SizedResult};
 use crate::ir::types::{
-    CoreFuncType, CoreModuleExportType, CoreModuleImportType, CoreModuleType, CoreType,
+    CoreFuncIdentity, CoreFuncType, CoreModuleExportType, CoreModuleFuncType, CoreModuleImportType,
+    CoreModuleType, CoreType,
 };
 use crate::ir::LocalIdx;
 use crate::support::binary::BinaryReader;
@@ -10,14 +11,19 @@ use crate::support::common::{
 };
 use crate::support::parser::core::{parse_name, parse_u32, parse_vec};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 enum LocalCoreType {
     /// A func type in a module type's local type space, together
     /// with its finality: a bare comptype is final, while a type
     /// defined by a non-final `sub` (or aliased from one) is not.
+    /// The canonical identity keeps the declared supertype
+    /// ancestry, which module import/export descriptors built from
+    /// this type must carry for matching (see `CoreFuncIdentity`).
     Func {
         func: CoreFuncType,
         is_final: bool,
+        identity: Rc<CoreFuncIdentity>,
     },
     Module,
 }
@@ -153,12 +159,21 @@ fn parse_wasm_memtype(reader: &mut impl BinaryReader) -> SizedResult<WasmMemType
     Ok((reader.read_count() - start, WasmMemType::new(limits, false)))
 }
 
-fn resolve_core_func_type(local_types: &[LocalCoreType], idx: u32) -> SizedResult<CoreFuncType> {
+fn resolve_core_func_type(
+    local_types: &[LocalCoreType],
+    idx: u32,
+) -> SizedResult<CoreModuleFuncType> {
     let ty = local_types
         .get(idx as usize)
         .ok_or(ComponentParseError::TypeIdxNotFound(idx))?;
     match ty {
-        LocalCoreType::Func { func, .. } => Ok((0, func.clone())),
+        LocalCoreType::Func { func, identity, .. } => Ok((
+            0,
+            CoreModuleFuncType {
+                signature: func.clone(),
+                identity: identity.clone(),
+            },
+        )),
         LocalCoreType::Module => Err(ComponentParseError::InvalidType(
             "core typeidx must refer to func type".to_owned(),
         )),
@@ -239,9 +254,17 @@ fn parse_core_module_alias(
                         .core_types
                         .finality(LocalIdx::new(index))
                         .unwrap_or(true);
+                    // The alias likewise keeps the type's canonical
+                    // identity; without an identity record the type
+                    // is the bare type of its signature.
+                    let identity = scope
+                        .core_types
+                        .identity(LocalIdx::new(index))
+                        .unwrap_or_else(|| CoreFuncIdentity::bare(func_ty.clone()));
                     local_types.push(LocalCoreType::Func {
                         func: func_ty,
                         is_final,
+                        identity,
                     });
                 }
                 CoreType::Module(_) => local_types.push(LocalCoreType::Module),
@@ -293,13 +316,19 @@ fn parse_core_module_type(
                 let base_len = local_types.len();
                 let resolve_existing = |idx: u32| {
                     local_types.get(idx as usize).map(|ty| match ty {
-                        LocalCoreType::Func { func, is_final } => SuperTypeInfo {
+                        LocalCoreType::Func {
+                            func,
+                            is_final,
+                            identity,
+                        } => SuperTypeInfo {
                             func: Some(func.clone()),
                             is_final: *is_final,
+                            identity: Some(identity.clone()),
                         },
                         LocalCoreType::Module => SuperTypeInfo {
                             func: None,
                             is_final: true,
+                            identity: None,
                         },
                     })
                 };
@@ -310,6 +339,7 @@ fn parse_core_module_type(
                     local_types.push(LocalCoreType::Func {
                         func: defined.func,
                         is_final: defined.is_final,
+                        identity: defined.identity,
                     });
                 }
             }
@@ -353,6 +383,10 @@ fn parse_core_module_type(
 struct DefinedCoreSubtype {
     func: CoreFuncType,
     is_final: bool,
+    /// The canonical identity of the defined type, linking it to
+    /// the identity of its declared supertype (see
+    /// `CoreFuncIdentity`).
+    identity: Rc<CoreFuncIdentity>,
 }
 
 /// What a supertype index in a `core:rectype` must resolve to.
@@ -362,6 +396,12 @@ struct SuperTypeInfo {
     /// of any other kind cannot be the supertype of a subtype decoded
     /// here.
     func: Option<CoreFuncType>,
+    /// The referenced type's canonical identity, when it is a func
+    /// type: a subtype declared against it links its own identity
+    /// to this one. Every func resolution provides it (a type
+    /// without an identity record resolves to the bare identity of
+    /// its signature).
+    identity: Option<Rc<CoreFuncIdentity>>,
     /// Whether the referenced type is final. A bare comptype is a
     /// final subtype by definition, and every non-final definition
     /// passes through the rectype decoder, which records the bit in
@@ -435,6 +475,7 @@ fn parse_core_subtype_body(
         ));
     }
     let mut supertype = None;
+    let mut supertype_identity = None;
     for idx in supertypes {
         let info = if (idx as usize) < base_len {
             resolve_existing(idx)
@@ -444,6 +485,7 @@ fn parse_core_subtype_body(
                 .map(|defined| SuperTypeInfo {
                     func: Some(defined.func.clone()),
                     is_final: defined.is_final,
+                    identity: Some(defined.identity.clone()),
                 })
         }
         .ok_or(ComponentParseError::TypeIdxNotFound(idx))?;
@@ -458,6 +500,7 @@ fn parse_core_subtype_body(
             )));
         }
         supertype = Some(func);
+        supertype_identity = info.identity;
     }
     let leading = reader.read_exact_one()?;
     let (_, func) = parse_core_comptype(reader, leading)?;
@@ -470,7 +513,16 @@ fn parse_core_subtype_body(
             ));
         }
     }
-    defined.push(DefinedCoreSubtype { func, is_final });
+    let identity = Rc::new(CoreFuncIdentity {
+        signature: func.clone(),
+        is_final,
+        supertype: supertype_identity,
+    });
+    defined.push(DefinedCoreSubtype {
+        func,
+        is_final,
+        identity,
+    });
     Ok((reader.read_count() - start, ()))
 }
 
@@ -494,9 +546,11 @@ fn parse_core_subtype(
         0x5e..=0x60 => {
             // A bare comptype is a final subtype with no supertypes.
             let (_, func) = parse_core_comptype(reader, leading)?;
+            let identity = CoreFuncIdentity::bare(func.clone());
             defined.push(DefinedCoreSubtype {
                 func,
                 is_final: true,
+                identity,
             });
         }
         x => {
@@ -542,13 +596,16 @@ fn parse_core_rectype(
 /// with its finality, which callers record in the core type store so
 /// that later definitions can validate supertype references against
 /// it (a bare comptype and a module type are final; a type defined by
-/// a non-final `sub` is not).
+/// a non-final `sub` is not), and, for a func type, with its
+/// canonical identity, which callers record alongside so that
+/// aliases and module-type declarators resolving the type keep its
+/// declared supertype ancestry.
 pub fn parse_core_type(
     ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<Vec<(CoreType, bool)>> {
+) -> SizedResult<Vec<(CoreType, bool, Option<Rc<CoreFuncIdentity>>)>> {
     let start = ctx.reader.read_count();
     let types = match ctx.reader.read_exact_one()? {
-        0x50 => vec![(CoreType::Module(parse_core_module_type(ctx)?.1), true)],
+        0x50 => vec![(CoreType::Module(parse_core_module_type(ctx)?.1), true, None)],
         0x00 => {
             // `core:deftype` shares the 0x50 opcode between
             // `core:moduletype` and a non-final `core:subtype`. The
@@ -582,10 +639,20 @@ pub fn parse_core_type(
                                 .core_types
                                 .finality(LocalIdx::new(idx))
                                 .unwrap_or(true),
+                            // Likewise, a store entry without an
+                            // identity record resolves to the bare
+                            // identity of its signature.
+                            identity: Some(
+                                scope
+                                    .core_types
+                                    .identity(LocalIdx::new(idx))
+                                    .unwrap_or_else(|| CoreFuncIdentity::bare(func.clone())),
+                            ),
                         },
                         CoreType::Module(_) => SuperTypeInfo {
                             func: None,
                             is_final: true,
+                            identity: None,
                         },
                     })
             };
@@ -599,7 +666,13 @@ pub fn parse_core_type(
             )?;
             defined
                 .into_iter()
-                .map(|defined| (CoreType::Func(defined.func), defined.is_final))
+                .map(|defined| {
+                    (
+                        CoreType::Func(defined.func),
+                        defined.is_final,
+                        Some(defined.identity),
+                    )
+                })
                 .collect()
         }
         leading => {
@@ -626,10 +699,20 @@ pub fn parse_core_type(
                                 .core_types
                                 .finality(LocalIdx::new(idx))
                                 .unwrap_or(true),
+                            // Likewise, a store entry without an
+                            // identity record resolves to the bare
+                            // identity of its signature.
+                            identity: Some(
+                                scope
+                                    .core_types
+                                    .identity(LocalIdx::new(idx))
+                                    .unwrap_or_else(|| CoreFuncIdentity::bare(func.clone())),
+                            ),
                         },
                         CoreType::Module(_) => SuperTypeInfo {
                             func: None,
                             is_final: true,
+                            identity: None,
                         },
                     })
             };
@@ -641,7 +724,13 @@ pub fn parse_core_type(
             )?;
             defined
                 .into_iter()
-                .map(|defined| (CoreType::Func(defined.func), defined.is_final))
+                .map(|defined| {
+                    (
+                        CoreType::Func(defined.func),
+                        defined.is_final,
+                        Some(defined.identity),
+                    )
+                })
                 .collect()
         }
     };

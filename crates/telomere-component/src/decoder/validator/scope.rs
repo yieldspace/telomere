@@ -1,7 +1,7 @@
 use crate::decoder::ParseResult;
 use crate::ir::types::{
-    ComponentImportType, CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType,
-    CoreModuleType, CoreTableType, CoreType, GenericsReplaceDSL, Type, ValType,
+    ComponentImportType, CoreFuncIdentity, CoreFuncType, CoreGlobalType, CoreInstanceType,
+    CoreMemoryType, CoreModuleType, CoreTableType, CoreType, GenericsReplaceDSL, Type, ValType,
 };
 use crate::ir::{
     Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, ExportName,
@@ -9,6 +9,7 @@ use crate::ir::{
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 pub struct TypeStore<T> {
     types: Vec<TypeId>,
@@ -32,6 +33,16 @@ pub struct CoreTypeStore<R, T> {
     /// supertype by a later `sub` definition, and `CoreType` itself
     /// does not carry that bit. Other stores leave every entry `None`.
     finalities: Vec<Option<bool>>,
+    /// Per-entry canonical func-type identities, parallel to
+    /// `types`. Only the core type store records these (via
+    /// `add_with_records`): the identity a func type was declared
+    /// with, which later definitions and module-type declarators
+    /// resolving the type through an alias need in order to keep
+    /// its declared supertype ancestry (see `CoreFuncIdentity`).
+    /// Other stores leave every entry `None`; a core type without
+    /// a record did not come from a `sub` definition and resolves
+    /// to the bare identity of its signature.
+    identities: Vec<Option<Rc<CoreFuncIdentity>>>,
     _phantom: PhantomData<R>,
 }
 
@@ -49,6 +60,7 @@ impl<R, T: Clone> Clone for CoreTypeStore<R, T> {
         Self {
             types: self.types.clone(),
             finalities: self.finalities.clone(),
+            identities: self.identities.clone(),
             _phantom: PhantomData,
         }
     }
@@ -59,6 +71,7 @@ impl<R, T> Default for CoreTypeStore<R, T> {
         Self {
             types: Vec::new(),
             finalities: Vec::new(),
+            identities: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -66,18 +79,28 @@ impl<R, T> Default for CoreTypeStore<R, T> {
 
 impl<R, T> CoreTypeStore<R, T> {
     pub fn add(&mut self, ty: T) -> LocalIdx<R> {
-        let idx = self.types.len() as u32;
-        self.types.push(ty);
-        self.finalities.push(None);
-        LocalIdx::new(idx)
+        self.add_with_records(ty, None, None)
     }
 
     /// Adds a type together with its finality record (`None` leaves
     /// the finality unrecorded, exactly like `add`).
     pub fn add_with_finality(&mut self, ty: T, is_final: Option<bool>) -> LocalIdx<R> {
+        self.add_with_records(ty, is_final, None)
+    }
+
+    /// Adds a type together with its finality record and, for a
+    /// core func type, the canonical identity it was declared with
+    /// (`None` leaves a record unrecorded, exactly like `add`).
+    pub fn add_with_records(
+        &mut self,
+        ty: T,
+        is_final: Option<bool>,
+        identity: Option<Rc<CoreFuncIdentity>>,
+    ) -> LocalIdx<R> {
         let idx = self.types.len() as u32;
         self.types.push(ty);
         self.finalities.push(is_final);
+        self.identities.push(identity);
         LocalIdx::new(idx)
     }
 
@@ -85,6 +108,12 @@ impl<R, T> CoreTypeStore<R, T> {
     /// that introduced it recorded one.
     pub fn finality(&self, idx: LocalIdx<R>) -> Option<bool> {
         self.finalities.get(idx.get() as usize).copied().flatten()
+    }
+
+    /// The recorded canonical identity of the core func type at
+    /// `idx`, when the definition that introduced it recorded one.
+    pub fn identity(&self, idx: LocalIdx<R>) -> Option<Rc<CoreFuncIdentity>> {
+        self.identities.get(idx.get() as usize).cloned().flatten()
     }
 
     pub fn get(&self, idx: LocalIdx<R>) -> ParseResult<&T> {

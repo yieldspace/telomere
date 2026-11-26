@@ -100,18 +100,19 @@ pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
                     ctx.validator.scope_mut().instance_indexes.add(type_id);
                 }
                 SortType::Core(CoreSortType::Type) => {
-                    let (ty, is_final) = {
+                    let (ty, is_final, identity) = {
                         let scope = ctx.validator.outer_scope(count)?;
                         let local_idx = LocalIdx::new(index);
                         (
                             scope.core_types.get(local_idx)?.clone(),
                             scope.core_types.finality(local_idx),
+                            scope.core_types.identity(local_idx),
                         )
                     };
                     ctx.validator
                         .scope_mut()
                         .core_types
-                        .add_with_finality(ty, is_final);
+                        .add_with_records(ty, is_final, identity);
                 }
                 SortType::Core(CoreSortType::Module) => {
                     let ty = {

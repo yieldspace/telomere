@@ -157,7 +157,14 @@ fn parse_core_export(
                 .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_funcs.register(gidx);
             if let CoreModuleExportType::Func(ty) = target_export_type {
-                ctx.validator.scope_mut().core_funcs.add(ty);
+                // The core func index space records signatures
+                // only, so the func's canonical identity does not
+                // survive this alias: a core instance assembled
+                // from this func through inline exports presents
+                // the bare type. (The instance's own export
+                // descriptors, which instantiation matching usually
+                // consumes, do keep the identity.)
+                ctx.validator.scope_mut().core_funcs.add(ty.signature);
             } else {
                 return Err(ComponentParseError::InvalidSortType(
                     SortType::Core(CoreSortType::Func),
@@ -217,12 +224,13 @@ fn parse_core_export(
                 .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_types.register(gidx);
             if let CoreModuleExportType::Type(ty) = target_export_type {
-                // No finality is recorded for an exported core type:
-                // the export type model carries only the `CoreType`,
-                // and a core module's exported types are plain
-                // functypes, so the entry resolves as final when a
-                // later `sub` names it (see `SuperTypeInfo` in
-                // decoder/core/types.rs).
+                // Neither finality nor canonical identity is
+                // recorded for an exported core type: the export
+                // type model carries only the `CoreType`, and a
+                // core module's exported types are plain functypes,
+                // so the entry resolves as final — the bare type of
+                // its signature — when a later `sub` names it (see
+                // `SuperTypeInfo` in decoder/core/types.rs).
                 ctx.validator.scope_mut().core_types.add(ty);
             } else {
                 return Err(ComponentParseError::InvalidSortType(
@@ -310,18 +318,19 @@ fn parse_outer_export(
                 .core_types
                 .get(LocalIdx::new(idx))?;
             ctx.state.scope_mut().core_types.register(gidx);
-            let (ty, is_final) = {
+            let (ty, is_final, identity) = {
                 let scope = ctx.validator.outer_scope(ct)?;
                 let local_idx = LocalIdx::new(idx);
                 (
                     scope.core_types.get(local_idx)?.clone(),
                     scope.core_types.finality(local_idx),
+                    scope.core_types.identity(local_idx),
                 )
             };
             ctx.validator
                 .scope_mut()
                 .core_types
-                .add_with_finality(ty, is_final);
+                .add_with_records(ty, is_final, identity);
         }
         SortType::Component => {
             let gidx = ctx
