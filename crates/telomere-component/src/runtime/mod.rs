@@ -1,4 +1,6 @@
-use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
+use crate::ir::types::{
+    Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType, VariantForm, VariantType,
+};
 use crate::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreGlobal,
     CoreInstance, CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, DefinedInstance,

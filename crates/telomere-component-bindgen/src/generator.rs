@@ -1169,6 +1169,16 @@ impl Generator {
                                     "typed component binding expects variant".to_owned(),
                                 ));
                             };
+                            // The declared constructor must match: a type declared with
+                            // a different variant-family constructor is the same component
+                            // type, but its values lift with that constructor's
+                            // representation, so accepting it here would produce a binding
+                            // that only fails when invoked.
+                            if cases.form != #bindgen::VariantForm::Variant {
+                                return Err(#runtime::ComponentError::Link(
+                                    "typed component binding expects variant".to_owned(),
+                                ));
+                            }
                             if cases.len() != #case_len {
                                 return Err(#runtime::ComponentError::Link(
                                     "typed component binding expects variant".to_owned(),
@@ -1273,6 +1283,16 @@ impl Generator {
                                     "typed component binding expects enum".to_owned(),
                                 ));
                             };
+                            // The declared constructor must match: a type declared with
+                            // a different variant-family constructor is the same component
+                            // type, but its values lift with that constructor's
+                            // representation, so accepting it here would produce a binding
+                            // that only fails when invoked.
+                            if cases.form != #bindgen::VariantForm::Enum {
+                                return Err(#runtime::ComponentError::Link(
+                                    "typed component binding expects enum".to_owned(),
+                                ));
+                            }
                             if cases.len() != #case_len {
                                 return Err(#runtime::ComponentError::Link(
                                     "typed component binding expects enum".to_owned(),
