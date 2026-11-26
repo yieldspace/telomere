@@ -1,7 +1,7 @@
 use crate::{
     common::{
-        decode_local_binop64_kind, decode_local_cmp32_kind, BlockReturn, Instr, LocalFastRhsShape,
-        LoopParam, MemArg, Op, VMResult,
+        decode_local_binop64_kind, decode_local_cmp32_kind, AtomicRmwOp, BlockReturn, Instr,
+        LocalFastRhsShape, LoopParam, MemArg, Op, VMResult,
     },
     runtime::vm::{
         op_br, op_br_if, op_br_table, op_call, op_call_i32_crc16_update16,
@@ -142,7 +142,26 @@ use crate::runtime::vm::simd::{
 };
 #[cfg(feature = "threads")]
 use crate::runtime::vm::{
-    op_atomic_fence, op_atomic_fence_shared, op_memory_atomic_notify,
+    op_atomic_fence, op_atomic_fence_shared, op_i32_atomic_load, op_i32_atomic_load16_u,
+    op_i32_atomic_load8_u, op_i32_atomic_rmw16_add_u, op_i32_atomic_rmw16_and_u,
+    op_i32_atomic_rmw16_cmpxchg_u, op_i32_atomic_rmw16_or_u, op_i32_atomic_rmw16_sub_u,
+    op_i32_atomic_rmw16_xchg_u, op_i32_atomic_rmw16_xor_u, op_i32_atomic_rmw8_add_u,
+    op_i32_atomic_rmw8_and_u, op_i32_atomic_rmw8_cmpxchg_u, op_i32_atomic_rmw8_or_u,
+    op_i32_atomic_rmw8_sub_u, op_i32_atomic_rmw8_xchg_u, op_i32_atomic_rmw8_xor_u,
+    op_i32_atomic_rmw_add, op_i32_atomic_rmw_and, op_i32_atomic_rmw_cmpxchg, op_i32_atomic_rmw_or,
+    op_i32_atomic_rmw_sub, op_i32_atomic_rmw_xchg, op_i32_atomic_rmw_xor, op_i32_atomic_store,
+    op_i32_atomic_store16, op_i32_atomic_store8, op_i64_atomic_load, op_i64_atomic_load16_u,
+    op_i64_atomic_load32_u, op_i64_atomic_load8_u, op_i64_atomic_rmw16_add_u,
+    op_i64_atomic_rmw16_and_u, op_i64_atomic_rmw16_cmpxchg_u, op_i64_atomic_rmw16_or_u,
+    op_i64_atomic_rmw16_sub_u, op_i64_atomic_rmw16_xchg_u, op_i64_atomic_rmw16_xor_u,
+    op_i64_atomic_rmw32_add_u, op_i64_atomic_rmw32_and_u, op_i64_atomic_rmw32_cmpxchg_u,
+    op_i64_atomic_rmw32_or_u, op_i64_atomic_rmw32_sub_u, op_i64_atomic_rmw32_xchg_u,
+    op_i64_atomic_rmw32_xor_u, op_i64_atomic_rmw8_add_u, op_i64_atomic_rmw8_and_u,
+    op_i64_atomic_rmw8_cmpxchg_u, op_i64_atomic_rmw8_or_u, op_i64_atomic_rmw8_sub_u,
+    op_i64_atomic_rmw8_xchg_u, op_i64_atomic_rmw8_xor_u, op_i64_atomic_rmw_add,
+    op_i64_atomic_rmw_and, op_i64_atomic_rmw_cmpxchg, op_i64_atomic_rmw_or, op_i64_atomic_rmw_sub,
+    op_i64_atomic_rmw_xchg, op_i64_atomic_rmw_xor, op_i64_atomic_store, op_i64_atomic_store16,
+    op_i64_atomic_store32, op_i64_atomic_store8, op_memory_atomic_notify,
     op_memory_atomic_notify_indexed_shared, op_memory_atomic_notify_indexed_unshared,
     op_memory_atomic_notify_shared, op_memory_atomic_notify_unshared, op_memory_atomic_wait32,
     op_memory_atomic_wait32_indexed_shared, op_memory_atomic_wait32_indexed_unshared,
@@ -736,6 +755,46 @@ pub(super) enum BaselineOp {
         width: u32,
     },
     I64Store {
+        memarg: MemArg,
+        width: u32,
+    },
+    // #194: native lowerings for the default memory's local atomic
+    // load/store/RMW/cmpxchg handlers, which previously all took the
+    // current-op continuation bridge. The shared and indexed variants
+    // keep bridging: the JIT has no shared-memory pointer/length
+    // resolution (the context snapshots only the local default memory)
+    // and no memidx resolution path.
+    I32AtomicLoad {
+        memarg: MemArg,
+        width: u32,
+    },
+    I64AtomicLoad {
+        memarg: MemArg,
+        width: u32,
+    },
+    I32AtomicStore {
+        memarg: MemArg,
+        width: u32,
+    },
+    I64AtomicStore {
+        memarg: MemArg,
+        width: u32,
+    },
+    I32AtomicRmw {
+        memarg: MemArg,
+        width: u32,
+        op: AtomicRmwOp,
+    },
+    I64AtomicRmw {
+        memarg: MemArg,
+        width: u32,
+        op: AtomicRmwOp,
+    },
+    I32AtomicCmpxchg {
+        memarg: MemArg,
+        width: u32,
+    },
+    I64AtomicCmpxchg {
         memarg: MemArg,
         width: u32,
     },
@@ -2967,6 +3026,321 @@ const OP_SPECS: &[OpSpec] = &[
         op: op_atomic_fence_shared as Op,
         decode: decode_atomic_fence_shared,
     },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_load as Op,
+        decode: |code, cursor| decode_i32_atomic_load_width(code, cursor, 4),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_load8_u as Op,
+        decode: |code, cursor| decode_i32_atomic_load_width(code, cursor, 1),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_load16_u as Op,
+        decode: |code, cursor| decode_i32_atomic_load_width(code, cursor, 2),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_load as Op,
+        decode: |code, cursor| decode_i64_atomic_load_width(code, cursor, 8),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_load8_u as Op,
+        decode: |code, cursor| decode_i64_atomic_load_width(code, cursor, 1),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_load16_u as Op,
+        decode: |code, cursor| decode_i64_atomic_load_width(code, cursor, 2),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_load32_u as Op,
+        decode: |code, cursor| decode_i64_atomic_load_width(code, cursor, 4),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_store as Op,
+        decode: |code, cursor| decode_i32_atomic_store_width(code, cursor, 4),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_store8 as Op,
+        decode: |code, cursor| decode_i32_atomic_store_width(code, cursor, 1),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_store16 as Op,
+        decode: |code, cursor| decode_i32_atomic_store_width(code, cursor, 2),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_store as Op,
+        decode: |code, cursor| decode_i64_atomic_store_width(code, cursor, 8),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_store8 as Op,
+        decode: |code, cursor| decode_i64_atomic_store_width(code, cursor, 1),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_store16 as Op,
+        decode: |code, cursor| decode_i64_atomic_store_width(code, cursor, 2),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_store32 as Op,
+        decode: |code, cursor| decode_i64_atomic_store_width(code, cursor, 4),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw_add as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 4, AtomicRmwOp::Add),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw8_add_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 1, AtomicRmwOp::Add),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw16_add_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 2, AtomicRmwOp::Add),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw_sub as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 4, AtomicRmwOp::Sub),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw8_sub_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 1, AtomicRmwOp::Sub),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw16_sub_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 2, AtomicRmwOp::Sub),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw_and as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 4, AtomicRmwOp::And),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw8_and_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 1, AtomicRmwOp::And),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw16_and_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 2, AtomicRmwOp::And),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw_or as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 4, AtomicRmwOp::Or),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw8_or_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 1, AtomicRmwOp::Or),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw16_or_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 2, AtomicRmwOp::Or),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw_xor as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 4, AtomicRmwOp::Xor),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw8_xor_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 1, AtomicRmwOp::Xor),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw16_xor_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 2, AtomicRmwOp::Xor),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw_xchg as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 4, AtomicRmwOp::Xchg),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw8_xchg_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 1, AtomicRmwOp::Xchg),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw16_xchg_u as Op,
+        decode: |code, cursor| decode_i32_atomic_rmw(code, cursor, 2, AtomicRmwOp::Xchg),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw_add as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 8, AtomicRmwOp::Add),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw8_add_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 1, AtomicRmwOp::Add),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw16_add_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 2, AtomicRmwOp::Add),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw32_add_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 4, AtomicRmwOp::Add),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw_sub as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 8, AtomicRmwOp::Sub),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw8_sub_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 1, AtomicRmwOp::Sub),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw16_sub_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 2, AtomicRmwOp::Sub),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw32_sub_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 4, AtomicRmwOp::Sub),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw_and as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 8, AtomicRmwOp::And),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw8_and_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 1, AtomicRmwOp::And),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw16_and_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 2, AtomicRmwOp::And),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw32_and_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 4, AtomicRmwOp::And),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw_or as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 8, AtomicRmwOp::Or),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw8_or_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 1, AtomicRmwOp::Or),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw16_or_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 2, AtomicRmwOp::Or),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw32_or_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 4, AtomicRmwOp::Or),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw_xor as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 8, AtomicRmwOp::Xor),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw8_xor_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 1, AtomicRmwOp::Xor),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw16_xor_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 2, AtomicRmwOp::Xor),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw32_xor_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 4, AtomicRmwOp::Xor),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw_xchg as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 8, AtomicRmwOp::Xchg),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw8_xchg_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 1, AtomicRmwOp::Xchg),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw16_xchg_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 2, AtomicRmwOp::Xchg),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw32_xchg_u as Op,
+        decode: |code, cursor| decode_i64_atomic_rmw(code, cursor, 4, AtomicRmwOp::Xchg),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw_cmpxchg as Op,
+        decode: |code, cursor| decode_i32_atomic_cmpxchg_width(code, cursor, 4),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw8_cmpxchg_u as Op,
+        decode: |code, cursor| decode_i32_atomic_cmpxchg_width(code, cursor, 1),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i32_atomic_rmw16_cmpxchg_u as Op,
+        decode: |code, cursor| decode_i32_atomic_cmpxchg_width(code, cursor, 2),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw_cmpxchg as Op,
+        decode: |code, cursor| decode_i64_atomic_cmpxchg_width(code, cursor, 8),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw8_cmpxchg_u as Op,
+        decode: |code, cursor| decode_i64_atomic_cmpxchg_width(code, cursor, 1),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw16_cmpxchg_u as Op,
+        decode: |code, cursor| decode_i64_atomic_cmpxchg_width(code, cursor, 2),
+    },
+    #[cfg(feature = "threads")]
+    OpSpec {
+        op: op_i64_atomic_rmw32_cmpxchg_u as Op,
+        decode: |code, cursor| decode_i64_atomic_cmpxchg_width(code, cursor, 4),
+    },
     OpSpec {
         op: op_call_cached_u16_low7_guard as Op,
         decode: decode_call_cached_u16_low7_guard,
@@ -4007,6 +4381,109 @@ fn decode_atomic_fence(_code: &[Instr], _cursor: usize) -> Result<BaselineOp, ()
 
 fn decode_atomic_fence_shared(_code: &[Instr], _cursor: usize) -> Result<BaselineOp, ()> {
     Ok(BaselineOp::AtomicFence { shared: true })
+}
+
+// #194: decoders for the native atomic BaselineOps. The handler stream
+// layout matches the plain loads/stores: the memarg operand sits at
+// `cursor + 1`.
+#[cfg(feature = "threads")]
+fn decode_i32_atomic_load_width(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I32AtomicLoad {
+        memarg: operand_memarg(code, cursor, 1)?,
+        width,
+    })
+}
+
+#[cfg(feature = "threads")]
+fn decode_i64_atomic_load_width(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I64AtomicLoad {
+        memarg: operand_memarg(code, cursor, 1)?,
+        width,
+    })
+}
+
+#[cfg(feature = "threads")]
+fn decode_i32_atomic_store_width(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I32AtomicStore {
+        memarg: operand_memarg(code, cursor, 1)?,
+        width,
+    })
+}
+
+#[cfg(feature = "threads")]
+fn decode_i64_atomic_store_width(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I64AtomicStore {
+        memarg: operand_memarg(code, cursor, 1)?,
+        width,
+    })
+}
+
+#[cfg(feature = "threads")]
+fn decode_i32_atomic_rmw(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+    op: AtomicRmwOp,
+) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I32AtomicRmw {
+        memarg: operand_memarg(code, cursor, 1)?,
+        width,
+        op,
+    })
+}
+
+#[cfg(feature = "threads")]
+fn decode_i64_atomic_rmw(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+    op: AtomicRmwOp,
+) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I64AtomicRmw {
+        memarg: operand_memarg(code, cursor, 1)?,
+        width,
+        op,
+    })
+}
+
+#[cfg(feature = "threads")]
+fn decode_i32_atomic_cmpxchg_width(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I32AtomicCmpxchg {
+        memarg: operand_memarg(code, cursor, 1)?,
+        width,
+    })
+}
+
+#[cfg(feature = "threads")]
+fn decode_i64_atomic_cmpxchg_width(
+    code: &[Instr],
+    cursor: usize,
+    width: u32,
+) -> Result<BaselineOp, ()> {
+    Ok(BaselineOp::I64AtomicCmpxchg {
+        memarg: operand_memarg(code, cursor, 1)?,
+        width,
+    })
 }
 
 fn decode_ref_null(_code: &[Instr], _cursor: usize) -> Result<BaselineOp, ()> {

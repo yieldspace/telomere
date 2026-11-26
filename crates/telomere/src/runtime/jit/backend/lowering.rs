@@ -16,9 +16,9 @@ use super::EmittedFunction;
 use crate::common::{
     decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
     decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind,
-    memory::MemoryJitLayout, store::GlobalValueJitLayout, ExecuteContext, Instr, LocalBinop32Op,
-    LocalBinop64Op, LocalCmp32Op, LocalCmp64Op, LocalFastRhsShape, LocalReference, LocalUnary32Op,
-    LocalUnary64Op, MemArg, ObjectRef, VMResult, PAGE_SIZE,
+    memory::MemoryJitLayout, store::GlobalValueJitLayout, AtomicRmwOp, ExecuteContext, Instr,
+    LocalBinop32Op, LocalBinop64Op, LocalCmp32Op, LocalCmp64Op, LocalFastRhsShape, LocalReference,
+    LocalUnary32Op, LocalUnary64Op, MemArg, ObjectRef, VMResult, PAGE_SIZE,
 };
 use crate::runtime::jit::abi::{pack_trap_value, vm_result_code, JitNativeExit};
 use crate::runtime::jit::emit_env::{Emission, EmitEnv, FastCallee, Reloc, RelocKind};
@@ -1744,6 +1744,66 @@ impl<E: EmitEnv, M: TargetHooks> BaselineOpEmitter<'_, '_, E, M> {
                     self.inline_i32_store(addr, memarg.offset, width, low)?;
                 }
             }
+            BaselineOp::I32AtomicLoad { memarg, width } => {
+                self.ensure_stack_slots(1)?;
+                let addr = self.peek_reg()?;
+                self.inline_atomic_load32(addr, memarg.offset, width)?;
+            }
+            BaselineOp::I64AtomicLoad { memarg, width } => {
+                self.ensure_stack_slots(1)?;
+                let addr = self.pop_reg()?;
+                self.push_atomic_load64_from_addr(addr, memarg.offset, width)?;
+            }
+            BaselineOp::I32AtomicStore { memarg, width } => {
+                self.ensure_stack_slots(2)?;
+                let value = self.pop_reg()?;
+                let addr = self.pop_reg()?;
+                self.inline_atomic_store32(addr, memarg.offset, width, value)?;
+            }
+            BaselineOp::I64AtomicStore { memarg, width } => {
+                self.ensure_stack_slots(3)?;
+                let high = self.pop_reg()?;
+                let low = self.pop_reg()?;
+                let addr = self.pop_reg()?;
+                self.inline_atomic_store64(addr, memarg.offset, width, low, high)?;
+            }
+            BaselineOp::I32AtomicRmw { memarg, width, op } => {
+                self.ensure_stack_slots(2)?;
+                let value = self.pop_reg()?;
+                let addr = self.peek_reg()?;
+                self.inline_atomic_rmw32(addr, memarg.offset, width, op, value)?;
+            }
+            BaselineOp::I64AtomicRmw { memarg, width, op } => {
+                self.ensure_stack_slots(3)?;
+                let high = self.pop_reg()?;
+                let low = self.pop_reg()?;
+                let addr = self.peek_reg()?;
+                self.inline_atomic_rmw64(addr, memarg.offset, width, op, low, high)?;
+            }
+            BaselineOp::I32AtomicCmpxchg { memarg, width } => {
+                self.ensure_stack_slots(3)?;
+                let replacement = self.pop_reg()?;
+                let expected = self.pop_reg()?;
+                let addr = self.peek_reg()?;
+                self.inline_atomic_cmpxchg32(addr, memarg.offset, width, expected, replacement)?;
+            }
+            BaselineOp::I64AtomicCmpxchg { memarg, width } => {
+                self.ensure_stack_slots(5)?;
+                let rep_high = self.pop_reg()?;
+                let rep_low = self.pop_reg()?;
+                let exp_high = self.pop_reg()?;
+                let exp_low = self.pop_reg()?;
+                let addr = self.peek_reg()?;
+                self.inline_atomic_cmpxchg64(
+                    addr,
+                    memarg.offset,
+                    width,
+                    exp_low,
+                    exp_high,
+                    rep_low,
+                    rep_high,
+                )?;
+            }
             BaselineOp::I64StoreLocalBase {
                 base_local,
                 delta,
@@ -3425,6 +3485,347 @@ impl<'a, E: EmitEnv, M: TargetHooks> Emitter<'a, E, M> {
             2 => self.strh_w(value, 11),
             4 => self.str_w(value, 11),
             _ => return Err(()),
+        }
+        Ok(())
+    }
+
+    // #194: native atomic accesses on the default memory. These
+    // sequences mirror the interpreter's local atomic handlers exactly.
+    // For a local (non-shared) memory the interpreter defines RMW as
+    // load + op + store and cmpxchg as load + conditional store, and
+    // local memories execute single-flight, so a plain load/op/store
+    // sequence here is observably identical — neither side uses
+    // hardware atomic instructions for local memories. The shared and
+    // indexed variants keep using the continuation bridge: the
+    // execution context snapshots only the local default memory, so
+    // the JIT has no shared-memory or memidx resolution path.
+    //
+    // Trap order matches the interpreter's checked access path:
+    // effective-address overflow (the interpreter forms the address
+    // with a checked u32 add) -> MemoryIndexOutOfRange, then alignment
+    // -> UnalignedAtomic, then bounds -> MemoryIndexOutOfRange. All
+    // checks run before any load or store, so a trapping access never
+    // performs a partial write. On success register 9 holds the
+    // effective address; registers 10/11 are clobbered.
+    fn checked_atomic_memory_start(
+        &mut self,
+        addr_w: u8,
+        offset: u32,
+        width: u32,
+    ) -> Result<(), ()> {
+        self.mov_w(9, addr_w);
+        self.add_imm_u64(9, 9, u64::from(offset))?;
+        // With a zero memarg offset the effective address is the
+        // zero-extended 32-bit operand itself, so the checked add
+        // cannot overflow and this check is skipped.
+        if offset != 0 {
+            self.mov_imm_u64(11, 1u64 << 32);
+            self.cmp_x(9, 11);
+            let in_range = self.branch_placeholder(FixupKind::BCond(Cond::Lo));
+            self.return_trap(VMResult::<()>::MemoryIndexOutOfRange);
+            let in_range_target = self.offset();
+            patch_branch::<M>(
+                self.masm.as_mut_bytes(),
+                in_range,
+                in_range_target,
+                FixupKind::BCond(Cond::Lo),
+            )?;
+        }
+        if width > 1 {
+            self.mov_x(10, 9);
+            self.mov_imm_u64(11, u64::from(width - 1));
+            self.and_x(10, 10, 11);
+            self.cmp_w_imm(10, 0)?;
+            let aligned = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
+            self.return_trap(VMResult::<()>::UnalignedAtomic);
+            let aligned_target = self.offset();
+            patch_branch::<M>(
+                self.masm.as_mut_bytes(),
+                aligned,
+                aligned_target,
+                FixupKind::BCond(Cond::Eq),
+            )?;
+        }
+        self.mov_x(10, 9);
+        self.add_imm_u64(10, 10, u64::from(width))?;
+        self.load_default_memory_data_size(11)?;
+        self.cmp_x(10, 11);
+        let ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ls));
+        self.return_trap(VMResult::<()>::MemoryIndexOutOfRange);
+        let target = self.offset();
+        patch_branch::<M>(
+            self.masm.as_mut_bytes(),
+            ok_branch,
+            target,
+            FixupKind::BCond(Cond::Ls),
+        )?;
+        Ok(())
+    }
+
+    /// Leaves the raw pointer for the access in register 11. Call only
+    /// immediately after `checked_atomic_memory_start`, which left the
+    /// effective address in register 9.
+    fn atomic_memory_ptr(&mut self) -> Result<(), ()> {
+        self.load_default_memory_data_ptr(11)?;
+        self.add_x(11, 11, 9);
+        Ok(())
+    }
+
+    fn atomic_load_w(&mut self, dest: u8, ptr: u8, width: u32) -> Result<(), ()> {
+        match width {
+            1 => self.ldrb_w(dest, ptr),
+            2 => self.ldrh_w(dest, ptr),
+            4 => self.ldr_w(dest, ptr),
+            _ => return Err(()),
+        }
+        Ok(())
+    }
+
+    fn atomic_store_w(&mut self, value: u8, ptr: u8, width: u32) {
+        match width {
+            1 => self.strb_w(value, ptr),
+            2 => self.strh_w(value, ptr),
+            _ => self.str_w(value, ptr),
+        }
+    }
+
+    fn inline_atomic_load32(&mut self, addr: u8, offset: u32, width: u32) -> Result<(), ()> {
+        self.checked_atomic_memory_start(addr, offset, width)?;
+        self.atomic_memory_ptr()?;
+        self.atomic_load_w(addr, 11, width)
+    }
+
+    fn inline_atomic_store32(
+        &mut self,
+        addr: u8,
+        offset: u32,
+        width: u32,
+        value: u8,
+    ) -> Result<(), ()> {
+        self.checked_atomic_memory_start(addr, offset, width)?;
+        self.atomic_memory_ptr()?;
+        self.atomic_store_w(value, 11, width);
+        Ok(())
+    }
+
+    fn inline_atomic_rmw32(
+        &mut self,
+        addr: u8,
+        offset: u32,
+        width: u32,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> Result<(), ()> {
+        self.checked_atomic_memory_start(addr, offset, width)?;
+        self.atomic_memory_ptr()?;
+        // The old value (zero-extended from the access width) replaces
+        // the address slot; the stored low `width` bytes of the result
+        // depend only on the low bytes of both inputs, exactly like the
+        // interpreter's width-truncated wrapping operation.
+        self.atomic_load_w(addr, 11, width)?;
+        match op {
+            AtomicRmwOp::Add => self.add_w(17, addr, value),
+            AtomicRmwOp::Sub => self.sub_w(17, addr, value),
+            AtomicRmwOp::And => self.and_w(17, addr, value),
+            AtomicRmwOp::Or => self.orr_w(17, addr, value),
+            AtomicRmwOp::Xor => self.eor_w(17, addr, value),
+            AtomicRmwOp::Xchg => self.mov_w(17, value),
+        }
+        self.atomic_store_w(17, 11, width);
+        Ok(())
+    }
+
+    fn inline_atomic_cmpxchg32(
+        &mut self,
+        addr: u8,
+        offset: u32,
+        width: u32,
+        expected: u8,
+        replacement: u8,
+    ) -> Result<(), ()> {
+        self.checked_atomic_memory_start(addr, offset, width)?;
+        self.atomic_memory_ptr()?;
+        self.atomic_load_w(addr, 11, width)?;
+        // The interpreter compares the width-truncated expected value
+        // against the loaded one; on a mismatch it stores the loaded
+        // value back, which the select below reproduces byte-exactly.
+        if width < 4 {
+            self.mov_imm_u32(17, (1u32 << (width * 8)) - 1);
+            self.and_w(expected, expected, 17);
+        }
+        self.cmp_w(addr, expected);
+        self.csel_w(17, replacement, addr, Cond::Eq);
+        self.atomic_store_w(17, 11, width);
+        Ok(())
+    }
+
+    fn push_atomic_load64_from_addr(
+        &mut self,
+        addr: u8,
+        offset: u32,
+        width: u32,
+    ) -> Result<(), ()> {
+        // One full-width check up front; the halves are then loaded
+        // unchecked from the address copy in register 16, which
+        // survives the stack flushes `push_reg` may trigger (the same
+        // shape as `push_i64_load_from_addr`).
+        self.mov_w(16, addr);
+        self.checked_atomic_memory_start(16, offset, width)?;
+        let low = self.push_reg()?;
+        self.atomic_load64_half(low, 16, offset, 0, width.min(4))?;
+        let high = self.push_reg()?;
+        if width == 8 {
+            self.atomic_load64_half(high, 16, offset, 4, 4)?;
+        } else {
+            self.mov_imm_u32(high, 0);
+        }
+        Ok(())
+    }
+
+    fn atomic_load64_half(
+        &mut self,
+        dest: u8,
+        addr: u8,
+        offset: u32,
+        delta: u32,
+        width: u32,
+    ) -> Result<(), ()> {
+        self.mov_w(9, addr);
+        self.add_imm_u64(9, 9, u64::from(offset + delta))?;
+        self.atomic_memory_ptr()?;
+        self.atomic_load_w(dest, 11, width)
+    }
+
+    fn inline_atomic_store64(
+        &mut self,
+        addr: u8,
+        offset: u32,
+        width: u32,
+        low: u8,
+        high: u8,
+    ) -> Result<(), ()> {
+        self.checked_atomic_memory_start(addr, offset, width)?;
+        self.atomic_memory_ptr()?;
+        if width == 8 {
+            self.str_w(low, 11);
+            self.mov_x(12, 11);
+            self.add_imm_u64(12, 12, 4)?;
+            self.str_w(high, 12);
+        } else {
+            self.atomic_store_w(low, 11, width);
+        }
+        Ok(())
+    }
+
+    fn inline_atomic_rmw64(
+        &mut self,
+        addr: u8,
+        offset: u32,
+        width: u32,
+        op: AtomicRmwOp,
+        low: u8,
+        high: u8,
+    ) -> Result<(), ()> {
+        self.checked_atomic_memory_start(addr, offset, width)?;
+        self.atomic_memory_ptr()?;
+        if width == 8 {
+            self.ldr_w(addr, 11);
+            self.mov_x(12, 11);
+            self.add_imm_u64(12, 12, 4)?;
+            // The old value's high half rides in 15 (flush-safe) until
+            // the result push below; 13/14 hold the combined old and
+            // operand values.
+            self.ldr_w(15, 12);
+            self.mov_w(13, 15);
+            self.lsl_x_imm(13, 13, 32)?;
+            self.mov_w(14, addr);
+            self.orr_x(13, 14, 13);
+            self.mov_w(14, high);
+            self.lsl_x_imm(14, 14, 32)?;
+            self.mov_w(10, low);
+            self.orr_x(14, 10, 14);
+            match op {
+                AtomicRmwOp::Add => self.add_x(14, 13, 14),
+                AtomicRmwOp::Sub => self.sub_x(14, 13, 14),
+                AtomicRmwOp::And => self.and_x(14, 13, 14),
+                AtomicRmwOp::Or => self.orr_x(14, 13, 14),
+                AtomicRmwOp::Xor => self.eor_x(14, 13, 14),
+                AtomicRmwOp::Xchg => {}
+            }
+            self.mov_w(10, 14);
+            self.str_w(10, 11);
+            self.lsr_x_imm(14, 14, 32)?;
+            self.str_w(14, 12);
+            self.mov_w(addr, 13);
+            let high_slot = self.push_reg()?;
+            self.mov_w(high_slot, 15);
+        } else {
+            self.atomic_load_w(addr, 11, width)?;
+            match op {
+                AtomicRmwOp::Add => self.add_w(17, addr, low),
+                AtomicRmwOp::Sub => self.sub_w(17, addr, low),
+                AtomicRmwOp::And => self.and_w(17, addr, low),
+                AtomicRmwOp::Or => self.orr_w(17, addr, low),
+                AtomicRmwOp::Xor => self.eor_w(17, addr, low),
+                AtomicRmwOp::Xchg => self.mov_w(17, low),
+            }
+            self.atomic_store_w(17, 11, width);
+            let high_slot = self.push_reg()?;
+            self.mov_imm_u32(high_slot, 0);
+        }
+        Ok(())
+    }
+
+    fn inline_atomic_cmpxchg64(
+        &mut self,
+        addr: u8,
+        offset: u32,
+        width: u32,
+        exp_low: u8,
+        exp_high: u8,
+        rep_low: u8,
+        rep_high: u8,
+    ) -> Result<(), ()> {
+        self.checked_atomic_memory_start(addr, offset, width)?;
+        self.atomic_memory_ptr()?;
+        if width == 8 {
+            self.ldr_w(addr, 11);
+            self.mov_x(12, 11);
+            self.add_imm_u64(12, 12, 4)?;
+            self.ldr_w(15, 12);
+            self.mov_w(13, 15);
+            self.lsl_x_imm(13, 13, 32)?;
+            self.mov_w(14, addr);
+            self.orr_x(13, 14, 13);
+            self.mov_w(14, exp_high);
+            self.lsl_x_imm(14, 14, 32)?;
+            self.mov_w(10, exp_low);
+            self.orr_x(14, 10, 14);
+            self.cmp_x(13, 14);
+            let done = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
+            self.str_w(rep_low, 11);
+            self.str_w(rep_high, 12);
+            let done_target = self.offset();
+            patch_branch::<M>(
+                self.masm.as_mut_bytes(),
+                done,
+                done_target,
+                FixupKind::BCond(Cond::Ne),
+            )?;
+            self.mov_w(addr, 13);
+            let high_slot = self.push_reg()?;
+            self.mov_w(high_slot, 15);
+        } else {
+            self.atomic_load_w(addr, 11, width)?;
+            if width < 4 {
+                self.mov_imm_u32(17, (1u32 << (width * 8)) - 1);
+                self.and_w(exp_low, exp_low, 17);
+            }
+            self.cmp_w(addr, exp_low);
+            self.csel_w(17, rep_low, addr, Cond::Eq);
+            self.atomic_store_w(17, 11, width);
+            let high_slot = self.push_reg()?;
+            self.mov_imm_u32(high_slot, 0);
         }
         Ok(())
     }
