@@ -3776,6 +3776,7 @@ impl<'a, E: EmitEnv, M: TargetHooks> Emitter<'a, E, M> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn inline_atomic_cmpxchg64(
         &mut self,
         addr: u8,
