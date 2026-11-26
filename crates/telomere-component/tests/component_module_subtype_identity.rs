@@ -44,6 +44,23 @@
 //! stack and `CoreFuncIdentity`'s `Drop` dismantles uniquely
 //! owned descendants iteratively; the deep-group tower tests at
 //! the bottom pin both.
+//!
+//! Round 6 (a further Codex finding on the paths that still used
+//! the derived equality): core-module instantiation matching was
+//! bounded, but component-type matching still compared whole core
+//! module types with the derived `PartialEq` -- in
+//! `ComponentType::assert_subtype_of` and in the validator's
+//! surface-summary version of the same check (both for core module
+//! imports), and in the `ComponentExportType` /
+//! `InstanceExportType` core module arms (for core module
+//! exports). A component export with a component-type ascription
+//! whose core module import carries an identity tower therefore
+//! still cost exponential time (measured on the unmodified code:
+//! ~4.4 s at depth 18, growing ~2.8x per level), and the
+//! recursion-group tower still overflowed the stack on that path
+//! (depth 100,000 aborted). All four comparisons now go through
+//! the bounded (memoised, iterative) equality; the ascription
+//! tests at the bottom pin each path.
 
 use telomere_component::ComponentEngine;
 
@@ -512,4 +529,249 @@ fn deep_group_tower_with_deep_difference_is_rejected() {
         &deep_group_tower_decls(100_000, true, false),
         &deep_group_tower_decls(100_000, false, true),
     ));
+}
+
+fn expect_rejected_with(text: &str, needle: &str) {
+    let error = compile(text).expect_err("component must be rejected");
+    assert!(
+        error.contains(needle),
+        "expected an error containing `{needle}`, got `{error}`"
+    );
+}
+
+/// Exports the component `$c` under a component-type ascription
+/// `$ct`, where `$ct` imports a core module of type `$M1` and `$c`
+/// imports a core module of type `$M2`. Checking the ascription
+/// compares the two module types whole (`ComponentType::
+/// assert_subtype_of`, core module import arm).
+fn ascription_import_component(parent_decls: &str, child_decls: &str) -> String {
+    format!(
+        r#"
+(component
+  (core type $M1 (module
+    {parent_decls}
+  ))
+  (core type $M2 (module
+    {child_decls}
+  ))
+  (type $ct (component
+    (import "m" (core module (type $M1)))
+  ))
+  (component $c
+    (import "m" (core module (type $M2)))
+  )
+  (export "x" (component $c) (component (type $ct)))
+)
+"#
+    )
+}
+
+#[test]
+fn identical_identity_tower_satisfies_type_ascription() {
+    // Round 6: the ascription check compares the two module types
+    // with the bounded equality, so matching two separately
+    // decoded copies of this tower is linear in the number of
+    // distinct identity pairs. At depth 40 the derived comparison
+    // (~3^40 subgraph traversals) would never finish; this test
+    // completing at all is the assertion.
+    compile(&ascription_import_component(
+        &identity_tower_decls(40, true, false),
+        &identity_tower_decls(40, true, false),
+    ))
+    .expect("identical identity towers must satisfy the ascription");
+}
+
+#[test]
+fn identity_tower_with_deep_difference_is_rejected_through_type_ascription() {
+    // The child's tower differs only in the first (deepest)
+    // group's first member; the ascription comparison must reach
+    // the bottom of the tower and reject.
+    expect_rejected_with(
+        &ascription_import_component(
+            &identity_tower_decls(40, true, false),
+            &identity_tower_decls(40, true, true),
+        ),
+        "import kind mismatch",
+    );
+}
+
+#[test]
+fn deep_group_tower_satisfies_type_ascription() {
+    // Round 6, the round-5 shape on the ascription path: with the
+    // derived equality this aborted the process with a stack
+    // overflow (measured on the unmodified code at depth 100,000;
+    // depth 20,000 still completed). The bounded comparison --
+    // and the iterative `Drop` dismantling the towers afterwards
+    // -- completes; that is the assertion.
+    compile(&ascription_import_component(
+        &deep_group_tower_decls(100_000, true, false),
+        &deep_group_tower_decls(100_000, true, false),
+    ))
+    .expect("identical deep group towers must satisfy the ascription");
+}
+
+/// Exports the component `$c` under a component-type ascription
+/// whose export is itself a component type, so the inner component
+/// types are compared by type id through the validator's
+/// surface-summary check (`assert_component_type_ids_subtype_of`,
+/// core module import arm).
+fn nested_component_component(parent_decls: &str, inner_decls: &str) -> String {
+    format!(
+        r#"
+(component
+  (core type $M1 (module
+    {parent_decls}
+  ))
+  (type $ct1 (component
+    (import "m" (core module (type $M1)))
+  ))
+  (type $outer (component
+    (export "inner" (component (type $ct1)))
+  ))
+  (component $c
+    (core type $M2 (module
+      {inner_decls}
+    ))
+    (type $ct2 (component
+      (import "m" (core module (type $M2)))
+    ))
+    (component $inner
+      (import "m" (core module (type $M2)))
+    )
+    (export "inner" (component $inner) (component (type $ct2)))
+  )
+  (export "x" (component $c) (component (type $outer)))
+)
+"#
+    )
+}
+
+#[test]
+fn identical_identity_tower_satisfies_nested_component_type_check() {
+    // Round 6: the surface-summary comparison of the two inner
+    // component types goes through the bounded equality as well.
+    compile(&nested_component_component(
+        &identity_tower_decls(40, true, false),
+        &identity_tower_decls(40, true, false),
+    ))
+    .expect("identical identity towers must satisfy the nested component type check");
+}
+
+#[test]
+fn identity_tower_with_deep_difference_is_rejected_through_nested_component_type_check() {
+    expect_rejected_with(
+        &nested_component_component(
+            &identity_tower_decls(40, true, false),
+            &identity_tower_decls(40, true, true),
+        ),
+        "import kind mismatch",
+    );
+}
+
+/// Exports the component `$c` under a component-type ascription
+/// `$ct` that both imports and exports a core module. Both sides
+/// import a module of the same type `$ME` (so the import check
+/// passes identically), while the export check compares the
+/// parent's export module type `$ME1` against the child's
+/// re-exported module type `$ME` (`ComponentExportType` core
+/// module arm).
+fn export_ascription_component(import_decls: &str, parent_export_decls: &str) -> String {
+    format!(
+        r#"
+(component
+  (core type $ME (module
+    {import_decls}
+  ))
+  (core type $ME1 (module
+    {parent_export_decls}
+  ))
+  (type $ct (component
+    (import "m" (core module (type $ME)))
+    (export "m" (core module (type $ME1)))
+  ))
+  (component $c
+    (import "m" (core module (type $ME)))
+    (export "m" (core module 0))
+  )
+  (export "x" (component $c) (component (type $ct)))
+)
+"#
+    )
+}
+
+#[test]
+fn identical_identity_tower_satisfies_export_ascription() {
+    // Round 6: the core module *export* comparison in component
+    // type matching goes through the bounded equality too.
+    compile(&export_ascription_component(
+        &identity_tower_decls(40, true, false),
+        &identity_tower_decls(40, true, false),
+    ))
+    .expect("identical identity towers must satisfy the export ascription");
+}
+
+#[test]
+fn identity_tower_with_deep_difference_is_rejected_through_export_ascription() {
+    // Only the parent's export module type is altered, at the
+    // deepest group member, so the rejection is decided by the
+    // export comparison alone.
+    expect_rejected_with(
+        &export_ascription_component(
+            &identity_tower_decls(40, true, false),
+            &identity_tower_decls(40, true, true),
+        ),
+        "core module export mismatch",
+    );
+}
+
+/// Exports an instance of `$c` under an instance-type ascription
+/// `$it` whose only export is a core module, comparing the two
+/// module types through the `InstanceExportType` core module arm.
+fn instance_type_export_component(parent_decls: &str, child_decls: &str) -> String {
+    format!(
+        r#"
+(component
+  (core type $M1 (module
+    {parent_decls}
+  ))
+  (core type $M2 (module
+    {child_decls}
+  ))
+  (import "p" (core module (type $M2)))
+  (type $it (instance
+    (export "m" (core module (type $M1)))
+  ))
+  (component $c
+    (import "m" (core module (type $M2)))
+    (export "m" (core module 0))
+  )
+  (instance $i (instantiate $c (with "m" (core module 0))))
+  (export "i" (instance $i) (instance (type $it)))
+)
+"#
+    )
+}
+
+#[test]
+fn identical_identity_tower_satisfies_instance_type_ascription() {
+    // Round 6: the instance-type version of the core module
+    // export comparison goes through the bounded equality too.
+    compile(&instance_type_export_component(
+        &identity_tower_decls(40, true, false),
+        &identity_tower_decls(40, true, false),
+    ))
+    .expect("identical identity towers must satisfy the instance type ascription");
+}
+
+#[test]
+fn identity_tower_with_deep_difference_is_rejected_through_instance_type_ascription() {
+    // Only the ascribed instance type's module type is altered,
+    // at the deepest group member.
+    expect_rejected_with(
+        &instance_type_export_component(
+            &identity_tower_decls(40, true, true),
+            &identity_tower_decls(40, true, false),
+        ),
+        "core module export mismatch",
+    );
 }

@@ -741,10 +741,16 @@ impl ComponentType {
                         type_id: _,
                     },
                 ) => child.bound.assert_subtype_of(&parent.bound, validator)?,
+                // Core module imports must be exactly equal. The
+                // comparison goes through the bounded (memoised,
+                // iterative) equality rather than the derived
+                // `PartialEq`, which re-traverses shared identity
+                // subgraphs exponentially and recurses one recursion
+                // group per level (PR #371 rounds 4-6).
                 (
                     ComponentImportType::CoreModule(child),
                     ComponentImportType::CoreModule(parent),
-                ) if child == parent => {}
+                ) if child.eq_memoized(parent, &mut IdentityEqCache::new()) => {}
                 (ComponentImportType::Value(child), ComponentImportType::Value(parent)) => {
                     child.assert_subtype_of(parent, validator)?
                 }
@@ -788,7 +794,10 @@ impl ComponentExportType {
         use ComponentExportType::*;
         match (self, parent) {
             (CoreModule(a), CoreModule(b)) => {
-                if a != b {
+                // Bounded equality, as in `ComponentType::assert_subtype_of`:
+                // the derived `PartialEq` is exponential over shared
+                // identity subgraphs and recurses per recursion-group level.
+                if !a.eq_memoized(b, &mut IdentityEqCache::new()) {
                     Err(ComponentParseError::TypeMismatch(
                         "core module export mismatch".to_owned(),
                     ))?
@@ -854,7 +863,10 @@ impl InstanceExportType {
         use InstanceExportType::*;
         match (self, parent) {
             (CoreModule(a), CoreModule(b)) => {
-                if a != b {
+                // Bounded equality, as in `ComponentType::assert_subtype_of`:
+                // the derived `PartialEq` is exponential over shared
+                // identity subgraphs and recurses per recursion-group level.
+                if !a.eq_memoized(b, &mut IdentityEqCache::new()) {
                     Err(ComponentParseError::TypeMismatch(
                         "core module export mismatch".to_owned(),
                     ))?

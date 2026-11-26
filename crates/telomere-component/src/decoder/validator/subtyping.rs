@@ -1,4 +1,5 @@
 use super::*;
+use crate::ir::types::IdentityEqCache;
 
 impl<'a> Validator<'a> {
     pub fn assert_type_ids_subtype_of(&self, child: TypeId, parent: TypeId) -> ParseResult<()> {
@@ -57,10 +58,13 @@ impl<'a> Validator<'a> {
                         generic: parent, ..
                     }),
                 ) => child.bound.assert_subtype_of(&parent.bound, self)?,
+                // Bounded equality rather than the derived
+                // `PartialEq`, as in the `ComponentType` version of
+                // this check (PR #371 round 6).
                 (
                     ComponentImportKind::CoreModule(child),
                     ComponentImportKind::CoreModule(parent),
-                ) if child == parent => {}
+                ) if child.eq_memoized(parent, &mut IdentityEqCache::new()) => {}
                 _ => Err(ComponentParseError::TypeMismatch(
                     "import kind mismatch".to_owned(),
                 ))?,
