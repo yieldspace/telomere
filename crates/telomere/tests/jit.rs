@@ -3102,3 +3102,293 @@ async fn jit_direct_calls_stay_correct_under_cache_eviction_pressure() {
         );
     }
 }
+
+// #311: JIT float semantics must match the interpreter bit-for-bit.
+// The riscv64 JIT returned `+0.0` for `f32.max(-0.0, -0.0)` and passed
+// signalling NaNs through the rounding operators unquieted. These tests
+// drive both tiers with raw bit patterns (via reinterpret) and assert
+// the exact result bits, which are derived from the spec: a zero pair
+// is `-0.0` only for `max(-0.0, -0.0)` / `min` with a `-0.0` operand,
+// and rounding a NaN yields an arithmetic NaN (quiet bit set, payload
+// and sign preserved).
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_float_min_max_signed_zero_bits_match_interpreter() {
+    const NEG_ZERO32: i32 = -2_147_483_648; // 0x8000_0000
+    const F32_WAT: &str = r#"
+        (module
+          (func (export "max") (param i32 i32) (result i32)
+            local.get 0
+            f32.reinterpret_i32
+            local.get 1
+            f32.reinterpret_i32
+            f32.max
+            i32.reinterpret_f32)
+          (func (export "min") (param i32 i32) (result i32)
+            local.get 0
+            f32.reinterpret_i32
+            local.get 1
+            f32.reinterpret_i32
+            f32.min
+            i32.reinterpret_f32))
+    "#;
+    // (lhs, rhs, expected max bits, expected min bits)
+    let f32_cases: [(i32, i32, i32, i32); 5] = [
+        (NEG_ZERO32, NEG_ZERO32, NEG_ZERO32, NEG_ZERO32),
+        (NEG_ZERO32, 0, 0, NEG_ZERO32),
+        (0, NEG_ZERO32, 0, NEG_ZERO32),
+        (0, 0, 0, 0),
+        // A NaN operand yields the canonical NaN in both tiers.
+        (
+            0x7fc0_0001_u32 as i32,
+            0x3f80_0000,
+            0x7fc0_0000_u32 as i32,
+            0x7fc0_0000_u32 as i32,
+        ),
+    ];
+    for (lhs, rhs, want_max, want_min) in f32_cases {
+        let args = || vec![WasmValue::I32(lhs), WasmValue::I32(rhs)];
+        assert_success_i32(invoke_jit(F32_WAT, "max", args()).await, want_max);
+        assert_success_i32(invoke_interpreter(F32_WAT, "max", args()).await, want_max);
+        assert_success_i32(invoke_jit(F32_WAT, "min", args()).await, want_min);
+        assert_success_i32(invoke_interpreter(F32_WAT, "min", args()).await, want_min);
+    }
+
+    const F64_WAT: &str = r#"
+        (module
+          (func (export "max") (param i64 i64) (result i64)
+            local.get 0
+            f64.reinterpret_i64
+            local.get 1
+            f64.reinterpret_i64
+            f64.max
+            i64.reinterpret_f64)
+          (func (export "min") (param i64 i64) (result i64)
+            local.get 0
+            f64.reinterpret_i64
+            local.get 1
+            f64.reinterpret_i64
+            f64.min
+            i64.reinterpret_f64))
+    "#;
+    // (lhs, rhs, expected max bits, expected min bits)
+    let f64_cases: [(i64, i64, i64, i64); 5] = [
+        (i64::MIN, i64::MIN, i64::MIN, i64::MIN),
+        (i64::MIN, 0, 0, i64::MIN),
+        (0, i64::MIN, 0, i64::MIN),
+        (0, 0, 0, 0),
+        (
+            0x7ff8_0000_0000_0001_u64 as i64,
+            0x3ff0_0000_0000_0000,
+            0x7ff8_0000_0000_0000_u64 as i64,
+            0x7ff8_0000_0000_0000_u64 as i64,
+        ),
+    ];
+    for (lhs, rhs, want_max, want_min) in f64_cases {
+        let args = || vec![WasmValue::I64(lhs), WasmValue::I64(rhs)];
+        assert_success_values(
+            invoke_jit(F64_WAT, "max", args()).await,
+            ResultValue::new(vec![WasmValue::I64(want_max)]),
+        );
+        assert_success_values(
+            invoke_interpreter(F64_WAT, "max", args()).await,
+            ResultValue::new(vec![WasmValue::I64(want_max)]),
+        );
+        assert_success_values(
+            invoke_jit(F64_WAT, "min", args()).await,
+            ResultValue::new(vec![WasmValue::I64(want_min)]),
+        );
+        assert_success_values(
+            invoke_interpreter(F64_WAT, "min", args()).await,
+            ResultValue::new(vec![WasmValue::I64(want_min)]),
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_float_rounding_quiets_signalling_nan_like_interpreter() {
+    const F64_WAT: &str = r#"
+        (module
+          (func (export "ceil") (param i64) (result i64)
+            local.get 0
+            f64.reinterpret_i64
+            f64.ceil
+            i64.reinterpret_f64)
+          (func (export "floor") (param i64) (result i64)
+            local.get 0
+            f64.reinterpret_i64
+            f64.floor
+            i64.reinterpret_f64)
+          (func (export "trunc") (param i64) (result i64)
+            local.get 0
+            f64.reinterpret_i64
+            f64.trunc
+            i64.reinterpret_f64)
+          (func (export "nearest") (param i64) (result i64)
+            local.get 0
+            f64.reinterpret_i64
+            f64.nearest
+            i64.reinterpret_f64))
+    "#;
+    // (input bits, expected bits) — identical for all four operators.
+    let f64_cases: [(i64, i64); 3] = [
+        // Signalling NaN, negative, payload 1: quieted, payload kept.
+        (
+            0xfff0_0000_0000_0001_u64 as i64,
+            0xfff8_0000_0000_0001_u64 as i64,
+        ),
+        // Signalling NaN, positive, payload 1.
+        (0x7ff0_0000_0000_0001, 0x7ff8_0000_0000_0001),
+        // Quiet NaN: passed through with its payload unchanged.
+        (
+            0x7ffc_0000_0000_0000_u64 as i64,
+            0x7ffc_0000_0000_0000_u64 as i64,
+        ),
+    ];
+    for op in ["ceil", "floor", "trunc", "nearest"] {
+        for (input, want) in f64_cases {
+            let expected = ResultValue::new(vec![WasmValue::I64(want)]);
+            assert_success_values(
+                invoke_jit(F64_WAT, op, vec![WasmValue::I64(input)]).await,
+                expected.clone(),
+            );
+            assert_success_values(
+                invoke_interpreter(F64_WAT, op, vec![WasmValue::I64(input)]).await,
+                expected,
+            );
+        }
+    }
+
+    const F32_WAT: &str = r#"
+        (module
+          (func (export "ceil") (param i32) (result i32)
+            local.get 0
+            f32.reinterpret_i32
+            f32.ceil
+            i32.reinterpret_f32)
+          (func (export "floor") (param i32) (result i32)
+            local.get 0
+            f32.reinterpret_i32
+            f32.floor
+            i32.reinterpret_f32)
+          (func (export "trunc") (param i32) (result i32)
+            local.get 0
+            f32.reinterpret_i32
+            f32.trunc
+            i32.reinterpret_f32)
+          (func (export "nearest") (param i32) (result i32)
+            local.get 0
+            f32.reinterpret_i32
+            f32.nearest
+            i32.reinterpret_f32))
+    "#;
+    let f32_cases: [(i32, i32); 3] = [
+        (0xff80_0001_u32 as i32, 0xffc0_0001_u32 as i32),
+        (0x7f80_0001, 0x7fc0_0001),
+        (0x7fc0_0001, 0x7fc0_0001),
+    ];
+    for op in ["ceil", "floor", "trunc", "nearest"] {
+        for (input, want) in f32_cases {
+            assert_success_i32(
+                invoke_jit(F32_WAT, op, vec![WasmValue::I32(input)]).await,
+                want,
+            );
+            assert_success_i32(
+                invoke_interpreter(F32_WAT, op, vec![WasmValue::I32(input)]).await,
+                want,
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_float_demote_and_copysign_bits_match_interpreter() {
+    // The shapes originally filed in #311 (D5/D6): demote of an
+    // out-of-range f64 saturates to infinity, and copysign preserves a
+    // NaN payload while taking the sign from the second operand.
+    const DEMOTE_WAT: &str = r#"
+        (module
+          (func (export "demote") (param f64) (result i32)
+            local.get 0
+            f32.demote_f64
+            i32.reinterpret_f32))
+    "#;
+    for (input, want) in [
+        (1e300f64, 0x7f80_0000_u32 as i32),
+        (-1e300f64, 0xff80_0000_u32 as i32),
+    ] {
+        assert_success_i32(
+            invoke_jit(DEMOTE_WAT, "demote", vec![WasmValue::F64(input)]).await,
+            want,
+        );
+        assert_success_i32(
+            invoke_interpreter(DEMOTE_WAT, "demote", vec![WasmValue::F64(input)]).await,
+            want,
+        );
+    }
+
+    const COPYSIGN_WAT: &str = r#"
+        (module
+          (func (export "copysign") (param i64 i64) (result i64)
+            local.get 0
+            f64.reinterpret_i64
+            local.get 1
+            f64.reinterpret_i64
+            f64.copysign
+            i64.reinterpret_f64))
+    "#;
+    // (value bits, sign bits, expected bits): the signalling payload
+    // and the quiet payload both survive; only the sign bit changes.
+    let cases: [(i64, i64, i64); 3] = [
+        (
+            0x7ff0_0000_0000_0001,
+            0xbff0_0000_0000_0000_u64 as i64,
+            0xfff0_0000_0000_0001_u64 as i64,
+        ),
+        (
+            0xfff8_0000_0000_0000_u64 as i64,
+            0x3ff0_0000_0000_0000,
+            0x7ff8_0000_0000_0000,
+        ),
+        (
+            0x7ffc_0000_0000_0000_u64 as i64,
+            0x8000_0000_0000_0000_u64 as i64,
+            0xfffc_0000_0000_0000_u64 as i64,
+        ),
+    ];
+    for (value, sign, want) in cases {
+        let args = || vec![WasmValue::I64(value), WasmValue::I64(sign)];
+        let expected = ResultValue::new(vec![WasmValue::I64(want)]);
+        assert_success_values(
+            invoke_jit(COPYSIGN_WAT, "copysign", args()).await,
+            expected.clone(),
+        );
+        assert_success_values(
+            invoke_interpreter(COPYSIGN_WAT, "copysign", args()).await,
+            expected,
+        );
+    }
+}
