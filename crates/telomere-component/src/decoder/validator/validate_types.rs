@@ -422,9 +422,18 @@ impl<'a> Validator<'a> {
     /// attribute the denoted type's own errors to the mentioning
     /// func. A plain export's face anywhere else -- notably on an
     /// import surface, since imports may not depend on exports --
-    /// names nothing. Any other eq type is a transitive alias of
-    /// the type it denotes, so the mention stands or falls with
-    /// the inner type's own visibility.
+    /// names nothing *when the denoted type needs a name*:
+    /// resources and named defvals mentioned through a face away
+    /// from the face's own surface are rejected, exactly like a
+    /// direct mention of their definition index. But a denoted
+    /// type that needs no name at all -- a primitive, or an
+    /// anonymous container of nameless types -- has no name to
+    /// depend on, so the mention stands or falls with the
+    /// denoted type itself, like a transitive alias (whose
+    /// contents the definition walk then judges one by one).
+    /// Any other eq type is a transitive alias of the type it
+    /// denotes, so the mention stands or falls with the inner
+    /// type's own visibility.
     fn validate_eq_mention(
         &self,
         type_id: TypeId,
@@ -434,7 +443,9 @@ impl<'a> Validator<'a> {
     ) -> ParseResult<()> {
         if contains_type_id(visible, type_id) {
             Ok(())
-        } else if self.is_plain_export_face(type_id) {
+        } else if self.is_plain_export_face(type_id)
+            && self.type_requires_name(self.get_type(inner)?)
+        {
             let ty = self.get_type(type_id)?.clone();
             Err(ComponentParseError::TypeMismatch(format!(
                 "surface type requires exported/imported name: {type_id:?} => {ty:?}"
