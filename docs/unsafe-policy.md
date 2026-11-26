@@ -2,10 +2,11 @@
 
 This document is the written unsafe policy required by #132. It states
 which layers may use `unsafe`, what justification every site must carry,
-and how the lint ratchet enforces both over time. The companion pieces of
-#132 — the per-site audit of the parser/optimizer layer and the miri CI
-subset — are tracked separately on the issue; this document is the
-policy they operate under.
+and how the lint ratchet enforces both over time. The companion pieces
+of #132 are the per-site audit of the parser/optimizer layer (tracked
+separately on the issue) and the miri CI subset (defined under
+"Dynamic checking" below); this document is the policy they operate
+under.
 
 Telomere is a WebAssembly runtime: it parses unvalidated input and then
 executes it on an interpreter core that is deliberately built on raw
@@ -95,6 +96,96 @@ RUSTFLAGS="-W unsafe_op_in_unsafe_fn" \
    scoping mechanically. Elsewhere, the PR description must call out
    the new site explicitly so review can check the justification.
 
+## Dynamic checking: the Miri subset
+
+The lint ratchet above is static. Its dynamic counterpart is a Miri run
+over the layers that touch input before validation — the parser and
+optimizer, the binary reader, and the common layer — executed by
+`.github/workflows/miri.yaml` on a weekly schedule and on manual
+dispatch. Like the toolchain watch, the job **reports without
+gating**: it is not a required status check and never runs on pull
+requests. A red run is the report: either Miri found undefined
+behaviour in a covered layer, or a covered test started reaching a
+platform facility Miri cannot emulate, which means the subset
+definition below needs revisiting rather than the code having
+regressed.
+
+The subset is the `telomere` lib-test suite filtered to the `parser::`,
+`binary::`, and `common::` module trees, minus the exclusions below:
+187 of the 267 lib tests (parser 131 of 132, binary 9 of 9, common 47
+of 68) at the time of writing. It covers the layers with the highest
+unsafe burden of proof — the parser/optimizer subtree (107 unsafe
+tokens, including the pipeline whose uninitialized-operand read was
+#292) and the common layer everything stands on (operand stack, store,
+metering, the precompiled codec) — while staying inside what Miri can
+execute: no covered test allocates JIT code memory or runs generated
+native code.
+
+Pass criterion: a Miri **error** (undefined behaviour) fails the run.
+Miri **warnings** do not; in particular the integer-to-pointer
+provenance warning in `common::StablePc::resolve`, first recorded by
+the #292 investigation, is expected noise until that cast is revisited.
+
+The run uses `MIRIFLAGS="-Zmiri-disable-isolation"` (the configuration
+the #292 investigation established) and the dated nightly
+`nightly-2026-11-17`, whose rustc and Miri are the exact builds the
+subset was measured with (rustc 1.102.0-nightly `5df8c02af`, Miri
+`5df8c02afd`). Bump the pin deliberately, in its own change, after
+re-measuring the subset.
+
+### Exclusions (each verified individually under Miri)
+
+1. **Tests that construct a real mmap-backed linear memory** — 20
+   tests, 13 in `common::memory` and 7 in `common::store`. The memory
+   implementation reserves its address space with a `PROT_NONE` `mmap`
+   (`crates/telomere/src/common/memory.rs`), and Miri does not emulate
+   `mmap`/`mprotect` with protections other than
+   `PROT_READ|PROT_WRITE`; it stops with "unsupported operation" and
+   notes that this is likely not a bug in the program. Every test in
+   this group was run individually and stops at exactly that operation
+   (no UB, no other failure):
+   `common::memory`: `failed_grow_keeps_pages_and_commit_length_unchanged`,
+   `initial_mprotect_failure_is_returned_from_local_memory_construction`,
+   `interruptible_wait_is_woken_by_a_metering_interrupt`,
+   `interruptible_wait_keeps_notify_and_timeout_result_codes`,
+   `local_memory_reserves_lazily_and_commits_only_grown_pages`,
+   `memory_write_copy_fill_and_grow_match_linear_model_bytes`,
+   `resolved_long_waits_release_their_timer_threads`,
+   `shared_memory_reserves_lazily_and_commits_only_grown_pages`,
+   `shared_wait64_queue_tracks_notify_and_timeout_cleanup`,
+   `shared_wait_queue_internal_state_tracks_notify_and_timeout_cleanup`,
+   `shared_wait_queue_rejects_mismatch_and_notifies_fifo_up_to_count`,
+   `shared_wait_timeout_completes_on_non_tokio_executor`,
+   `zero_sized_memory_keeps_a_valid_uncommitted_reservation`.
+   `common::store`: `cross_memory_copy_checkpoint_interrupts_before_the_later_chunk`,
+   `store_atomic_cmpxchg_dispatch_preserves_old_value_and_alignment_errors`,
+   `store_memory_creation_returns_initial_mprotect_failure`,
+   `store_memory_dispatch_matches_handle_kind_and_cross_copy_paths`,
+   `total_budget_adoption_refuses_over_cap_without_residue`,
+   `total_budget_never_exceeds_cap_under_concurrent_shared_growth`,
+   `total_budget_reservation_is_consumed_by_adoptions_and_released`.
+   Five further `common::memory` tests that reject or account before
+   any mapping exists were initially excluded by module and are **not**
+   excluded: the individual probes showed they pass, and they run in
+   the subset.
+2. **One wall-clock complexity guard**:
+   `parser::core::optimizer::pipeline::analysis::tests::analyze_stays_fast_on_a_deeply_nested_chain`
+   asserts `analyze` finishes a 4,096-block chain in under 10 seconds
+   of host time (the #170 complexity regression guard). Its input is
+   sized for native speed; under interpretation it did not finish
+   within 7 minutes, and a host-time bound is not a property Miri can
+   judge. The analysis code it exercises is covered by the other
+   analysis tests in the subset.
+
+Everything else in the three trees runs. The interpreter runtime tree
+(`runtime::`, the remaining 58 lib tests, plus the integration suites)
+is outside the subset for now: its tests instantiate and execute
+modules, reaching the JIT code-memory allocation (`memfd_create`, a
+foreign call Miri cannot emulate) on jit-enabled paths and the
+mmap-backed memory above wherever a test creates a memory. That is the
+recorded boundary of the subset, not a silent gap; extending coverage
+there is follow-up work.
+
 ## Current measured state
 
 Baseline measurement for this policy (2026-11-27, `main` = `cc6550b`,
@@ -121,3 +212,31 @@ Rust 1.96.0, distinct `warning[E0133]` sites under
   macros, 9 in the root `src/`. Only 55 `SAFETY:` comments existed in
   `crates/telomere/src` before this policy — the sparsity #132 calls
   out, and the gap the ratchet exists to close.
+
+Miri subset measurement (2026-11-27, nightly-2026-11-17 as above,
+`MIRIFLAGS=-Zmiri-disable-isolation`, on fleur-du-lapin):
+
+- **187 tests run, 187 pass, 0 fail**, running the workflow's exact
+  commands with the pinned nightly from a clean target directory.
+  Parser: 131 tests, test phase 853–1,000 s across two runs at the
+  default parallelism of a 72-thread host and 940 s at
+  `--test-threads=4` — the wall is set by
+  the slowest individual tests, not by aggregate throughput, which is
+  why the parser job's timeout (120 min) carries large headroom over
+  both. Common: 47 tests, 118 s. Binary: 9 tests, 3 s. One further
+  subset test (`common::debug_names` measurement probe) is ignored by
+  default in the source and stays ignored under Miri.
+- The first subset run found four remaining sites of the #292 class —
+  `Operand { local_addr }.encoded`, which constructs the union's raw
+  eight bytes from a four-byte field and leaves the high half
+  uninitialized — in the optimizer pipeline: one in production code
+  (`pipeline/transform.rs`, the temp-local materialisation used by the
+  GVN/fusion transforms) and three in pipeline test helpers
+  (`pipeline/analysis.rs`, `pipeline/encode.rs`, `optimizer/mod.rs`).
+  All four now build the operand through `Operand::from_local_addr`,
+  the canonical constructor #292 added; the subset is the standing
+  regression guard for the class, and a static sweep confirms no other
+  narrow-field union literal remains in the parser, common, or binary
+  trees (the runtime tree's literals are the separate remainder the
+  audit plan already tracks: they are only ever read back through the
+  field that wrote them and never reach the optimizer).
