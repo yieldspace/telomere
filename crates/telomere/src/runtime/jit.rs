@@ -187,7 +187,13 @@ pub(crate) unsafe fn enter_current_frame_from_lazy_call(
         VMResult::ResourceLimitExceeded => return VMResult::ResourceLimitExceeded,
     };
     if exit.kind == JitNativeExit::CONTINUE_PTR && exit.value == continuation as u64 {
+        #[cfg(not(feature = "loop-dispatch-fallback"))]
         return unsafe { vm::call_code(continuation, ctx) };
+        // #114: in loop-dispatch fallback builds, `call_code` bounces
+        // without dispatching; continue the segment through the
+        // trampoline driver (see `vm::resume_loop_dispatch`).
+        #[cfg(feature = "loop-dispatch-fallback")]
+        return unsafe { vm::resume_loop_dispatch(vm::call_code(continuation, ctx), ctx) };
     }
     unsafe { handle_exit(exit, code_base, ctx) }
 }
@@ -205,7 +211,14 @@ pub(crate) unsafe fn run_interpreter_continue_from_jit_call(
     let ctx = guard.context();
     let mut next = pc;
     loop {
-        match unsafe { vm::call_code(next, ctx) } {
+        let segment = unsafe { vm::call_code(next, ctx) };
+        // #114: in loop-dispatch fallback builds, `call_code` bounces
+        // without dispatching; continue the segment through the
+        // trampoline driver so this bridge sees the same segment-end
+        // results as the threaded chain produces.
+        #[cfg(feature = "loop-dispatch-fallback")]
+        let segment = unsafe { vm::resume_loop_dispatch(segment, ctx) };
+        match segment {
             VMResult::Success(()) => {
                 if ctx.cont.is_null() {
                     return JitNativeExit::done();

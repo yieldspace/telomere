@@ -227,6 +227,13 @@ const LOOP_ALLOWANCES: &[LoopAllowance] = &[
         reason: "the validated module result type list fixes the paired result count.",
     },
     LoopAllowance {
+        source: "src/runtime/vm.rs",
+        function: "drive_loop_dispatch",
+        identifier: "loop",
+        reason:
+            "the loop-dispatch fallback driver: each iteration dispatches exactly one handler and returns on any non-bounce result, so guest-level looping stays charged by the dispatched handlers' own checkpoints exactly as in the threaded chain.",
+    },
+    LoopAllowance {
         source: "src/runtime/vm/control.rs",
         function: "skip_end_ops",
         identifier: "while:std :: ptr :: fn_addr_eq ((* ptr) . op , op_end as Op)",

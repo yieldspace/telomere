@@ -152,6 +152,37 @@ fn call_loop_keeps_direct_threading_on_a_small_stack() {
         .expect("the small-stack call loop test thread must not panic");
 }
 
+/// The #114 loop-dispatch fallback, exercised on the tripwire's shape.
+///
+/// This test exists only in `loop-dispatch-fallback` builds. It runs
+/// the same 200,000-cycle body as the small-stack tripwire above on
+/// the same 4 MiB stack. On toolchains that break the tail-call
+/// contract (measured: 1.97.0 and every later release measured so
+/// far), the threaded build aborts in this shape -- that is what the
+/// tripwire detects -- while a fallback build completes it, because
+/// the trampoline driver dispatches one handler per loop iteration
+/// from a single frame and host-stack depth no longer grows with the
+/// number of executed instructions. On the pinned toolchain both
+/// builds complete the shape; the fallback's cost is measured
+/// separately (see docs/core/optimizer.md).
+#[cfg(feature = "loop-dispatch-fallback")]
+#[test]
+fn call_loop_completes_on_a_small_stack_with_loop_dispatch_fallback() {
+    std::thread::Builder::new()
+        .name("call-loop-fallback-test".to_string())
+        .stack_size(CALL_LOOP_SMALL_STACK_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building a runtime for the fallback call loop test");
+            runtime.block_on(call_loop_body());
+        })
+        .expect("spawning the fallback call loop test thread")
+        .join()
+        .expect("the fallback call loop test thread must not panic");
+}
+
 /// Stack size for the ref.is_null loop test below (#282).
 ///
 /// The loop runs 2,000,000 iterations. With the #240 identity barrier in

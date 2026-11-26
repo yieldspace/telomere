@@ -928,6 +928,12 @@ pub(crate) extern "C" fn runtime_continuation_op(
         RUNTIME_CONT_SIMD_V128_CONST => unsafe { vm::simd::v128_const(tail_code, ctx) },
         _ => VMResult::Unimplemented,
     };
+    // #114: in loop-dispatch fallback builds, a first dispatch that
+    // bounced off `call_code` continues stepping through the
+    // trampoline driver, so this stub still observes the segment-end
+    // result the threaded chain would have produced.
+    #[cfg(feature = "loop-dispatch-fallback")]
+    let result = unsafe { vm::resume_loop_dispatch(result, ctx) };
     match result {
         VMResult::Success(()) if ctx.cont == stop_pc => JitNativeExit::keep_going(),
         VMResult::Success(()) if ctx.cont.is_null() => JitNativeExit::done(),

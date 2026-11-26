@@ -1533,8 +1533,22 @@ pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext
     // that gain is not landable while trap capture depends on it:
     // `VMResult` carries no pc that could replace the channel.
     ctx.cont = tail_code;
-    let op = (*tail_code).op;
-    op(tail_code.offset(1), ctx)
+    #[cfg(not(feature = "loop-dispatch-fallback"))]
+    {
+        let op = (*tail_code).op;
+        op(tail_code.offset(1), ctx)
+    }
+    #[cfg(feature = "loop-dispatch-fallback")]
+    {
+        // #114 loop-dispatch fallback: do not dispatch here. The next
+        // instruction is already recorded in `ctx.cont` by the store
+        // above; flag the step and return to the trampoline driver
+        // (`drive_loop_dispatch`), which dispatches it. Correctness
+        // and host-stack depth then no longer depend on this call
+        // being turned into a sibling tail call by LLVM.
+        ctx.trampoline_bounced = true;
+        VMResult::Success(())
+    }
 }
 
 #[inline(always)]
@@ -1557,6 +1571,107 @@ pub(crate) unsafe fn call_next(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     call_code(tail_code.offset(consumed), ctx)
+}
+
+/// Telomere runtime helper `drive_loop_dispatch`.
+///
+/// Related spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal runtime continuation dispatch.
+/// Traps: propagates the trap behavior of the dispatched instructions.
+/// Notes: The #114 loop-dispatch fallback's trampoline driver. Runs
+/// one execution segment the way the direct-threaded chain does, but
+/// dispatches one handler per loop iteration from this single frame:
+/// a handler whose dispatch bounced off `call_code` (flag
+/// `ctx.trampoline_bounced` set, next instruction in `ctx.cont`) is
+/// followed by dispatching that instruction here, and any other
+/// handler return -- a trap, a suspend, a completion, a JIT stop --
+/// ends the segment with exactly the result and `ctx.cont` the
+/// threaded chain would have produced. Host-stack depth is therefore
+/// bounded by one handler frame plus this loop's frame, independent
+/// of the toolchain's sibling-call optimisation. Every interpreter
+/// segment entry point routes through this driver (or through
+/// [`resume_loop_dispatch`] after its first dispatch) in
+/// `loop-dispatch-fallback` builds: the scheduler's task entry, the
+/// JIT interpreter-continuation bridge and stub, and the lazy-call
+/// continuation entry.
+///
+/// # Safety
+/// - `first` must reference the active decoded instruction stream for
+///   the current frame.
+/// - `ctx` must reference a live execution context for the same store,
+///   frame, and validated locals/stack layout.
+/// - `ctx.trampoline_bounced` must be false on entry (it is false
+///   whenever control is outside a driver step; see the field).
+/// - Callers must not preserve borrows, locks, or guards across any
+///   dispatch this driver performs.
+#[cfg(feature = "loop-dispatch-fallback")]
+pub(crate) unsafe fn drive_loop_dispatch(
+    first: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let mut pc = first;
+    loop {
+        ctx.trampoline_bounced = false;
+        let op = (*pc).op;
+        match op(pc.offset(1), ctx) {
+            VMResult::Success(()) if ctx.trampoline_bounced => {
+                pc = ctx.cont;
+                if pc.is_null() {
+                    // Defensive: `call_code` only bounces with `cont`
+                    // set to the (non-null) next instruction, so this
+                    // is unreachable unless a handler is changed to
+                    // bounce differently. Treat it as completion
+                    // rather than dispatching a null pc.
+                    return VMResult::Success(());
+                }
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Telomere runtime helper `resume_loop_dispatch`.
+///
+/// Related spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal runtime continuation dispatch.
+/// Traps: propagates the trap behavior of the dispatched instructions.
+/// Notes: The #114 loop-dispatch fallback's continuation of a segment
+/// whose first dispatch already happened. Some segment entries
+/// dispatch their first handler through a form other than `(*pc).op`
+/// -- the JIT continuation stub dispatches a specific handler by
+/// kind, and the JIT bridge entries dispatch through `call_code`
+/// itself so its stop check applies to the first instruction. Those
+/// entries pass the first dispatch's result here; if it bounced,
+/// stepping continues with [`drive_loop_dispatch`] at `ctx.cont`,
+/// and if it did not, the result is the segment's result unchanged.
+///
+/// # Safety
+/// - Same requirements as [`drive_loop_dispatch`]; in addition, the
+///   first dispatch must have run against this `ctx` with
+///   `ctx.trampoline_bounced` false on its entry.
+// Only the JIT segment entries call this; it is dead code in
+// interpreter-only fallback builds.
+#[cfg(feature = "loop-dispatch-fallback")]
+#[allow(dead_code)]
+pub(crate) unsafe fn resume_loop_dispatch(
+    result: VMResult<()>,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match result {
+        VMResult::Success(()) if ctx.trampoline_bounced => {
+            let pc = ctx.cont;
+            if pc.is_null() {
+                VMResult::Success(())
+            } else {
+                drive_loop_dispatch(pc, ctx)
+            }
+        }
+        other => other,
+    }
 }
 
 /// Charges one execution checkpoint, entering the cold metering path only when a grant is empty.
