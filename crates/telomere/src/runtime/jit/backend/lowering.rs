@@ -3691,7 +3691,11 @@ impl<'a, E: EmitEnv, M: TargetHooks> Emitter<'a, E, M> {
         width: u32,
     ) -> Result<(), ()> {
         self.mov_w(9, addr);
-        self.add_imm_u64(9, 9, u64::from(offset + delta))?;
+        // Widen before adding: `offset + delta` in u32 overflows for
+        // memarg offsets at the top of the range (e.g. an 8-byte load
+        // at offset 4294967292), which panicked the host under
+        // overflow checks instead of emitting a trapping access.
+        self.add_imm_u64(9, 9, u64::from(offset) + u64::from(delta))?;
         self.atomic_memory_ptr()?;
         self.atomic_load_w(dest, 11, width)
     }

@@ -3833,3 +3833,90 @@ async fn jit_atomic_traps_match_interpreter() {
         );
     }
 }
+
+#[cfg(all(
+    feature = "jit",
+    feature = "threads",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_atomic_huge_memarg_offsets_match_interpreter() {
+    // Memarg offsets at the top of the u32 range. The 64-bit load
+    // lowering forms the high half's displacement from the offset;
+    // that arithmetic must widen before it adds, or compiling a
+    // valid access overflows in the host (a panic under overflow
+    // checks) instead of emitting code that traps at run time. The
+    // interpreter checks the effective address for u32 overflow,
+    // then alignment, then bounds; every case below must compile
+    // and trap exactly like the interpreter.
+    let cases: [(&str, VMResult<ResultValue>); 8] = [
+        // offset + 4 crosses the u32 boundary; the access itself is
+        // unaligned (4294967292 % 8 == 4).
+        (
+            "(drop (i64.atomic.load offset=4294967292 (i32.const 0)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // The largest possible offset; also unaligned.
+        (
+            "(drop (i64.atomic.load offset=4294967295 (i32.const 0)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // Aligned, just below the boundary: out of bounds instead.
+        (
+            "(drop (i64.atomic.load offset=4294967288 (i32.const 0)))",
+            VMResult::MemoryIndexOutOfRange,
+        ),
+        // Huge offset plus a dynamic address overflows the u32
+        // effective address: out-of-range wins over alignment.
+        (
+            "(drop (i64.atomic.load offset=4294967292 (i32.const 8)))",
+            VMResult::MemoryIndexOutOfRange,
+        ),
+        // The store/RMW/cmpxchg 64-bit paths share the checked start;
+        // the same unaligned offset traps identically.
+        (
+            "(i64.atomic.store offset=4294967292 (i32.const 0) (i64.const 1))",
+            VMResult::UnalignedAtomic,
+        ),
+        (
+            "(drop (i64.atomic.rmw.add offset=4294967292 (i32.const 0) (i64.const 1)))",
+            VMResult::UnalignedAtomic,
+        ),
+        (
+            "(drop (i64.atomic.rmw.cmpxchg offset=4294967292 (i32.const 0) (i64.const 0) (i64.const 1)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // 32-bit path with the largest offset: unaligned.
+        (
+            "(drop (i32.atomic.load offset=4294967295 (i32.const 0)))",
+            VMResult::UnalignedAtomic,
+        ),
+    ];
+    for (body, expected) in cases {
+        let wat = format!(
+            r#"
+            (module
+              (memory 1)
+              (func (export "t") (result i32)
+                {body}
+                (i32.const 0)))
+            "#
+        );
+        let jit = invoke_jit(&wat, "t", vec![]).await;
+        let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+        assert_eq!(
+            std::mem::discriminant(&jit),
+            std::mem::discriminant(&expected),
+            "JIT trap mismatch for {body}: jit={jit:?} expected={expected:?}"
+        );
+        assert_eq!(
+            std::mem::discriminant(&interpreter),
+            std::mem::discriminant(&expected),
+            "interpreter trap mismatch for {body}: interpreter={interpreter:?} expected={expected:?}"
+        );
+    }
+}
