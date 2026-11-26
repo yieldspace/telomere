@@ -77,6 +77,7 @@ resolution in `ComponentProgram`.
 | Document | Status | Use it for |
 | --- | --- | --- |
 | [memory-reduction-audit.md](memory-reduction-audit.md) | Audit | Implemented memory reductions, measurements, and tradeoffs left for later. |
+| [parser-unsafe-audit.md](parser-unsafe-audit.md) | Audit | Per-site audit of the parser/optimizer unsafe sites: the initialization and layout invariants each class rests on, and the uninitialized-tail defect found and fixed (#132). |
 
 ## Policies
 

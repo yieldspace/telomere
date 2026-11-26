@@ -3760,6 +3760,7 @@ impl FamilySpec for I32LoadConstBaseLocalGet4AddSet4Spec {
                 label: None,
                 op: vm::op_i32_load_const_base_local_get4_i32_add_set4 as Op,
                 operands: vec![
+                    // SAFETY: folded is built by fold_const_base_memarg as an Operand holding a MemArg -- an eight-byte plain-data struct with no padding -- so it is fully initialized and the encoded arm reads no uninitialized bytes.
                     LoweredOperand::Raw(unsafe { folded.encoded }),
                     rhs.operands.first()?.clone(),
                     set.operands.first()?.clone(),
@@ -5842,6 +5843,7 @@ fn emit_scalar_load_const_base(
             ops: vec![KernelOp {
                 label: None,
                 op,
+                // SAFETY: folded is built by fold_const_base_memarg as an Operand holding a MemArg -- an eight-byte plain-data struct with no padding -- so it is fully initialized and the encoded arm reads no uninitialized bytes.
                 operands: vec![LoweredOperand::Raw(unsafe { folded.encoded })],
                 family: "memory.const_base_load",
             }],
@@ -5873,6 +5875,7 @@ fn emit_scalar_store_const_base(
                 label: None,
                 op,
                 operands: vec![
+                    // SAFETY: folded is built by fold_const_base_memarg as an Operand holding a MemArg -- an eight-byte plain-data struct with no padding -- so it is fully initialized and the encoded arm reads no uninitialized bytes.
                     LoweredOperand::Raw(unsafe { folded.encoded }),
                     local_operand,
                 ],
@@ -7813,6 +7816,7 @@ fn raw_i32(operand: Option<&LoweredOperand>) -> Option<i32> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     Some(unsafe { Operand { encoded: *encoded }.i32 })
 }
 
@@ -7827,6 +7831,7 @@ fn raw_select(operand: Option<&LoweredOperand>) -> Option<u32> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     Some(unsafe { Operand { encoded: *encoded }.select })
 }
 
@@ -7838,14 +7843,17 @@ fn raw_memarg(operand: Option<&LoweredOperand>) -> Option<MemArg> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data spanning all eight bytes.
     Some(unsafe { Operand { encoded: *encoded }.memarg })
 }
 
 fn raw_u32_operand(value: u32) -> LoweredOperand {
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand::from_u32(value).encoded })
 }
 
 fn raw_i32_operand(value: i32) -> LoweredOperand {
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand::from_i32(value).encoded })
 }
 

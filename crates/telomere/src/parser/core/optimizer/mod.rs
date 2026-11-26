@@ -117,6 +117,7 @@ mod tests {
         for len in &func.op_lens {
             let width = usize::from(*len);
             for offset in 1..width {
+                // SAFETY: offsets 1..width are operand slots under the op_lens layout of a parser-built stream, whose operands are fully initialized.
                 slots.push(unsafe { func.expr[cursor + offset].operand.encoded });
             }
             cursor += width;
@@ -144,6 +145,7 @@ mod tests {
         op_lens
             .iter()
             .map(|len| {
+                // SAFETY: this slot is the head of an instruction in the parser-built stream; the InstructionGenerator writes the Op there and operands in the following slots.
                 let op = unsafe { expr[cursor].op };
                 cursor += usize::from(*len);
                 op
@@ -179,12 +181,16 @@ mod tests {
     }
 
     fn raw_local(local_addr: u32) -> crate::common::LoweredOperand {
-        crate::common::LoweredOperand::Raw(unsafe { crate::common::Operand { local_addr }.encoded })
+        // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
+        crate::common::LoweredOperand::Raw(unsafe {
+            crate::common::Operand::from_local_addr(local_addr).encoded
+        })
     }
 
     fn assert_control_targets_align(expr: &[Instr], op_lens: &[u16]) {
         let mut cursor = 0usize;
         for len in op_lens {
+            // SAFETY: this slot is the head of an instruction in the parser-built stream; the InstructionGenerator writes the Op there and operands in the following slots.
             let op = unsafe { expr[cursor].op };
             if std::ptr::fn_addr_eq(op, vm::op_br as crate::common::Op)
                 || std::ptr::fn_addr_eq(op, vm::op_br_if as crate::common::Op)
@@ -192,6 +198,7 @@ mod tests {
                 || std::ptr::fn_addr_eq(op, vm::op_else as crate::common::Op)
                 || std::ptr::fn_addr_eq(op, vm::op_return as crate::common::Op)
             {
+                // SAFETY: slots after an instruction head hold operands under the stream layout, and parser-built operands are fully initialized (narrow values via Operand::from_* constructors, wide ones via eight-byte arms).
                 let target = unsafe { expr[cursor + 1].operand.jump_addr as usize };
                 assert!(target < expr.len());
             }
@@ -1489,6 +1496,7 @@ mod tests {
         let crate::common::LoweredOperand::Raw(encoded) = store.operands[3] else {
             panic!("expected raw memidx operand");
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         let memidx = unsafe { crate::common::Operand { encoded }.u32 };
         assert_eq!(memidx, 1);
     }
@@ -1609,6 +1617,7 @@ mod tests {
         let crate::common::LoweredOperand::Raw(encoded) = store.operands[5] else {
             panic!("expected raw memidx operand");
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         let memidx = unsafe { crate::common::Operand { encoded }.u32 };
         assert_eq!(memidx, 1);
     }
@@ -3225,6 +3234,7 @@ mod tests {
                 CanonInst {
                     id: InstId(2),
                     op: vm::op_i32_const as crate::common::Op,
+                    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand::from_i32(0).encoded
                     })],
@@ -3274,6 +3284,7 @@ mod tests {
             insts: vec![CanonInst {
                 id: InstId(6),
                 op: vm::op_i32_const as crate::common::Op,
+                // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                     Operand::from_i32(1).encoded
                 })],
@@ -3292,6 +3303,7 @@ mod tests {
             insts: vec![CanonInst {
                 id: InstId(7),
                 op: vm::op_i32_const as crate::common::Op,
+                // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                     Operand::from_i32(2).encoded
                 })],
@@ -3464,6 +3476,7 @@ mod tests {
                 CanonInst {
                     id: InstId(0),
                     op: vm::op_i32_const as crate::common::Op,
+                    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand::from_i32(4).encoded
                     })],
@@ -3499,6 +3512,7 @@ mod tests {
                 CanonInst {
                     id: InstId(2),
                     op: vm::op_i32_load as crate::common::Op,
+                    // SAFETY: MemArg is an eight-byte plain-data struct (two u32 fields, no padding), so the literal initializes the whole union and the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand {
                             memarg: MemArg {
@@ -3534,6 +3548,7 @@ mod tests {
             insts: vec![CanonInst {
                 id: InstId(4),
                 op: vm::op_i32_const as crate::common::Op,
+                // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                     Operand::from_i32(0).encoded
                 })],
@@ -3575,6 +3590,7 @@ mod tests {
         let crate::common::LoweredOperand::Raw(encoded) = specialized.ops[0].operands[0] else {
             panic!("expected folded memarg operand");
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data spanning all eight bytes.
         let memarg = unsafe { Operand { encoded }.memarg };
         assert_eq!(memarg.offset, 12);
 
@@ -3614,6 +3630,7 @@ mod tests {
                 CanonInst {
                     id: InstId(0),
                     op: vm::op_i32_const as crate::common::Op,
+                    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand::from_i32(1).encoded
                     })],
@@ -3649,6 +3666,7 @@ mod tests {
                 CanonInst {
                     id: InstId(2),
                     op: vm::op_i32_load as crate::common::Op,
+                    // SAFETY: MemArg is an eight-byte plain-data struct (two u32 fields, no padding), so the literal initializes the whole union and the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand {
                             memarg: MemArg {
@@ -3684,6 +3702,7 @@ mod tests {
             insts: vec![CanonInst {
                 id: InstId(4),
                 op: vm::op_i32_const as crate::common::Op,
+                // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                     Operand::from_i32(0).encoded
                 })],
@@ -3747,6 +3766,7 @@ mod tests {
                 CanonInst {
                     id: InstId(0),
                     op: vm::op_i32_const as crate::common::Op,
+                    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand::from_i32(8).encoded
                     })],
@@ -3782,6 +3802,7 @@ mod tests {
                 CanonInst {
                     id: InstId(2),
                     op: vm::op_i64_load as crate::common::Op,
+                    // SAFETY: MemArg is an eight-byte plain-data struct (two u32 fields, no padding), so the literal initializes the whole union and the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand {
                             memarg: MemArg {
@@ -3817,6 +3838,7 @@ mod tests {
             insts: vec![CanonInst {
                 id: InstId(4),
                 op: vm::op_i64_const as crate::common::Op,
+                // SAFETY: the i64 arm spans all eight bytes of the union, so the literal fully initializes it and the encoded arm reads no uninitialized bytes.
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                     Operand { i64: 0 }.encoded
                 })],
@@ -3858,6 +3880,7 @@ mod tests {
         let crate::common::LoweredOperand::Raw(encoded) = specialized.ops[0].operands[0] else {
             panic!("expected folded memarg operand");
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data spanning all eight bytes.
         let memarg = unsafe { Operand { encoded }.memarg };
         assert_eq!(memarg.offset, 12);
     }
@@ -3892,6 +3915,7 @@ mod tests {
                 CanonInst {
                     id: InstId(1),
                     op: vm::op_i32_const as crate::common::Op,
+                    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand::from_i32(12).encoded
                     })],
@@ -3937,6 +3961,7 @@ mod tests {
                 CanonInst {
                     id: InstId(4),
                     op: vm::op_i32_load as crate::common::Op,
+                    // SAFETY: MemArg is an eight-byte plain-data struct (two u32 fields, no padding), so the literal initializes the whole union and the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand {
                             memarg: MemArg {
@@ -3972,6 +3997,7 @@ mod tests {
             insts: vec![CanonInst {
                 id: InstId(6),
                 op: vm::op_i32_const as crate::common::Op,
+                // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                     Operand::from_i32(0).encoded
                 })],
@@ -4016,7 +4042,9 @@ mod tests {
         let crate::common::LoweredOperand::Raw(delta_raw) = specialized.ops[0].operands[1] else {
             panic!("expected delta operand");
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: local_raw }.local_addr }, 4);
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: delta_raw }.i32 }, 12);
 
         let entry = &versioned.blocks[0];
@@ -4076,6 +4104,7 @@ mod tests {
                 CanonInst {
                     id: InstId(2),
                     op: vm::op_i32_const as crate::common::Op,
+                    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand::from_i32(2).encoded
                     })],
@@ -4108,6 +4137,7 @@ mod tests {
                 CanonInst {
                     id: InstId(5),
                     op: vm::op_i32_const as crate::common::Op,
+                    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand::from_i32(16).encoded
                     })],
@@ -4153,6 +4183,7 @@ mod tests {
                 CanonInst {
                     id: InstId(8),
                     op: vm::op_i32_load as crate::common::Op,
+                    // SAFETY: MemArg is an eight-byte plain-data struct (two u32 fields, no padding), so the literal initializes the whole union and the encoded arm reads no uninitialized bytes.
                     operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                         Operand {
                             memarg: MemArg {
@@ -4188,6 +4219,7 @@ mod tests {
             insts: vec![CanonInst {
                 id: InstId(10),
                 op: vm::op_i32_const as crate::common::Op,
+                // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
                 operands: vec![crate::common::LoweredOperand::Raw(unsafe {
                     Operand::from_i32(0).encoded
                 })],
@@ -4238,9 +4270,13 @@ mod tests {
         let crate::common::LoweredOperand::Raw(delta_raw) = specialized.ops[0].operands[3] else {
             panic!("expected delta operand");
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: base_raw }.local_addr }, 4);
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: index_raw }.local_addr }, 8);
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: scale_raw }.u32 }, 2);
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: delta_raw }.i32 }, 16);
 
         let entry = &versioned.blocks[0];

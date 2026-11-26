@@ -30,45 +30,54 @@ pub(crate) struct DecodedInstr {
 
 impl DecodedInstr {
     pub(crate) fn operand_u32(&self, idx: usize) -> u32 {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized; this arm is plain data in the low four bytes.
         unsafe { self.operands[idx].u32 }
     }
 
     #[allow(dead_code)]
     pub(crate) fn operand_i32(&self, idx: usize) -> i32 {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized; this arm is plain data in the low four bytes.
         unsafe { self.operands[idx].i32 }
     }
 
     #[allow(dead_code)]
     pub(crate) fn operand_i64(&self, idx: usize) -> i64 {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized across all eight bytes (narrow values via the Operand::from_* constructors, which zero the tail); this arm is plain data.
         unsafe { self.operands[idx].i64 }
     }
 
     #[allow(dead_code)]
     pub(crate) fn operand_f32(&self, idx: usize) -> f32 {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized; this arm is plain data in the low four bytes.
         unsafe { self.operands[idx].f32 }
     }
 
     #[allow(dead_code)]
     pub(crate) fn operand_f64(&self, idx: usize) -> f64 {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized across all eight bytes (narrow values via the Operand::from_* constructors, which zero the tail); this arm is plain data.
         unsafe { self.operands[idx].f64 }
     }
 
     #[allow(dead_code)]
     pub(crate) fn operand_select(&self) -> u32 {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized; this arm is plain data in the low four bytes.
         unsafe { self.operands[0].select }
     }
 
     #[allow(dead_code)]
     pub(crate) fn operand_local_addr(&self) -> u32 {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized; this arm is plain data in the low four bytes.
         unsafe { self.operands[0].local_addr }
     }
 
     #[allow(dead_code)]
     pub(crate) fn operand_memarg(&self, idx: usize) -> MemArg {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized across all eight bytes (narrow values via the Operand::from_* constructors, which zero the tail); this arm is plain data.
         unsafe { self.operands[idx].memarg }
     }
 
     pub(crate) fn operand_jump_addr(&self, idx: usize) -> usize {
+        // SAFETY: DecodedInstr operands are copied from the parser-built stream, whose operands are fully initialized; this arm is plain data in the low four bytes.
         unsafe { self.operands[idx].jump_addr as usize }
     }
 
@@ -119,9 +128,11 @@ pub(crate) fn build_program(
         if meta.start + meta.len > instrs.len() || meta.len == 0 {
             return None;
         }
+        // SAFETY: meta.start is an instruction head slot; the parser's InstructionGenerator writes the Op there and operands in the following slots, and the bounds check above keeps start + len inside the stream.
         let op = unsafe { instrs[meta.start].op };
         let mut operands = SmallVec::with_capacity(meta.len.saturating_sub(1));
         for operand_idx in 1..meta.len {
+            // SAFETY: the slots after the head hold operands under the same stream layout, and parser-built operands are fully initialized (narrow values via the Operand::from_* constructors, wide ones via eight-byte arms).
             operands.push(unsafe { instrs[meta.start + operand_idx].operand });
         }
         start_to_record.insert(meta.start, record_idx);

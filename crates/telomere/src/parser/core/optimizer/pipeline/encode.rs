@@ -253,6 +253,7 @@ fn local_get4_run_operands(op: &LoweredOp) -> Option<Vec<LoweredOperand>> {
     let LoweredOperand::Raw(encoded_count) = op.operands.first()? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     let count = unsafe {
         Operand {
             encoded: *encoded_count,
@@ -754,6 +755,7 @@ fn lowered_op_is_noop(op: &LoweredOp) -> bool {
     let Some(LoweredOperand::Raw(encoded)) = op.operands.first() else {
         return false;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     unsafe { Operand { encoded: *encoded }.drop_size == 0 }
 }
 
@@ -926,10 +928,12 @@ fn raw_local_addr(operand: Option<&LoweredOperand>) -> Option<u32> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     Some(unsafe { Operand { encoded: *encoded }.local_addr })
 }
 
 fn raw_u32_operand(value: u32) -> LoweredOperand {
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand::from_u32(value).encoded })
 }
 
@@ -972,6 +976,7 @@ fn is_integer_i32_cmp32(kind_operand: &LoweredOperand) -> bool {
     let LoweredOperand::Raw(encoded) = kind_operand else {
         return false;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     let kind = unsafe { Operand { encoded: *encoded }.u32 };
     let Some((op, _)) = decode_local_cmp32_kind(kind) else {
         return false;
@@ -1072,6 +1077,7 @@ fn poolable_raw_operand(op: Op, operand_index: usize, operands: &[LoweredOperand
     let Some(LoweredOperand::Raw(kind_raw)) = operands.first() else {
         return false;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     let kind = unsafe { Operand { encoded: *kind_raw }.u32 };
     if std::ptr::fn_addr_eq(op, vm::op_local_binop32 as Op)
         || std::ptr::fn_addr_eq(op, vm::op_local_binop32_set4 as Op)
@@ -1122,18 +1128,22 @@ mod tests {
     };
 
     fn raw_local(local_addr: u32) -> LoweredOperand {
-        LoweredOperand::Raw(unsafe { Operand { local_addr }.encoded })
+        // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
+        LoweredOperand::Raw(unsafe { Operand::from_local_addr(local_addr).encoded })
     }
 
     fn raw_i32(value: i32) -> LoweredOperand {
+        // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
         LoweredOperand::Raw(unsafe { Operand::from_i32(value).encoded })
     }
 
     fn raw_u32(value: u32) -> LoweredOperand {
+        // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
         LoweredOperand::Raw(unsafe { Operand::from_u32(value).encoded })
     }
 
     fn raw_memarg(offset: u32) -> LoweredOperand {
+        // SAFETY: MemArg is an eight-byte plain-data struct (two u32 fields, no padding), so the literal initializes the whole union and the encoded arm reads no uninitialized bytes.
         LoweredOperand::Raw(unsafe {
             Operand {
                 memarg: MemArg { align: 0, offset },
@@ -1180,6 +1190,7 @@ mod tests {
         ));
         let materialized = lowered.materialize();
         assert!(std::ptr::fn_addr_eq(
+            // SAFETY: materialize() writes each op at the head slot of its instruction group (the op_lens layout), so this slot holds an Op.
             unsafe { materialized.instrs[0].op },
             vm::op_i32_load_store_local_base_local_get4 as Op
         ));
@@ -1231,6 +1242,7 @@ mod tests {
         let materialized = lowered.materialize();
         assert_eq!(materialized.op_lens[0], 8);
         assert_eq!(
+            // SAFETY: this slot is an operand slot under the materialized stream's op_lens layout, and materialized operands are fully initialized.
             unsafe { materialized.instrs[7].operand.u32 },
             9,
             "fused handler must skip its operands and the consumed local.get"
@@ -1279,6 +1291,7 @@ mod tests {
         let materialized = lowered.materialize();
         assert_eq!(materialized.op_lens[0], 8);
         assert_eq!(
+            // SAFETY: this slot is an operand slot under the materialized stream's op_lens layout, and materialized operands are fully initialized.
             unsafe { materialized.instrs[7].operand.u32 },
             13,
             "fused handler must skip its operands and the consumed load pair"
@@ -1317,10 +1330,12 @@ mod tests {
         let Some(LoweredOperand::Raw(count)) = lowered.code[0].operands.first() else {
             panic!("run must encode count")
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: *count }.u32 }, 6);
         let Some(LoweredOperand::Raw(skip)) = lowered.code[0].operands.last() else {
             panic!("run must encode skip")
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: *skip }.u32 }, 12);
         assert!(verify(&lowered));
     }
@@ -1376,9 +1391,11 @@ mod tests {
         let Some(LoweredOperand::Raw(skip)) = lowered.code[0].operands.get(13) else {
             panic!("fused op must encode a raw skip slot")
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: *skip }.u32 }, 23);
         let materialized = lowered.materialize();
         assert!(std::ptr::fn_addr_eq(
+            // SAFETY: materialize() writes each op at the head slot of its instruction group (the op_lens layout), so this slot holds an Op.
             unsafe { materialized.instrs[0].op },
             vm::op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if
                 as Op
@@ -1454,6 +1471,7 @@ mod tests {
         assert_eq!(lowered.code[0].operands.len(), 15);
         let materialized = lowered.materialize();
         assert!(std::ptr::fn_addr_eq(
+            // SAFETY: materialize() writes each op at the head slot of its instruction group (the op_lens layout), so this slot holds an Op.
             unsafe { materialized.instrs[0].op },
             vm::op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if as Op
         ));
@@ -1891,9 +1909,11 @@ mod tests {
         let Some(LoweredOperand::Raw(local)) = lowered.code[0].operands.get(8) else {
             panic!("fused branch must append taken local")
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: *local }.local_addr }, 4);
         let materialized = lowered.materialize();
         assert!(std::ptr::fn_addr_eq(
+            // SAFETY: materialize() writes each op at the head slot of its instruction group (the op_lens layout), so this slot holds an Op.
             unsafe { materialized.instrs[0].op },
             vm::op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4
                 as Op
@@ -1943,10 +1963,12 @@ mod tests {
         let Some(LoweredOperand::Raw(local)) = lowered.code[0].operands.get(8) else {
             panic!("fused branch must append fallthrough local")
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: *local }.local_addr }, 4);
         let Some(LoweredOperand::Raw(skip)) = lowered.code[0].operands.get(9) else {
             panic!("fused branch must append fallthrough skip")
         };
+        // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
         assert_eq!(unsafe { Operand { encoded: *skip }.u32 }, 12);
         assert!(verify(&lowered));
     }

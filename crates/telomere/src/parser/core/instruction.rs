@@ -489,6 +489,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         stack_before: &crate::parser::core::type_checker::StackSnapshot,
         stack_after: &crate::parser::core::type_checker::StackSnapshot,
     ) -> (usize, usize) {
+        // SAFETY: start is the head slot of an instruction in the stream being emitted; the InstructionGenerator writes the Op there and operands in the following slots.
         let op = unsafe { instrs[start].op };
         if is_simd_fixed_two_to_one_op(op) {
             return fixed_stack_shape(2, 1, stack_before, stack_after);
@@ -499,10 +500,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         if std::ptr::fn_addr_eq(op, vm::op_call as Op)
             || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
         {
+            // SAFETY: for a call op the parser writes the callee funcidx as the operand in slot start + 1, and stream operands are fully initialized.
             let funcidx = unsafe { instrs[start + 1].operand.u32 };
             return self.direct_call_stack_shape(funcidx, 0, stack_before, stack_after);
         }
         if std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op) {
+            // SAFETY: for a call_indirect op the parser writes the typeidx as the operand in slot start + 2, and stream operands are fully initialized.
             let typeidx = unsafe { instrs[start + 2].operand.u32 };
             return self.typeidx_call_stack_shape(typeidx, 1, stack_before, stack_after);
         }
@@ -4448,6 +4451,7 @@ mod tests {
         let FunctionBody::Wasm(func) = &module.codes.0[func_index] else {
             panic!("expected wasm function body");
         };
+        // SAFETY: this slot is the head of an instruction in the parser-built stream; the InstructionGenerator writes the Op there and operands in the following slots.
         unsafe { func.expr[index].op }
     }
 
@@ -4467,6 +4471,7 @@ mod tests {
         func.op_lens
             .iter()
             .map(|len| {
+                // SAFETY: this slot is the head of an instruction in the parser-built stream; the InstructionGenerator writes the Op there and operands in the following slots.
                 let op = unsafe { func.expr[cursor].op };
                 cursor += usize::from(*len);
                 op
@@ -4491,6 +4496,7 @@ mod tests {
         let FunctionBody::Wasm(func) = &module.codes.0[0] else {
             panic!("expected wasm function body");
         };
+        // SAFETY: slots after an instruction head hold operands under the stream layout, and parser-built operands are fully initialized (narrow values via Operand::from_* constructors, wide ones via eight-byte arms).
         unsafe { func.expr[index].operand }
     }
 
@@ -4607,6 +4613,7 @@ mod tests {
 
     #[test]
     fn parser_decodes_indexed_memarg_memidx_and_offset() {
+        // SAFETY: operand_at copies the operand out of an operand slot of a parser-built stream, whose operands are fully initialized, and the memarg arm is plain data.
         let memarg = unsafe {
             operand_at(
                 r#"
@@ -4621,6 +4628,7 @@ mod tests {
             )
             .memarg
         };
+        // SAFETY: operand_at copies the operand out of an operand slot of a parser-built stream, whose operands are fully initialized, and the u32 arm is plain data.
         let memidx = unsafe {
             operand_at(
                 r#"

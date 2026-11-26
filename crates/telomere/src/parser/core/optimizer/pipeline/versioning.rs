@@ -1103,6 +1103,7 @@ fn fold_const_base_memarg(base: u32, memarg: Option<&LoweredOperand>) -> Option<
     // effective address is >= 2^32 and the generic (checked) path has to
     // trap with MemoryIndexOutOfRange instead of wrapping in-bounds (#263).
     memarg.offset = memarg.offset.checked_add(base)?;
+    // SAFETY: MemArg is an eight-byte plain-data struct (two u32 fields, no padding), so the literal initializes the whole union and the encoded arm reads no uninitialized bytes.
     Some(LoweredOperand::Raw(unsafe { Operand { memarg }.encoded }))
 }
 
@@ -1139,6 +1140,7 @@ fn raw_local_addr(operand: Option<&LoweredOperand>) -> Option<u32> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     Some(unsafe { crate::common::Operand { encoded: *encoded }.local_addr })
 }
 
@@ -1146,6 +1148,7 @@ fn raw_i32(operand: Option<&LoweredOperand>) -> Option<i32> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     Some(unsafe { crate::common::Operand { encoded: *encoded }.i32 })
 }
 
@@ -1153,18 +1156,22 @@ fn raw_memarg(operand: Option<&LoweredOperand>) -> Option<MemArg> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data spanning all eight bytes.
     Some(unsafe { Operand { encoded: *encoded }.memarg })
 }
 
 fn raw_local_operand(local_addr: u32) -> LoweredOperand {
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand::from_local_addr(local_addr).encoded })
 }
 
 fn raw_i32_operand(i32: i32) -> LoweredOperand {
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand::from_i32(i32).encoded })
 }
 
 fn raw_u32_operand(u32: u32) -> LoweredOperand {
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand::from_u32(u32).encoded })
 }
 
@@ -1394,6 +1401,7 @@ fn raw_u32(operand: Option<&LoweredOperand>) -> Option<u32> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     Some(unsafe { crate::common::Operand { encoded: *encoded }.u32 })
 }
 

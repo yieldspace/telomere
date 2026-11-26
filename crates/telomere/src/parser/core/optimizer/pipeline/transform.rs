@@ -622,6 +622,7 @@ fn raw_local_addr(operand: Option<&LoweredOperand>) -> Option<u32> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     Some(unsafe { Operand { encoded: *encoded }.local_addr })
 }
 
@@ -653,7 +654,8 @@ fn local_set_op_for_ty(ty: ValType) -> Op {
 }
 
 fn raw_local_operand(local_addr: u32) -> LoweredOperand {
-    LoweredOperand::Raw(unsafe { Operand { local_addr }.encoded })
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
+    LoweredOperand::Raw(unsafe { Operand::from_local_addr(local_addr).encoded })
 }
 
 fn fold_i32_const_window(
@@ -955,6 +957,7 @@ fn same_raw_operand(lhs: &LoweredOperand, rhs: &LoweredOperand) -> bool {
 }
 
 fn raw_u32_operand(value: u32) -> LoweredOperand {
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand::from_u32(value).encoded })
 }
 
@@ -1402,6 +1405,7 @@ fn raw_i32(operand: Option<&LoweredOperand>) -> Option<i32> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data in its low four bytes.
     Some(unsafe { Operand { encoded: *encoded }.i32 })
 }
 
@@ -1409,14 +1413,17 @@ fn raw_i64(operand: Option<&LoweredOperand>) -> Option<i64> {
     let LoweredOperand::Raw(encoded) = operand? else {
         return None;
     };
+    // SAFETY: the Raw payload is a fully initialized [u8; 8] value, and this arm is plain data spanning all eight bytes.
     Some(unsafe { Operand { encoded: *encoded }.i64 })
 }
 
 fn raw_i32_operand(value: i32) -> LoweredOperand {
+    // SAFETY: the Operand::from_* constructors fully initialize the union (value bytes plus a zeroed tail), so the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand::from_i32(value).encoded })
 }
 
 fn raw_i64_operand(value: i64) -> LoweredOperand {
+    // SAFETY: the i64 arm spans all eight bytes of the union, so the literal fully initializes it and the encoded arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { Operand { i64: value }.encoded })
 }
 
