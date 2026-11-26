@@ -211,11 +211,7 @@ fn rec_group_eq_memoized(
     result
 }
 
-fn rec_member_eq(
-    lhs: &CoreRecMember,
-    rhs: &CoreRecMember,
-    cache: &mut IdentityEqCache,
-) -> bool {
+fn rec_member_eq(lhs: &CoreRecMember, rhs: &CoreRecMember, cache: &mut IdentityEqCache) -> bool {
     lhs.signature == rhs.signature
         && lhs.is_final == rhs.is_final
         && match (&lhs.supertype, &rhs.supertype) {
