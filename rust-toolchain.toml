@@ -19,6 +19,12 @@
 #
 # Remove this pin once the dispatch loop no longer depends on an
 # optimisation that stable Rust does not guarantee.
+#
+# The loop-dispatch fallback (cargo feature `loop-dispatch-fallback`,
+# PR #387) makes correctness independent of this optimisation, but it
+# is a safety net, not the default build; the pin protects the
+# threaded main path. Decision record: docs/core/toolchain-pin.md
+# (#114).
 [toolchain]
 channel = "1.96.0"
 components = ["clippy", "rustfmt"]
