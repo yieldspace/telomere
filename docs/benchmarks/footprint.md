@@ -599,12 +599,12 @@ re-baselined the two `release-size` `core-jit` series a further
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,593,688 | 1,205,863 |
-| `release` | `component` | 2,711,648 | 2,151,575 |
-| `release` | `wasi` | 2,939,144 | 2,325,959 |
+| `release` | `component` | 2,714,216 | 2,151,575 |
+| `release` | `wasi` | 2,941,696 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
 | `release` | `core-jit` | 2,145,040 | 1,648,743 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
-| `release` | `wasi-threads` | 3,154,848 | 2,493,271 |
+| `release` | `wasi-threads` | 3,157,416 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,119,576 | 790,695 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
@@ -615,6 +615,34 @@ re-baselined the two `release-size` `core-jit` series a further
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+The #365 change (plain type exports mint an `(eq)` face in the
+type index space, confined to validation identity, with every
+consumer resolving the `(eq)` generic to the type it denotes)
+was re-baselined after the branch merged current `main` at
+`2d653bf` (PRs #379, #382 and #383). Attribution was isolated by
+measuring current `main` alone three times (workflow_dispatch
+runs 45812192789, 45812208358 and 45812224165 on `main` at
+`2d653bf`; all three runs pass the gate). This change's own
+delta against the main control is confined to the three
+configurations that link `telomere-component`: in `release`,
+stripped file +4,448 B (`component`) and +4,432 B (`wasi`,
+`wasi-threads`) and stripped `.text` +4,128 B on all three; in
+`release-size`, stripped file +3,120 B and stripped `.text`
++2,704 B on all three. Every other series is byte-identical to
+`main` in both profiles. Against the checked-in baseline only
+the three `release` stripped file series grow (`component`
++2,568 B, `wasi` +2,552 B, `wasi-threads` +2,568 B; the
+`release` `.text` series and every `release-size` series
+measure below their retained baselines), so only those three
+series are re-baselined to the branch measurements
+(workflow_dispatch runs 45813419836, 45813435144 and
+45813449727 on the branch at `c503a07`; spread 0 B on every
+series). Against the original #164 baseline, the largest
+cumulative growth is now the `release` `component` stripped
+file series at +11.53% (2,433,656 B to 2,714,216 B). The
+baseline was re-measured on the branch and updated as recorded
+above, following the procedure below.
 
 PR #378 was re-baselined a second time after the Codex P2 fix
 (commit `1d4529f`: `atomic_load64_half` formed the i64 atomic
