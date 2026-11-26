@@ -8096,6 +8096,7 @@ mod tests {
             jit_trap_pc: std::ptr::null(),
             jit_stop_pc: std::ptr::null(),
             jit_native_stack_floor: 0,
+            trampoline_bounced: false,
         }
     }
 

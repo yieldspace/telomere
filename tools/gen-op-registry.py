@@ -181,6 +181,7 @@ def collect_from_parser(names: dict[str, dict]) -> None:
         "i32_numeric_token_state_transition_value", "instr_index_from_base",
         "jit_call_direct", "jit_call_direct_wasm_fast", "jit_call_indirect",
         "list_crc_summary_value", "read_u16_linear", "read_u32_linear",
+        "resume_loop_dispatch",
         "run_module_function", "run_module_function_result",
         "run_module_function_sync_with_runtime",
         "run_module_function_with_driver",
@@ -288,6 +289,12 @@ SHAPE_OVERRIDES: dict[str, tuple] = {
     # The dispatch trampoline itself: it forwards the instruction at
     # its operand pointer and consumes no operands of its own.
     "call_code": ("exact", 0),
+    # The #114 loop-dispatch fallback's trampoline driver: the
+    # fallback counterpart of `call_code`. It dispatches the
+    # instruction at its pointer from its own frame and consumes no
+    # operands of its own (each dispatched handler consumes its own);
+    # it is never lowered from a wasm instruction.
+    "drive_loop_dispatch": ("exact", 0),
     # Terminal trap: `_tail_code` is unused and it never dispatches.
     "op_unreachable": ("exact", 0),
     # Frame-entry trampolines: `_tail_code` is unused; they are

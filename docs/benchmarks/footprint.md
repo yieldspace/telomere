@@ -606,19 +606,61 @@ unchanged.
 | `release` | `component` | 2,717,576 | 2,151,575 |
 | `release` | `wasi` | 2,945,072 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
-| `release` | `core-jit` | 2,155,128 | 1,656,599 |
-| `release` | `core-aot` | 1,639,600 | 1,239,095 |
+| `release` | `core-jit` | 2,156,168 | 1,657,623 |
+| `release` | `core-aot` | 1,639,992 | 1,239,575 |
 | `release` | `wasi-threads` | 3,160,776 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,119,576 | 790,695 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
 | `release-size` | `wasi` | 1,820,136 | 1,337,047 |
 | `release-size` | `core-nosimd` | 1,004,784 | 711,159 |
-| `release-size` | `core-jit` | 1,552,128 | 1,102,503 |
-| `release-size` | `core-aot` | 1,158,576 | 815,847 |
+| `release-size` | `core-jit` | 1,553,968 | 1,104,327 |
+| `release-size` | `core-aot` | 1,159,392 | 816,743 |
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+The PR #387 change (the #114 loop-dispatch fallback
+-- cargo feature `loop-dispatch-fallback`, default off:
+`call_code` bounces to the trampoline driver
+`vm::drive_loop_dispatch` instead of dispatching the
+next handler, and all four interpreter segment entries
+route through the driver -- plus the op-registry fix
+that registers `drive_loop_dispatch` with a justified
+Exact(0) shape override as `call_code`'s fallback
+counterpart and excludes `resume_loop_dispatch` from
+the registry generator's scan) was re-baselined on
+the #114 branch. Attribution was isolated with a
+three-run control against unmodified `main` at
+`e1be4a9` (workflow_dispatch runs 45890660462,
+45890676048 and 45890692847; byte-identical across
+the three, and the gate passes on `main`): against
+`main` the branch moves only the eight series of the
+`core-aot` and `core-jit` configurations (release:
+core-aot stripped file +496 B and stripped `.text`
++496 B, core-jit stripped file +1,040 B and stripped
+`.text` +1,024 B; release-size: core-aot stripped
+file +976 B and stripped `.text` +960 B, core-jit
+stripped file +1,840 B and stripped `.text`
++1,824 B); the `baseline` configuration is
+byte-identical and every other series measures below
+`main` (the interpreter-only and component-linked
+configurations shrink by 1,536-4,240 B -- a
+codegen/layout effect of the vm.rs dispatch
+restructure with the feature off). Against the
+checked-in baseline only those eight series grow, so
+only those eight series are re-baselined to the
+branch measurements (workflow_dispatch runs
+45889106469, 45889123389 and 45889141430 on the
+branch at `a8b9969`; spread 0 B on every series, and
+the pull-request run 45889099409 at the same head
+measured byte-identically). Against the original
+#164 baseline, the largest cumulative growth remains
+the `release` `component` stripped file series at
++11.67% (2,433,656 B to 2,717,576 B; retained -- the
+branch measures below it); the re-baselined
+`core-jit` `release` stripped file series stands at
++8.37% (1,989,584 B to 2,156,168 B).
 
 The PR #384 Codex review round-5 fix
 (`assert_type_ids_subtype_of` in

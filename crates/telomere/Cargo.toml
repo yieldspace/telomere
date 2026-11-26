@@ -57,6 +57,17 @@ simd = ["dep:wide"]
 threads = ["dep:tokio"]
 vm-profile = []
 vm-diagnostics = []
+# #114: loop-dispatch fallback for the interpreter. With this feature,
+# `call_code` does not tail-dispatch into the next handler; it records
+# the next instruction in `ctx.cont` and returns to a trampoline driver
+# loop that dispatches one handler per iteration, so execution
+# correctness and host-stack depth no longer depend on LLVM applying
+# sibling-call optimisation to the dispatch chain. The main path (this
+# feature off) is the direct-threaded tail-call dispatch and is
+# unchanged. The fallback is a safety net for toolchains whose codegen
+# breaks the tail-call contract (measured: 1.97.0 and later), not a
+# migration target; see docs/core/optimizer.md.
+loop-dispatch-fallback = []
 measure-switches = []
 unstable-internals = []
 # Executing precompiled native code: the JIT cache / load path, runtime

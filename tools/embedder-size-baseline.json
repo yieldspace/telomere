@@ -1,22 +1,24 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions 'Embedder footprint' runs for the PR #384 Codex review round-5 fix (branch fix/365-eq-face-identity at head 8b544fb79a82b5ea9471d61e633465b42631ce2b \u2014 assert_type_ids_subtype_of in decoder/validator/subtyping.rs now resolves both equality chains to their roots before comparing, so two plain-export faces of one resource compare as the resource they both denote, and validate_eq_mention in decoder/validator/validate_types.rs now judges a plain export face by the naming requirement of the type it denotes, so faces of primitives and anonymous containers no longer require a surface name while faces of named types still do) on top of the round-4 tree at 0530897 (ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45872799759, 45872814913 and 45872830716 against the branch produced byte-identical sizes for every gated series; the four core-jit series in this file are retained from PR #381's campaign (workflow_dispatch runs 45817815567, 45817829767 and 45817843974)",
-    "commit": "8b544fb79a82b5ea9471d61e633465b42631ce2b",
+    "summary": "GitHub Actions 'Embedder footprint' runs for PR #387 (branch fix/114-tailcall-fallback at head a8b99695976516079406aa39e05a4573b8fb9a59 \u2014 the #114 loop-dispatch fallback: cargo feature `loop-dispatch-fallback` (default off) makes `call_code` bounce to the trampoline driver `vm::drive_loop_dispatch` instead of dispatching the next handler, with all four interpreter segment entries routed through the driver; plus the op-registry fix that registers `drive_loop_dispatch` with a justified Exact(0) SHAPE_OVERRIDES entry as `call_code`'s fallback counterpart, adds `resume_loop_dispatch` to the registry generator's not_handlers set, and regenerates op_registry.rs; merged with current main at e1be4a9 (PR #384)) (ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45889106469, 45889123389 and 45889141430 against the branch produced byte-identical sizes for every gated series; a three-run control against unmodified main (workflow_dispatch runs 45890660462, 45890676048 and 45890692847) isolates the attribution recorded in the derivation",
+    "commit": "a8b99695976516079406aa39e05a4573b8fb9a59",
     "date": "2026-11-27",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45872799759,
-      45872814913,
-      45872830716
+      45889106469,
+      45889123389,
+      45889141430
     ],
     "cross_check_run_ids": [
-      45871375119,
-      45865649303
+      45889099409,
+      45890660462,
+      45890676048,
+      45890692847
     ],
-    "derivation": "Re-baseline for the PR #384 Codex review round-5 fix (assert_type_ids_subtype_of resolves both equality chains before comparing resource types; validate_eq_mention judges a plain export face by the denoted type's naming requirement), following the round-4 re-baseline at 0530897. Attribution was isolated against the round-4 tree itself: pull-request run 45865649303 measured the pre-fix head 0530897 in CI and passed the gate, and the round-5 fix commit 8b544fb \u2014 the only change between the two heads \u2014 moves only the twelve series of the three configurations that link telomere-component: in release, stripped file +208 B and stripped .text +208 B on all three; in release-size, stripped file +224 B (component, wasi-threads) and +240 B (wasi), stripped .text +224 B (component, wasi-threads) and +240 B (wasi). Every other series is byte-identical between the two heads. Against the checked-in baseline only the three release stripped file series grow (+208 B each; every .text series and every release-size series measures at or below its retained baseline), so only those three series are re-baselined to the branch measurements and every other baseline is retained, following the established practice of re-baselining growth only. Run-to-run spread was 0 B for every gated series across the three branch samples, and the pull-request run 45871375119 at the same head measured byte-identically once more. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.67% (2,433,656 B to 2,717,576 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Merge note for the integration with main cc6550bce007ca8d747160778aab6c3e41af272e (PR #381), retained from the round-2 campaign record: the four core-jit series are retained from PR #381's second re-baseline campaign (branch runs 45817815567, 45817829767 and 45817843974; main control runs 45817858119, 45817871880 and 45817883664 on main at 2d653bfae0bd3ac995c17a0d26154f531762d28c), which re-baselined them for the #193 register mapping and the Codex P2 REX fix in movsx_vreg32; against the original #164 baseline those series stand at +8.32% (release stripped file, 1,989,584 B to 2,155,128 B), +7.48% (release stripped .text), +4.57% (release-size stripped file) and +4.24% (release-size stripped .text). The three release stripped file series of the component-linked configurations are from this PR's round-1, round-2, round-3 and round-4 campaigns, and every other series is identical in the campaigns' baselines, so the merged file is the union of the re-baselines."
+    "derivation": "Re-baseline for PR #387 (the #114 loop-dispatch fallback and its op-registry fix), following the PR #384 Codex review round-5 re-baseline. Attribution was isolated with a three-run control against unmodified main at e1be4a9 (workflow_dispatch runs 45890660462, 45890676048 and 45890692847; byte-identical across the three, and the size gate passes on main): against main, the branch moves only the eight series of the core-aot and core-jit configurations \u2014 in release, core-aot stripped file +496 B and stripped .text +496 B, core-jit stripped file +1,040 B and stripped .text +1,024 B; in release-size, core-aot stripped file +976 B and stripped .text +960 B, core-jit stripped file +1,840 B and stripped .text +1,824 B \u2014 while the baseline configuration is byte-identical and every other series measures below main (the interpreter-only and component-linked configurations shrink by 1,536\u20134,240 B, a codegen/layout effect of the vm.rs dispatch restructure with the feature off). The pull-request run 45889099409 at the same head measured byte-identically to the three branch dispatch runs. Against the checked-in baseline only those eight series grow (release core-aot stripped file +392 B and stripped .text +480 B; release core-jit stripped file +1,040 B and stripped .text +1,024 B; release-size core-aot stripped file +816 B and stripped .text +896 B; release-size core-jit stripped file +1,840 B and stripped .text +1,824 B), so only those eight series are re-baselined to the branch measurements and every other baseline is retained, following the established practice of re-baselining growth only. Run-to-run spread was 0 B for every gated series across the three branch samples and the three main samples. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series at +11.67% (2,433,656 B to 2,717,576 B; that series is retained \u2014 the branch measures below it), and the re-baselined core-jit release stripped file series stands at +8.37% (1,989,584 B to 2,156,168 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -72,22 +74,22 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2155128,
-          "threshold": 2155128
+          "baseline": 2156168,
+          "threshold": 2156168
         },
         "stripped_text_bytes": {
-          "baseline": 1656599,
-          "threshold": 1656599
+          "baseline": 1657623,
+          "threshold": 1657623
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1639600,
-          "threshold": 1639600
+          "baseline": 1639992,
+          "threshold": 1639992
         },
         "stripped_text_bytes": {
-          "baseline": 1239095,
-          "threshold": 1239095
+          "baseline": 1239575,
+          "threshold": 1239575
         }
       },
       "wasi-threads": {
@@ -154,22 +156,22 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1552128,
-          "threshold": 1552128
+          "baseline": 1553968,
+          "threshold": 1553968
         },
         "stripped_text_bytes": {
-          "baseline": 1102503,
-          "threshold": 1102503
+          "baseline": 1104327,
+          "threshold": 1104327
         }
       },
       "core-aot": {
         "stripped_file_bytes": {
-          "baseline": 1158576,
-          "threshold": 1158576
+          "baseline": 1159392,
+          "threshold": 1159392
         },
         "stripped_text_bytes": {
-          "baseline": 815847,
-          "threshold": 815847
+          "baseline": 816743,
+          "threshold": 816743
         }
       },
       "wasi-threads": {

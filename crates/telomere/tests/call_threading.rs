@@ -152,6 +152,211 @@ fn call_loop_keeps_direct_threading_on_a_small_stack() {
         .expect("the small-stack call loop test thread must not panic");
 }
 
+/// The #114 loop-dispatch fallback, exercised on the tripwire's shape.
+///
+/// This test exists only in `loop-dispatch-fallback` builds. It runs
+/// the same 200,000-cycle body as the small-stack tripwire above on
+/// the same 4 MiB stack. On toolchains that break the tail-call
+/// contract (measured: 1.97.0 and every later release measured so
+/// far), the threaded build aborts in this shape -- that is what the
+/// tripwire detects -- while a fallback build completes it, because
+/// the trampoline driver dispatches one handler per loop iteration
+/// from a single frame and host-stack depth no longer grows with the
+/// number of executed instructions. On the pinned toolchain both
+/// builds complete the shape; the fallback's cost is measured
+/// separately (see docs/core/optimizer.md).
+#[cfg(feature = "loop-dispatch-fallback")]
+#[test]
+fn call_loop_completes_on_a_small_stack_with_loop_dispatch_fallback() {
+    std::thread::Builder::new()
+        .name("call-loop-fallback-test".to_string())
+        .stack_size(CALL_LOOP_SMALL_STACK_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building a runtime for the fallback call loop test");
+            runtime.block_on(call_loop_body());
+        })
+        .expect("spawning the fallback call loop test thread")
+        .join()
+        .expect("the fallback call loop test thread must not panic");
+}
+
+/// The #114 loop-dispatch fallback in the lazy-JIT-call shape: an
+/// interpreted loop calling a *compiled* callee (Codex review on
+/// PR #387).
+///
+/// The shape is forced with a 1,200-byte JIT code-cache cap: the tiny
+/// callee compiles (516 bytes emitted on x86_64) and stays resident,
+/// while the caller -- whose loop body carries value-neutral filler
+/// churn so its compiled form is ~3,000 bytes on x86_64 -- is rejected
+/// as too large and stays interpreted. Every call in the loop then
+/// crosses `enter_current_frame_from_lazy_call`: the callee runs
+/// natively and its continuation is dispatched on the interpreter
+/// side. The cache-stat assertions below pin that this really is the
+/// configuration running (caller rejected, exactly the callee
+/// resident), so the test cannot silently degenerate into a plain
+/// interpreted or fully native loop.
+///
+/// The fallback's first version routed the lazy-call continuation
+/// through `resume_loop_dispatch`, starting a second trampoline
+/// driver nested inside the driver that dispatched the call handler.
+/// One nesting level stayed on the host stack per call cycle, so
+/// stack depth grew with the number of cycles again -- the exact
+/// failure the fallback exists to remove. Measured on the pinned
+/// toolchain with an instrumented driver (temporary probe, not
+/// committed): the nesting depth reached the iteration count
+/// (20,000) and the stack pointer descended ~5.76 MB over the loop;
+/// after the fix (the lazy-call entry returns `call_code`'s bounce
+/// to the enclosing driver) the depth stays at 1 and the descent is
+/// zero, and 200,000 cycles complete on a 2 MiB stack.
+///
+/// A completion assertion alone cannot trip on the old behaviour --
+/// the native-entry stack floor declines native entry as the stack
+/// runs low, which unwinds the nesting and lets even the old build
+/// finish on small stacks (with the compiled callee demoted to the
+/// interpreter for stretches). What this test pins is the shape and
+/// the continuation's correctness through the bounce-to-driver path:
+/// a wrong `ctx.cont`, a lost bounce, or a double dispatch in that
+/// hand-off fails the result or the cache-stat assertions here.
+#[cfg(all(
+    feature = "loop-dispatch-fallback",
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[test]
+fn interpreted_loop_calling_compiled_callee_completes_on_a_small_stack_with_loop_dispatch_fallback()
+{
+    std::thread::Builder::new()
+        .name("lazy-call-fallback-test".to_string())
+        .stack_size(CALL_LOOP_SMALL_STACK_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building a runtime for the lazy-call fallback test");
+            runtime.block_on(lazy_call_loop_body());
+        })
+        .expect("spawning the lazy-call fallback test thread")
+        .join()
+        .expect("the lazy-call fallback test thread must not panic");
+}
+
+#[cfg(all(
+    feature = "loop-dispatch-fallback",
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+async fn lazy_call_loop_body() {
+    // Value-neutral filler churned on a scratch local, repeated so the
+    // caller's compiled form is several times the code-cache cap below
+    // on every supported target, while the callee stays tiny.
+    let filler = r#"
+        local.get $scratch
+        i32.const 3
+        i32.mul
+        i32.const 7
+        i32.xor
+        i32.const 1
+        i32.add
+        local.set $scratch
+        local.get $scratch
+        i32.const 5
+        i32.mul
+        i32.const 11
+        i32.xor
+        i32.const 2
+        i32.add
+        local.set $scratch
+"#;
+    let wat = format!(
+        r#"
+        (module
+          (func $step (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+          (func (export "run") (param $remaining i32) (result i32)
+            (local $acc i32)
+            (local $scratch i32)
+            i32.const 0
+            local.set $acc
+            block $done
+              loop $loop
+                local.get $remaining
+                i32.eqz
+                br_if $done
+
+                local.get $acc
+                call $step
+                local.set $acc
+
+                local.get $remaining
+                local.set $scratch
+        {filler}
+                local.get $remaining
+                i32.const 1
+                i32.sub
+                local.set $remaining
+                br $loop
+              end
+            end
+            local.get $acc))
+        "#,
+        filler = filler.repeat(16)
+    );
+
+    const CODE_CACHE_CAP: u32 = 1_200;
+    let mut runtime_config = telomere::RuntimeConfig::default();
+    runtime_config.jit = telomere::JitConfig { enabled: true };
+    runtime_config.limits.max_code_cache_bytes = CODE_CACHE_CAP;
+    let store = Store::new_with_runtime_config(runtime_config);
+    let registry = Registry::new();
+    let instance = instantiate_wat(&wat, &store, &registry).await;
+
+    let iterations = 200_000;
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(iterations)]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(iterations)]));
+        }
+        other => panic!("lazy-call loop must succeed, got {other:?}"),
+    }
+
+    // Pin the shape: the caller was rejected as too large for the
+    // cache (so the loop ran interpreted) and exactly the tiny callee
+    // is resident as compiled code.
+    let stats = store.jit_cache_stats();
+    assert!(
+        stats.rejected_functions >= 1,
+        "the caller must be rejected as too large for the {CODE_CACHE_CAP}-byte          code cache, stats={stats:?}"
+    );
+    assert_eq!(
+        stats.compiled_functions, 1,
+        "exactly the callee must be resident as compiled code, stats={stats:?}"
+    );
+    assert!(
+        stats.used_bytes <= CODE_CACHE_CAP as usize,
+        "resident code must respect the cache cap, stats={stats:?}"
+    );
+}
+
 /// Stack size for the ref.is_null loop test below (#282).
 ///
 /// The loop runs 2,000,000 iterations. With the #240 identity barrier in

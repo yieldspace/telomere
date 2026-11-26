@@ -635,8 +635,15 @@ impl<'a> Scheduler<'a> {
                     jit_trap_pc: std::ptr::null(),
                     jit_stop_pc: std::ptr::null(),
                     jit_native_stack_floor: 0,
+                    trampoline_bounced: false,
                 };
+                #[cfg(not(feature = "loop-dispatch-fallback"))]
                 let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
+                // #114: in loop-dispatch fallback builds the segment
+                // runs through the trampoline driver instead of the
+                // direct-threaded chain (see `vm::drive_loop_dispatch`).
+                #[cfg(feature = "loop-dispatch-fallback")]
+                let res = unsafe { crate::runtime::vm::drive_loop_dispatch(fp, &mut ec) };
                 if let Some(metering) = self.store.metering_ref() {
                     metering.release(ec.reserved, ec.budget, ec.budget_epoch);
                     ec.reserved = 0;

@@ -1527,6 +1527,27 @@ pub struct ExecuteContext<'a> {
     // builds.
     #[allow(dead_code)]
     pub(crate) jit_native_stack_floor: usize,
+    /// #114: loop-dispatch fallback step marker (feature
+    /// `loop-dispatch-fallback` only).
+    ///
+    /// In a fallback build, `call_code` does not dispatch the next
+    /// handler. It stores the next instruction in `cont` (its existing
+    /// per-dispatch store), sets this flag, and returns
+    /// `VMResult::Success(())`; the trampoline driver
+    /// (`runtime::vm::drive_loop_dispatch`) sees the flag, dispatches
+    /// the instruction named by `cont` itself, and repeats. A handler
+    /// return without the flag is a genuine segment end (suspend,
+    /// completion, or a JIT stop), exactly as in the threaded build.
+    /// The flag is false whenever control is outside a driver step:
+    /// drivers clear it before every dispatch, and it is set only by
+    /// `call_code`'s bounce, immediately before the dispatching
+    /// handler returns it unchanged. Appended at the end of the
+    /// struct for the same `offset_of!` reason as `jit_stop_pc`.
+    // Read and written only by the dispatch paths in
+    // `loop-dispatch-fallback` builds; the dead_code lint cannot see
+    // that use in other builds.
+    #[allow(dead_code)]
+    pub(crate) trampoline_bounced: bool,
 }
 
 /// Flat `(base, committed_len)` view of the active frame's default local

@@ -18,7 +18,10 @@ are only a preview of `lowered.materialize()`, and that instantiate uses
 Status notes record that `optimize_function` is the sole entry point, that the
 older pass/sink/versioning/expr modules were removed with no path back, and that
 the runtime has no matcher and executes the optimizer-chosen op family through
-direct-threaded handlers. The document ends with the regression commands to run.
+direct-threaded handlers. A closing section records the #114 loop-dispatch
+fallback: an opt-in build mode in which the interpreter's dispatch does not
+depend on tail-call optimisation, with its measured cost. The document ends
+with the regression commands to run.
 
 core optimizer は、`LoweredFunction` を唯一の正本 artifact にした単一 pipeline である。外部 feature や環境変数で optimizer 実装を切り替える構成は廃止した。
 
@@ -54,6 +57,18 @@ optimizer は次の 7 段を持つ。
 - 旧 `pass.rs` / `sink.rs` / `versioning.rs` / `expr.rs` は廃止し、選択・versioning・encode はすべて `pipeline/*` にある
 - fail-closed path は `LoweredFunction::from_materialized(...)` のみで、旧 optimizer 実装へ戻る経路はない
 - runtime は matcher を持たず、optimizer が選んだ op family をそのまま direct-threaded handler で実行する。local unary/binop/cmp fast family は runtime 側で descriptor decode して実行し、handler 本体は decode 後の descriptor を読むだけに寄せている
+
+## Loop-dispatch fallback (#114)
+
+runtime の direct-threaded dispatch は、各 handler が `call_next` / `call_code` 経由で次の handler を末尾呼び出しすることに依存している。Rust は sibling call を保証しないため、この契約は toolchain の codegen 次第である。実測では 1.97.0 以降（1.97.0 / 1.98.0 / 1.99.1 / 1.100.0 で確認）で `op_call` の callee への dispatch が通常の `call` に編まれ、guest call のたびに約 88 B の host frame が segment 終了まで残るようになった（call cycle あたり約 42–168 B の消費として観測）。pin している 1.96.0 では従来どおり `jmp` 形である。
+
+fallback はこの契約が壊れた toolchain でも正しく動くための build configuration であり、移行先ではない。
+
+- 選択機構: telomere crate の cargo feature `loop-dispatch-fallback`。既定は無効で、無効時の主経路のコード生成は不変（`op_call` の逆アセンブルで `jmp` 形の維持を確認済み）。
+- 機構: 有効時、`call_code` は次の handler を dispatch せず、次の命令を `ctx.cont` に記録して trampoline driver（`runtime::vm::drive_loop_dispatch`）へ戻る。driver は 1 iteration に 1 handler だけを dispatch するため、host stack 深度は命令数にも guest の call 深度にも比例しない。segment の入口（scheduler、JIT の interpreter-continuation bridge / stub）は全て driver 経由に揃えてあり、trap・suspend・完了・JIT stop の segment 終端の意味は threaded 版と同一。lazy-call 継続入口だけは扱いが違う: あの handler は既に driver の内側で dispatch されているため、新しい driver を始めず `call_code` の bounce をその既存の driver へ返す。初期版はここでも `resume_loop_dispatch` 経由で driver を新規に始めており、compiled な callee を呼ぶ interpreted loop では call cycle ごとに driver が1段ネストして host stack が cycle 数に比例して伸びていた（pin toolchain で実測: 20,000 cycle で driver のネスト深度が 20,000 に達した。PR #387 の Codex 指摘で判明）。
+- 実測コスト（fleur、x86_64、Rust 1.96.0、criterion、median、2 反復）: threaded を 1.00 とした fallback の時間比は、fib 約 1.19、return_call_chain 約 1.10、tail_recursive_accumulate 約 1.15、scalar_local_loop 約 1.59–1.73、memory_load_store_loop 約 1.78–1.98。dispatch 密度の高い形状ほど高くつく。これは安全網の価格であり、主経路の性能目標とは別に扱う。
+- 検証: 1.97.0 上で fallback 有効時、call loop（200,000 cycle）が 2 / 4 / 8 / 32 MiB の各スタックで完走する（threaded 版は 2 / 8 MiB で overflow、感度テスト形状の 4 MiB でも abort）。pin では両モードとも通常スイートが全 pass し、vendored component suite の数値（files=79 ran=21 checked=774）は両モードで不変。
+- 性能 gate（`tools/measure-performance.py` / `perf-baseline.json`)は default / jit 構成の CLI を測るもので、どちらの構成も本 feature を有効化しないため gate のセルに fallback は含まれない。feature 無効時の A/B（base vs 本変更、同一 bench）では fib と return_call_chain は符号が反復間で一致せず、最もタイトな dispatch loop でも差は ±5% の測定ノイズ帯域内だった。
 
 ## Regression Checks
 
