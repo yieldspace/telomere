@@ -1,0 +1,109 @@
+name: Miri subset
+
+# #132: the dynamic counterpart of the unsafe policy's lint ratchet.
+# Runs a defined subset of the telomere lib tests under Miri — the
+# parser/optimizer, binary-reader, and common layers, which parse and
+# lower unvalidated input and hold the unsafe with the highest burden
+# of proof (including the optimizer pipeline whose uninitialized
+# operand read was #292). The subset, its pass criteria, and every
+# exclusion with its reason are defined in docs/unsafe-policy.md
+# ("Dynamic checking: the Miri subset").
+#
+# This workflow REPORTS WITHOUT GATING, in the toolchain-watch shape:
+# it is not a required status check, never runs on pull requests, and
+# a red run blocks nothing. A red run is the report — either Miri found
+# undefined behaviour in a covered layer, or a covered test started
+# reaching a platform facility Miri cannot emulate, which means the
+# subset definition needs revisiting.
+#
+# The nightly is a dated pin, not a float: Miri's diagnostics are the
+# signal, so the interpreter must be reproducible. The pin is the
+# exact build the subset was measured with locally (rustc
+# 1.102.0-nightly 5df8c02af, Miri 5df8c02afd). Bump it deliberately,
+# in its own change, after re-measuring the subset.
+
+on:
+  schedule:
+    - cron: "17 5 * * 3"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The configuration the #292 investigation established and the
+  # subset was measured in: some covered code paths touch host
+  # facilities Miri isolates by default.
+  MIRIFLAGS: "-Zmiri-disable-isolation"
+
+jobs:
+  miri:
+    name: Miri subset (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: binary
+            timeout: 60
+            args: "-- binary::"
+          - group: common
+            timeout: 60
+            # The 20 --skip names are the tests that construct a real
+            # mmap-backed linear memory: the implementation reserves
+            # with a PROT_NONE mmap, which Miri cannot emulate (it
+            # stops with "unsupported operation", not a UB error).
+            # Each was verified individually; see docs/unsafe-policy.md
+            # for the list with reasons. Five common::memory tests that
+            # never reach a mapping run unskipped.
+            args: >-
+              -- common::
+              --skip common::memory::tests::failed_grow_keeps_pages_and_commit_length_unchanged
+              --skip common::memory::tests::initial_mprotect_failure_is_returned_from_local_memory_construction
+              --skip common::memory::tests::interruptible_wait_is_woken_by_a_metering_interrupt
+              --skip common::memory::tests::interruptible_wait_keeps_notify_and_timeout_result_codes
+              --skip common::memory::tests::local_memory_reserves_lazily_and_commits_only_grown_pages
+              --skip common::memory::tests::memory_write_copy_fill_and_grow_match_linear_model_bytes
+              --skip common::memory::tests::resolved_long_waits_release_their_timer_threads
+              --skip common::memory::tests::shared_memory_reserves_lazily_and_commits_only_grown_pages
+              --skip common::memory::tests::shared_wait64_queue_tracks_notify_and_timeout_cleanup
+              --skip common::memory::tests::shared_wait_queue_internal_state_tracks_notify_and_timeout_cleanup
+              --skip common::memory::tests::shared_wait_queue_rejects_mismatch_and_notifies_fifo_up_to_count
+              --skip common::memory::tests::shared_wait_timeout_completes_on_non_tokio_executor
+              --skip common::memory::tests::zero_sized_memory_keeps_a_valid_uncommitted_reservation
+              --skip common::store::tests::cross_memory_copy_checkpoint_interrupts_before_the_later_chunk
+              --skip common::store::tests::store_atomic_cmpxchg_dispatch_preserves_old_value_and_alignment_errors
+              --skip common::store::tests::store_memory_creation_returns_initial_mprotect_failure
+              --skip common::store::tests::store_memory_dispatch_matches_handle_kind_and_cross_copy_paths
+              --skip common::store::tests::total_budget_adoption_refuses_over_cap_without_residue
+              --skip common::store::tests::total_budget_never_exceeds_cap_under_concurrent_shared_growth
+              --skip common::store::tests::total_budget_reservation_is_consumed_by_adoptions_and_released
+          - group: parser
+            timeout: 120
+            # The one --skip is a wall-clock complexity guard whose
+            # input is sized for native speed; Miri cannot judge a
+            # host-time bound. See docs/unsafe-policy.md.
+            args: >-
+              -- parser::
+              --skip parser::core::optimizer::pipeline::analysis::tests::analyze_stays_fast_on_a_deeply_nested_chain
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Miri nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "nightly-2026-11-17"
+          components: miri
+
+      - name: Report toolchain version
+        run: rustc --version && cargo --version && cargo miri --version
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: miri-${{ matrix.group }}
+
+      - name: Run the ${{ matrix.group }} subset under Miri
+        run: cargo miri test -p telomere --lib ${{ matrix.args }}
