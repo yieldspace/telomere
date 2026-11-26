@@ -159,12 +159,16 @@ pub(crate) extern "C" fn i64_popcnt_value(value: u64) -> u64 {
 
 pub(crate) extern "C" fn f32_min_bits(lhs: u32, rhs: u32) -> u32 {
     profile::count(Counter::RuntimeFloatHelper);
+    // Both-zero case on the raw bits, as in `f32_max_bits`: `min` of a
+    // zero pair is `-0.0` when either operand is `-0.0`, which is exactly
+    // the OR of the two patterns (#311).
+    if lhs & 0x7fff_ffff == 0 && rhs & 0x7fff_ffff == 0 {
+        return lhs | rhs;
+    }
     let lhs = f32::from_bits(lhs);
     let rhs = f32::from_bits(rhs);
     if lhs.is_nan() || rhs.is_nan() {
         f32::NAN.to_bits()
-    } else if lhs == 0.0 && rhs == 0.0 && (lhs.is_sign_negative() || rhs.is_sign_negative()) {
-        (-0.0f32).to_bits()
     } else {
         lhs.min(rhs).to_bits()
     }
@@ -172,12 +176,18 @@ pub(crate) extern "C" fn f32_min_bits(lhs: u32, rhs: u32) -> u32 {
 
 pub(crate) extern "C" fn f32_max_bits(lhs: u32, rhs: u32) -> u32 {
     profile::count(Counter::RuntimeFloatHelper);
+    // Decide the both-zero case on the raw bits: `max(-0.0, -0.0)` is
+    // `-0.0`, and any other zero pair is `+0.0`, which is exactly the AND
+    // of the two patterns. A float-level `== 0.0` / sign test compiled to
+    // a 64-bit AND + sign check over the zero-extended u32 arguments on
+    // riscv64 and misrouted the both-negative case to `+0.0` (#311).
+    if lhs & 0x7fff_ffff == 0 && rhs & 0x7fff_ffff == 0 {
+        return lhs & rhs;
+    }
     let lhs = f32::from_bits(lhs);
     let rhs = f32::from_bits(rhs);
     if lhs.is_nan() || rhs.is_nan() {
         f32::NAN.to_bits()
-    } else if lhs == 0.0 && rhs == 0.0 && (lhs.is_sign_positive() || rhs.is_sign_positive()) {
-        0.0f32.to_bits()
     } else {
         lhs.max(rhs).to_bits()
     }
@@ -185,12 +195,14 @@ pub(crate) extern "C" fn f32_max_bits(lhs: u32, rhs: u32) -> u32 {
 
 pub(crate) extern "C" fn f64_min_bits(lhs: u64, rhs: u64) -> u64 {
     profile::count(Counter::RuntimeFloatHelper);
+    // Both-zero case on the raw bits, as in `f32_min_bits` (#311).
+    if lhs & 0x7fff_ffff_ffff_ffff == 0 && rhs & 0x7fff_ffff_ffff_ffff == 0 {
+        return lhs | rhs;
+    }
     let lhs = f64::from_bits(lhs);
     let rhs = f64::from_bits(rhs);
     if lhs.is_nan() || rhs.is_nan() {
         f64::NAN.to_bits()
-    } else if lhs == 0.0 && rhs == 0.0 && (lhs.is_sign_negative() || rhs.is_sign_negative()) {
-        (-0.0f64).to_bits()
     } else {
         lhs.min(rhs).to_bits()
     }
@@ -198,12 +210,14 @@ pub(crate) extern "C" fn f64_min_bits(lhs: u64, rhs: u64) -> u64 {
 
 pub(crate) extern "C" fn f64_max_bits(lhs: u64, rhs: u64) -> u64 {
     profile::count(Counter::RuntimeFloatHelper);
+    // Both-zero case on the raw bits, as in `f32_max_bits` (#311).
+    if lhs & 0x7fff_ffff_ffff_ffff == 0 && rhs & 0x7fff_ffff_ffff_ffff == 0 {
+        return lhs & rhs;
+    }
     let lhs = f64::from_bits(lhs);
     let rhs = f64::from_bits(rhs);
     if lhs.is_nan() || rhs.is_nan() {
         f64::NAN.to_bits()
-    } else if lhs == 0.0 && rhs == 0.0 && (lhs.is_sign_positive() || rhs.is_sign_positive()) {
-        0.0f64.to_bits()
     } else {
         lhs.max(rhs).to_bits()
     }
@@ -227,13 +241,20 @@ enum FloatRoundOp {
 ))]
 fn f32_round_bits(value: u32, op: FloatRoundOp) -> u32 {
     let value = f32::from_bits(value);
-    match op {
+    let rounded = match op {
         FloatRoundOp::Ceil => value.ceil(),
         FloatRoundOp::Floor => value.floor(),
         FloatRoundOp::Trunc => value.trunc(),
         FloatRoundOp::Nearest => value.round_ties_even(),
+    };
+    // Quiet NaN results like the interpreter (`quiet_nan_f32`); see
+    // `f64_round_bits` (#311).
+    let bits = rounded.to_bits();
+    if rounded.is_nan() {
+        bits | 0x0040_0000
+    } else {
+        bits
     }
-    .to_bits()
 }
 
 #[cfg(any(
@@ -242,13 +263,23 @@ fn f32_round_bits(value: u32, op: FloatRoundOp) -> u32 {
 ))]
 fn f64_round_bits(value: u64, op: FloatRoundOp) -> u64 {
     let value = f64::from_bits(value);
-    match op {
+    let rounded = match op {
         FloatRoundOp::Ceil => value.ceil(),
         FloatRoundOp::Floor => value.floor(),
         FloatRoundOp::Trunc => value.trunc(),
         FloatRoundOp::Nearest => value.round_ties_even(),
+    };
+    // Match the interpreter, which quiets the result of the rounding
+    // operators (`quiet_nan_f64` in the VM): a signalling NaN operand
+    // must yield an arithmetic NaN with its payload preserved. Rust's
+    // rounding methods return a signalling NaN unchanged, so set the
+    // quiet bit explicitly (#311).
+    let bits = rounded.to_bits();
+    if rounded.is_nan() {
+        bits | 0x0008_0000_0000_0000
+    } else {
+        bits
     }
-    .to_bits()
 }
 
 #[cfg(all(target_os = "linux", target_arch = "riscv64", target_env = "gnu"))]
