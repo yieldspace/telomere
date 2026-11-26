@@ -3392,3 +3392,531 @@ async fn jit_float_demote_and_copysign_bits_match_interpreter() {
         );
     }
 }
+
+// #194: the default memory's local atomic load/store/RMW/cmpxchg
+// handlers lower natively instead of crossing the current-op
+// continuation bridge. These tests pin the native sequences to the
+// interpreter's semantics: identical results, identical stored bytes,
+// and identical traps (including the overflow -> alignment -> bounds
+// precedence).
+
+#[cfg(all(
+    feature = "jit",
+    feature = "threads",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_atomic_rmw_add_loop_matches_interpreter() {
+    // The issue's probe shape at small n: the accumulator collects the
+    // old value of every atomic add, a serial load/op/store chain.
+    let wat = r#"
+        (module
+          (memory 1)
+          (func (export "run") (param $n i32) (result i32)
+            (local $i i32) (local $acc i32)
+            (loop $l
+              (local.set $acc (i32.atomic.rmw.add (i32.const 0) (local.get $i)))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br_if $l (i32.lt_u (local.get $i) (local.get $n))))
+            (local.get $acc)))
+        "#;
+    let n = 10_000i64;
+    // `acc` is overwritten with each RMW's old value, so it ends with
+    // the sum of every add before the final iteration:
+    // 0 + 1 + ... + (n - 2).
+    let expected = ((n - 2) * (n - 1) / 2) as i32;
+    let jit = invoke_jit(wat, "run", vec![WasmValue::I32(n as i32)]).await;
+    let interpreter = invoke_interpreter(wat, "run", vec![WasmValue::I32(n as i32)]).await;
+    assert_vm_result_matches_interpreter(&jit, &interpreter);
+    assert_success_i32(jit, expected);
+}
+
+#[cfg(all(
+    feature = "jit",
+    feature = "threads",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_atomic_load_store_widths_match_interpreter() {
+    // (atomic store, atomic load, address, stored operand, expected
+    // loaded field, expected full word after the store)
+    let i32_cases: [(&str, &str, u32, u32, u32, u32); 3] = [
+        (
+            "i32.atomic.store",
+            "i32.atomic.load",
+            0,
+            0x0BAD_F00D,
+            0x0BAD_F00D,
+            0x0BAD_F00D,
+        ),
+        (
+            "i32.atomic.store8",
+            "i32.atomic.load8_u",
+            1,
+            0x1EE,
+            0xEE,
+            0xAABB_EEDD,
+        ),
+        (
+            "i32.atomic.store16",
+            "i32.atomic.load16_u",
+            2,
+            0x1_2345,
+            0x2345,
+            0x2345_CCDD,
+        ),
+    ];
+    for (store, load, addr, operand, expected_field, expected_word) in i32_cases {
+        let wat = format!(
+            r#"
+            (module
+              (memory 1)
+              (func (export "t") (result i32 i32)
+                (i32.store (i32.const 0) (i32.const {}))
+                ({store} (i32.const {addr}) (i32.const {}))
+                ({load} (i32.const {addr}))
+                (i32.load (i32.const 0))))
+            "#,
+            0xAABB_CCDDu32 as i32, operand as i32,
+        );
+        let expected = ResultValue::new(vec![
+            WasmValue::I32(expected_field as i32),
+            WasmValue::I32(expected_word as i32),
+        ]);
+        let jit = invoke_jit(&wat, "t", vec![]).await;
+        let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+        assert_vm_result_matches_interpreter(&jit, &interpreter);
+        assert_success_values(jit, expected);
+    }
+
+    let i64_cases: [(&str, &str, u32, u64, u64, u64); 4] = [
+        (
+            "i64.atomic.store",
+            "i64.atomic.load",
+            0,
+            0x0BAD_F00D_DEAD_BEEF,
+            0x0BAD_F00D_DEAD_BEEF,
+            0x0BAD_F00D_DEAD_BEEF,
+        ),
+        (
+            "i64.atomic.store8",
+            "i64.atomic.load8_u",
+            1,
+            0x1EE,
+            0xEE,
+            0xAABB_CCDD_EEFF_EE11,
+        ),
+        (
+            "i64.atomic.store16",
+            "i64.atomic.load16_u",
+            2,
+            0x1_2345,
+            0x2345,
+            0xAABB_CCDD_2345_0011,
+        ),
+        (
+            "i64.atomic.store32",
+            "i64.atomic.load32_u",
+            4,
+            0x1_2345_6789,
+            0x2345_6789,
+            0x2345_6789_EEFF_0011,
+        ),
+    ];
+    for (store, load, addr, operand, expected_field, expected_word) in i64_cases {
+        let wat = format!(
+            r#"
+            (module
+              (memory 1)
+              (func (export "t") (result i64 i64)
+                (i64.store (i32.const 0) (i64.const {}))
+                ({store} (i32.const {addr}) (i64.const {}))
+                ({load} (i32.const {addr}))
+                (i64.load (i32.const 0))))
+            "#,
+            0xAABB_CCDD_EEFF_0011u64 as i64, operand as i64,
+        );
+        let expected = ResultValue::new(vec![
+            WasmValue::I64(expected_field as i64),
+            WasmValue::I64(expected_word as i64),
+        ]);
+        let jit = invoke_jit(&wat, "t", vec![]).await;
+        let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+        assert_vm_result_matches_interpreter(&jit, &interpreter);
+        assert_success_values(jit, expected);
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    feature = "threads",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+fn rmw_expected_field(old: u64, operand: u64, mask: u64, op: &str) -> u64 {
+    let operand = operand & mask;
+    match op {
+        "add" => old.wrapping_add(operand) & mask,
+        "sub" => old.wrapping_sub(operand) & mask,
+        "and" => old & operand,
+        "or" => old | operand,
+        "xor" => old ^ operand,
+        "xchg" => operand,
+        _ => unreachable!(),
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    feature = "threads",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_atomic_rmw_ops_and_widths_match_interpreter() {
+    let ops = ["add", "sub", "and", "or", "xor", "xchg"];
+    // (instruction width suffix, byte address, access width in bytes)
+    let i32_widths: [(&str, u32, u32); 3] = [("", 0, 4), ("8", 1, 1), ("16", 2, 2)];
+    let seed32 = 0x7F80_FF01u32;
+    let operand32 = 0xABCD_1234u32;
+    for op in ops {
+        for (suffix, addr, width) in i32_widths {
+            let instr = if suffix.is_empty() {
+                format!("i32.atomic.rmw.{op}")
+            } else {
+                format!("i32.atomic.rmw{suffix}.{op}_u")
+            };
+            let mask = (1u64 << (width * 8)) - 1;
+            let shift = addr * 8;
+            let old_field = (u64::from(seed32) >> shift) & mask;
+            let new_field = rmw_expected_field(old_field, u64::from(operand32), mask, op);
+            let expected_word = (u64::from(seed32) & !(mask << shift)) | (new_field << shift);
+            let wat = format!(
+                r#"
+                (module
+                  (memory 1)
+                  (func (export "t") (result i32 i32)
+                    (i32.store (i32.const 0) (i32.const {}))
+                    ({instr} (i32.const {addr}) (i32.const {}))
+                    (i32.atomic.load (i32.const 0))))
+                "#,
+                seed32 as i32, operand32 as i32,
+            );
+            let expected = ResultValue::new(vec![
+                WasmValue::I32(old_field as u32 as i32),
+                WasmValue::I32(expected_word as u32 as i32),
+            ]);
+            let jit = invoke_jit(&wat, "t", vec![]).await;
+            let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+            assert_vm_result_matches_interpreter(&jit, &interpreter);
+            assert_success_values(jit, expected);
+        }
+    }
+
+    let i64_widths: [(&str, u32, u32); 4] = [("", 0, 8), ("8", 1, 1), ("16", 2, 2), ("32", 4, 4)];
+    let seed64 = 0x7F80_FF01_DEAD_BEEFu64;
+    let operand64 = 0xABCD_1234_5678_9ABCu64;
+    for op in ops {
+        for (suffix, addr, width) in i64_widths {
+            let instr = if suffix.is_empty() {
+                format!("i64.atomic.rmw.{op}")
+            } else {
+                format!("i64.atomic.rmw{suffix}.{op}_u")
+            };
+            let mask = if width == 8 {
+                u64::MAX
+            } else {
+                (1u64 << (width * 8)) - 1
+            };
+            let shift = addr * 8;
+            let old_field = (seed64 >> shift) & mask;
+            let new_field = rmw_expected_field(old_field, operand64, mask, op);
+            let expected_word = (seed64 & !(mask << shift)) | (new_field << shift);
+            let wat = format!(
+                r#"
+                (module
+                  (memory 1)
+                  (func (export "t") (result i64 i64)
+                    (i64.store (i32.const 0) (i64.const {}))
+                    ({instr} (i32.const {addr}) (i64.const {}))
+                    (i64.atomic.load (i32.const 0))))
+                "#,
+                seed64 as i64, operand64 as i64,
+            );
+            let expected = ResultValue::new(vec![
+                WasmValue::I64(old_field as i64),
+                WasmValue::I64(expected_word as i64),
+            ]);
+            let jit = invoke_jit(&wat, "t", vec![]).await;
+            let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+            assert_vm_result_matches_interpreter(&jit, &interpreter);
+            assert_success_values(jit, expected);
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    feature = "threads",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_atomic_cmpxchg_matches_interpreter() {
+    // (instruction, seed word, expected operand, replacement, expected
+    // old field, expected word after)
+    let i32_cases: [(&str, u32, u32, u32, u32, u32); 4] = [
+        // Full-width match and mismatch.
+        ("i32.atomic.rmw.cmpxchg", 41, 41, 99, 41, 99),
+        ("i32.atomic.rmw.cmpxchg", 41, 42, 99, 41, 41),
+        // The expected operand is truncated to the access width before
+        // comparing: 0x105 matches the stored byte 0x05.
+        ("i32.atomic.rmw8.cmpxchg_u", 0x05, 0x105, 0x77, 0x05, 0x77),
+        // Truncated mismatch leaves memory untouched.
+        (
+            "i32.atomic.rmw16.cmpxchg_u",
+            0x1234,
+            0xFFFF_1235,
+            0x77,
+            0x1234,
+            0x1234,
+        ),
+    ];
+    for (instr, seed, expected_op, replacement, expected_old, expected_word) in i32_cases {
+        let wat = format!(
+            r#"
+            (module
+              (memory 1)
+              (func (export "t") (result i32 i32)
+                (i32.store (i32.const 0) (i32.const {}))
+                ({instr} (i32.const 0) (i32.const {}) (i32.const {}))
+                (i32.atomic.load (i32.const 0))))
+            "#,
+            seed as i32, expected_op as i32, replacement as i32,
+        );
+        let expected = ResultValue::new(vec![
+            WasmValue::I32(expected_old as i32),
+            WasmValue::I32(expected_word as i32),
+        ]);
+        let jit = invoke_jit(&wat, "t", vec![]).await;
+        let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+        assert_vm_result_matches_interpreter(&jit, &interpreter);
+        assert_success_values(jit, expected);
+    }
+
+    let i64_cases: [(&str, u64, u64, u64, u64, u64); 3] = [
+        ("i64.atomic.rmw.cmpxchg", 41, 41, 99, 41, 99),
+        ("i64.atomic.rmw.cmpxchg", 41, 42, 99, 41, 41),
+        (
+            "i64.atomic.rmw16.cmpxchg_u",
+            0x1234,
+            0xFFFF_1234,
+            0x77,
+            0x1234,
+            0x77,
+        ),
+    ];
+    for (instr, seed, expected_op, replacement, expected_old, expected_word) in i64_cases {
+        let wat = format!(
+            r#"
+            (module
+              (memory 1)
+              (func (export "t") (result i64 i64)
+                (i64.store (i32.const 0) (i64.const {}))
+                ({instr} (i32.const 0) (i64.const {}) (i64.const {}))
+                (i64.atomic.load (i32.const 0))))
+            "#,
+            seed as i64, expected_op as i64, replacement as i64,
+        );
+        let expected = ResultValue::new(vec![
+            WasmValue::I64(expected_old as i64),
+            WasmValue::I64(expected_word as i64),
+        ]);
+        let jit = invoke_jit(&wat, "t", vec![]).await;
+        let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+        assert_vm_result_matches_interpreter(&jit, &interpreter);
+        assert_success_values(jit, expected);
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    feature = "threads",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_atomic_traps_match_interpreter() {
+    // (body, expected trap) — the interpreter checks the effective
+    // address in u32 (overflow first), then alignment, then bounds.
+    let cases: [(&str, VMResult<ResultValue>); 7] = [
+        // Unaligned 4-byte RMW.
+        (
+            "(drop (i32.atomic.rmw.add (i32.const 1) (i32.const 1)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // Aligned but past the single page.
+        (
+            "(drop (i32.atomic.load (i32.const 65536)))",
+            VMResult::MemoryIndexOutOfRange,
+        ),
+        // Unaligned AND out of bounds: alignment wins.
+        (
+            "(drop (i32.atomic.load (i32.const 65537)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // Effective address overflows u32 (0xFFFF_FFFF + offset 2):
+        // the interpreter's checked add traps out-of-range before the
+        // alignment check, even though the wrapped sum would be
+        // misaligned.
+        (
+            "(drop (i32.atomic.rmw.add offset=2 (i32.const -1) (i32.const 1)))",
+            VMResult::MemoryIndexOutOfRange,
+        ),
+        // 0xFFFF_FFFF itself: no overflow, but misaligned.
+        (
+            "(drop (i32.atomic.rmw.add (i32.const -1) (i32.const 1)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // Aligned huge address: out of bounds.
+        (
+            "(drop (i32.atomic.rmw.add (i32.const -4) (i32.const 1)))",
+            VMResult::MemoryIndexOutOfRange,
+        ),
+        // Unaligned 8-byte store.
+        (
+            "(i64.atomic.store (i32.const 4) (i64.const 1))",
+            VMResult::UnalignedAtomic,
+        ),
+    ];
+    for (body, expected) in cases {
+        let wat = format!(
+            r#"
+            (module
+              (memory 1)
+              (func (export "t") (result i32)
+                {body}
+                (i32.const 0)))
+            "#
+        );
+        let jit = invoke_jit(&wat, "t", vec![]).await;
+        let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+        assert_eq!(
+            std::mem::discriminant(&jit),
+            std::mem::discriminant(&expected),
+            "JIT trap mismatch for {body}: jit={jit:?} expected={expected:?}"
+        );
+        assert_eq!(
+            std::mem::discriminant(&interpreter),
+            std::mem::discriminant(&expected),
+            "interpreter trap mismatch for {body}: interpreter={interpreter:?} expected={expected:?}"
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "jit",
+    feature = "threads",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_atomic_huge_memarg_offsets_match_interpreter() {
+    // Memarg offsets at the top of the u32 range. The 64-bit load
+    // lowering forms the high half's displacement from the offset;
+    // that arithmetic must widen before it adds, or compiling a
+    // valid access overflows in the host (a panic under overflow
+    // checks) instead of emitting code that traps at run time. The
+    // interpreter checks the effective address for u32 overflow,
+    // then alignment, then bounds; every case below must compile
+    // and trap exactly like the interpreter.
+    let cases: [(&str, VMResult<ResultValue>); 8] = [
+        // offset + 4 crosses the u32 boundary; the access itself is
+        // unaligned (4294967292 % 8 == 4).
+        (
+            "(drop (i64.atomic.load offset=4294967292 (i32.const 0)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // The largest possible offset; also unaligned.
+        (
+            "(drop (i64.atomic.load offset=4294967295 (i32.const 0)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // Aligned, just below the boundary: out of bounds instead.
+        (
+            "(drop (i64.atomic.load offset=4294967288 (i32.const 0)))",
+            VMResult::MemoryIndexOutOfRange,
+        ),
+        // Huge offset plus a dynamic address overflows the u32
+        // effective address: out-of-range wins over alignment.
+        (
+            "(drop (i64.atomic.load offset=4294967292 (i32.const 8)))",
+            VMResult::MemoryIndexOutOfRange,
+        ),
+        // The store/RMW/cmpxchg 64-bit paths share the checked start;
+        // the same unaligned offset traps identically.
+        (
+            "(i64.atomic.store offset=4294967292 (i32.const 0) (i64.const 1))",
+            VMResult::UnalignedAtomic,
+        ),
+        (
+            "(drop (i64.atomic.rmw.add offset=4294967292 (i32.const 0) (i64.const 1)))",
+            VMResult::UnalignedAtomic,
+        ),
+        (
+            "(drop (i64.atomic.rmw.cmpxchg offset=4294967292 (i32.const 0) (i64.const 0) (i64.const 1)))",
+            VMResult::UnalignedAtomic,
+        ),
+        // 32-bit path with the largest offset: unaligned.
+        (
+            "(drop (i32.atomic.load offset=4294967295 (i32.const 0)))",
+            VMResult::UnalignedAtomic,
+        ),
+    ];
+    for (body, expected) in cases {
+        let wat = format!(
+            r#"
+            (module
+              (memory 1)
+              (func (export "t") (result i32)
+                {body}
+                (i32.const 0)))
+            "#
+        );
+        let jit = invoke_jit(&wat, "t", vec![]).await;
+        let interpreter = invoke_interpreter(&wat, "t", vec![]).await;
+        assert_eq!(
+            std::mem::discriminant(&jit),
+            std::mem::discriminant(&expected),
+            "JIT trap mismatch for {body}: jit={jit:?} expected={expected:?}"
+        );
+        assert_eq!(
+            std::mem::discriminant(&interpreter),
+            std::mem::discriminant(&expected),
+            "interpreter trap mismatch for {body}: interpreter={interpreter:?} expected={expected:?}"
+        );
+    }
+}
