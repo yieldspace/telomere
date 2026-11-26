@@ -131,21 +131,71 @@ impl CoreFuncIdentity {
     /// identities are immutable acyclic `Arc` graphs, so a pair's
     /// result cannot change once computed. The result is exactly
     /// the derived `PartialEq` result; only the cost changes.
+    ///
+    /// The comparison runs on an explicit work stack (`EqMachine`),
+    /// not by recursion: memoisation bounds the repeated work but
+    /// not the call-stack depth, and the comparison reaches a
+    /// recursion group's recorded external supertypes one group per
+    /// level, so a recursive formulation descends one native frame
+    /// chain per group and overflows the stack on a deep enough
+    /// tower (measured: matching two towers of 100,000 two-member
+    /// groups aborted the process in release mode). Every step of
+    /// the machine descends to nodes defined strictly earlier than
+    /// the pair it started from -- a declared supertype, or a group
+    /// member's external supertype -- so the pair graph is acyclic
+    /// and a pair is never requested again while its own evaluation
+    /// is still pending.
     pub(crate) fn eq_memoized(&self, other: &Self, cache: &mut IdentityEqCache) -> bool {
-        if ptr::eq(self, other) {
-            return true;
+        EqMachine::new(cache).compare(self, other)
+    }
+}
+
+impl Drop for CoreFuncIdentity {
+    fn drop(&mut self) {
+        // A tower of identities links every level to the level
+        // below -- along the declared supertype chain and through
+        // the recursion-group members' external supertypes -- so
+        // the default field-by-field drop cascades one native
+        // frame chain per level and overflows the stack on a deep
+        // enough tower (measured: dropping the same 100,000-group
+        // tower whose comparison is iterative above still aborted
+        // the process). Dismantle uniquely owned descendants on
+        // an explicit worklist instead. A child whose `Arc` turns
+        // out to be shared is left to its remaining owners; the
+        // last owner's drop continues the dismantling from there,
+        // so every path into the cascade reaches this loop within
+        // a constant number of native frames.
+        let mut work: Vec<Arc<CoreFuncIdentity>> = Vec::new();
+        if let Some(supertype) = self.supertype.take() {
+            work.push(supertype);
         }
-        let key = (ptr::from_ref(self) as usize, ptr::from_ref(other) as usize);
-        if let Some(&result) = cache.identities.get(&key) {
-            return result;
+        if let Some(rec_group) = self.rec_group.take() {
+            take_group_externals(rec_group, &mut work);
         }
-        let result = self.signature == other.signature
-            && self.is_final == other.is_final
-            && self.rec_index == other.rec_index
-            && opt_identity_eq(&self.supertype, &other.supertype, cache)
-            && opt_rec_group_eq(&self.rec_group, &other.rec_group, cache);
-        cache.identities.insert(key, result);
-        result
+        while let Some(arc) = work.pop() {
+            if let Ok(mut node) = Arc::try_unwrap(arc) {
+                if let Some(supertype) = node.supertype.take() {
+                    work.push(supertype);
+                }
+                if let Some(rec_group) = node.rec_group.take() {
+                    take_group_externals(rec_group, &mut work);
+                }
+            }
+        }
+    }
+}
+
+/// Moves a recursion group's members' external supertype `Arc`s
+/// into the drop worklist when this is the group's last owner;
+/// a shared group is left for its remaining owners (see
+/// `CoreFuncIdentity`'s `Drop`).
+fn take_group_externals(rec_group: Arc<CoreRecGroup>, work: &mut Vec<Arc<CoreFuncIdentity>>) {
+    if let Ok(rec_group) = Arc::try_unwrap(rec_group) {
+        for mut member in rec_group.members {
+            if let Some(CoreRecSuper::External(supertype)) = member.supertype.take() {
+                work.push(supertype);
+            }
+        }
     }
 }
 
@@ -165,63 +215,185 @@ impl IdentityEqCache {
     }
 }
 
-fn opt_identity_eq(
-    lhs: &Option<Arc<CoreFuncIdentity>>,
-    rhs: &Option<Arc<CoreFuncIdentity>>,
-    cache: &mut IdentityEqCache,
-) -> bool {
-    match (lhs, rhs) {
-        (None, None) => true,
-        (Some(lhs), Some(rhs)) => lhs.eq_memoized(rhs, cache),
-        _ => false,
-    }
+/// One step of the iterative identity comparison (`EqMachine`).
+enum EqStep<'a> {
+    /// Compare an identity pair, leaving exactly one result.
+    Identity(&'a CoreFuncIdentity, &'a CoreFuncIdentity),
+    /// Compare a recursion-group pair, leaving exactly one result.
+    RecGroup(&'a CoreRecGroup, &'a CoreRecGroup),
+    /// Combine the top results with `&&`, record the identity pair
+    /// under the key, and leave the combined result.
+    FinishIdentity((usize, usize), usize),
+    /// Combine and record a recursion-group pair, as above.
+    FinishRecGroup((usize, usize), usize),
 }
 
-fn opt_rec_group_eq(
-    lhs: &Option<Arc<CoreRecGroup>>,
-    rhs: &Option<Arc<CoreRecGroup>>,
-    cache: &mut IdentityEqCache,
-) -> bool {
-    match (lhs, rhs) {
-        (None, None) => true,
-        (Some(lhs), Some(rhs)) => rec_group_eq_memoized(lhs, rhs, cache),
-        _ => false,
-    }
+/// The identity comparison as an explicit work-stack machine: a
+/// stack of `EqStep`s plus a result stack, evaluating the same
+/// conjunction as the derived `PartialEq` in postfix order. A step
+/// either decides its pair on the spot -- pointer equality, a
+/// cached result, or a local mismatch -- and leaves one result, or
+/// leaves a `Finish` step under one child step per sub-comparison
+/// that still needs evaluating; the `Finish` step runs once every
+/// child has left its result, records the pair in the cache (only
+/// completed results are stored, exactly as the recursive form
+/// did), and leaves the combined result. The native call-stack
+/// depth is therefore constant in the depth of the type graphs
+/// being compared, however deep their recursion-group towers run.
+struct EqMachine<'a, 'c> {
+    cache: &'c mut IdentityEqCache,
+    work: Vec<EqStep<'a>>,
+    results: Vec<bool>,
 }
 
-fn rec_group_eq_memoized(
-    lhs: &CoreRecGroup,
-    rhs: &CoreRecGroup,
-    cache: &mut IdentityEqCache,
-) -> bool {
-    if ptr::eq(lhs, rhs) {
-        return true;
-    }
-    let key = (ptr::from_ref(lhs) as usize, ptr::from_ref(rhs) as usize);
-    if let Some(&result) = cache.rec_groups.get(&key) {
-        return result;
-    }
-    let result = lhs.members.len() == rhs.members.len()
-        && lhs
-            .members
-            .iter()
-            .zip(rhs.members.iter())
-            .all(|(lhs, rhs)| rec_member_eq(lhs, rhs, cache));
-    cache.rec_groups.insert(key, result);
-    result
-}
-
-fn rec_member_eq(lhs: &CoreRecMember, rhs: &CoreRecMember, cache: &mut IdentityEqCache) -> bool {
-    lhs.signature == rhs.signature
-        && lhs.is_final == rhs.is_final
-        && match (&lhs.supertype, &rhs.supertype) {
-            (None, None) => true,
-            (Some(CoreRecSuper::Member(lhs)), Some(CoreRecSuper::Member(rhs))) => lhs == rhs,
-            (Some(CoreRecSuper::External(lhs)), Some(CoreRecSuper::External(rhs))) => {
-                lhs.eq_memoized(rhs, cache)
-            }
-            _ => false,
+impl<'a, 'c> EqMachine<'a, 'c> {
+    fn new(cache: &'c mut IdentityEqCache) -> Self {
+        Self {
+            cache,
+            work: Vec::new(),
+            results: Vec::new(),
         }
+    }
+
+    fn compare(mut self, lhs: &'a CoreFuncIdentity, rhs: &'a CoreFuncIdentity) -> bool {
+        self.work.push(EqStep::Identity(lhs, rhs));
+        while let Some(step) = self.work.pop() {
+            match step {
+                EqStep::Identity(lhs, rhs) => self.step_identity(lhs, rhs),
+                EqStep::RecGroup(lhs, rhs) => self.step_rec_group(lhs, rhs),
+                EqStep::FinishIdentity(key, count) => {
+                    let result = self.combine(count);
+                    self.cache.identities.insert(key, result);
+                    self.results.push(result);
+                }
+                EqStep::FinishRecGroup(key, count) => {
+                    let result = self.combine(count);
+                    self.cache.rec_groups.insert(key, result);
+                    self.results.push(result);
+                }
+            }
+        }
+        debug_assert_eq!(self.results.len(), 1);
+        // Every step leaves exactly one result, so the seed pair's
+        // result is the one element left; an empty stack would be
+        // a machine bug, and `false` is the fail-closed direction
+        // for a validator.
+        self.results.pop().unwrap_or(false)
+    }
+
+    /// Pops the top `count` results and returns their conjunction.
+    fn combine(&mut self, count: usize) -> bool {
+        self.results
+            .drain(self.results.len() - count..)
+            .all(|result| result)
+    }
+
+    fn step_identity(&mut self, lhs: &'a CoreFuncIdentity, rhs: &'a CoreFuncIdentity) {
+        if ptr::eq(lhs, rhs) {
+            self.results.push(true);
+            return;
+        }
+        let key = (ptr::from_ref(lhs) as usize, ptr::from_ref(rhs) as usize);
+        if let Some(&result) = self.cache.identities.get(&key) {
+            self.results.push(result);
+            return;
+        }
+        if lhs.signature != rhs.signature
+            || lhs.is_final != rhs.is_final
+            || lhs.rec_index != rhs.rec_index
+        {
+            self.cache.identities.insert(key, false);
+            self.results.push(false);
+            return;
+        }
+        // A pair present on one side only decides the comparison
+        // at once, as the derived equality's `Option` arms do.
+        let supertype_pair = match (&lhs.supertype, &rhs.supertype) {
+            (None, None) => None,
+            (Some(lhs), Some(rhs)) => Some((&**lhs, &**rhs)),
+            _ => {
+                self.cache.identities.insert(key, false);
+                self.results.push(false);
+                return;
+            }
+        };
+        let rec_group_pair = match (&lhs.rec_group, &rhs.rec_group) {
+            (None, None) => None,
+            (Some(lhs), Some(rhs)) => Some((&**lhs, &**rhs)),
+            _ => {
+                self.cache.identities.insert(key, false);
+                self.results.push(false);
+                return;
+            }
+        };
+        let count = supertype_pair.is_some() as usize + rec_group_pair.is_some() as usize;
+        if count == 0 {
+            self.cache.identities.insert(key, true);
+            self.results.push(true);
+            return;
+        }
+        self.work.push(EqStep::FinishIdentity(key, count));
+        if let Some((lhs, rhs)) = supertype_pair {
+            self.work.push(EqStep::Identity(lhs, rhs));
+        }
+        if let Some((lhs, rhs)) = rec_group_pair {
+            self.work.push(EqStep::RecGroup(lhs, rhs));
+        }
+    }
+
+    fn step_rec_group(&mut self, lhs: &'a CoreRecGroup, rhs: &'a CoreRecGroup) {
+        if ptr::eq(lhs, rhs) {
+            self.results.push(true);
+            return;
+        }
+        let key = (ptr::from_ref(lhs) as usize, ptr::from_ref(rhs) as usize);
+        if let Some(&result) = self.cache.rec_groups.get(&key) {
+            self.results.push(result);
+            return;
+        }
+        if lhs.members.len() != rhs.members.len() {
+            self.cache.rec_groups.insert(key, false);
+            self.results.push(false);
+            return;
+        }
+        // The members' local fields decide on the spot; a member's
+        // external supertype is a sub-comparison of its own and
+        // becomes a child step, exactly as the recursive form
+        // recursed into it.
+        let mut externals: Vec<(&'a CoreFuncIdentity, &'a CoreFuncIdentity)> = Vec::new();
+        for (lhs, rhs) in lhs.members.iter().zip(rhs.members.iter()) {
+            let local = lhs.signature == rhs.signature
+                && lhs.is_final == rhs.is_final
+                && match (&lhs.supertype, &rhs.supertype) {
+                    (None, None) => true,
+                    (Some(CoreRecSuper::Member(lhs)), Some(CoreRecSuper::Member(rhs))) => {
+                        lhs == rhs
+                    }
+                    (Some(CoreRecSuper::External(_)), Some(CoreRecSuper::External(_))) => true,
+                    _ => false,
+                };
+            if !local {
+                self.cache.rec_groups.insert(key, false);
+                self.results.push(false);
+                return;
+            }
+            if let (Some(CoreRecSuper::External(lhs)), Some(CoreRecSuper::External(rhs))) =
+                (&lhs.supertype, &rhs.supertype)
+            {
+                externals.push((lhs, rhs));
+            }
+        }
+        if externals.is_empty() {
+            self.cache.rec_groups.insert(key, true);
+            self.results.push(true);
+            return;
+        }
+        let count = externals.len();
+        self.work.push(EqStep::FinishRecGroup(key, count));
+        for (lhs, rhs) in externals {
+            self.work.push(EqStep::Identity(lhs, rhs));
+        }
+    }
 }
 
 /// A func type as recorded in a core module import/export
@@ -752,6 +924,50 @@ mod tests {
         below
     }
 
+    /// Builds the identity of the exported member of a tower of
+    /// two-member recursion groups in the round-5 shape: the
+    /// exported member declares no supertype, and the group's
+    /// other member subtypes the previous group's exported
+    /// member, so the identity comparison descends one group per
+    /// level through that member's recorded external supertype
+    /// while the declared subtype chains stay one edge deep.
+    /// With `alter_deepest`, the tower's base identity carries a
+    /// different signature -- a difference only visible at the
+    /// very bottom of the tower.
+    fn group_tower_identity(depth: usize, alter_deepest: bool) -> Arc<CoreFuncIdentity> {
+        let mut below = Arc::new(CoreFuncIdentity {
+            signature: if alter_deepest { other_sig() } else { sig() },
+            is_final: false,
+            supertype: None,
+            rec_group: None,
+            rec_index: 0,
+        });
+        for _ in 1..=depth {
+            let group = Arc::new(CoreRecGroup {
+                members: vec![
+                    CoreRecMember {
+                        signature: sig(),
+                        is_final: false,
+                        supertype: Some(CoreRecSuper::External(below.clone())),
+                    },
+                    CoreRecMember {
+                        signature: sig(),
+                        is_final: false,
+                        supertype: None,
+                    },
+                ],
+            });
+            below = Arc::new(CoreFuncIdentity {
+                signature: sig(),
+                is_final: false,
+                supertype: None,
+                rec_group: Some(group),
+                rec_index: 1,
+            });
+        }
+        below
+    }
+
     #[test]
     fn memoized_identity_eq_agrees_with_derived_eq() {
         let pairs: Vec<(Arc<CoreFuncIdentity>, Arc<CoreFuncIdentity>)> = vec![
@@ -763,6 +979,14 @@ mod tests {
             (
                 CoreFuncIdentity::bare(sig()),
                 CoreFuncIdentity::bare(other_sig()),
+            ),
+            (
+                group_tower_identity(5, false),
+                group_tower_identity(5, false),
+            ),
+            (
+                group_tower_identity(5, false),
+                group_tower_identity(5, true),
             ),
         ];
         for (lhs, rhs) in &pairs {
@@ -790,6 +1014,30 @@ mod tests {
         let mut cache = IdentityEqCache::new();
         assert!(!lhs.eq_memoized(&different, &mut cache));
         assert!(!lhs.is_subtype_of(&different));
+    }
+
+    #[test]
+    fn iterative_identity_eq_handles_deep_group_towers() {
+        // Round 5: memoisation bounded the comparison's repeated
+        // work but not its native recursion depth -- in the
+        // recursive formulation, matching two towers of 100,000
+        // two-member groups aborted the process with a stack
+        // overflow (the abort threshold on the integration path
+        // measured ~20,000 groups). The work-stack machine's
+        // depth is constant, so both the identical pair and the
+        // pair differing only at its base are decided; completion
+        // is the assertion.
+        let lhs = group_tower_identity(100_000, false);
+        let rhs = group_tower_identity(100_000, false);
+        let mut cache = IdentityEqCache::new();
+        assert!(lhs.eq_memoized(&rhs, &mut cache));
+        let different = group_tower_identity(100_000, true);
+        let mut cache = IdentityEqCache::new();
+        assert!(!lhs.eq_memoized(&different, &mut cache));
+        // The towers are dropped normally at the end of the
+        // test: `CoreFuncIdentity`'s iterative `Drop` dismantles
+        // the 100,000-deep `Arc` chains without cascading, which
+        // the end-to-end form of this shape relies on as well.
     }
 
     #[test]

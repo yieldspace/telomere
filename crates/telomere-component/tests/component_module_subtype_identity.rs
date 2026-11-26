@@ -31,6 +31,19 @@
 //! shared subgraph once per path. The comparison is now memoised
 //! over node pairs (`CoreFuncIdentity::eq_memoized`); the tower
 //! tests at the bottom pin the scaling.
+//!
+//! Round 5 (a further Codex finding on the memoised comparison):
+//! memoisation bounded the repeated work but not the call-stack
+//! depth -- matching two towers of 100,000 two-member recursion
+//! groups, whose exported members declare no supertype and whose
+//! other members subtype the previous group's exported member,
+//! aborted the process with a stack overflow in the alternating
+//! `eq_memoized` / rec-group comparison recursion (and, once the
+//! comparison itself was iterative, in the `Arc` drop cascade of
+//! the same tower). The comparison now runs on an explicit work
+//! stack and `CoreFuncIdentity`'s `Drop` dismantles uniquely
+//! owned descendants iteratively; the deep-group tower tests at
+//! the bottom pin both.
 
 use telomere_component::ComponentEngine;
 
@@ -436,5 +449,67 @@ fn identity_tower_with_deep_difference_is_rejected() {
     expect_rejected(&instantiate_with_typed_module(
         &identity_tower_decls(40, true, false),
         &identity_tower_decls(40, false, true),
+    ));
+}
+
+/// Builds the module-type declarations for the round-5 tower
+/// shape: `$a0` is a standalone non-final type declaring no
+/// supertype, and each group `i` pairs `$b{i}` -- which subtypes
+/// `$a{i-1}` -- with `$a{i}`, which declares no supertype. The
+/// exported func has type `$a{depth}`. Declared subtype chains
+/// are one edge deep, so the shape isolates the recursion-group
+/// descent of the identity comparison: matching reaches the level
+/// below only through `$b{i}`'s recorded external supertype, one
+/// group per level. With `alter_deepest`, the first (deepest)
+/// group's first member is a plain type of a different signature
+/// instead of a subtype of `$a0` -- a difference only visible at
+/// the very bottom of the tower, which keeps each side internally
+/// valid (a declared subtype's signature must match its
+/// supertype's, so altering `$a0` itself would be rejected at
+/// validation time instead).
+fn deep_group_tower_decls(depth: usize, import: bool, alter_deepest: bool) -> String {
+    let mut decls = String::from("(type $a0 (sub (func)))\n");
+    for i in 1..=depth {
+        let first = if alter_deepest && i == 1 {
+            "(type $b1 (func (param i32)))".to_string()
+        } else {
+            format!("(type $b{i} (sub $a{} (func)))", i - 1)
+        };
+        decls.push_str(&format!("(rec {first} (type $a{i} (sub (func))))\n"));
+    }
+    if import {
+        decls.push_str(&format!("(import \"i\" \"f\" (func (type $a{depth})))"));
+    } else {
+        decls.push_str(&format!("(export \"f\" (func (type $a{depth})))"));
+    }
+    decls
+}
+
+#[test]
+fn deep_group_tower_satisfies_import() {
+    // Round 5: with a recursive identity comparison this aborted
+    // the process with a stack overflow (measured on the pre-fix
+    // code: depth 15,000 still passed, depth 20,000 aborted, in
+    // this same harness; Codex reproduced the abort at 100,000
+    // groups with the comparison on the stack). The work-stack
+    // comparison -- and the iterative `Drop` dismantling the
+    // towers afterwards -- completes; that is the assertion.
+    compile(&instantiate_with_typed_module(
+        &deep_group_tower_decls(100_000, true, false),
+        &deep_group_tower_decls(100_000, false, false),
+    ))
+    .expect("identical deep group towers must satisfy the import");
+}
+
+#[test]
+fn deep_group_tower_with_deep_difference_is_rejected() {
+    // The provider's tower differs only in the first (deepest)
+    // group's first member; the comparison must descend all
+    // 100,000 groups, decide inequality there, and the
+    // instantiation is rejected -- without overflowing on the
+    // way down or back.
+    expect_rejected(&instantiate_with_typed_module(
+        &deep_group_tower_decls(100_000, true, false),
+        &deep_group_tower_decls(100_000, false, true),
     ));
 }
