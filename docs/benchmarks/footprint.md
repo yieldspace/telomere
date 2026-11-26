@@ -603,12 +603,12 @@ unchanged.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,593,688 | 1,205,863 |
-| `release` | `component` | 2,716,200 | 2,151,575 |
-| `release` | `wasi` | 2,943,696 | 2,325,959 |
+| `release` | `component` | 2,716,680 | 2,151,575 |
+| `release` | `wasi` | 2,944,176 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
 | `release` | `core-jit` | 2,155,128 | 1,656,599 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
-| `release` | `wasi-threads` | 3,159,416 | 2,493,271 |
+| `release` | `wasi-threads` | 3,159,880 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,119,576 | 790,695 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
@@ -619,6 +619,39 @@ unchanged.
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+The PR #384 Codex review round-2 fix (the remaining
+traversals and comparisons that met an `(eq)` face — the
+borrow and memory-requirement traversals in
+`decoder/validator/size.rs`, the mixed primitive comparison
+in `runtime/canonical.rs`, annotated-name root
+normalisation, and the `(eq …)` ascription branch in
+`decoder/export.rs` — now resolve it to the type it
+denotes) was re-baselined on the #365 branch. Attribution
+was isolated against the integrated tree itself: the
+pull-request run 45831335741 measured the pre-fix head
+`d954c8f` in CI and passed the gate, and the round-2 fix
+commit `cb4eb7c` — the only change between the two
+heads — moves only the twelve series of the three
+configurations that link `telomere-component`: in
+`release`, stripped file +480 B (`component`, `wasi`) and
++464 B (`wasi-threads`) and stripped `.text` +400 B on all
+three; in `release-size`, stripped file +256 B
+(`component`) and +272 B (`wasi`, `wasi-threads`) and
+stripped `.text` +208 B (`component`) and +224 B (`wasi`,
+`wasi-threads`). Every other series is byte-identical
+between the two heads. Against the checked-in baseline
+only the three `release` stripped file series grow
+(`component` +480 B, `wasi` +480 B, `wasi-threads`
++464 B), so only those three series are re-baselined to
+the branch measurements (workflow_dispatch runs
+45843366760, 45843388098 and 45843411918 on the branch at
+`cb4eb7c`; spread 0 B on every series, and the
+pull-request run 45841060403 at the same head measured
+byte-identically). Against the original #164 baseline,
+the largest cumulative growth is now the `release`
+`component` stripped file series at +11.63% (2,433,656 B
+to 2,716,680 B).
 
 The PR #384 Codex review fix (the remaining `(eq)` face
 consumers — typed bindings, annotated-name shape checks,
