@@ -113,6 +113,13 @@ async fn run_core_module_with_stdio(
 /// given instead of failing with a wasm parse error.
 const AOT_ARTIFACT_MAGIC: &[u8; 8] = b"TELOAOT1";
 
+/// Magic prefix of a component bundle (#201). Duplicated here for
+/// the same reason as [`AOT_ARTIFACT_MAGIC`]: the routing code in
+/// `main` and `component_cli` must recognise a bundle in builds
+/// without the `jit` feature (which gates the bundle API) so it can
+/// name what it was given.
+pub(crate) const COMPONENT_BUNDLE_MAGIC: &[u8; 8] = b"TELOBND1";
+
 /// How the load path treats an AoT artifact (#199): the key to
 /// verify a signature against, and whether unsigned artifacts are
 /// trusted without verification.
@@ -230,9 +237,11 @@ fn install_loaded_aot_artifact(
 /// Implements `telomere-cli compile MODULE [-o OUTPUT]`: parse a core
 /// module and write its artifact, printing the per-phase serialize
 /// timings. The default artifact is the #196 precompiled module;
-/// `--aot` writes the #198 AoT artifact instead. Compilation only
-/// ever parses: it never instantiates the module, so guest code
-/// (including the start function) never runs at compile time (#199).
+/// `--aot` writes the #198 AoT artifact instead, and `--bundle`
+/// packages a component into the #201 component bundle (see
+/// [`compile_component_bundle`]). Compilation only ever parses: it
+/// never instantiates the module, so guest code (including the
+/// start function) never runs at compile time (#199).
 ///
 /// With `--check`, nothing is compiled: the named artifact is
 /// validated against this build instead (see [`check_artifact`]).
@@ -252,10 +261,24 @@ fn compile_module(command: CompileCommand) -> anyhow::Result<ExitCode> {
     if bytes.starts_with(AOT_ARTIFACT_MAGIC) {
         anyhow::bail!("`{}` is already an AoT artifact", command.name.display());
     }
+    if bytes.starts_with(COMPONENT_BUNDLE_MAGIC) {
+        anyhow::bail!("`{}` is already a component bundle", command.name.display());
+    }
+    if command.bundle {
+        if !is_component_binary(&bytes) {
+            anyhow::bail!(
+                "`{}` is not a Wasm component; `--bundle` packages components — \
+                 compile core modules without `--bundle`",
+                command.name.display()
+            );
+        }
+        return compile_component_bundle(&command, &bytes);
+    }
     if is_component_binary(&bytes) {
         anyhow::bail!(
             "`{}` is a Wasm component; `compile` handles core modules only — \
-             run components with `telomere component` (component AoT bundles are out of scope)",
+             run components with `telomere component`, or package one into \
+             an AoT bundle with `compile --bundle`",
             command.name.display()
         );
     }
@@ -271,7 +294,7 @@ fn compile_module(command: CompileCommand) -> anyhow::Result<ExitCode> {
     }
     if command.sign_key.is_some() {
         anyhow::bail!(
-            "`--sign-key` only applies with `--aot` (precompiled artifacts are not signed)"
+            "`--sign-key` only applies with `--aot` or `--bundle` (precompiled artifacts are not signed)"
         );
     }
 
@@ -376,6 +399,71 @@ fn compile_aot_artifact(
     anyhow::bail!("`compile --aot` requires a telomere-cli build with `--features jit`")
 }
 
+/// Implements `telomere-cli compile --bundle COMPONENT [-o OUTPUT]`:
+/// package the component into the #201 bundle through the library
+/// producer, signed when a key is configured and unsigned
+/// (developer mode) otherwise. Like the other producers, this only
+/// ever parses: the embedded core modules are never instantiated,
+/// so guest code never runs at compile time.
+#[cfg(feature = "jit")]
+fn compile_component_bundle(command: &CompileCommand, bytes: &[u8]) -> anyhow::Result<ExitCode> {
+    let key = match sign_key_path(command) {
+        Some(path) => Some(aot_key::HmacSha256Key::load(&path)?),
+        None => None,
+    };
+    let sections = telomere_component::bundle::enumerate_core_module_sections(bytes)
+        .map_err(anyhow::Error::from)
+        .with_context(|| {
+            format!(
+                "failed to enumerate core modules of `{}`",
+                command.name.display()
+            )
+        })?;
+    let bundle = telomere_component::build_component_bundle(
+        bytes,
+        key.as_ref().map(|key| key as &dyn telomere::AotSigner),
+    )
+    .map_err(anyhow::Error::from)
+    .with_context(|| {
+        format!(
+            "failed to build component bundle for `{}`",
+            command.name.display()
+        )
+    })?;
+    let output = command.output.clone().unwrap_or_else(|| {
+        let mut path = command.name.clone().into_os_string();
+        path.push(".tbnd");
+        PathBuf::from(path)
+    });
+    fs::write(&output, &bundle)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("failed to write bundle `{}`", output.display()))?;
+    match &key {
+        Some(key) => println!(
+            "compiled {} -> {} ({} bytes, component bundle, {} core module sections, signed with {})",
+            command.name.display(),
+            output.display(),
+            bundle.len(),
+            sections.len(),
+            key.key_id(),
+        ),
+        None => println!(
+            "compiled {} -> {} ({} bytes, component bundle, {} core module sections, UNSIGNED: developer mode only — \
+             loaders refuse this bundle unless explicitly trusted)",
+            command.name.display(),
+            output.display(),
+            bundle.len(),
+            sections.len(),
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(not(feature = "jit"))]
+fn compile_component_bundle(_command: &CompileCommand, _bytes: &[u8]) -> anyhow::Result<ExitCode> {
+    anyhow::bail!("`compile --bundle` requires a telomere-cli build with `--features jit`")
+}
+
 /// Implements `telomere-cli compile --check ARTIFACT`: validates an
 /// existing artifact against this build without executing or
 /// installing anything. A matching artifact prints `ok:` and exits
@@ -387,6 +475,9 @@ fn check_artifact(command: &CompileCommand) -> anyhow::Result<ExitCode> {
         .with_context(|| format!("failed to read artifact `{}`", command.name.display()))?;
     if bytes.starts_with(AOT_ARTIFACT_MAGIC) {
         return check_aot_artifact(command, &bytes);
+    }
+    if bytes.starts_with(COMPONENT_BUNDLE_MAGIC) {
+        return check_component_bundle(command, &bytes);
     }
     if telomere::is_precompiled_module(&bytes) {
         return match telomere::deserialize_module(&bytes) {
@@ -404,7 +495,7 @@ fn check_artifact(command: &CompileCommand) -> anyhow::Result<ExitCode> {
         };
     }
     eprintln!(
-        "rejected: `{}` is not a telomere artifact (neither precompiled nor AoT)",
+        "rejected: `{}` is not a telomere artifact (neither precompiled, AoT, nor a component bundle)",
         command.name.display()
     );
     Ok(ExitCode::FAILURE)
@@ -454,6 +545,63 @@ fn check_aot_artifact(command: &CompileCommand, bytes: &[u8]) -> anyhow::Result<
 #[cfg(not(feature = "jit"))]
 fn check_aot_artifact(_command: &CompileCommand, _bytes: &[u8]) -> anyhow::Result<ExitCode> {
     anyhow::bail!("checking an AoT artifact requires a telomere-cli build with `--features jit`")
+}
+
+/// Implements `telomere-cli compile --check BUNDLE` for a component
+/// bundle (#201): runs the fail-closed bundle loader (signature
+/// posture, keyed-set pre-check, per-artifact fingerprint checks,
+/// substitution decode) without instantiating or installing
+/// anything. As with `--check` for AoT artifacts, an unsigned
+/// bundle is validated structurally and reported as unsigned — the
+/// trust decision belongs to the load path — while a signed bundle
+/// still requires its key: a signature that cannot be verified is
+/// a rejection (typed `BundleError::NoVerifier`).
+#[cfg(feature = "jit")]
+fn check_component_bundle(command: &CompileCommand, bytes: &[u8]) -> anyhow::Result<ExitCode> {
+    let verifier = match &command.verify_key {
+        Some(path) => Some(aot_key::HmacSha256Key::load(path)?),
+        None => None,
+    };
+    let policy = telomere::AotLoadPolicy {
+        allow_unsigned: true,
+    };
+    let engine = telomere_component::ComponentEngine::new();
+    match engine.compile_bundle(
+        bytes,
+        verifier
+            .as_ref()
+            .map(|key| key as &dyn telomere::AotVerifier),
+        policy,
+    ) {
+        Ok(loaded) => {
+            // The reported signature state comes from the bundle
+            // itself, as in `check_aot_artifact`: supplying a key
+            // does not make an unsigned bundle signed.
+            let signature = if loaded.is_unsigned() {
+                "unsigned".to_owned()
+            } else {
+                format!("signed with {}", loaded.key_id())
+            };
+            let report = loaded.report();
+            println!(
+                "ok: `{}` is a component bundle matching this build ({}; {} core module sections, {} substituted)",
+                command.name.display(),
+                signature,
+                report.core_module_sections,
+                report.substituted_ordinals.len(),
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            eprintln!("rejected: `{}`: {error}", command.name.display());
+            Ok(ExitCode::FAILURE)
+        }
+    }
+}
+
+#[cfg(not(feature = "jit"))]
+fn check_component_bundle(_command: &CompileCommand, _bytes: &[u8]) -> anyhow::Result<ExitCode> {
+    anyhow::bail!("checking a component bundle requires a telomere-cli build with `--features jit`")
 }
 
 fn should_run_wasi(command: &CoreCommand, module: &telomere::Module) -> bool {

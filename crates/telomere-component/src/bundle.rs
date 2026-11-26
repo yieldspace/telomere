@@ -763,8 +763,8 @@ pub struct BundleLoadReport {
 }
 
 /// A component loaded from a bundle: the decoded program, the opened
-/// artifacts keyed by the program's core module indices, and the load
-/// report. Instantiate it with
+/// artifacts keyed by the program's core module indices, the load
+/// report, and the bundle's own signature state. Instantiate it with
 /// [`ComponentEngine::instantiate_bundle`].
 ///
 /// [`ComponentEngine::instantiate_bundle`]: crate::ComponentEngine::instantiate_bundle
@@ -772,6 +772,8 @@ pub struct LoadedComponentBundle {
     program: ComponentProgram,
     artifacts: ComponentBundleArtifacts,
     report: BundleLoadReport,
+    key_id: String,
+    unsigned: bool,
 }
 
 impl LoadedComponentBundle {
@@ -779,11 +781,15 @@ impl LoadedComponentBundle {
         program: ComponentProgram,
         artifacts: ComponentBundleArtifacts,
         report: BundleLoadReport,
+        key_id: String,
+        unsigned: bool,
     ) -> Self {
         Self {
             program,
             artifacts,
             report,
+            key_id,
+            unsigned,
         }
     }
 
@@ -801,6 +807,17 @@ impl LoadedComponentBundle {
     /// The load's phase accounting.
     pub fn report(&self) -> &BundleLoadReport {
         &self.report
+    }
+
+    /// The signing key id, or empty for an unsigned bundle.
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    /// Whether the bundle carried no signature (accepted only
+    /// under an explicit opt-in policy).
+    pub fn is_unsigned(&self) -> bool {
+        self.unsigned
     }
 }
 

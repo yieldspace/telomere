@@ -20,7 +20,7 @@ full = [
     "telomere-component-wasi/simd",
     "telomere-component-wasi/threads",
 ]
-jit = ["telomere/jit"]
+jit = ["telomere/jit", "telomere-component/aot-bundle"]
 vm-profile = ["telomere/vm-profile"]
 vm-diagnostics = ["telomere/vm-diagnostics"]
 measure-switches = ["telomere/measure-switches"]
