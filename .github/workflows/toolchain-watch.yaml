@@ -50,9 +50,12 @@ jobs:
       - name: Check workspace on latest stable
         run: cargo check --workspace --all-targets
 
-      # The tripwire from #114: 200,000 call cycles on a bounded host
-      # stack. If a future stable restores the tail-call form, this
-      # goes green and the pin can be revisited; while it stays red,
-      # the pin stays.
+      # The tripwires from #114: 200,000 call cycles on bounded host
+      # stacks. `--include-ignored` also runs the small-stack tripwire
+      # (4 MiB), which is the sensitive one: the 64 MiB execution test
+      # alone passes even on toolchains that break the contract,
+      # because their per-cycle leak totals less than 64 MiB. If a
+      # future stable restores the tail-call form, this goes green and
+      # the pin can be revisited; while it stays red, the pin stays.
       - name: Tail-call threading tripwire on latest stable
-        run: cargo test -p telomere --release --test call_threading
+        run: cargo test -p telomere --release --test call_threading -- --include-ignored

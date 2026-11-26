@@ -11,6 +11,15 @@ use telomere::{run_module_function, Registry, ResultValue, Store, VMResult, Wasm
 /// below needs between 8 MiB and 32 MiB there), so the test runs on an
 /// explicit 64 MiB thread in both profiles instead of being ignored in
 /// debug builds.
+///
+/// This test is the both-profiles execution tripwire. It is not the
+/// sensitive one: at 64 MiB it also passes on toolchains that break the
+/// tail-call contract, because the leak those toolchains leave per call
+/// cycle (measured at roughly 42-168 bytes on 1.97.0 and later) totals
+/// only about 8.4-33.6 MiB over this loop. That is how the 1.97 break
+/// went unnoticed after the move to this stack size. The release-side
+/// sensitivity lives in `call_loop_keeps_direct_threading_on_a_small_stack`
+/// below (#114).
 const CALL_LOOP_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 #[test]
@@ -83,6 +92,64 @@ async fn call_loop_body() {
         }
         other => panic!("call loop must succeed, got {other:?}"),
     }
+}
+
+/// Stack size for the small-stack tripwire below (#114).
+///
+/// The same 200,000-cycle body as `release_call_loop_keeps_direct_threading`,
+/// but on a stack sized by the same discipline as the sibling tests in
+/// this file (#277, #282): far above the flat usage of a build that keeps
+/// the tail-call form, far below the total a leaking build consumes.
+///
+/// - Flat side: on the pinned 1.96.0 the loop completes in a 2 MiB stack
+///   in release builds (measured 2026-11-27), so 4 MiB leaves at least
+///   2x headroom.
+/// - Leak side: on 1.97.0 and every later release measured (1.98.0,
+///   1.99.1, 1.100.0) the loop leaves roughly 42-168 bytes of host stack
+///   per call cycle, 8.4-33.6 MiB over the loop, so the smallest leak
+///   total is still more than 2x this stack and the test aborts with a
+///   stack overflow there.
+///
+/// History: when issue #114 was filed, this tripwire ran on the default
+/// test thread (2 MiB class) and caught the 1.97 break. PR #250 (#154)
+/// then moved it onto a 64 MiB thread so it could run in dev builds too,
+/// which absorbed the leak and silently desensitised the release side;
+/// the "recovery" later observed on 1.99/1.100 was that artifact, not a
+/// codegen fix (re-measured 2026-11-27: the shipped 64 MiB shape passes
+/// on every toolchain from 1.97.0 on, the same body overflows at 2 MiB
+/// and 8 MiB on all of them).
+const CALL_LOOP_SMALL_STACK_BYTES: usize = 4 * 1024 * 1024;
+
+/// The #114 tail-call threading tripwire with its sensitivity restored.
+///
+/// Ignored by default and run explicitly in release builds: CI runs it
+/// with `--ignored` in the workspace-test and release-size guard jobs,
+/// and the toolchain watch runs this file with `--include-ignored`.
+///
+/// It cannot simply run everywhere. The contract surface is the release
+/// build configuration (codegen-units = 1, thin LTO); the dev
+/// configuration (many codegen units, no LTO) pays a per-cycle host
+/// cost even on the pinned toolchain -- the same body overflows a
+/// 16 MiB stack and needs 32 MiB in dev builds on 1.96.0 (measured
+/// 2026-11-27) -- so no single stack size is both dev-passing and
+/// release-sensitive at 200,000 iterations. The 64 MiB test above
+/// remains the both-profiles execution coverage.
+#[test]
+#[ignore = "release-configuration tripwire for #114: run with --ignored in release builds (dev codegen pays a per-cycle host cost even on the pinned toolchain)"]
+fn call_loop_keeps_direct_threading_on_a_small_stack() {
+    std::thread::Builder::new()
+        .name("call-loop-small-stack-test".to_string())
+        .stack_size(CALL_LOOP_SMALL_STACK_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building a runtime for the small-stack call loop test");
+            runtime.block_on(call_loop_body());
+        })
+        .expect("spawning the small-stack call loop test thread")
+        .join()
+        .expect("the small-stack call loop test thread must not panic");
 }
 
 /// Stack size for the ref.is_null loop test below (#282).
