@@ -125,7 +125,7 @@ pub(super) fn extract_option_payload_type<'a>(
             "typed component binding expects option".to_owned(),
         ));
     };
-    match cases.as_slice() {
+    match cases.cases.as_slice() {
         [none, some] if none.label.0 == "none" && none.ty.is_none() && some.label.0 == "some" => {
             some.ty.as_ref().ok_or_else(|| {
                 ComponentError::Link("typed component binding expects option payload".to_owned())
@@ -146,7 +146,7 @@ pub(super) fn extract_result_payload_types<'a>(
             "typed component binding expects result".to_owned(),
         ));
     };
-    match cases.as_slice() {
+    match cases.cases.as_slice() {
         [ok, err] if ok.label.0 == "ok" && err.label.0 == "err" => {
             Ok((ok.ty.as_ref(), err.ty.as_ref()))
         }

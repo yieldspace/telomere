@@ -425,7 +425,7 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
                 let mut payload_size = 0u32;
                 let mut payload_align = discriminant_size;
                 let mut payload_flat = 0usize;
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         let info = valtype_info(ty, types, memo, visiting)?;
                         payload_flat = payload_flat.max(info.flat_len);

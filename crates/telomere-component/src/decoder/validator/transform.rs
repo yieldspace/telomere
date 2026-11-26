@@ -616,20 +616,23 @@ impl<'a> Validator<'a> {
                     })
                     .collect::<ParseResult<Vec<_>>>()?,
             ),
-            DefValType::Variant(cases) => DefValType::Variant(
-                cases
-                    .iter()
-                    .map(|case| {
-                        Ok(crate::ir::types::Case::new(
-                            case.label.clone(),
-                            case.ty
-                                .as_ref()
-                                .map(|ty| self.instantiate_valtype(ty, context))
-                                .transpose()?,
-                        ))
-                    })
-                    .collect::<ParseResult<Vec<_>>>()?,
-            ),
+            DefValType::Variant(variant) => {
+                DefValType::Variant(crate::ir::types::VariantType::new(
+                    variant
+                        .iter()
+                        .map(|case| {
+                            Ok(crate::ir::types::Case::new(
+                                case.label.clone(),
+                                case.ty
+                                    .as_ref()
+                                    .map(|ty| self.instantiate_valtype(ty, context))
+                                    .transpose()?,
+                            ))
+                        })
+                        .collect::<ParseResult<Vec<_>>>()?,
+                    variant.form,
+                ))
+            }
             DefValType::Flags(labels) => DefValType::Flags(labels.clone()),
             DefValType::List(ty, len) => {
                 DefValType::List(self.instantiate_valtype(ty, context)?, *len)
@@ -661,20 +664,23 @@ impl<'a> Validator<'a> {
                     })
                     .collect::<ParseResult<Vec<_>>>()?,
             ),
-            DefValType::Variant(cases) => DefValType::Variant(
-                cases
-                    .iter()
-                    .map(|case| {
-                        Ok(crate::ir::types::Case::new(
-                            case.label.clone(),
-                            case.ty
-                                .as_ref()
-                                .map(|ty| self.freshen_import_valtype(ty, context))
-                                .transpose()?,
-                        ))
-                    })
-                    .collect::<ParseResult<Vec<_>>>()?,
-            ),
+            DefValType::Variant(variant) => {
+                DefValType::Variant(crate::ir::types::VariantType::new(
+                    variant
+                        .iter()
+                        .map(|case| {
+                            Ok(crate::ir::types::Case::new(
+                                case.label.clone(),
+                                case.ty
+                                    .as_ref()
+                                    .map(|ty| self.freshen_import_valtype(ty, context))
+                                    .transpose()?,
+                            ))
+                        })
+                        .collect::<ParseResult<Vec<_>>>()?,
+                    variant.form,
+                ))
+            }
             DefValType::Flags(labels) => DefValType::Flags(labels.clone()),
             DefValType::List(ty, len) => {
                 DefValType::List(self.freshen_import_valtype(ty, context)?, *len)

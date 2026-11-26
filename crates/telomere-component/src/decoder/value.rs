@@ -145,8 +145,8 @@ fn validate_defval(
             }
             Ok(())
         }
-        DefValType::Variant(cases) => {
-            for case in cases {
+        DefValType::Variant(variant) => {
+            for case in variant.iter() {
                 if let Some(ty) = &case.ty {
                     validate_valtype(validator, ty, allow_own, visiting)?;
                 }
@@ -248,9 +248,9 @@ fn decode_defval(
             }
             Ok(ComponentValue::Record(values))
         }
-        DefValType::Variant(cases) => {
+        DefValType::Variant(variant) => {
             let (_, index) = parse_u32(reader)?;
-            let case = cases.get(index as usize).ok_or_else(|| {
+            let case = variant.get(index as usize).ok_or_else(|| {
                 ComponentParseError::InvalidSignature(format!(
                     "variant case index {index} is out of range"
                 ))
@@ -265,6 +265,11 @@ fn decode_defval(
                 )?)),
                 None => None,
             };
+            // Defined values keep the plain `Variant` representation for
+            // every variant-shaped type, including ones declared with the
+            // sugar constructors: the stored form of a value-section
+            // constant is not a lift (issue #314 covers the dynamic API's
+            // function-boundary lifts, not defined values).
             Ok(ComponentValue::Variant {
                 case: case.label.flat(),
                 value,

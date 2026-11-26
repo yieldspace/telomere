@@ -332,7 +332,7 @@ impl<'a> Validator<'a> {
             }
             DefValType::Variant(cases) => {
                 let mut summary = ResourceOwnerSummary::default();
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         summary.merge(&self.valtype_resource_owner_summary(ty, visiting)?);
                     }
@@ -546,7 +546,7 @@ impl<'a> Validator<'a> {
                 let discriminant = discriminant_elem_size(cases.len());
                 let mut max_case_alignment = 1;
                 let mut max_payload = 0;
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         max_case_alignment = max_case_alignment
                             .max(self.compute_valtype_alignment(ty, &mut aligning)?);
@@ -633,7 +633,7 @@ impl<'a> Validator<'a> {
             }
             DefValType::Variant(cases) => {
                 let mut alignment = discriminant_elem_size(cases.len());
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         alignment = alignment.max(self.compute_valtype_alignment(ty, visiting)?);
                     }

@@ -1256,8 +1256,8 @@ fn lift_defined_value(
         Type::DefVal(DefValType::Record(fields)) => {
             lift_record_value(fields, options, program, store, cursor)
         }
-        Type::DefVal(DefValType::Variant(cases)) => {
-            lift_variant_value(cases, options, program, store, cursor)
+        Type::DefVal(DefValType::Variant(variant)) => {
+            lift_variant_value(variant, options, program, store, cursor)
         }
         Type::DefVal(DefValType::Flags(labels)) => lift_flags_value(labels, cursor),
         Type::DefVal(DefValType::List(elem, maybe_len)) => {
@@ -1625,7 +1625,7 @@ fn flat_types_for_defval(
         }
         DefValType::Variant(cases) => {
             let mut payload = Vec::new();
-            for case in cases {
+            for case in cases.iter() {
                 if let Some(ty) = &case.ty {
                     for (index, flat_ty) in
                         flat_types_for_valtype(ty, program)?.into_iter().enumerate()
@@ -1807,8 +1807,8 @@ fn read_defined_value_from_memory(
         Type::DefVal(DefValType::Record(fields)) => {
             read_record_value_from_memory(fields, options, program, store, memory, ptr)
         }
-        Type::DefVal(DefValType::Variant(cases)) => {
-            read_variant_value_from_memory(cases, options, program, store, memory, ptr)
+        Type::DefVal(DefValType::Variant(variant)) => {
+            read_variant_value_from_memory(variant, options, program, store, memory, ptr)
         }
         Type::DefVal(DefValType::Flags(labels)) => {
             read_flags_value_from_memory(labels, memory, store, ptr)
@@ -2109,18 +2109,18 @@ fn write_variant_value_to_memory(
 }
 
 fn read_variant_value_from_memory(
-    cases: &[Case],
+    variant: &VariantType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
     store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
-    let discriminant = read_variant_discriminant_from_memory(store, memory, ptr, cases.len())?;
-    let case = cases
+    let discriminant = read_variant_discriminant_from_memory(store, memory, ptr, variant.len())?;
+    let case = variant
         .get(discriminant)
         .ok_or_else(|| ComponentError::Trap("invalid variant discriminant".to_owned()))?;
-    let (payload_offset, _) = variant_payload_offset_and_size(cases, program)?;
+    let (payload_offset, _) = variant_payload_offset_and_size(variant, program)?;
     let payload = if let Some(ty) = &case.ty {
         Some(Box::new(read_value_from_memory(
             ty,
@@ -2134,34 +2134,7 @@ fn read_variant_value_from_memory(
         None
     };
 
-    if is_option_cases(cases) {
-        return Ok(ComponentValue::Option(payload));
-    }
-    if is_result_cases(cases) {
-        let payload = if case.ty.is_none() {
-            Some(Box::new(ComponentValue::Tuple(Vec::new())))
-        } else {
-            payload
-        };
-        return Ok(match case.label.0.as_str() {
-            "ok" => ComponentValue::Result {
-                ok: payload,
-                err: None,
-            },
-            "err" => ComponentValue::Result {
-                ok: None,
-                err: payload,
-            },
-            _ => unreachable!(),
-        });
-    }
-    if is_enum_cases(cases) {
-        return Ok(ComponentValue::Enum(case.label.0.clone()));
-    }
-    Ok(ComponentValue::Variant {
-        case: case.label.0.clone(),
-        value: payload,
-    })
+    Ok(variant_representation(variant, case, payload))
 }
 
 fn write_flags_value_to_memory(
@@ -2537,17 +2510,17 @@ fn lower_variant_value(
 }
 
 fn lift_variant_value(
-    cases: &[Case],
+    variant: &VariantType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
     store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     let case_index = cursor.next_i32()? as usize;
-    let case = cases
+    let case = variant
         .get(case_index)
         .ok_or_else(|| ComponentError::Trap("invalid variant discriminant".to_owned()))?;
-    let payload_types = variant_payload_flat_types(cases, program)?;
+    let payload_types = variant_payload_flat_types(variant, program)?;
     let raw_payload = payload_types
         .iter()
         .map(|ty| cursor.next_for_type(*ty))
@@ -2567,34 +2540,55 @@ fn lift_variant_value(
     } else {
         None
     };
-    if is_option_cases(cases) {
-        return Ok(ComponentValue::Option(payload));
-    }
-    if is_result_cases(cases) {
-        let payload = if case.ty.is_none() {
-            Some(Box::new(ComponentValue::Tuple(Vec::new())))
-        } else {
-            payload
-        };
-        return Ok(match case.label.0.as_str() {
-            "ok" => ComponentValue::Result {
-                ok: payload,
-                err: None,
+    Ok(variant_representation(variant, case, payload))
+}
+
+/// Choose the dynamic representation for a lifted variant-shaped value.
+///
+/// The representation follows the constructor the type was declared with
+/// (its `VariantForm`), not the shape of its cases: a type declared as
+/// `variant { none, some(T) }` lifts to `ComponentValue::Variant`, while a
+/// type declared as `option T` — whose cases are identical — lifts to
+/// `ComponentValue::Option`. The shape checks remain as a sanity guard:
+/// a form whose cases do not have the expected shape (which the decoder
+/// cannot produce) falls back to the plain `Variant` representation.
+fn variant_representation(
+    variant: &VariantType,
+    case: &Case,
+    payload: Option<Box<ComponentValue>>,
+) -> ComponentValue {
+    match variant.form {
+        VariantForm::Option if is_option_cases(variant) => ComponentValue::Option(payload),
+        VariantForm::Result if is_result_cases(variant) => match case.label.0.as_str() {
+            "ok" | "err" => {
+                let payload = if case.ty.is_none() {
+                    Some(Box::new(ComponentValue::Tuple(Vec::new())))
+                } else {
+                    payload
+                };
+                if case.label.0 == "ok" {
+                    ComponentValue::Result {
+                        ok: payload,
+                        err: None,
+                    }
+                } else {
+                    ComponentValue::Result {
+                        ok: None,
+                        err: payload,
+                    }
+                }
+            }
+            _ => ComponentValue::Variant {
+                case: case.label.0.clone(),
+                value: payload,
             },
-            "err" => ComponentValue::Result {
-                ok: None,
-                err: payload,
-            },
-            _ => unreachable!(),
-        });
+        },
+        VariantForm::Enum if is_enum_cases(variant) => ComponentValue::Enum(case.label.0.clone()),
+        _ => ComponentValue::Variant {
+            case: case.label.0.clone(),
+            value: payload,
+        },
     }
-    if is_enum_cases(cases) {
-        return Ok(ComponentValue::Enum(case.label.0.clone()));
-    }
-    Ok(ComponentValue::Variant {
-        case: case.label.0.clone(),
-        value: payload,
-    })
 }
 
 fn lower_flags_value(

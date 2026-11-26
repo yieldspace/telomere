@@ -107,7 +107,7 @@ fn flatten_defval(
         }
         DefValType::Variant(cases) => {
             let mut payload = Vec::new();
-            for case in cases {
+            for case in cases.iter() {
                 if let Some(ty) = &case.ty {
                     let mut flat = Vec::new();
                     flatten_val_type(ty, ctx, &mut flat)?;
