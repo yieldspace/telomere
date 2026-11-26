@@ -1,23 +1,23 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions 'Embedder footprint' runs for the #365 change (branch fix/365-eq-face-identity at head c503a078207d086dd9d2d2c6407aabc7ef6ff292 \u2014 the #365 change (plain type exports mint an (eq) face in the type index space, confined to validation identity, with every consumer resolving the (eq) generic to the type it denotes) on top of its base fcc577f, merged with current main 2d653bfae0bd3ac995c17a0d26154f531762d28c (PRs #379, #382 and #383) for footprint attribution; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45813419836, 45813435144 and 45813449727 against the branch produced byte-identical sizes for every gated series",
-    "commit": "c503a078207d086dd9d2d2c6407aabc7ef6ff292",
+    "summary": "GitHub Actions 'Embedder footprint' runs for the PR #384 Codex review fix (branch fix/365-eq-face-identity at head 3f7431ffe5c5ab1288d74a3a16f4b427f5f98797 \u2014 the remaining (eq) face consumers in typed bindings, annotated-name shape checks, canon resource ops, value types and value imports now resolve the face to the type it denotes before inspecting shape or kind) on top of the #365 change at dbcb675; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45825636440, 45825653204 and 45825670500 against the branch produced byte-identical sizes for every gated series",
+    "commit": "3f7431ffe5c5ab1288d74a3a16f4b427f5f98797",
     "date": "2026-11-26",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45813419836,
-      45813435144,
-      45813449727
+      45825636440,
+      45825653204,
+      45825670500
     ],
     "cross_check_run_ids": [
-      45812192789,
-      45812208358,
-      45812224165
+      45825689603,
+      45825709336,
+      45825736689
     ],
-    "derivation": "Re-baseline for the #365 change (plain type exports mint an (eq) face identity), following the merge of current main at 2d653bf (PRs #379, #382, #383) into the branch. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45812192789, 45812208358 and 45812224165 on main at 2d653bfae0bd3ac995c17a0d26154f531762d28c; all three runs pass the gate). This change's own delta against the main control is confined to the three configurations that link telomere-component: in release, stripped file +4,448 B (component) and +4,432 B (wasi, wasi-threads) and stripped .text +4,128 B on all three; in release-size, stripped file +3,120 B and stripped .text +2,704 B on all three. Every other series is byte-identical to main in both profiles. Against the checked-in baseline only the three release stripped file series grow (component +2,568 B, wasi +2,552 B, wasi-threads +2,568 B; the release .text series and every release-size series measure below their retained baselines), so only those three series are re-baselined to the branch measurements and every other baseline is retained, following the established practice of re-baselining growth only. Run-to-run spread was 0 B for every gated series across the three branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.53% (2,433,656 B to 2,714,216 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
+    "derivation": "Re-baseline for the PR #384 Codex review fix (the remaining (eq) face consumers resolve the face to the type it denotes before inspecting shape or kind), following the #365 re-baseline at dbcb675. Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45825689603, 45825709336 and 45825736689 on main at cc6550bce007ca8d747160778aab6c3e41af272e; all three runs pass the gate). This fix's own delta against the main control is confined to the three configurations that link telomere-component: in release, stripped file +6,432 B and stripped .text +6,048 B on all three; in release-size, stripped file +3,952 B (component) and +3,936 B (wasi, wasi-threads) and stripped .text +3,344 B (component) and +3,328 B (wasi, wasi-threads). Every other series is byte-identical to main in both profiles except core-jit, where the branch measures below both the main control and the checked-in baseline because main gained core-jit size after this branch's merge point. Against the checked-in baseline only the three release stripped file series grow (component +1,984 B, wasi +2,000 B, wasi-threads +2,000 B; every .text series and every release-size series measures at or below its retained baseline), so only those three series are re-baselined to the branch measurements and every other baseline is retained, following the established practice of re-baselining growth only. Run-to-run spread was 0 B for every gated series across the three branch samples and across the three main samples. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.61% (2,433,656 B to 2,716,200 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -43,8 +43,8 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2714216,
-          "threshold": 2714216
+          "baseline": 2716200,
+          "threshold": 2716200
         },
         "stripped_text_bytes": {
           "baseline": 2151575,
@@ -53,8 +53,8 @@
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2941696,
-          "threshold": 2941696
+          "baseline": 2943696,
+          "threshold": 2943696
         },
         "stripped_text_bytes": {
           "baseline": 2325959,
@@ -93,8 +93,8 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3157416,
-          "threshold": 3157416
+          "baseline": 3159416,
+          "threshold": 3159416
         },
         "stripped_text_bytes": {
           "baseline": 2493271,

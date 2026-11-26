@@ -599,12 +599,12 @@ re-baselined the two `release-size` `core-jit` series a further
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,593,688 | 1,205,863 |
-| `release` | `component` | 2,714,216 | 2,151,575 |
-| `release` | `wasi` | 2,941,696 | 2,325,959 |
+| `release` | `component` | 2,716,200 | 2,151,575 |
+| `release` | `wasi` | 2,943,696 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
 | `release` | `core-jit` | 2,145,040 | 1,648,743 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
-| `release` | `wasi-threads` | 3,157,416 | 2,493,271 |
+| `release` | `wasi-threads` | 3,159,416 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,119,576 | 790,695 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
@@ -615,6 +615,35 @@ re-baselined the two `release-size` `core-jit` series a further
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+The PR #384 Codex review fix (the remaining `(eq)` face
+consumers — typed bindings, annotated-name shape checks,
+canon resource ops, value types and value imports — now
+resolve the face to the type it denotes before inspecting
+shape or kind) was re-baselined on the #365 branch.
+Attribution was isolated by measuring current `main` alone
+three times (workflow_dispatch runs 45825689603, 45825709336
+and 45825736689 on `main` at `cc6550b`; all three runs pass
+the gate). The fix's own delta against the main control is
+confined to the three configurations that link
+`telomere-component`: in `release`, stripped file +6,432 B
+and stripped `.text` +6,048 B on all three; in `release-size`,
+stripped file +3,952 B (`component`) and +3,936 B (`wasi`,
+`wasi-threads`) and stripped `.text` +3,344 B (`component`)
+and +3,328 B (`wasi`, `wasi-threads`). Every other series is
+byte-identical to `main` in both profiles except `core-jit`,
+where the branch measures below both the main control and
+the checked-in baseline because `main` gained `core-jit`
+size after this branch's merge point. Against the checked-in
+baseline only the three `release` stripped file series grow
+(`component` +1,984 B, `wasi` +2,000 B, `wasi-threads`
++2,000 B), so only those three series are re-baselined to
+the branch measurements (workflow_dispatch runs 45825636440,
+45825653204 and 45825670500 on the branch at `3f7431f`;
+spread 0 B on every series). Against the original #164
+baseline, the largest cumulative growth is now the `release`
+`component` stripped file series at +11.61% (2,433,656 B to
+2,716,200 B).
 
 The #365 change (plain type exports mint an `(eq)` face in the
 type index space, confined to validation identity, with every
