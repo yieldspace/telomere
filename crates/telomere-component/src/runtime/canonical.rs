@@ -3260,14 +3260,23 @@ fn defval_types_equal_modulo_variant_form(
         }
         (DefValType::Own(x), DefValType::Own(y))
         | (DefValType::Borrow(x), DefValType::Borrow(y)) => {
-            // Handles denote resources nominally: the two indices must
-            // be the same entry or entries for the same resource. A
-            // generic face is only equal to itself (handled by the
-            // index comparison); faces of one resource under different
-            // indices stay distinct, as they do for subtyping.
-            x == y
+            // Handles denote resources: the two indices must denote
+            // the same resource. Resolve `(eq)` faces -- including
+            // the faces plain type exports mint -- to the type they
+            // denote before comparing, as the (Type, Type) comparison
+            // in `val_types_equal_modulo_variant_form` does: an
+            // export ascription can only name a resource through its
+            // face, while a definition may use the resource index
+            // directly, and an `(eq)` face is definitionally the type
+            // it denotes. Distinct resources stay distinct: their
+            // denoted entries differ, and separate entries must
+            // still agree on the resource identity in the check
+            // below.
+            let denoted_x = resolve_eq_type_id(program, *x);
+            let denoted_y = resolve_eq_type_id(program, *y);
+            denoted_x == denoted_y
                 || matches!(
-                    (program.get_type(*x), program.get_type(*y)),
+                    (program.get_type(denoted_x), program.get_type(denoted_y)),
                     (Some(Type::Resource(rx)), Some(Type::Resource(ry))) if rx == ry
                 )
         }
