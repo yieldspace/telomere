@@ -1,7 +1,7 @@
 use crate::decoder::name::parse_label_dash;
 use crate::decoder::types::is_type_opcode;
 use crate::decoder::{ComponentParseError, ParseContext, ParseResult, SizedResult};
-use crate::ir::types::{LabelValType, PrimValType, Type, ValType};
+use crate::ir::types::{Generic, GenericBound, LabelValType, PrimValType, Type, ValType};
 use crate::ir::LocalIdx;
 use crate::support::binary::BinaryReader;
 use crate::support::parser::core::parse_i32;
@@ -25,12 +25,25 @@ pub fn parse_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<V
             .scope()
             .type_indexes
             .get(LocalIdx::new(value as u32))?;
-        let ty = ctx.validator.get_type(tid)?;
-        let Type::DefVal(_) = ty else {
-            return Err(ComponentParseError::TypeMismatch(
-                "the typeidx of valtype must refer to defvaltype".to_string(),
-            ));
-        };
+        // An `(eq)` type -- including the face a plain type
+        // export mints for its index -- is definitionally the
+        // type it denotes, so the reference is a defvaltype
+        // reference when the type at the end of the eq chain is.
+        let mut resolved = tid;
+        loop {
+            match ctx.validator.get_type(resolved)? {
+                Type::DefVal(_) => break,
+                Type::Generic(Generic {
+                    bound: GenericBound::Eq(inner),
+                    ..
+                }) => resolved = *inner,
+                _ => {
+                    return Err(ComponentParseError::TypeMismatch(
+                        "the typeidx of valtype must refer to defvaltype".to_string(),
+                    ));
+                }
+            }
+        }
         Ok(ValType::Type(tid))
     }
 }

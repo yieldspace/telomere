@@ -1,4 +1,5 @@
 use super::*;
+use crate::ir::types::{Generic, GenericBound};
 use crate::ir::TypeId;
 use std::collections::HashSet;
 
@@ -151,6 +152,15 @@ fn flatten_type(
 ) -> ParseResult<()> {
     match ty {
         Type::DefVal(def) => flatten_defval(def, ctx, visiting, out),
+        // An `(eq)` type is definitionally its inner type, so it
+        // flattens as the inner type: a plain export's face over a
+        // record flattens as the record, not as a handle. (An eq
+        // over a resource or a `(sub)` generic still flattens to
+        // the single handle slot those arms produce.)
+        Type::Generic(Generic {
+            bound: GenericBound::Eq(inner),
+            ..
+        }) => flatten_type_by_id(*inner, ctx, visiting, out),
         Type::Resource(_) | Type::Generic(_) => {
             out.push(CoreValType::I32);
             Ok(())

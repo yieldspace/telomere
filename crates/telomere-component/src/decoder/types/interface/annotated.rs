@@ -296,7 +296,8 @@ fn result_ok_own_resource_type(
     let ValType::Type(type_id) = val_ty else {
         return None;
     };
-    let Type::DefVal(DefValType::Variant(cases)) = ctx.validator.get_type(*type_id).ok()? else {
+    let type_id = resolve_eq_alias(ctx, *type_id)?;
+    let Type::DefVal(DefValType::Variant(cases)) = ctx.validator.get_type(type_id).ok()? else {
         return None;
     };
     if cases.len() != 2 || cases[0].label.0 != "ok" || cases[1].label.0 != "err" {
@@ -309,17 +310,37 @@ fn is_result_type(ctx: &ParseContext<impl BinaryReader>, val_ty: &ValType) -> bo
     let ValType::Type(type_id) = val_ty else {
         return false;
     };
-    let Ok(Type::DefVal(DefValType::Variant(cases))) = ctx.validator.get_type(*type_id) else {
+    let Some(type_id) = resolve_eq_alias(ctx, *type_id) else {
+        return false;
+    };
+    let Ok(Type::DefVal(DefValType::Variant(cases))) = ctx.validator.get_type(type_id) else {
         return false;
     };
     cases.len() == 2 && cases[0].label.0 == "ok" && cases[1].label.0 == "err"
+}
+
+/// Resolves an `(eq)` generic -- an alias, or the face of a plain
+/// type export -- to the type it denotes. Any other type resolves to
+/// itself. The shape helpers below judge the denoted type: a face of
+/// an `own` type is an `own` type for constructor/method purposes.
+fn resolve_eq_alias(ctx: &ParseContext<impl BinaryReader>, mut type_id: TypeId) -> Option<TypeId> {
+    loop {
+        match ctx.validator.get_type(type_id).ok()? {
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => type_id = *inner,
+            _ => return Some(type_id),
+        }
+    }
 }
 
 fn own_resource_type(ctx: &ParseContext<impl BinaryReader>, val_ty: &ValType) -> Option<TypeId> {
     let ValType::Type(type_id) = val_ty else {
         return None;
     };
-    let Type::DefVal(DefValType::Own(resource)) = ctx.validator.get_type(*type_id).ok()? else {
+    let type_id = resolve_eq_alias(ctx, *type_id)?;
+    let Type::DefVal(DefValType::Own(resource)) = ctx.validator.get_type(type_id).ok()? else {
         return None;
     };
     Some(*resource)
@@ -332,7 +353,8 @@ fn borrow_resource_param(
     let ValType::Type(type_id) = val_ty else {
         return None;
     };
-    let Type::DefVal(DefValType::Borrow(resource)) = ctx.validator.get_type(*type_id).ok()? else {
+    let type_id = resolve_eq_alias(ctx, *type_id)?;
+    let Type::DefVal(DefValType::Borrow(resource)) = ctx.validator.get_type(type_id).ok()? else {
         return None;
     };
     Some(*resource)
@@ -344,30 +366,64 @@ fn ensure_same_resource(
     expected: TypeId,
     context: AnnotatedContext,
 ) -> ParseResult<()> {
-    let checked = match ctx.validator.sub_face_root(expected) {
-        Some(root) => {
-            // The name denotes a `(sub resource)` export face, whose
-            // nominal identity inside this component is the underlying
-            // resource it was minted from (chained faces resolve to
-            // their root). Subtyping alone would accept any resource
-            // through the face's `Sub` bound, so require the
-            // function's resource to be that very resource -- or a
-            // face of it -- and keep the subtype check as the shape
-            // gate.
-            let actual_root = ctx.validator.sub_face_root(actual).unwrap_or(actual);
+    let checked = match ctx.validator.plain_export_face_root(expected) {
+        Some(plain_root) => {
+            // The name denotes a plain export's `(eq)` face, whose
+            // nominal identity inside this component is the
+            // underlying resource it was minted from (chained faces
+            // resolve to their root). The plain face may itself
+            // denote a `(sub resource)` export face -- a plain
+            // re-export of a sub-ascribed export -- so keep
+            // resolving through sub faces to reach the resource.
+            // Require the function's resource to be that very
+            // resource -- or a face of it -- and keep the subtype
+            // check between the roots as the shape gate.
+            let root = ctx
+                .validator
+                .sub_face_root(plain_root)
+                .unwrap_or(plain_root);
+            let actual_plain_root = ctx
+                .validator
+                .plain_export_face_root(actual)
+                .unwrap_or(actual);
+            let actual_root = ctx
+                .validator
+                .sub_face_root(actual_plain_root)
+                .unwrap_or(actual_plain_root);
             ctx.validator
                 .get_type(actual_root)?
                 .assert_same_resource_identities(ctx.validator.get_type(root)?, ctx.validator)
                 .and_then(|()| {
                     ctx.validator
-                        .get_type(actual)?
-                        .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator)
+                        .get_type(actual_root)?
+                        .assert_subtype_of(ctx.validator.get_type(root)?, ctx.validator)
                 })
         }
-        None => ctx
-            .validator
-            .get_type(actual)?
-            .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator),
+        None => match ctx.validator.sub_face_root(expected) {
+            Some(root) => {
+                // The name denotes a `(sub resource)` export face, whose
+                // nominal identity inside this component is the underlying
+                // resource it was minted from (chained faces resolve to
+                // their root). Subtyping alone would accept any resource
+                // through the face's `Sub` bound, so require the
+                // function's resource to be that very resource -- or a
+                // face of it -- and keep the subtype check as the shape
+                // gate.
+                let actual_root = ctx.validator.sub_face_root(actual).unwrap_or(actual);
+                ctx.validator
+                    .get_type(actual_root)?
+                    .assert_same_resource_identities(ctx.validator.get_type(root)?, ctx.validator)
+                    .and_then(|()| {
+                        ctx.validator
+                            .get_type(actual)?
+                            .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator)
+                    })
+            }
+            None => ctx
+                .validator
+                .get_type(actual)?
+                .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator),
+        },
     };
     checked.map_err(|_| match context {
         AnnotatedContext::Import => crate::decoder::ComponentParseError::TypeMismatch(format!(

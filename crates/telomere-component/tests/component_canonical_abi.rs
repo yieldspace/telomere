@@ -1010,8 +1010,8 @@ async fn direct_list_record_uses_16_byte_stride_with_b_at_offset_8() {
         &direct_list_component(
             r#"
   (type $entry (record (field "a" u8) (field "b" u64)))
-  (export "entry" (type $entry))
-  (type $value (list $entry))
+  (export $entry' "entry" (type $entry))
+  (type $value (list $entry'))
   (export "value" (type $value))
 "#,
             false,
@@ -1121,8 +1121,8 @@ async fn indirect_u64_list_and_15_u32_params_use_an_80_byte_outer_area() {
             name: "list<record{a:u8,b:u64}>",
             type_defs: r#"
   (type $entry (record (field "a" u8) (field "b" u64)))
-  (export "entry" (type $entry))
-  (type $value (list $entry))
+  (export $entry' "entry" (type $entry))
+  (type $value (list $entry'))
   (export "value" (type $value))
 "#,
             values: records
@@ -1748,7 +1748,7 @@ async fn lifted_char_record_results_from_memory_trap_on_invalid_bit_patterns() {
     let component = r#"
 (component
   (type $pair (record (field "a" char) (field "b" char)))
-  (export "pair" (type $pair))
+  (export $pair' "pair" (type $pair))
   (core module $M
     (memory (export "memory") 1)
     (func (export "give") (result i32)
@@ -1757,7 +1757,7 @@ async fn lifted_char_record_results_from_memory_trap_on_invalid_bit_patterns() {
       (i32.const 0))
   )
   (core instance $m (instantiate $M))
-  (func (export "give") (result $pair) (canon lift (core func $m "give") (memory (core memory $m "memory"))))
+  (func (export "give") (result $pair') (canon lift (core func $m "give") (memory (core memory $m "memory"))))
 )
 "#;
     let (store, instance) = instantiate(component, &ComponentLinker::new()).await;
@@ -1880,13 +1880,13 @@ async fn flat_variant_result_with_out_of_range_discriminant_traps_canonically() 
         r#"
 (component
   (type $v (variant (case "x")))
-  (export "v" (type $v))
+  (export $v' "v" (type $v))
   (core module $M
     (func (export "give") (result i32) (i32.const 1))
     (func (export "give-ok") (result i32) (i32.const 0)))
   (core instance $m (instantiate $M))
-  (func (export "give") (result $v) (canon lift (core func $m "give")))
-  (func (export "give-ok") (result $v) (canon lift (core func $m "give-ok"))))
+  (func (export "give") (result $v') (canon lift (core func $m "give")))
+  (func (export "give-ok") (result $v') (canon lift (core func $m "give-ok"))))
 "#,
         &ComponentLinker::new(),
     )
@@ -1921,13 +1921,13 @@ async fn flat_enum_result_with_out_of_range_discriminant_traps_canonically() {
         r#"
 (component
   (type $e (enum "a" "b"))
-  (export "e" (type $e))
+  (export $e' "e" (type $e))
   (core module $M
     (func (export "give") (result i32) (i32.const 2))
     (func (export "give-ok") (result i32) (i32.const 1)))
   (core instance $m (instantiate $M))
-  (func (export "give") (result $e) (canon lift (core func $m "give")))
-  (func (export "give-ok") (result $e) (canon lift (core func $m "give-ok"))))
+  (func (export "give") (result $e') (canon lift (core func $m "give")))
+  (func (export "give-ok") (result $e') (canon lift (core func $m "give-ok"))))
 "#,
         &ComponentLinker::new(),
     )
@@ -1955,7 +1955,7 @@ async fn memory_variant_result_with_out_of_range_discriminant_traps_canonically(
         r#"
 (component
   (type $v (variant (case "a" string) (case "b" u32)))
-  (export "v" (type $v))
+  (export $v' "v" (type $v))
   (core module $M
     (memory (export "mem") 1)
     (func (export "give") (result i32)
@@ -1968,9 +1968,9 @@ async fn memory_variant_result_with_out_of_range_discriminant_traps_canonically(
       (i32.store (i32.const 68) (i32.const 42))
       (i32.const 64)))
   (core instance $m (instantiate $M))
-  (func (export "give") (result $v)
+  (func (export "give") (result $v')
     (canon lift (core func $m "give") (memory (core memory $m "mem"))))
-  (func (export "give-ok") (result $v)
+  (func (export "give-ok") (result $v')
     (canon lift (core func $m "give-ok") (memory (core memory $m "mem")))))
 "#,
         &ComponentLinker::new(),
@@ -2005,7 +2005,7 @@ async fn list_of_variants_with_out_of_range_discriminant_traps_canonically() {
         r#"
 (component
   (type $v (variant (case "x")))
-  (export "v" (type $v))
+  (export $v' "v" (type $v))
   (core module $M
     (memory (export "mem") 1)
     (func (export "give") (result i32)
@@ -2015,7 +2015,7 @@ async fn list_of_variants_with_out_of_range_discriminant_traps_canonically() {
       (i32.store (i32.const 68) (i32.const 2))
       (i32.const 64)))
   (core instance $m (instantiate $M))
-  (func (export "give") (result (list $v))
+  (func (export "give") (result (list $v'))
     (canon lift (core func $m "give") (memory (core memory $m "mem")))))
 "#,
         &ComponentLinker::new(),

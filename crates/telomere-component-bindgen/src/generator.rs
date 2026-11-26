@@ -849,7 +849,7 @@ impl Generator {
                 ) -> Result<&'a #bindgen::Type, #runtime::ComponentError> {
                     match ty {
                         #bindgen::ValType::Type(type_id) => program
-                            .get_type(*type_id)
+                            .resolve_eq_type(*type_id)
                             .ok_or_else(|| #runtime::ComponentError::Link("type id not found".to_owned())),
                         #bindgen::ValType::Primitive(_) => Err(#runtime::ComponentError::Link(
                             "expected defined component type".to_owned(),

@@ -1373,7 +1373,7 @@ async fn resource_drop_of_borrowed_owned_resource_traps() {
         r#"
 (component
   (type $R (resource (rep i32)))
-  (export "R" (type $R))
+  (export $R' "R" (type $R))
   (canon resource.new $R (core func $R.resource.new))
   (canon resource.drop $R (core func $R.resource.drop))
   (core module $M
@@ -1389,9 +1389,9 @@ async fn resource_drop_of_borrowed_owned_resource_traps() {
     (export "new" (func $R.resource.new))
     (export "drop" (func $R.resource.drop))
   ))))
-  (func (export "make") (param "rep" u32) (result (own $R)) (canon lift (core func $m "make")))
-  (func (export "drop-own") (param "b" (borrow $R)) (param "o" (own $R)) (canon lift (core func $m "drop-own")))
-  (func (export "drop") (param "o" (own $R)) (canon lift (core func $m "drop")))
+  (func (export "make") (param "rep" u32) (result (own $R')) (canon lift (core func $m "make")))
+  (func (export "drop-own") (param "b" (borrow $R')) (param "o" (own $R')) (canon lift (core func $m "drop-own")))
+  (func (export "drop") (param "o" (own $R')) (canon lift (core func $m "drop")))
 )
 "#,
     );
@@ -1457,7 +1457,7 @@ async fn resource_drop_of_borrowed_owned_resource_traps_for_every_handle_represe
         r#"
 (component
   (type $R (resource (rep i32)))
-  (export "R" (type $R))
+  (export $R' "R" (type $R))
   (canon resource.new $R (core func $R.resource.new))
   (canon resource.drop $R (core func $R.resource.drop))
   (core module $M
@@ -1471,9 +1471,9 @@ async fn resource_drop_of_borrowed_owned_resource_traps_for_every_handle_represe
     (export "new" (func $R.resource.new))
     (export "drop" (func $R.resource.drop))
   ))))
-  (func (export "make") (param "rep" u32) (result (own $R)) (canon lift (core func $m "make")))
-  (func (export "drop-own") (param "b" (borrow $R)) (param "o" (own $R)) (canon lift (core func $m "drop-own")))
-  (func (export "drop") (param "o" (own $R)) (canon lift (core func $m "drop")))
+  (func (export "make") (param "rep" u32) (result (own $R')) (canon lift (core func $m "make")))
+  (func (export "drop-own") (param "b" (borrow $R')) (param "o" (own $R')) (canon lift (core func $m "drop-own")))
+  (func (export "drop") (param "o" (own $R')) (canon lift (core func $m "drop")))
 )
 "#,
     );

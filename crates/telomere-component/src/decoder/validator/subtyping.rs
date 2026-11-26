@@ -7,6 +7,40 @@ impl<'a> Validator<'a> {
             return Ok(());
         }
 
+        // An `(eq)` type is definitionally the type it denotes,
+        // so a type is a subtype of an eq type that denotes it.
+        // The type-level comparison cannot see this case: meeting
+        // the parent's eq bound it has no access to the identity
+        // of the type being assigned. This covers the faces plain
+        // type exports mint, which denote the very resource or
+        // defval they name. Both chains are resolved to their
+        // roots before comparing: the child may itself be a face
+        // (one resource plainly exported twice mints two faces of
+        // it), and resolving only the parent compares the denoted
+        // resource against the child's unresolved face, missing
+        // their common root.
+        {
+            let mut child_root = child;
+            while let Type::Generic(crate::ir::types::Generic {
+                bound: crate::ir::types::GenericBound::Eq(inner),
+                ..
+            }) = self.get_type(child_root)?
+            {
+                child_root = *inner;
+            }
+            let mut parent_root = parent;
+            while let Type::Generic(crate::ir::types::Generic {
+                bound: crate::ir::types::GenericBound::Eq(inner),
+                ..
+            }) = self.get_type(parent_root)?
+            {
+                parent_root = *inner;
+            }
+            if child_root == parent_root {
+                return Ok(());
+            }
+        }
+
         match (self.get_type(child)?, self.get_type(parent)?) {
             (Type::Component(_), Type::Component(_)) => {
                 self.assert_component_type_ids_subtype_of(child, parent)

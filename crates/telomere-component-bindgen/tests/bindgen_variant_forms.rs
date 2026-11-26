@@ -59,11 +59,11 @@ fn returning_component(constructor: &str, type_export: &str) -> Vec<u8> {
         r#"
 (component
   (type $t {constructor})
-  (export "{type_export}" (type $t))
+  (export $t' "{type_export}" (type $t))
   (core module $m
     (func (export "f") (result i32) i32.const 1))
   (core instance $i (instantiate $m))
-  (func (export "get-{type_export}") (result $t)
+  (func (export "get-{type_export}") (result $t')
     (canon lift (core func $i "f")))
 )
 "#
@@ -79,13 +79,13 @@ fn ascribed_component(own: &str, ascribed: &str) -> Vec<u8> {
 (component
   (type $own {own})
   (type $asc {ascribed})
-  (export "status" (type $asc))
+  (export $asc' "status" (type $asc))
   (core module $m
     (func (export "f") (result i32) i32.const 1))
   (core instance $i (instantiate $m))
   (func $f (result $own)
     (canon lift (core func $i "f")))
-  (export "get-status" (func $f) (func (result $asc)))
+  (export "get-status" (func $f) (func (result $asc')))
 )
 "#
     ))
@@ -151,11 +151,11 @@ async fn generated_enum_param_rejects_declared_variant() {
     let component = r#"
 (component
   (type $t (variant (case "ready") (case "done")))
-  (export "status" (type $t))
+  (export $t' "status" (type $t))
   (core module $m
     (func (export "echo") (param i32) (result i32) (local.get 0)))
   (core instance $i (instantiate $m))
-  (func (export "echo") (param "value" $t) (result u32)
+  (func (export "echo") (param "value" $t') (result u32)
     (canon lift (core func $i "echo")))
 )
 "#;

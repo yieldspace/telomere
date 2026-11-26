@@ -137,7 +137,7 @@ fn large_record_type_defs(field_count: usize) -> String {
         .map(|index| format!("(field \"f-{index}\" u32)"))
         .collect::<Vec<_>>()
         .join(" ");
-    format!("(type $value (record {fields}))\n  (export \"value\" (type $value))")
+    format!("(type $value (record {fields}))\n  (export $value' \"value\" (type $value))")
 }
 
 fn large_record_value(field_count: usize) -> ComponentValue {
@@ -170,9 +170,9 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
     let record = r#"
 (component
   (type $inner (record (field "d" bool) (field "e" u32)))
-  (export "inner" (type $inner))
-  (type $value (record (field "a" u32) (field "b" float64) (field "c" $inner)))
-  (export "value" (type $value))
+  (export $inner' "inner" (type $inner))
+  (type $value (record (field "a" u32) (field "b" float64) (field "c" $inner')))
+  (export $value' "value" (type $value))
   (core module $m
     (memory (export "memory") 1)
     (global $bump (mut i32) (i32.const 32))
@@ -198,7 +198,7 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
     )
   )
   (core instance $i (instantiate $m))
-  (func (export "run") (param "value" $value) (result $value)
+  (func (export "run") (param "value" $value') (result $value')
     (canon lift (core func $i "run") (memory (core memory $i "memory")) (realloc (core func $i "realloc")))
   )
 )
@@ -235,9 +235,9 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
     let variant = r#"
 (component
   (type $inner (record (field "d" bool) (field "e" u32)))
-  (export "inner" (type $inner))
-  (type $value (variant (case "a" u32) (case "b" float64) (case "c" $inner)))
-  (export "value" (type $value))
+  (export $inner' "inner" (type $inner))
+  (type $value (variant (case "a" u32) (case "b" float64) (case "c" $inner')))
+  (export $value' "value" (type $value))
   (core module $m
     (memory (export "memory") 1)
     (global $bump (mut i32) (i32.const 32))
@@ -265,7 +265,7 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
     )
   )
   (core instance $i (instantiate $m))
-  (func (export "run") (param "value" $value) (result $value)
+  (func (export "run") (param "value" $value') (result $value')
     (canon lift (core func $i "run") (memory (core memory $i "memory")) (realloc (core func $i "realloc")))
   )
 )
@@ -285,13 +285,13 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
     let enum_component = r#"
 (component
   (type $value (enum "a" "b"))
-  (export "value" (type $value))
+  (export $value' "value" (type $value))
   (core module $m
     (func (export "run") (param i32) (result i32)
       (local.get 0))
   )
   (core instance $i (instantiate $m))
-  (func (export "run") (param "value" $value) (result $value)
+  (func (export "run") (param "value" $value') (result $value')
     (canon lift (core func $i "run"))
   )
 )
@@ -301,13 +301,13 @@ async fn component_dynamic_values_roundtrip_matches_wasmtime_supported_sync_valu
     let flags = r#"
 (component
   (type $value (flags "a" "b" "c" "d" "e"))
-  (export "value" (type $value))
+  (export $value' "value" (type $value))
   (core module $m
     (func (export "run") (param i32) (result i32)
       (local.get 0))
   )
   (core instance $i (instantiate $m))
-  (func (export "run") (param "value" $value) (result $value)
+  (func (export "run") (param "value" $value') (result $value')
     (canon lift (core func $i "run"))
   )
 )
@@ -374,7 +374,7 @@ async fn component_dynamic_values_support_indirect_parameter_areas() {
     )
   )
   (core instance $i (instantiate $m))
-  (func (export "run") (param "value" $value) (result $value)
+  (func (export "run") (param "value" $value') (result $value')
     (canon lift (core func $i "run") (memory (core memory $i "memory")) (realloc (core func $i "realloc")))
   )
 )
