@@ -2,6 +2,7 @@ use crate::ir::types::{
     ComponentExportType, ComponentImportType, CoreModuleType, InstanceExportType, Type,
 };
 use crate::ir::{ScopeId, TypeId};
+use crate::support::common::ValType as CoreValType;
 use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 
@@ -99,6 +100,8 @@ pub(crate) struct TypeMeta {
     alignment: Option<u64>,
     contains_resource_handle: Option<bool>,
     contains_borrow: Option<bool>,
+    needs_memory: Option<bool>,
+    flattened: Option<Box<[CoreValType]>>,
     resource_owner_summary: Option<ResourceOwnerSummary>,
     visible_closure: Option<Box<[TypeId]>>,
     surface_validated: ValidationState,
@@ -562,6 +565,29 @@ impl TypeArena {
     pub(crate) fn set_alignment(&self, id: TypeId, alignment: u64) {
         if let Some(slot) = self.slots.get(id.index() as usize) {
             slot.meta.borrow_mut().alignment = Some(alignment);
+        }
+    }
+
+    pub(crate) fn needs_memory(&self, id: TypeId) -> Option<bool> {
+        self.slots
+            .get(id.index() as usize)
+            .and_then(|slot| slot.meta.borrow().needs_memory)
+    }
+
+    pub(crate) fn set_needs_memory(&self, id: TypeId, found: bool) {
+        if let Some(slot) = self.slots.get(id.index() as usize) {
+            slot.meta.borrow_mut().needs_memory = Some(found);
+        }
+    }
+
+    pub(crate) fn flattened_types(&self, id: TypeId) -> Option<Ref<'_, [CoreValType]>> {
+        let slot = self.slots.get(id.index() as usize)?;
+        Ref::filter_map(slot.meta.borrow(), |meta| meta.flattened.as_deref()).ok()
+    }
+
+    pub(crate) fn set_flattened_types(&self, id: TypeId, flat: Vec<CoreValType>) {
+        if let Some(slot) = self.slots.get(id.index() as usize) {
+            slot.meta.borrow_mut().flattened = Some(flat.into_boxed_slice());
         }
     }
 

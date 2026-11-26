@@ -10,7 +10,7 @@ pub use crate::support::common::{
 };
 use crate::support::Module;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// The canonical identity of a declared core func type: its
 /// signature, its finality, and the identity of its declared
@@ -32,14 +32,14 @@ use std::rc::Rc;
 pub struct CoreFuncIdentity {
     pub signature: CoreFuncType,
     pub is_final: bool,
-    pub supertype: Option<Rc<CoreFuncIdentity>>,
+    pub supertype: Option<Arc<CoreFuncIdentity>>,
 }
 
 impl CoreFuncIdentity {
     /// The identity of a bare (final, supertype-less) func type
     /// with the given signature.
-    pub fn bare(signature: CoreFuncType) -> Rc<Self> {
-        Rc::new(Self {
+    pub fn bare(signature: CoreFuncType) -> Arc<Self> {
+        Arc::new(Self {
             signature,
             is_final: true,
             supertype: None,
@@ -74,7 +74,7 @@ impl CoreFuncIdentity {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoreModuleFuncType {
     pub signature: CoreFuncType,
-    pub identity: Rc<CoreFuncIdentity>,
+    pub identity: Arc<CoreFuncIdentity>,
 }
 
 impl CoreModuleFuncType {

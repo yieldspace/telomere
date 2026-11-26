@@ -11,7 +11,7 @@ use crate::support::common::{
 };
 use crate::support::parser::core::{parse_name, parse_u32, parse_vec};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 enum LocalCoreType {
     /// A func type in a module type's local type space, together
@@ -23,7 +23,7 @@ enum LocalCoreType {
     Func {
         func: CoreFuncType,
         is_final: bool,
-        identity: Rc<CoreFuncIdentity>,
+        identity: Arc<CoreFuncIdentity>,
     },
     Module,
 }
@@ -386,7 +386,7 @@ struct DefinedCoreSubtype {
     /// The canonical identity of the defined type, linking it to
     /// the identity of its declared supertype (see
     /// `CoreFuncIdentity`).
-    identity: Rc<CoreFuncIdentity>,
+    identity: Arc<CoreFuncIdentity>,
 }
 
 /// What a supertype index in a `core:rectype` must resolve to.
@@ -401,7 +401,7 @@ struct SuperTypeInfo {
     /// to this one. Every func resolution provides it (a type
     /// without an identity record resolves to the bare identity of
     /// its signature).
-    identity: Option<Rc<CoreFuncIdentity>>,
+    identity: Option<Arc<CoreFuncIdentity>>,
     /// Whether the referenced type is final. A bare comptype is a
     /// final subtype by definition, and every non-final definition
     /// passes through the rectype decoder, which records the bit in
@@ -513,7 +513,7 @@ fn parse_core_subtype_body(
             ));
         }
     }
-    let identity = Rc::new(CoreFuncIdentity {
+    let identity = Arc::new(CoreFuncIdentity {
         signature: func.clone(),
         is_final,
         supertype: supertype_identity,
@@ -588,6 +588,15 @@ fn parse_core_rectype(
     Ok((reader.read_count() - start, defined))
 }
 
+/// One core type defined by a `core:deftype`, together with the
+/// records its callers keep in the core type store: the type's
+/// finality, and, for a func type, its canonical identity.
+pub struct DefinedCoreType {
+    pub ty: CoreType,
+    pub is_final: bool,
+    pub identity: Option<Arc<CoreFuncIdentity>>,
+}
+
 /// Decodes a `core:deftype` (a core type section entry, or the core
 /// typedef inside a component/instance type). Returns every core type
 /// the definition introduces into the core type index space, in index
@@ -602,10 +611,14 @@ fn parse_core_rectype(
 /// declared supertype ancestry.
 pub fn parse_core_type(
     ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<Vec<(CoreType, bool, Option<Rc<CoreFuncIdentity>>)>> {
+) -> SizedResult<Vec<DefinedCoreType>> {
     let start = ctx.reader.read_count();
     let types = match ctx.reader.read_exact_one()? {
-        0x50 => vec![(CoreType::Module(parse_core_module_type(ctx)?.1), true, None)],
+        0x50 => vec![DefinedCoreType {
+            ty: CoreType::Module(parse_core_module_type(ctx)?.1),
+            is_final: true,
+            identity: None,
+        }],
         0x00 => {
             // `core:deftype` shares the 0x50 opcode between
             // `core:moduletype` and a non-final `core:subtype`. The
@@ -666,12 +679,10 @@ pub fn parse_core_type(
             )?;
             defined
                 .into_iter()
-                .map(|defined| {
-                    (
-                        CoreType::Func(defined.func),
-                        defined.is_final,
-                        Some(defined.identity),
-                    )
+                .map(|defined| DefinedCoreType {
+                    ty: CoreType::Func(defined.func),
+                    is_final: defined.is_final,
+                    identity: Some(defined.identity),
                 })
                 .collect()
         }
@@ -724,12 +735,10 @@ pub fn parse_core_type(
             )?;
             defined
                 .into_iter()
-                .map(|defined| {
-                    (
-                        CoreType::Func(defined.func),
-                        defined.is_final,
-                        Some(defined.identity),
-                    )
+                .map(|defined| DefinedCoreType {
+                    ty: CoreType::Func(defined.func),
+                    is_final: defined.is_final,
+                    identity: Some(defined.identity),
                 })
                 .collect()
         }

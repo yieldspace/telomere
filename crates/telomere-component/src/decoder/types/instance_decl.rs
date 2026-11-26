@@ -1,6 +1,6 @@
-use crate::decoder::parse_core_type;
 use crate::decoder::types::alias::parse_alias_type;
 use crate::decoder::types::{parse_export_decl, parse_type};
+use crate::decoder::{parse_core_type, DefinedCoreType};
 use crate::decoder::{ComponentParseError, ParseContext, ParseResult};
 use crate::support::binary::BinaryReader;
 
@@ -24,7 +24,12 @@ pub fn _parse_instance_decl(
     match b {
         0x00 => {
             let (_, types) = parse_core_type(ctx)?;
-            for (ty, is_final, identity) in types {
+            for DefinedCoreType {
+                ty,
+                is_final,
+                identity,
+            } in types
+            {
                 ctx.validator
                     .scope_mut()
                     .core_types

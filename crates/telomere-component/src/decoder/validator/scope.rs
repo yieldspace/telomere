@@ -9,7 +9,7 @@ use crate::ir::{
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct TypeStore<T> {
     types: Vec<TypeId>,
@@ -42,7 +42,7 @@ pub struct CoreTypeStore<R, T> {
     /// Other stores leave every entry `None`; a core type without
     /// a record did not come from a `sub` definition and resolves
     /// to the bare identity of its signature.
-    identities: Vec<Option<Rc<CoreFuncIdentity>>>,
+    identities: Vec<Option<Arc<CoreFuncIdentity>>>,
     _phantom: PhantomData<R>,
 }
 
@@ -95,7 +95,7 @@ impl<R, T> CoreTypeStore<R, T> {
         &mut self,
         ty: T,
         is_final: Option<bool>,
-        identity: Option<Rc<CoreFuncIdentity>>,
+        identity: Option<Arc<CoreFuncIdentity>>,
     ) -> LocalIdx<R> {
         let idx = self.types.len() as u32;
         self.types.push(ty);
@@ -112,7 +112,7 @@ impl<R, T> CoreTypeStore<R, T> {
 
     /// The recorded canonical identity of the core func type at
     /// `idx`, when the definition that introduced it recorded one.
-    pub fn identity(&self, idx: LocalIdx<R>) -> Option<Rc<CoreFuncIdentity>> {
+    pub fn identity(&self, idx: LocalIdx<R>) -> Option<Arc<CoreFuncIdentity>> {
         self.identities.get(idx.get() as usize).cloned().flatten()
     }
 

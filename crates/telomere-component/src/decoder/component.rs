@@ -8,7 +8,8 @@ use crate::decoder::validator::ParseState;
 use crate::decoder::value::parse_value_def;
 use crate::decoder::{
     parse_core_instance, parse_core_type, parse_layer, parse_magic, parse_section_type,
-    parse_vec_range, parse_version, ComponentParseError, ParseContext, ParseResult, Validator,
+    parse_vec_range, parse_version, ComponentParseError, DefinedCoreType, ParseContext,
+    ParseResult, Validator,
 };
 use crate::ir::types::{CoreModuleType, Type};
 use crate::ir::{ComponentSection, CoreModule, CoreRelation, Relation};
@@ -99,7 +100,12 @@ fn _parse_component(
                         // One `core:deftype` can define several core
                         // types (a `rec` group); register each of them.
                         let (_, types) = parse_core_type(&mut ctx)?;
-                        for (ty, is_final, identity) in types {
+                        for DefinedCoreType {
+                            ty,
+                            is_final,
+                            identity,
+                        } in types
+                        {
                             let idx = ctx
                                 .state
                                 .core_type_store
