@@ -147,11 +147,11 @@ pub(super) fn validate_required_options(
     let params_need_memory = func_ty
         .params
         .iter()
-        .any(|param| type_needs_memory(param, ctx));
+        .any(|param| ctx.validator.type_needs_memory(param));
     let results_need_memory = func_ty
         .result
         .as_ref()
-        .is_some_and(|result| type_needs_memory(result, ctx));
+        .is_some_and(|result| ctx.validator.type_needs_memory(result));
     let params_indirect = direct_params.len() > MAX_FLAT_PARAMS;
     let results_indirect = direct_results.len() > MAX_FLAT_RESULTS;
     let needs_memory =
@@ -176,39 +176,4 @@ pub(super) fn validate_required_options(
         ));
     }
     Ok(())
-}
-
-fn type_needs_memory(ty: &ValType, ctx: &ParseContext<impl BinaryReader>) -> bool {
-    match ty {
-        ValType::Primitive(PrimValType::String) => true,
-        ValType::Primitive(_) => false,
-        ValType::Type(type_id) => ctx
-            .validator
-            .get_type(*type_id)
-            .map(|ty| defined_type_needs_memory(ty, ctx))
-            .unwrap_or(false),
-    }
-}
-
-fn defined_type_needs_memory(ty: &Type, ctx: &ParseContext<impl BinaryReader>) -> bool {
-    match ty {
-        Type::DefVal(def) => defval_needs_memory(def, ctx),
-        Type::Resource(_) | Type::Generic(_) => false,
-        Type::Func(_) | Type::Component(_) | Type::Instance(_) => false,
-    }
-}
-
-fn defval_needs_memory(def: &DefValType, ctx: &ParseContext<impl BinaryReader>) -> bool {
-    match def {
-        DefValType::Primitive(PrimValType::String) => true,
-        DefValType::Primitive(_) => false,
-        DefValType::Record(fields) => fields.iter().any(|field| type_needs_memory(&field.ty, ctx)),
-        DefValType::Variant(cases) => cases
-            .iter()
-            .filter_map(|case| case.ty.as_ref())
-            .any(|ty| type_needs_memory(ty, ctx)),
-        DefValType::Flags(_) => false,
-        DefValType::List(elem, maybe_len) => maybe_len.is_none() || type_needs_memory(elem, ctx),
-        DefValType::Own(_) | DefValType::Borrow(_) => false,
-    }
 }

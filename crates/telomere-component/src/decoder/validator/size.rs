@@ -228,6 +228,71 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// Whether passing values of this type through the Canonical ABI
+    /// needs a memory: strings, lists without a fixed length, and
+    /// anything containing them. The canon options check asks this of
+    /// every parameter and result type.
+    ///
+    /// Memoised per type with the same discipline as the borrow check
+    /// above: only completed results are cached, and a type already on
+    /// the current traversal stack contributes `false` without being
+    /// cached. Without the cache, shared references in a type graph
+    /// are re-expanded at every visit and the check takes exponential
+    /// time on types the size gate now admits (issue #367; the canon
+    /// layer's `defval_needs_memory` walk had the same unmemoised
+    /// shape as the flatten walk).
+    pub(crate) fn type_needs_memory(&self, ty: &ValType) -> bool {
+        let mut visiting = VisitTracker::new(self.types.len());
+        self.valtype_needs_memory(ty, &mut visiting)
+    }
+
+    fn type_id_needs_memory(&self, type_id: TypeId, visiting: &mut VisitTracker) -> bool {
+        if let Some(found) = self.types.needs_memory(type_id) {
+            return found;
+        }
+        if !visiting.enter(type_id) {
+            return false;
+        }
+        let found = match self.get_type(type_id) {
+            Ok(Type::DefVal(def)) => self.defval_needs_memory(def, visiting),
+            Ok(_) => false,
+            Err(_) => {
+                visiting.leave(type_id);
+                return false;
+            }
+        };
+        visiting.leave(type_id);
+        self.types.set_needs_memory(type_id, found);
+        found
+    }
+
+    fn defval_needs_memory(&self, def: &DefValType, visiting: &mut VisitTracker) -> bool {
+        match def {
+            DefValType::Primitive(PrimValType::String) => true,
+            DefValType::Primitive(_) => false,
+            DefValType::Record(fields) => fields
+                .iter()
+                .any(|field| self.valtype_needs_memory(&field.ty, visiting)),
+            DefValType::Variant(cases) => cases
+                .iter()
+                .filter_map(|case| case.ty.as_ref())
+                .any(|ty| self.valtype_needs_memory(ty, visiting)),
+            DefValType::Flags(_) => false,
+            DefValType::List(elem, maybe_len) => {
+                maybe_len.is_none() || self.valtype_needs_memory(elem, visiting)
+            }
+            DefValType::Own(_) | DefValType::Borrow(_) => false,
+        }
+    }
+
+    fn valtype_needs_memory(&self, ty: &ValType, visiting: &mut VisitTracker) -> bool {
+        match ty {
+            ValType::Primitive(PrimValType::String) => true,
+            ValType::Primitive(_) => false,
+            ValType::Type(type_id) => self.type_id_needs_memory(*type_id, visiting),
+        }
+    }
+
     pub(super) fn resource_owner_summary(
         &self,
         type_id: TypeId,

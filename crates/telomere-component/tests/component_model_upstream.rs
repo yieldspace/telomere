@@ -65,12 +65,10 @@ const EXCLUDED: &[(&str, &str)] = &[
     (
         "binary/binary.wast",
         "malformed-binary strictness is fixed (#319: section sizes \
-         are enforced and core decode reasons are preserved), but the \
-         file still fails on other defects: two binary extern-name \
-         cases (lines 1467, 1481 - a malformed name is accepted, and \
-         another is rejected with a non-canonical message) remain \
-         after the split extern-name encoding fix (issue #318; the \
-         lines 1297, 1316 cases now pass); async type encodings the \
+         are enforced and core decode reasons are preserved) and \
+         binary extern names are validated (issue #359; the \
+         lines 1467, 1481 cases now pass), but the file still \
+         fails on other defects: async type encodings the \
          decoder \
          does not know - stream (0x66) and async func (0x43) types, \
          async being a documented non-goal (lines 556, 742, 754, \
