@@ -138,13 +138,15 @@ using the [component crate's Cargo features][gated-proposal-features].
 | Feature | Current effect |
 | --- | --- |
 | `component-gated-feature-async` | The decoder recognizes the `error-context` type opcode `0x64`. `[async]`, `[async method]`, and `[async static]` names are rejected by the decoder with named `Unsupported` before IR construction; their corresponding gated `PlainName` variants are defined in the IR but do not occur in decoded components. `stream` (`0x66`) and `future` (`0x65`) are declared but are not decoded. Every canonical ABI path that would move an `error-context` value returns `Unsupported` with the exact message ``canonical ABI for `error-context` is not supported``. |
-| `component-gated-feature-nested-namespaces-and-packages` | Declared only; no source use. |
-| `component-gated-feature-threading-builtins` | Declared only; no source use. |
-| `component-gated-feature-fixed-length-lists` | Declared only; no source use. |
-| `component-gated-feature-error-context-type` | Declared only; no source use. |
+| `component-gated-feature-nested-namespaces-and-packages` | Removed in #148; it was declared only, with no source use. |
+| `component-gated-feature-threading-builtins` | Removed in #148; it was declared only, with no source use. |
+| `component-gated-feature-fixed-length-lists` | Removed in #148; it was declared only, with no source use. |
+| `component-gated-feature-error-context-type` | Removed in #148; it was declared only, with no source use. |
 
-`error-context` is gated by `component-gated-feature-async`, not by
-`component-gated-feature-error-context-type`; the latter is inert. The
+`error-context` is gated by `component-gated-feature-async`, not by the
+former `component-gated-feature-error-context-type`; that flag was inert
+and was removed with the other declared-only flags in #148, following the
+`component-gated-feature-value-imports-exports` precedent above. The
 `feature-coverage` CI job compiles
 `cargo check -p telomere-component --all-features --all-targets` on every push.
 That compilation guarantee does not implement the gated features.

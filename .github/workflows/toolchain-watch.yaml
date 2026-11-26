@@ -1,0 +1,58 @@
+name: Toolchain watch
+
+# #148 / #114: the toolchain-ceiling watch. Builds the workspace with
+# the latest stable toolchain and runs the tail-call threading tripwire
+# on it, on a weekly schedule and on manual dispatch only.
+#
+# This workflow REPORTS WITHOUT GATING: it is not a required status
+# check, never runs on pull requests, and a red run blocks nothing.
+# A red run is the report — it means latest stable no longer builds
+# the tree, or the direct-threaded dispatch loop lost the tail-call
+# form the interpreter's stack contract depends on (the failure mode
+# rust-toolchain.toml records for 1.97.0). Either outcome is the
+# signal that the 1.96.0 pin needs revisiting, in one direction or
+# the other.
+
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # rust-toolchain.toml pins 1.96.0; RUSTUP_TOOLCHAIN takes precedence
+  # over the toolchain file, so this workflow alone floats on stable.
+  RUSTUP_TOOLCHAIN: "stable"
+
+jobs:
+  stable-watch:
+    name: Latest stable build and threading tripwire
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install latest stable toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "stable"
+
+      - name: Report toolchain version
+        run: rustc --version && cargo --version
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: toolchain-watch-stable
+
+      - name: Check workspace on latest stable
+        run: cargo check --workspace --all-targets
+
+      # The tripwire from #114: 200,000 call cycles on a bounded host
+      # stack. If a future stable restores the tail-call form, this
+      # goes green and the pin can be revisited; while it stays red,
+      # the pin stays.
+      - name: Tail-call threading tripwire on latest stable
+        run: cargo test -p telomere --release --test call_threading
