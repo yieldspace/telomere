@@ -1517,6 +1517,19 @@ impl X64BaselineMasm {
     fn movsx_vreg32(&mut self, rd: u8, rn: u8, opcode2: u8) {
         match Self::phys_loc(rn).expect("virtual register fits") {
             PhysLoc::Reg(reg) => {
+                // The byte form (0xbe, `sxtb_w`) names its source in
+                // the r/m field as an 8-bit register. Without any REX
+                // prefix, r/m fields 4..=7 select AH/CH/DH/BH instead
+                // of SPL/BPL/SIL/DIL, so a source homed in RSI or RDI
+                // (vregs 9/10 since #193) would silently sign-extend
+                // DH/BH. Force the bare REX that `emit_rex` would
+                // otherwise suppress for those sources; R8-R15
+                // sources already imply REX.B, and the word form
+                // (0xbf, `sxth_w`) selects its 16-bit source the same
+                // with or without REX.
+                if opcode2 == 0xbe && reg & 8 == 0 && reg & 7 >= 4 {
+                    self.bytes.push(0x40);
+                }
                 self.emit_rex(false, RAX, reg);
                 self.emit(&[0x0f, opcode2]);
                 self.modrm_rr(reg, RAX);
@@ -2081,6 +2094,80 @@ mod tests {
                 .windows(4)
                 .any(|window| window == [0xf2, 0x0f, 0x58, 0xc0]),
             "unsigned i64 conversion must double the repaired half value: {bytes:02x?}"
+        );
+    }
+
+    /// Regression test for the Codex P2 on PR #381: `sxtb_w` with a
+    /// source homed in RSI/RDI (vregs 9/10) emitted no REX prefix, so
+    /// the byte-source encoding selected DH/BH instead of SIL/DIL and
+    /// silently sign-extended the wrong register. The stubs below are
+    /// executed, not just byte-checked.
+    #[cfg(all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"))]
+    #[test]
+    fn sxtb_w_sign_extends_the_byte_of_rsi_rdi_homes() {
+        use crate::code_memory::CodeArena;
+
+        type Entry = unsafe extern "C" fn(u64, u64, u64) -> u32;
+
+        fn run(build: impl Fn(&mut X64BaselineMasm)) -> u32 {
+            let mut asm = X64BaselineMasm::with_capacity(64);
+            asm.stp_pre(29, 30);
+            build(&mut asm);
+            asm.ldp_post(29, 30);
+            asm.ret();
+            let arena = CodeArena::default();
+            let code = arena.allocate(&asm.into_bytes()).expect("allocation");
+            let entry: Entry = unsafe { std::mem::transmute(code.ptr()) };
+            // The third argument lands in RDX, so passing 0 makes DH
+            // (the register a REX-less encoding reads in place of
+            // SIL) deterministically zero.
+            unsafe { entry(0, 0, 0) }
+        }
+
+        // vreg 9 homes in RSI: SIL = 0x80 must sign-extend to
+        // 0xffffff80, not read DH (= 0).
+        assert_eq!(
+            run(|asm| {
+                asm.mov_imm_u32(9, 0x80);
+                asm.sxtb_w(0, 9);
+            }),
+            0xffff_ff80
+        );
+        // vreg 10 homes in RDI: DIL = 0x80. RBX is zeroed first so
+        // BH (the REX-less alias of the rm field) is also zero.
+        assert_eq!(
+            run(|asm| {
+                asm.mov_imm_u32(19, 0);
+                asm.mov_imm_u32(10, 0x80);
+                asm.sxtb_w(0, 10);
+            }),
+            0xffff_ff80
+        );
+        // A positive byte in SIL stays positive.
+        assert_eq!(
+            run(|asm| {
+                asm.mov_imm_u32(9, 0x7f);
+                asm.sxtb_w(0, 9);
+            }),
+            0x7f
+        );
+        // Control: vreg 22 homes in R14, whose encoding always
+        // carried REX.B.
+        assert_eq!(
+            run(|asm| {
+                asm.mov_imm_u32(22, 0x80);
+                asm.sxtb_w(0, 22);
+            }),
+            0xffff_ff80
+        );
+        // sxth_w reads a 16-bit source, whose register selection a
+        // missing REX cannot change: vreg 9 = 0x8000.
+        assert_eq!(
+            run(|asm| {
+                asm.mov_imm_u32(9, 0x8000);
+                asm.sxth_w(0, 9);
+            }),
+            0xffff_8000
         );
     }
 }
