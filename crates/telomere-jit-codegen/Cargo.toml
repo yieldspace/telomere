@@ -21,7 +21,14 @@ emit = []
 telomere-jit-codegen = { path = ".", features = ["emit"] }
 
 [dependencies]
-mmap-rs.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+# mmap-rs is used only for the standalone code mapping on non-Unix
+# targets. Its Unix backend declares the libgcc builtin `__clear_cache`
+# as an unconditional extern, which fails to link where the toolchain
+# never provides that symbol (Rust's self-contained musl linking);
+# the Unix mapping is implemented directly on libc in code_memory.rs.
+[target.'cfg(not(unix))'.dependencies]
+mmap-rs.workspace = true

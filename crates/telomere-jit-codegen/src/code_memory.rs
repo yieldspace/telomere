@@ -26,9 +26,36 @@
 #[cfg(unix)]
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use mmap_rs::{Mmap, MmapOptions};
-
 const CODE_ALIGNMENT: usize = 16;
+
+/// The OS page size: `sysconf(_SC_PAGESIZE)` on Unix (falling back to
+/// 4096 when the query fails), the platform query on other targets.
+///
+/// This is a local definition rather than `mmap_rs::MmapOptions`'s
+/// because the standalone mapping below is implemented directly on
+/// Unix: mmap-rs's Unix backend declares the libgcc builtin
+/// `__clear_cache` as an unconditional extern, so every binary linking
+/// it fails on targets whose linker never provides that symbol —
+/// Rust's self-contained musl linking being the observed case
+/// (`undefined reference to __clear_cache` from the telomere-jit-codegen
+/// lib test for x86_64-unknown-linux-musl). mmap-rs remains a
+/// dependency only on non-Unix targets, whose backend resolves the
+/// cache flush through the OS and carries no such assumption.
+fn page_size() -> usize {
+    #[cfg(unix)]
+    {
+        let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if size > 0 {
+            size as usize
+        } else {
+            4096
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        mmap_rs::MmapOptions::page_size()
+    }
+}
 
 /// Size of one code slab. 256 KiB holds hundreds of typical baseline-JIT
 /// functions while keeping the worst-case pinned waste (one hot function
@@ -80,7 +107,7 @@ unsafe impl Sync for Slab {}
 #[cfg(unix)]
 impl Slab {
     fn new(size: usize) -> Result<Self, CodeMemoryError> {
-        debug_assert!(size > 0 && size % MmapOptions::page_size() == 0);
+        debug_assert!(size > 0 && size % page_size() == 0);
         let (rw, rx) = create_slab_views(size)?;
         Ok(Self {
             rx,
@@ -333,6 +360,156 @@ mod mach {
     }
 }
 
+/// A standalone (one function, one mapping) allocation in its writable
+/// phase. On Unix this is a private anonymous `mmap` made directly with
+/// libc — the same style as the slab path above — so no dependency's
+/// libgcc `__clear_cache` assumption enters the link (see [`page_size`]).
+/// On non-Unix targets it wraps mmap-rs, whose non-Unix backends do not
+/// carry that assumption.
+struct StandaloneMut {
+    #[cfg(unix)]
+    ptr: *mut u8,
+    #[cfg(unix)]
+    len: usize,
+    #[cfg(not(unix))]
+    inner: mmap_rs::MmapMut,
+}
+
+unsafe impl Send for StandaloneMut {}
+unsafe impl Sync for StandaloneMut {}
+
+impl StandaloneMut {
+    fn map(len: usize) -> Result<Self, CodeMemoryError> {
+        if len == 0 {
+            return Err(CodeMemoryError);
+        }
+        #[cfg(unix)]
+        {
+            let ptr = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANON,
+                    -1,
+                    0,
+                )
+            };
+            if ptr == libc::MAP_FAILED {
+                return Err(CodeMemoryError);
+            }
+            Ok(Self {
+                ptr: ptr as *mut u8,
+                len,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let inner = mmap_rs::MmapOptions::new(len)
+                .map_err(|_| CodeMemoryError)?
+                .map_mut()
+                .map_err(|_| CodeMemoryError)?;
+            Ok(Self { inner })
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        #[cfg(unix)]
+        {
+            self.ptr
+        }
+        #[cfg(not(unix))]
+        {
+            self.inner.as_mut_ptr()
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        #[cfg(unix)]
+        {
+            unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+        }
+        #[cfg(not(unix))]
+        {
+            self.inner.as_mut_slice()
+        }
+    }
+
+    /// Flips the mapping to read/execute exactly once. The instruction
+    /// cache flush names the written range, matching the slab path's
+    /// contract in `write_into_slab`.
+    fn make_exec(self) -> Result<StandaloneMap, CodeMemoryError> {
+        #[cfg(unix)]
+        {
+            let ptr = self.ptr;
+            let len = self.len;
+            // The mapping is unmapped by StandaloneMap's Drop from here
+            // on; do not let this phase's Drop run for it.
+            std::mem::forget(self);
+            let prot = libc::PROT_READ | libc::PROT_EXEC;
+            if unsafe { libc::mprotect(ptr as *mut libc::c_void, len, prot) } != 0 {
+                unsafe { libc::munmap(ptr as *mut libc::c_void, len) };
+                return Err(CodeMemoryError);
+            }
+            // Mirror the flip this replaces (mmap-rs's make_exec):
+            // protect first, then flush the instruction cache over the
+            // mapping. Callers have normally flushed the written range
+            // already; this covers the whole mapping, as mmap-rs did.
+            if flush_instruction_cache(ptr, len).is_err() {
+                unsafe { libc::munmap(ptr as *mut libc::c_void, len) };
+                return Err(CodeMemoryError);
+            }
+            Ok(StandaloneMap { ptr, len })
+        }
+        #[cfg(not(unix))]
+        {
+            let inner = self.inner.make_exec().map_err(|_| CodeMemoryError)?;
+            Ok(StandaloneMap { inner })
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StandaloneMut {
+    fn drop(&mut self) {
+        unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
+    }
+}
+
+/// A standalone mapping after its one-way flip to executable. Owns the
+/// mapping; dropping unmaps it.
+struct StandaloneMap {
+    #[cfg(unix)]
+    ptr: *mut u8,
+    #[cfg(unix)]
+    len: usize,
+    #[cfg(not(unix))]
+    inner: mmap_rs::Mmap,
+}
+
+unsafe impl Send for StandaloneMap {}
+unsafe impl Sync for StandaloneMap {}
+
+impl StandaloneMap {
+    fn as_ptr(&self) -> *mut u8 {
+        #[cfg(unix)]
+        {
+            self.ptr
+        }
+        #[cfg(not(unix))]
+        {
+            self.inner.as_ptr().cast_mut()
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StandaloneMap {
+    fn drop(&mut self) {
+        unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
+    }
+}
+
 pub struct ExecutableCode {
     ptr: *mut u8,
     /// Accounted length: the code size rounded up to [`CODE_ALIGNMENT`].
@@ -350,7 +527,7 @@ pub struct ExecutableCode {
 enum CodeOwner {
     #[cfg(unix)]
     Slab(Arc<Slab>),
-    Standalone(Mmap),
+    Standalone(StandaloneMap),
 }
 
 unsafe impl Send for ExecutableCode {}
@@ -387,7 +564,7 @@ impl CodeArena {
             return Err(CodeMemoryError);
         }
         let code_len = align_up(byte_len, CODE_ALIGNMENT)?;
-        align_up(code_len, MmapOptions::page_size())
+        align_up(code_len, page_size())
     }
 
     /// Seals the currently open slab: its writable view is unmapped
@@ -423,7 +600,7 @@ impl CodeArena {
         if code_len > SLAB_SIZE {
             // Oversize functions get a dedicated slab, sealed at once:
             // nothing else will ever be written into it.
-            let size = align_up(code_len, MmapOptions::page_size())?;
+            let size = align_up(code_len, page_size())?;
             let slab = Arc::new(Slab::new(size)?);
             write_into_slab(&slab, 0, bytes, code_len)?;
             slab.retire();
@@ -471,10 +648,7 @@ impl CodeArena {
         code_len: usize,
     ) -> Result<ExecutableCode, CodeMemoryError> {
         let len = Self::allocation_len(bytes.len())?;
-        let mut map = MmapOptions::new(len)
-            .map_err(|_| CodeMemoryError)?
-            .map_mut()
-            .map_err(|_| CodeMemoryError)?;
+        let mut map = StandaloneMut::map(len)?;
         let ptr = map.as_mut_ptr();
         write_code(map.as_mut_slice(), 0, code_len, bytes)?;
         flush_instruction_cache(ptr, bytes.len())?;
@@ -523,16 +697,13 @@ impl ExecutableCode {
 
     #[doc(hidden)]
     pub fn test_stub(len: usize) -> Self {
-        let page_size = MmapOptions::page_size();
-        let map = MmapOptions::new(page_size)
-            .expect("test mapping options")
-            .map_mut()
+        let page_size = page_size();
+        let map = StandaloneMut::map(page_size)
             .expect("test mapping")
             .make_exec()
-            .map_err(|_| CodeMemoryError)
             .expect("test executable mapping");
         Self {
-            ptr: map.as_ptr().cast_mut(),
+            ptr: map.as_ptr(),
             len: len.min(page_size),
             _owner: CodeOwner::Standalone(map),
         }
@@ -727,7 +898,7 @@ mod slab_tests {
         assert!(CodeArena::accounted_len(0).is_err());
         // The standalone mapping size stays page-rounded; the two notions
         // must not be conflated.
-        assert!(CodeArena::allocation_len(1).expect("len") >= MmapOptions::page_size());
+        assert!(CodeArena::allocation_len(1).expect("len") >= page_size());
     }
 
     #[test]
@@ -828,7 +999,7 @@ mod test_stub_tests {
 
     #[test]
     fn test_stub_len_never_exceeds_backing_mapping() {
-        let code = ExecutableCode::test_stub(MmapOptions::page_size() * 2);
-        assert_eq!(code.len(), MmapOptions::page_size());
+        let code = ExecutableCode::test_stub(page_size() * 2);
+        assert_eq!(code.len(), page_size());
     }
 }

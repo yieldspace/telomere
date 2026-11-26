@@ -549,3 +549,73 @@ jobs:
 
       - name: Check component feature coverage
         run: cargo check -p telomere-component --all-features --all-targets
+
+      # #148: compile cells for the hand-copied simd/threads forwarding
+      # chain (telomere -> telomere-component -> telomere-component-wasi).
+      # tools/check-feature-wiring.py proves the manifests forward the
+      # flags; these cells prove each single-flag and no-flag combination
+      # actually compiles at every hop, which the manifest check cannot.
+      - name: Check forwarding cells without default features
+        run: |
+          for pkg in telomere telomere-component telomere-component-wasi; do
+            cargo check -p "$pkg" --no-default-features --all-targets
+          done
+
+      - name: Check simd-only forwarding cells
+        run: |
+          for pkg in telomere telomere-component telomere-component-wasi; do
+            cargo check -p "$pkg" --no-default-features --features simd --all-targets
+          done
+
+      - name: Check threads-only forwarding cells
+        run: |
+          for pkg in telomere telomere-component telomere-component-wasi; do
+            cargo check -p "$pkg" --no-default-features --features threads --all-targets
+          done
+
+      # Execution proof for the two single-flag cells of the defining
+      # crate: the lib tests must also pass with exactly one of the two
+      # forwarded features enabled.
+      - name: Test telomere simd-only
+        run: cargo test -p telomere --release --lib --no-default-features --features simd
+
+      - name: Test telomere threads-only
+        run: cargo test -p telomere --release --lib --no-default-features --features threads
+
+  msrv:
+    name: MSRV (1.86.0) runtime crates
+    runs-on: ubuntu-latest
+
+    # rust-toolchain.toml pins 1.96.0 for the rest of CI; RUSTUP_TOOLCHAIN
+    # takes precedence over the toolchain file, so this job alone builds
+    # with the declared rust-version floor.
+    env:
+      RUSTUP_TOOLCHAIN: "1.86.0"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.86.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.86.0
+
+      # The acceptance scope of #148 is the runtime crates: the libraries
+      # an embedder can depend on. Dev-dependencies (wast, criterion, ...)
+      # are test-only and are not part of the MSRV promise.
+      - name: Check runtime crates at MSRV
+        run: >-
+          cargo check
+          -p telomere
+          -p telomere-component
+          -p telomere-component-wasi
+          -p telomere-jit-codegen
+          -p telomere-macros
+          -p telomere-component-bindgen

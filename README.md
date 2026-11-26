@@ -264,11 +264,13 @@ defines the library defaults, forwarding rules, and enforcement.
 Multi-memory, tail calls, and async runtime support are always enabled; they are
 not separate Cargo features.
 
-The component crate also contains gated Component Model proposal features such
-as `component-gated-feature-async` and
-`component-gated-feature-fixed-length-lists`. These are intentionally explicit
-because Component Model proposal stability differs from core Wasm proposal
-coverage.
+The component crate also contains a gated Component Model proposal feature,
+`component-gated-feature-async`, which enables the decoder surface for the
+async proposal. It is intentionally explicit because Component Model proposal
+stability differs from core Wasm proposal coverage. Earlier inert feature
+declarations for proposals with no gated code at all were removed in #148;
+a `component-gated-feature-*` flag is now declared only once it gates real
+code.
 
 ## Support matrix
 
