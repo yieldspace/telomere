@@ -30,6 +30,12 @@ jobs:
       - name: Test
         run: cargo test --verbose --release --workspace
 
+      # The #114 small-stack tripwire is ignored by default (it is only
+      # meaningful in the release build configuration), so run it
+      # explicitly on the pinned toolchain.
+      - name: Test the small-stack call threading tripwire
+        run: cargo test -p telomere --release --test call_threading -- --ignored
+
   debug-wast-test:
     name: Debug-profile wast tests
     runs-on: ubuntu-latest
@@ -512,6 +518,10 @@ jobs:
 
       - name: Test release-size call threading
         run: cargo test -p telomere --profile release-size --test call_threading
+
+      # The #114 small-stack tripwire, explicitly (see workspace-test).
+      - name: Test release-size small-stack call threading tripwire
+        run: cargo test -p telomere --profile release-size --test call_threading -- --ignored
 
       - name: Test release-size wast conformance
         run: cargo test -p telomere --profile release-size --test wast

@@ -5,11 +5,17 @@
 # Wasm-level call consumes host stack and call-heavy modules overflow the
 # stack in release builds. Reproduced on aarch64-apple-darwin and
 # x86_64-unknown-linux-gnu; 1.96.0 passes and 1.97.0 aborts on the same
-# commit. The `release_call_loop_keeps_direct_threading` regression test
-# exists to catch exactly this.
+# commit.
 #
 # Known good: 1.86.0 (MSRV) through 1.96.0.
-# Known broken: 1.97.0.
+# Known broken: 1.97.0 and every later release measured so far.
+# Re-measured 2026-11-27 (#114): 1.97.0, 1.98.0, 1.99.1 and 1.100.0 all
+# leak host stack per call cycle in release builds. The apparent
+# recovery on 1.99+ was an artifact of the regression test's 64 MiB
+# thread absorbing the leak; the small-stack tripwire
+# `call_loop_keeps_direct_threading_on_a_small_stack` in
+# crates/telomere/tests/call_threading.rs is the test that catches
+# exactly this.
 #
 # Remove this pin once the dispatch loop no longer depends on an
 # optimisation that stable Rust does not guarantee.
