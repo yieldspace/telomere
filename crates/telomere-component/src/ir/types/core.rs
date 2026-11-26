@@ -10,6 +10,7 @@ pub use crate::support::common::{
 };
 use crate::support::Module;
 use std::collections::HashMap;
+use std::ptr;
 use std::sync::Arc;
 
 /// The canonical identity of a declared core func type: its
@@ -103,9 +104,10 @@ impl CoreFuncIdentity {
     /// declared with a signature matching its supertype's, so every
     /// type on a chain shares the chain head's signature.
     pub fn is_subtype_of(&self, sup: &Self) -> bool {
+        let mut cache = IdentityEqCache::new();
         let mut current = self;
         loop {
-            if current == sup {
+            if current.eq_memoized(sup, &mut cache) {
                 return true;
             }
             match &current.supertype {
@@ -114,6 +116,116 @@ impl CoreFuncIdentity {
             }
         }
     }
+
+    /// Structural equality with `other`, memoised over node pairs.
+    ///
+    /// The plain derived comparison re-traverses a shared subgraph
+    /// once per path that reaches it: an identity carries its
+    /// external ancestors both on its own `supertype` chain and in
+    /// every `rec_group` member's `CoreRecSuper::External`, so a
+    /// tower of such declarations compares in time exponential in
+    /// its height even when the two sides are identical. The cache
+    /// keys each decided pair by the two nodes' addresses (both
+    /// graphs outlive the comparison, so an address names one node
+    /// for the whole session) and stores only completed results --
+    /// identities are immutable acyclic `Arc` graphs, so a pair's
+    /// result cannot change once computed. The result is exactly
+    /// the derived `PartialEq` result; only the cost changes.
+    pub(crate) fn eq_memoized(&self, other: &Self, cache: &mut IdentityEqCache) -> bool {
+        if ptr::eq(self, other) {
+            return true;
+        }
+        let key = (ptr::from_ref(self) as usize, ptr::from_ref(other) as usize);
+        if let Some(&result) = cache.identities.get(&key) {
+            return result;
+        }
+        let result = self.signature == other.signature
+            && self.is_final == other.is_final
+            && self.rec_index == other.rec_index
+            && opt_identity_eq(&self.supertype, &other.supertype, cache)
+            && opt_rec_group_eq(&self.rec_group, &other.rec_group, cache);
+        cache.identities.insert(key, result);
+        result
+    }
+}
+
+/// The memoisation tables for one identity comparison session; see
+/// `CoreFuncIdentity::eq_memoized`. Identity pairs and rec-group
+/// pairs are keyed in separate maps because they are different
+/// node kinds.
+#[derive(Default)]
+pub(crate) struct IdentityEqCache {
+    identities: HashMap<(usize, usize), bool>,
+    rec_groups: HashMap<(usize, usize), bool>,
+}
+
+impl IdentityEqCache {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+
+fn opt_identity_eq(
+    lhs: &Option<Arc<CoreFuncIdentity>>,
+    rhs: &Option<Arc<CoreFuncIdentity>>,
+    cache: &mut IdentityEqCache,
+) -> bool {
+    match (lhs, rhs) {
+        (None, None) => true,
+        (Some(lhs), Some(rhs)) => lhs.eq_memoized(rhs, cache),
+        _ => false,
+    }
+}
+
+fn opt_rec_group_eq(
+    lhs: &Option<Arc<CoreRecGroup>>,
+    rhs: &Option<Arc<CoreRecGroup>>,
+    cache: &mut IdentityEqCache,
+) -> bool {
+    match (lhs, rhs) {
+        (None, None) => true,
+        (Some(lhs), Some(rhs)) => rec_group_eq_memoized(lhs, rhs, cache),
+        _ => false,
+    }
+}
+
+fn rec_group_eq_memoized(
+    lhs: &CoreRecGroup,
+    rhs: &CoreRecGroup,
+    cache: &mut IdentityEqCache,
+) -> bool {
+    if ptr::eq(lhs, rhs) {
+        return true;
+    }
+    let key = (ptr::from_ref(lhs) as usize, ptr::from_ref(rhs) as usize);
+    if let Some(&result) = cache.rec_groups.get(&key) {
+        return result;
+    }
+    let result = lhs.members.len() == rhs.members.len()
+        && lhs
+            .members
+            .iter()
+            .zip(rhs.members.iter())
+            .all(|(lhs, rhs)| rec_member_eq(lhs, rhs, cache));
+    cache.rec_groups.insert(key, result);
+    result
+}
+
+fn rec_member_eq(
+    lhs: &CoreRecMember,
+    rhs: &CoreRecMember,
+    cache: &mut IdentityEqCache,
+) -> bool {
+    lhs.signature == rhs.signature
+        && lhs.is_final == rhs.is_final
+        && match (&lhs.supertype, &rhs.supertype) {
+            (None, None) => true,
+            (Some(CoreRecSuper::Member(lhs)), Some(CoreRecSuper::Member(rhs))) => lhs == rhs,
+            (Some(CoreRecSuper::External(lhs)), Some(CoreRecSuper::External(rhs))) => {
+                lhs.eq_memoized(rhs, cache)
+            }
+            _ => false,
+        }
 }
 
 /// A func type as recorded in a core module import/export
@@ -376,7 +488,7 @@ impl CoreModuleExportType {
                 CoreModuleImportType::Global(*expected).assert_satisfied_by(actual)
             }
             _ => {
-                if self == actual {
+                if self.eq_memoized(actual, &mut IdentityEqCache::new()) {
                     Ok(())
                 } else {
                     Err(ComponentParseError::TypeMismatch(
@@ -385,6 +497,93 @@ impl CoreModuleExportType {
                 }
             }
         }
+    }
+}
+
+/// Memoised structural equality for the descriptor types, with
+/// exactly the derived `PartialEq` semantics: the only difference
+/// is that func identities are compared through
+/// `CoreFuncIdentity::eq_memoized`, so a descriptor carrying a
+/// shared-subgraph identity tower compares in time linear in the
+/// number of distinct node pairs instead of exponential in the
+/// number of paths reaching them. Used by the export-matching
+/// fallback above, where module, instance and type exports are
+/// compared whole.
+impl CoreModuleFuncType {
+    pub(crate) fn eq_memoized(&self, other: &Self, cache: &mut IdentityEqCache) -> bool {
+        self.signature == other.signature && self.identity.eq_memoized(&other.identity, cache)
+    }
+}
+
+impl CoreModuleImportType {
+    pub(crate) fn eq_memoized(&self, other: &Self, cache: &mut IdentityEqCache) -> bool {
+        match (self, other) {
+            (Self::Func(lhs), Self::Func(rhs)) => lhs.eq_memoized(rhs, cache),
+            (Self::Memory(lhs), Self::Memory(rhs)) => lhs == rhs,
+            (Self::Table(lhs), Self::Table(rhs)) => lhs == rhs,
+            (Self::Global(lhs), Self::Global(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+}
+
+impl CoreModuleExportType {
+    pub(crate) fn eq_memoized(&self, other: &Self, cache: &mut IdentityEqCache) -> bool {
+        match (self, other) {
+            (Self::Memory(lhs), Self::Memory(rhs)) => lhs == rhs,
+            (Self::Table(lhs), Self::Table(rhs)) => lhs == rhs,
+            (Self::Func(lhs), Self::Func(rhs)) => lhs.eq_memoized(rhs, cache),
+            (Self::Global(lhs), Self::Global(rhs)) => lhs == rhs,
+            (Self::Type(lhs), Self::Type(rhs)) => lhs.eq_memoized(rhs, cache),
+            (Self::Module(lhs), Self::Module(rhs)) => lhs.eq_memoized(rhs, cache),
+            (Self::Instance(lhs), Self::Instance(rhs)) => lhs.eq_memoized(rhs, cache),
+            _ => false,
+        }
+    }
+}
+
+impl CoreType {
+    pub(crate) fn eq_memoized(&self, other: &Self, cache: &mut IdentityEqCache) -> bool {
+        match (self, other) {
+            (Self::Func(lhs), Self::Func(rhs)) => lhs == rhs,
+            (Self::Module(lhs), Self::Module(rhs)) => lhs.eq_memoized(rhs, cache),
+            _ => false,
+        }
+    }
+}
+
+impl CoreModuleType {
+    pub(crate) fn eq_memoized(&self, other: &Self, cache: &mut IdentityEqCache) -> bool {
+        self.imports.len() == other.imports.len()
+            && self.exports.len() == other.exports.len()
+            && self.imports.iter().all(|(module, lhs_imports)| {
+                other.imports.get(module).is_some_and(|rhs_imports| {
+                    lhs_imports.len() == rhs_imports.len()
+                        && lhs_imports.iter().all(|(name, lhs)| {
+                            rhs_imports
+                                .get(name)
+                                .is_some_and(|rhs| lhs.eq_memoized(rhs, cache))
+                        })
+                })
+            })
+            && self.exports.iter().all(|(name, lhs)| {
+                other
+                    .exports
+                    .get(name)
+                    .is_some_and(|rhs| lhs.eq_memoized(rhs, cache))
+            })
+    }
+}
+
+impl CoreInstanceType {
+    pub(crate) fn eq_memoized(&self, other: &Self, cache: &mut IdentityEqCache) -> bool {
+        self.exports.len() == other.exports.len()
+            && self.exports.iter().all(|(name, lhs)| {
+                other
+                    .exports
+                    .get(name)
+                    .is_some_and(|rhs| lhs.eq_memoized(rhs, cache))
+            })
     }
 }
 
@@ -494,5 +693,131 @@ impl From<CoreModuleType> for CoreModuleExportType {
 impl From<CoreInstanceType> for CoreModuleExportType {
     fn from(value: CoreInstanceType) -> Self {
         CoreModuleExportType::Instance(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::support::common::ValType;
+
+    fn sig() -> CoreFuncType {
+        CoreFuncType::new(vec![], vec![])
+    }
+
+    fn other_sig() -> CoreFuncType {
+        CoreFuncType::new(vec![ValType::I32], vec![])
+    }
+
+    /// Builds the identity of the top member of a tower of
+    /// two-member recursion groups, mirroring the identities the
+    /// rectype decoder builds for the tower declarations in the
+    /// `component_module_subtype_identity` integration tests: each
+    /// level's identity reaches the level below along three paths
+    /// (its supertype chain and both group members' recorded
+    /// external supertypes). With `alter_deepest`, the first
+    /// group's first member carries a different signature.
+    fn tower_identity(depth: usize, alter_deepest: bool) -> Arc<CoreFuncIdentity> {
+        let mut below = Arc::new(CoreFuncIdentity {
+            signature: sig(),
+            is_final: false,
+            supertype: None,
+            rec_group: None,
+            rec_index: 0,
+        });
+        for level in 1..=depth {
+            let first_sig = if alter_deepest && level == 1 {
+                other_sig()
+            } else {
+                sig()
+            };
+            let group = Arc::new(CoreRecGroup {
+                members: vec![
+                    CoreRecMember {
+                        signature: first_sig,
+                        is_final: false,
+                        supertype: Some(CoreRecSuper::External(below.clone())),
+                    },
+                    CoreRecMember {
+                        signature: sig(),
+                        is_final: false,
+                        supertype: Some(CoreRecSuper::External(below.clone())),
+                    },
+                ],
+            });
+            below = Arc::new(CoreFuncIdentity {
+                signature: sig(),
+                is_final: false,
+                supertype: Some(below.clone()),
+                rec_group: Some(group),
+                rec_index: 1,
+            });
+        }
+        below
+    }
+
+    #[test]
+    fn memoized_identity_eq_agrees_with_derived_eq() {
+        let pairs: Vec<(Arc<CoreFuncIdentity>, Arc<CoreFuncIdentity>)> = vec![
+            (tower_identity(5, false), tower_identity(5, false)),
+            (tower_identity(5, false), tower_identity(5, true)),
+            (tower_identity(5, false), tower_identity(4, false)),
+            (tower_identity(5, false), CoreFuncIdentity::bare(sig())),
+            (CoreFuncIdentity::bare(sig()), CoreFuncIdentity::bare(sig())),
+            (
+                CoreFuncIdentity::bare(sig()),
+                CoreFuncIdentity::bare(other_sig()),
+            ),
+        ];
+        for (lhs, rhs) in &pairs {
+            let mut cache = IdentityEqCache::new();
+            assert_eq!(
+                lhs.eq_memoized(rhs, &mut cache),
+                lhs.as_ref() == rhs.as_ref(),
+                "memoised and derived equality must agree"
+            );
+        }
+    }
+
+    #[test]
+    fn memoized_identity_eq_scales_to_deep_towers() {
+        // The unmemoised comparison of two depth-200 towers would
+        // need ~3^200 subgraph traversals; the memoised one decides
+        // each distinct node pair once. Completion is the
+        // assertion.
+        let lhs = tower_identity(200, false);
+        let rhs = tower_identity(200, false);
+        let mut cache = IdentityEqCache::new();
+        assert!(lhs.eq_memoized(&rhs, &mut cache));
+        assert!(lhs.is_subtype_of(&rhs));
+        let different = tower_identity(200, true);
+        let mut cache = IdentityEqCache::new();
+        assert!(!lhs.eq_memoized(&different, &mut cache));
+        assert!(!lhs.is_subtype_of(&different));
+    }
+
+    #[test]
+    fn descriptor_eq_memoized_covers_instance_exports() {
+        // The export-matching fallback compares instance exports
+        // whole; a func export carrying a tower identity must
+        // compare through the memoised path too.
+        let instance_with_tower = |depth: usize, alter: bool| {
+            let mut exports = HashMap::new();
+            exports.insert(
+                "f".to_string(),
+                CoreModuleExportType::Func(CoreModuleFuncType {
+                    signature: sig(),
+                    identity: tower_identity(depth, alter),
+                }),
+            );
+            CoreModuleExportType::Instance(CoreInstanceType { exports })
+        };
+        let expected = instance_with_tower(64, false);
+        let matching = instance_with_tower(64, false);
+        expected
+            .assert_satisfied_by(&matching)
+            .expect("identical tower-carrying instance exports must match");
+        let different = instance_with_tower(64, true);
+        assert!(expected.assert_satisfied_by(&different).is_err());
     }
 }

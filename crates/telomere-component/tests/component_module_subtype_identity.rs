@@ -21,6 +21,16 @@
 //! its recursion-group context, because canonicalisation treats a
 //! `rec` group as a unit: a member of a multi-member group is a
 //! different type from a standalone definition of the same shape.
+//!
+//! Round 4 (a further Codex finding on the identity comparison
+//! itself): comparing two separately decoded identities was
+//! exponential in the presence of shared subgraphs, because an
+//! identity reaches its external ancestors both along its own
+//! supertype chain and through every group member's recorded
+//! external supertype, and the derived equality re-traversed the
+//! shared subgraph once per path. The comparison is now memoised
+//! over node pairs (`CoreFuncIdentity::eq_memoized`); the tower
+//! tests at the bottom pin the scaling.
 
 use telomere_component::ComponentEngine;
 
@@ -366,5 +376,65 @@ fn rec_group_subtype_does_not_satisfy_standalone_supertype_import() {
            (import "i" "f" (func (type $t)))"#,
         r#"(rec (type $t (sub (func))) (type $s (sub $t (func))))
            (export "f" (func (type $s)))"#,
+    ));
+}
+
+/// Builds the module-type declarations for a tower of `depth`
+/// two-member recursion groups: `$a0` is a standalone non-final
+/// type, and each `$a{i}` is the second member of a group whose
+/// two members both declare `$a{i-1}` as their (external)
+/// supertype. An identity from this tower reaches the identity
+/// below it along three paths -- its own supertype chain and both
+/// group members' recorded external supertypes -- so comparing two
+/// separately decoded towers without memoisation costs time
+/// exponential in `depth` (measured on the unmemoised code: ~4.6 s
+/// at depth 18, growing ~2.8x per level). With `alter_deepest`,
+/// the first group's first member is a plain type of a different
+/// signature, a difference only visible at the bottom of the
+/// tower.
+fn identity_tower_decls(depth: usize, import: bool, alter_deepest: bool) -> String {
+    let mut decls = String::from("(type $a0 (sub (func)))\n");
+    for i in 1..=depth {
+        let first = if alter_deepest && i == 1 {
+            "(type $b1 (func (param i32)))".to_string()
+        } else {
+            format!("(type $b{i} (sub $a{} (func)))", i - 1)
+        };
+        decls.push_str(&format!(
+            "(rec {first} (type $a{i} (sub $a{} (func))))\n",
+            i - 1
+        ));
+    }
+    if import {
+        decls.push_str(&format!("(import \"i\" \"f\" (func (type $a{depth})))"));
+    } else {
+        decls.push_str(&format!("(export \"f\" (func (type $a{depth})))"));
+    }
+    decls
+}
+
+#[test]
+fn identical_identity_tower_satisfies_import() {
+    // Round 4: identity comparison is memoised over node pairs, so
+    // matching two separately decoded copies of this tower is
+    // linear in the number of distinct pairs. At depth 40 the
+    // unmemoised comparison (~3^40 subgraph traversals) would
+    // never finish; this test completing at all is the assertion.
+    compile(&instantiate_with_typed_module(
+        &identity_tower_decls(40, true, false),
+        &identity_tower_decls(40, false, false),
+    ))
+    .expect("identical identity towers must satisfy the import");
+}
+
+#[test]
+fn identity_tower_with_deep_difference_is_rejected() {
+    // The provider's tower differs only in the first (deepest)
+    // group's first member; the comparison must reach the bottom
+    // of the tower, decide inequality there, and the instantiation
+    // is rejected.
+    expect_rejected(&instantiate_with_typed_module(
+        &identity_tower_decls(40, true, false),
+        &identity_tower_decls(40, false, true),
     ));
 }
