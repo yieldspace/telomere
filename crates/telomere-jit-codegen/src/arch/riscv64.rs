@@ -74,17 +74,41 @@ const fn target_os() -> TargetOs {
     }
 }
 
+/// Patches the eight-byte branch placeholder at `at` (the
+/// `auipc`/`jalr` pair emitted by
+/// [`Riscv64BaselineMasm::branch_placeholder`]) to jump to `target`.
+///
+/// The pair reaches ±2 GiB from the placeholder. A lone `jal` spans
+/// only ±1 MiB, and the fixups that target a function's epilogue sit
+/// near its start, so any function whose emitted code grows past
+/// that range was rejected outright at patch time (#310).
 pub fn patch_branch(bytes: &mut [u8], at: usize, target: usize, _kind: BranchKind) -> AsmResult {
     let delta = target as isize - at as isize;
-    if delta % 2 != 0 {
-        return Err(AsmError::InvalidImmediate);
-    }
-    let insn = encode_jal(ZERO, delta).ok_or(AsmError::BranchOutOfRange)?;
-    bytes
-        .get_mut(at..at + 4)
-        .ok_or(AsmError::InvalidImmediate)?
-        .copy_from_slice(&insn.to_le_bytes());
+    let (hi, lo) = branch_pair_offsets(delta).ok_or(AsmError::BranchOutOfRange)?;
+    let jalr = encode_i(0x67, 0, ZERO, T0, lo).ok_or(AsmError::InvalidImmediate)?;
+    let site = bytes
+        .get_mut(at..at + 8)
+        .ok_or(AsmError::InvalidImmediate)?;
+    site[..4].copy_from_slice(&encode_auipc(T0, hi).to_le_bytes());
+    site[4..].copy_from_slice(&jalr.to_le_bytes());
     Ok(())
+}
+
+/// Splits a PC-relative byte offset into the `imm20`/`imm12` pair an
+/// `auipc` + `jalr` sequence applies: `auipc` adds `imm20 << 12` to
+/// its own PC and `jalr` then adds the sign-extended `imm12`.
+/// Together they cover ±2 GiB; returns `None` outside that range.
+fn branch_pair_offsets(delta: isize) -> Option<(i32, i32)> {
+    let hi = (delta + 0x800) >> 12;
+    if !(-(1 << 19)..(1 << 19)).contains(&hi) {
+        return None;
+    }
+    let lo = delta - (hi << 12);
+    Some((hi as i32, lo as i32))
+}
+
+fn encode_auipc(rd: u8, imm20: i32) -> u32 {
+    (((imm20 as u32) & 0x000f_ffff) << 12) | ((rd as u32) << 7) | 0x17
 }
 
 #[derive(Debug, Clone)]
@@ -125,35 +149,40 @@ impl Riscv64BaselineMasm {
 
     pub fn branch_placeholder(&mut self, kind: BranchKind) -> AsmResult<usize> {
         match kind {
-            BranchKind::B => {
-                let at = self.offset();
-                self.insn(encode_jal(ZERO, 0).expect("zero jal encodes"));
-                Ok(at)
-            }
+            BranchKind::B => Ok(self.branch_pair_placeholder()),
             BranchKind::BCond(cond) => {
                 let cmp = self.last_cmp.ok_or(AsmError::InvalidImmediate)?;
                 self.emit_cmp_branch_to_skip(cmp, cond.inverted())?;
-                let at = self.offset();
-                self.insn(encode_jal(ZERO, 0).expect("zero jal encodes"));
-                Ok(at)
+                Ok(self.branch_pair_placeholder())
             }
             BranchKind::CbnzX(reg) => {
                 self.load_slot64(T0, reg)?;
-                self.insn(encode_b(0b000, T0, ZERO, 8).expect("local branch fits"));
-                let at = self.offset();
-                self.insn(encode_jal(ZERO, 0).expect("zero jal encodes"));
-                Ok(at)
+                self.insn(encode_b(0b000, T0, ZERO, 12).expect("local branch fits"));
+                Ok(self.branch_pair_placeholder())
             }
             BranchKind::CbnzW(reg) => {
                 self.load_slot32(T0, reg)?;
-                self.insn(encode_b(0b000, T0, ZERO, 8).expect("local branch fits"));
-                let at = self.offset();
-                self.insn(encode_jal(ZERO, 0).expect("zero jal encodes"));
-                Ok(at)
+                self.insn(encode_b(0b000, T0, ZERO, 12).expect("local branch fits"));
+                Ok(self.branch_pair_placeholder())
             }
             // CbzW is an aarch64-only placeholder shape.
             BranchKind::CbzW(_) => Err(AsmError::UnsupportedFeature),
         }
+    }
+
+    /// Emits the eight-byte long-branch placeholder — an
+    /// `auipc`/`jalr` pair through the T0 scratch — and returns its
+    /// offset, the site [`patch_branch`] later rewrites. The pair is
+    /// emitted with a zero offset, i.e. as a jump to itself. T0 is
+    /// the assembler's universal scratch and no virtual register is
+    /// live in a real register across a branch site, so clobbering
+    /// it here is safe; the conditional placeholders have already
+    /// consumed the value they test before this pair runs.
+    fn branch_pair_placeholder(&mut self) -> usize {
+        let at = self.offset();
+        self.insn(encode_auipc(T0, 0));
+        self.insn(encode_i(0x67, 0, ZERO, T0, 0).expect("jalr encodes"));
+        at
     }
 
     pub fn ret(&mut self) {
@@ -1178,7 +1207,10 @@ impl Riscv64BaselineMasm {
 
     fn emit_cmp_branch_to_skip(&mut self, cmp: LastCmp, inverted_cond: Cond) -> AsmResult {
         self.emit_cmp_bool(T4, cmp, inverted_cond)?;
-        self.insn(encode_b(0b001, T4, ZERO, 8).expect("local branch fits"));
+        // The skip lands just past the eight-byte branch pair that
+        // follows (and the four-byte instruction this branch itself
+        // occupies), hence 12 from this branch's own PC.
+        self.insn(encode_b(0b001, T4, ZERO, 12).expect("local branch fits"));
         Ok(())
     }
 
@@ -1476,14 +1508,49 @@ mod tests {
         }
     }
 
+    /// Decodes the `auipc`/`jalr` branch pair at `at` and returns
+    /// the absolute target it jumps to.
+    fn decode_branch_pair(bytes: &[u8], at: usize) -> usize {
+        let auipc = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let jalr = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
+        assert_eq!(auipc & 0x7f, 0x17, "first word must be auipc");
+        assert_eq!((auipc >> 7) & 0x1f, T0 as u32, "auipc writes T0");
+        assert_eq!(jalr & 0x7f, 0x67, "second word must be jalr");
+        assert_eq!((jalr >> 7) & 0x1f, 0, "jalr discards the link");
+        assert_eq!((jalr >> 15) & 0x1f, T0 as u32, "jalr reads T0");
+        let hi = (((auipc >> 12) & 0x000f_ffff) << 12) as i32;
+        let lo = (jalr as i32) >> 20;
+        (at as i64 + i64::from(hi) + i64::from(lo)) as usize
+    }
+
     #[test]
-    fn patches_jal_forward() {
-        let mut bytes = encode_jal(ZERO, 0).unwrap().to_le_bytes().to_vec();
+    fn patches_branch_forward() {
+        let mut bytes = vec![0u8; 8];
         patch_branch(&mut bytes, 0, 16, BranchKind::B).unwrap();
-        assert_eq!(
-            u32::from_le_bytes(bytes.try_into().unwrap()),
-            encode_jal(ZERO, 16).unwrap()
-        );
+        assert_eq!(decode_branch_pair(&bytes, 0), 16);
+    }
+
+    #[test]
+    fn patches_branch_beyond_jal_range() {
+        // Regression test for #310: the epilogue fixups of the
+        // 3,001-function cache test's `run` function and of
+        // skip-stack-guard-page's many-locals function sit more than
+        // the ±1 MiB jal range away from their target (measured
+        // deltas 1,631,100 and 1,371,144 bytes), so patching them
+        // with a lone jal failed and the functions were rejected.
+        for (at, target) in [(180usize, 1_631_280usize), (272, 1_371_416), (0, 2_000_000)] {
+            let mut bytes = vec![0u8; target.max(at) + 8];
+            patch_branch(&mut bytes, at, target, BranchKind::B).unwrap();
+            assert_eq!(decode_branch_pair(&bytes, at), target);
+        }
+        // Backwards past the jal range as well.
+        let mut bytes = vec![0u8; 2_000_008];
+        patch_branch(&mut bytes, 2_000_000, 180, BranchKind::B).unwrap();
+        assert_eq!(decode_branch_pair(&bytes, 2_000_000), 180);
+        // Past even the pair's ±2 GiB range the patch still fails
+        // closed instead of encoding a wrong target.
+        let mut bytes = vec![0u8; 8];
+        assert!(patch_branch(&mut bytes, 0, (1usize << 31) + 16, BranchKind::B).is_err());
     }
 
     #[test]

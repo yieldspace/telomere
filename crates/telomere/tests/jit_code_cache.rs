@@ -405,3 +405,105 @@ mod compile_reject_events {
         );
     }
 }
+
+/// Builds a module whose single exported function mirrors the
+/// many-locals shape of `skip-stack-guard-page.wast`, the second
+/// #310 manifestation: over a thousand i64 locals, each loaded from
+/// memory and stored back incremented. On riscv64 the function's
+/// emitted code exceeds the ±1 MiB range of a lone `jal`, so the
+/// epilogue fixups near its start could not be patched and the JIT
+/// rejected the whole function (measured fixup delta 1,371,144
+/// bytes); it now emits through the auipc/jalr branch pair.
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+fn many_locals_store_module(locals: usize) -> String {
+    let mut wat = String::from("(module\n  (memory (export \"mem\") 1)\n");
+    wat.push_str("  (func (export \"run\")\n    (local");
+    for _ in 0..locals {
+        wat.push_str(" i64");
+    }
+    wat.push_str(")\n");
+    for i in 0..locals {
+        wat.push_str(&format!(
+            "    i32.const 0\n    i64.load offset={}\n    local.set {i}\n",
+            i * 8
+        ));
+    }
+    for i in 0..locals {
+        wat.push_str(&format!(
+            "    i32.const 0\n    local.get {i}\n    i64.const 1\n    i64.add\n    i64.store offset={}\n",
+            i * 8
+        ));
+    }
+    wat.push_str("  )\n");
+    wat.push_str(
+        "  (func (export \"read\") (param i32) (result i64)\n    local.get 0\n    i64.load)\n)\n",
+    );
+    wat
+}
+
+/// Regression test for #310: a large store-heavy function whose
+/// epilogue branches sit more than a lone riscv64 `jal` can reach
+/// must still compile under the JIT — no rejected functions — and
+/// the stores must land in memory exactly as the interpreter would
+/// have written them.
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_compiles_and_runs_large_store_function() {
+    const LOCALS: usize = 1200;
+    let wat = many_locals_store_module(LOCALS);
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(&wat, &store, &registry).await;
+
+    let result =
+        telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    assert!(
+        matches!(result, VMResult::Success(_)),
+        "run must succeed, got {result:?}"
+    );
+    let stats = store.jit_cache_stats();
+    assert_eq!(
+        stats.rejected_functions, 0,
+        "no function should be rejected, stats={stats:?}"
+    );
+    assert_eq!(
+        stats.compiled_functions, 1,
+        "the large function should be JIT-compiled, stats={stats:?}"
+    );
+
+    // Memory starts zeroed and every cell is stored back incremented
+    // through its local, so the first and last cells must both hold 1.
+    for offset in [0i32, ((LOCALS - 1) * 8) as i32] {
+        let read = telomere::run_module_function(
+            &instance,
+            &store,
+            "read",
+            &ResultValue::new(vec![WasmValue::I32(offset)]),
+        )
+        .await;
+        match read {
+            VMResult::Success(values) => {
+                assert_eq!(
+                    values,
+                    ResultValue::new(vec![WasmValue::I64(1)]),
+                    "memory[{offset}] must hold the incremented value"
+                );
+            }
+            other => panic!("read must succeed, got {other:?}"),
+        }
+    }
+}
