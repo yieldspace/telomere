@@ -1,23 +1,23 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #381 (branch fix/193-register-mapping at head efa4f04b9ff6648a078edc7b5cf8464f7f253896 \u2014 the #193 change (the masm trait\u2019s explicit per-target register mapping, phys_loc(vreg) -> PhysLoc { Reg | Slot }, homing the x86_64 and riscv64 virtual registers in physical registers instead of emulating the A64 register file in frame slots) merged with current main 9b7b4d4d3d168a25d4f82a3214cf1b32549f04d2 (PR #379 and PR #382), plus a size-gate re-baseline; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45806009119, 45806021489 and 45806033696 against the branch produced byte-identical sizes for every gated series",
-    "commit": "efa4f04b9ff6648a078edc7b5cf8464f7f253896",
+    "summary": "GitHub Actions \u2018Embedder footprint\u2019 runs for PR #381 (branch fix/193-register-mapping at head eab5e2fac87cf9e778b34144ebe863d87335f48f \u2014 the #193 change (the masm trait\u2019s explicit per-target register mapping, phys_loc(vreg) -> PhysLoc { Reg | Slot }, homing the x86_64 and riscv64 virtual registers in physical registers instead of emulating the A64 register file in frame slots) merged with current main 2d653bfae0bd3ac995c17a0d26154f531762d28c (PR #379, PR #382 and PR #383), plus a size-gate re-baseline, plus a follow-up fix forcing a REX prefix when sign-extending a byte source homed in RSI/RDI (Codex P2 on the PR) and a second size-gate re-baseline for that fix; ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45817815567, 45817829767 and 45817843974 against the branch produced byte-identical sizes for every gated series",
+    "commit": "eab5e2fac87cf9e778b34144ebe863d87335f48f",
     "date": "2026-11-26",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45806009119,
-      45806021489,
-      45806033696
+      45817815567,
+      45817829767,
+      45817843974
     ],
     "cross_check_run_ids": [
-      45806043868,
-      45806057168,
-      45806068026
+      45817858119,
+      45817871880,
+      45817883664
     ],
-    "derivation": "Re-baseline for PR #381 (#193, per-target physical register mapping for the x86_64 and riscv64 baseline-JIT encoders). Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45806043868, 45806057168 and 45806068026 on main at 9b7b4d4d3d168a25d4f82a3214cf1b32549f04d2 (PR #379 and PR #382); all three runs pass the gate; the main control is byte-identical to the checked-in baseline on the twelve series of the baseline, core and core-nosimd configurations, measures below it on the core-aot series (104 B / 16 B in release and 160 B / 64 B in release-size) and on the core-jit series (2,824 B / 1,600 B in release and 1,496 B / 512 B in release-size \u2014 the shrink from PR #382\u2019s removal of the mmap-rs dependency from Unix builds of telomere-jit-codegen, independently measured by the #380 lane at \u22122,808 B on the release stripped file series), and measures below the retained baselines on the twelve series of the three configurations that link telomere-component). This PR\u2019s own delta against the main control is confined to the core-jit configuration: in release, stripped file +12,864 B and stripped .text +9,408 B; in release-size, stripped file +5,704 B and stripped .text +3,536 B \u2014 the physical-register encodings and the in-place / register-destination forms in the x86_64 and riscv64 baseline encoders of telomere-jit-codegen, which only the core-jit configuration links with the jit feature. Every other series is byte-identical to main in both profiles. Against the checked-in baseline all four core-jit series grow (by 10,040 B / 7,808 B in release and 4,208 B / 3,024 B in release-size, the branch delta net of PR #382\u2019s shrink already on main), so only those four series are re-baselined to the branch measurements and every other baseline is retained, following the established practice of re-baselining growth only. Run-to-run spread was 0 B for every gated series across the three branch samples and across the three main samples; the pull-request run 45806003564 at the same head measured byte-identically to the branch samples on every series. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series at +11.42% (2,433,656 B to 2,711,648 B), unchanged because that series\u2019 baseline is retained; the re-baselined core-jit series stand at +8.32% (release stripped file, 1,989,584 B to 2,155,080 B), +7.48% (release stripped .text), +4.57% (release-size stripped file) and +4.23% (release-size stripped .text). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
+    "derivation": "Second re-baseline for PR #381 (#193, per-target physical register mapping for the x86_64 and riscv64 baseline-JIT encoders), following the Codex P2 fix that forces the bare REX prefix in movsx_vreg32 when the byte form\u2019s source register sits in r/m fields 4..=7 without REX.B \u2014 since #193, vregs 9/10 home in RSI/RDI, whose byte forms SIL/DIL a REX-less encoding misreads as DH/BH (commit 876525d6c171178e6b4b312e7252dcde88c43978, on top of the first re-baseline at 099876d). Attribution was isolated by measuring current main alone three times (workflow_dispatch runs 45817858119, 45817871880 and 45817883664 on main at 2d653bfae0bd3ac995c17a0d26154f531762d28c (PR #383); all three runs pass the gate; the main control is byte-identical to the previous campaign\u2019s main control on every series \u2014 PR #383 touched only a CI workflow file \u2014 and thereby byte-identical to the checked-in baseline on the twelve series of the baseline, core and core-nosimd configurations, below it on the core-aot series (104 B / 16 B in release and 160 B / 64 B in release-size) and on the core-jit series (12,864 B / 9,408 B in release and 5,704 B / 3,536 B in release-size \u2014 the #193 delta net of PR #382\u2019s shrink already on main), and below the retained baselines on the twelve series of the three configurations that link telomere-component). This PR\u2019s own delta against the main control remains confined to the core-jit configuration: in release, stripped file +12,912 B and stripped .text +9,456 B; in release-size, stripped file +5,736 B and stripped .text +3,568 B \u2014 the #193 register-mapping encodings plus the REX-forcing branch in the x86_64 encoder\u2019s movsx path, which only the core-jit configuration links with the jit feature. Every other series is byte-identical to main in both profiles. Against the checked-in baseline only the four core-jit series grow (+48 B / +48 B in release and +32 B / +32 B in release-size \u2014 the Codex P2 fix alone, the #193 delta having been re-baselined at 099876d), so only those four series are re-baselined to the branch measurements and every other baseline is retained, following the established practice of re-baselining growth only. Run-to-run spread was 0 B for every gated series across the three branch samples and across the three main samples; the pull-request run 45817805255 at the same head measured byte-identically to the branch samples on every series. Against the original #164 baseline, the largest cumulative growth remains the release component stripped file series at +11.42% (2,433,656 B to 2,711,648 B), unchanged because that series\u2019 baseline is retained; the re-baselined core-jit series stand at +8.32% (release stripped file, 1,989,584 B to 2,155,128 B), +7.48% (release stripped .text), +4.57% (release-size stripped file) and +4.24% (release-size stripped .text). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison."
   },
   "thresholds": {
     "release": {
@@ -73,12 +73,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 2155080,
-          "threshold": 2155080
+          "baseline": 2155128,
+          "threshold": 2155128
         },
         "stripped_text_bytes": {
-          "baseline": 1656551,
-          "threshold": 1656551
+          "baseline": 1656599,
+          "threshold": 1656599
         }
       },
       "core-aot": {
@@ -155,12 +155,12 @@
       },
       "core-jit": {
         "stripped_file_bytes": {
-          "baseline": 1552096,
-          "threshold": 1552096
+          "baseline": 1552128,
+          "threshold": 1552128
         },
         "stripped_text_bytes": {
-          "baseline": 1102471,
-          "threshold": 1102471
+          "baseline": 1102503,
+          "threshold": 1102503
         }
       },
       "core-aot": {

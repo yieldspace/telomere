@@ -563,25 +563,30 @@ CI. #164 supplies that observation first and derives the threshold from it.
 ### Observed run-to-run variance
 
 On 2026-11-26, the `Embedder footprint` workflow was run three times
-against the code of PR #381: workflow_dispatch runs 45806009119,
-45806021489 and 45806033696 against the PR branch at head
-`efa4f04` (the #193 change — the masm trait's explicit per-target
+against the code of PR #381: workflow_dispatch runs 45817815567,
+45817829767 and 45817843974 against the PR branch at head
+`eab5e2f` (the #193 change — the masm trait's explicit per-target
 register mapping, `phys_loc(vreg) -> PhysLoc { Reg | Slot }`,
 homing the x86_64 and riscv64 virtual registers in physical
 registers instead of emulating the A64 register file in frame
-slots — merged with current `main` at `9b7b4d4` (PR #379 and
-PR #382)) (`ubuntu-24.04`, Rust 1.96.0). The pull-request run at
-the same head (45806003564) measured byte-identically once more.
-A three-run control against unmodified `main` at `9b7b4d4`
-(workflow_dispatch runs 45806043868, 45806057168 and 45806068026)
-isolates the attribution recorded in the re-baseline history
-below; the control is byte-identical to the checked-in baseline
-on the twelve series of the `baseline`, `core` and `core-nosimd`
-configurations, measures below it on the `core-jit` series (PR
-#382's removal of `mmap-rs` from Unix builds) and on the
-`core-aot` series, and the twelve series of the three
-configurations that link `telomere-component` measure below
-their retained baselines. Every run produced byte-identical
+slots — merged with current `main` at `2d653bf` (PR #379,
+PR #382 and PR #383), plus a follow-up fix forcing a REX prefix
+when sign-extending a byte source homed in RSI/RDI (the Codex P2
+described in the first history entry below)) (`ubuntu-24.04`,
+Rust 1.96.0). The pull-request run at the same head (45817805255)
+measured byte-identically once more. A three-run control against
+unmodified `main` at `2d653bf` (workflow_dispatch runs
+45817858119, 45817871880 and 45817883664) isolates the
+attribution recorded in the re-baseline history below; the
+control is byte-identical to the previous campaign's main
+control on every series (PR #383 touched only a CI workflow
+file), hence byte-identical to the checked-in baseline on the
+twelve series of the `baseline`, `core` and `core-nosimd`
+configurations, measures below it on the `core-jit` series (the
+#193 delta net of PR #382's removal of `mmap-rs` from Unix
+builds) and on the `core-aot` series, and the twelve series of
+the three configurations that link `telomere-component` measure
+below their retained baselines. Every run produced byte-identical
 sizes for its tree: for all sixteen profile/configuration rows,
 the raw file size, the `.text` size, the stripped file size, and
 the stripped `.text` size each have a run-to-run spread of
@@ -601,7 +606,7 @@ unchanged.
 | `release` | `component` | 2,711,648 | 2,151,575 |
 | `release` | `wasi` | 2,939,144 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
-| `release` | `core-jit` | 2,155,080 | 1,656,551 |
+| `release` | `core-jit` | 2,155,128 | 1,656,599 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
 | `release` | `wasi-threads` | 3,154,848 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
@@ -609,11 +614,50 @@ unchanged.
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
 | `release-size` | `wasi` | 1,820,136 | 1,337,047 |
 | `release-size` | `core-nosimd` | 1,004,784 | 711,159 |
-| `release-size` | `core-jit` | 1,552,096 | 1,102,471 |
+| `release-size` | `core-jit` | 1,552,128 | 1,102,503 |
 | `release-size` | `core-aot` | 1,158,576 | 815,847 |
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+A follow-up campaign on PR #381 re-baselined the four `core-jit`
+series a second time, for the Codex P2 fix (commit `876525d`):
+`movsx_vreg32` emitted no REX prefix for a byte source whose r/m
+field is 4..=7 without REX.B, so `sxtb_w` on a source homed in
+RSI/RDI (vregs 9/10 since #193) sign-extended DH/BH instead of
+SIL/DIL; the fix forces the bare REX for the byte form. The
+branch merged current `main` at `2d653bf` (PR #383, a CI
+workflow file only) and was measured three times
+(workflow_dispatch runs 45817815567, 45817829767 and
+45817843974; the pull-request run 45817805255 at the same head
+measured byte-identically). Attribution was isolated by
+measuring current `main` alone three times (workflow_dispatch
+runs 45817858119, 45817871880 and 45817883664 on `main` at
+`2d653bf`; all three runs pass the gate; the main control is
+byte-identical to the previous campaign's main control on every
+series, and thereby byte-identical to the checked-in baseline
+on the twelve series of the `baseline`, `core` and `core-nosimd`
+configurations, below it on the `core-aot` series (104 B / 16 B
+in `release`, 160 B / 64 B in `release-size`) and on the
+`core-jit` series (12,864 B / 9,408 B in `release`, 5,704 B /
+3,536 B in `release-size` — the #193 delta net of PR #382's
+shrink already on `main`), and below the retained baselines on
+the twelve series of the three configurations that link
+`telomere-component`). The PR's own delta against the main
+control remains confined to the `core-jit` configuration:
++12,912 B / +9,456 B in `release` and +5,736 B / +3,568 B in
+`release-size` — the #193 encodings plus the fix's REX-forcing
+branch. Against the checked-in baseline only the four
+`core-jit` series grow, by the fix alone (+48 B / +48 B in
+`release`, +32 B / +32 B in `release-size`), so only those four
+series are re-baselined: `release` core-jit 2,155,128 /
+1,656,599; `release-size` core-jit 1,552,128 / 1,102,503. Run-to-run
+spread was 0 B on every gated series in both sample sets.
+Against the original #164 baseline the largest cumulative
+growth remains the `release` `component` stripped file series
+at +11.42% (baseline retained); the re-baselined core-jit
+series stand at +8.32% / +7.48% (`release`) and +4.57% /
++4.24% (`release-size`).
 
 PR #381 (#193, the masm trait's explicit per-target register
 mapping — `phys_loc(vreg) -> PhysLoc { Reg | Slot }` — homing the
