@@ -47,18 +47,10 @@ jobs:
       # x86_64 musl binaries are statically linked, so the glibc host
       # executes them natively; this is the same suite as the glibc
       # workspace-test job in ci.yaml, rebuilt for the musl target.
-      #
-      # The -lgcc link argument works around a known gap this job
-      # surfaced: mmap-rs (used by telomere-jit-codegen) calls the
-      # libgcc builtin __clear_cache unconditionally on Linux, and
-      # Rust's self-contained musl linking does not link libgcc, so
-      # every binary pulling in mmap-rs failed to link for this target
-      # (undefined reference to `__clear_cache`). libgcc.a provides
-      # the symbol; linking it explicitly closes the gap until the
-      # dependency assumption is fixed upstream or in the crate.
+      # (The mmap-rs/__clear_cache musl link failure this job once
+      # surfaced was fixed in the crate by #380, so no -lgcc link
+      # workaround is needed here anymore.)
       - name: Test workspace on musl
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-C link-args=-lgcc"
         run: cargo test --verbose --release --workspace --target x86_64-unknown-linux-musl
 
   aarch64-test:
