@@ -893,6 +893,17 @@ pub struct A64BaselineMasm {
 }
 
 impl A64BaselineMasm {
+    /// #193: on aarch64 the virtual register file *is* the physical
+    /// register file — the mapping is the identity and no vreg ever
+    /// lives in a frame slot.
+    pub fn phys_loc(vreg: u8) -> AsmResult<crate::masm::PhysLoc> {
+        if vreg < 32 {
+            Ok(crate::masm::PhysLoc::Reg(vreg))
+        } else {
+            Err(AsmError::InvalidRegister)
+        }
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: A64Masm::with_capacity(capacity),

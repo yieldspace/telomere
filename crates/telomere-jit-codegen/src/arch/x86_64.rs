@@ -1,5 +1,5 @@
 use crate::{
-    masm::{AsmError, AsmResult},
+    masm::{AsmError, AsmResult, PhysLoc},
     target::{TargetArch, TargetInfo, TargetOs},
 };
 
@@ -14,6 +14,7 @@ const EXTRA_ARG7: i32 = -FRAME_SIZE + SLOT_SIZE;
 const RAX: u8 = 0;
 const RCX: u8 = 1;
 const RDX: u8 = 2;
+const RBX: u8 = 3;
 const RBP: u8 = 5;
 const RSI: u8 = 6;
 const RDI: u8 = 7;
@@ -21,6 +22,10 @@ const R8: u8 = 8;
 const R9: u8 = 9;
 const R10: u8 = 10;
 const R11: u8 = 11;
+const R12: u8 = 12;
+const R13: u8 = 13;
+const R14: u8 = 14;
+const R15: u8 = 15;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FloatWidth {
@@ -121,6 +126,37 @@ pub struct X64BaselineMasm {
 }
 
 impl X64BaselineMasm {
+    /// The x86_64 virtual-register mapping (#193). The encoder's own
+    /// transient scratch is RAX/RCX/RDX/R11, so no virtual register
+    /// is homed there. The call-preserved vregs that are live across
+    /// helper calls for the whole function body — ctx (19), code
+    /// base (20) and locals base (21) — plus the two deepest operand
+    /// stack window slots (22, 23) live in the callee-saved
+    /// registers; the prologue spills the incoming values of those
+    /// registers into the corresponding frame slots and the epilogue
+    /// restores them, so the frame layout itself is unchanged. Part
+    /// of the call-clobbered scratch set (9-13) lives in the
+    /// remaining caller-saved registers, mirroring the aarch64
+    /// discipline under which the shared lowering already treats
+    /// those vregs as dead across a call. Everything else — the
+    /// argument/result vregs 0-7, the upper stack window (24-28),
+    /// the frame pair and the residue — stays in its frame slot.
+    pub fn phys_loc(vreg: u8) -> AsmResult<PhysLoc> {
+        Ok(match vreg {
+            19 => PhysLoc::Reg(RBX),
+            20 => PhysLoc::Reg(R12),
+            21 => PhysLoc::Reg(R13),
+            22 => PhysLoc::Reg(R14),
+            23 => PhysLoc::Reg(R15),
+            9 => PhysLoc::Reg(RSI),
+            10 => PhysLoc::Reg(RDI),
+            11 => PhysLoc::Reg(R8),
+            12 => PhysLoc::Reg(R9),
+            13 => PhysLoc::Reg(R10),
+            _ => PhysLoc::Slot(Self::slot_disp(vreg)?),
+        })
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             bytes: Vec::with_capacity(capacity),
@@ -160,14 +196,14 @@ impl X64BaselineMasm {
                 Ok(at)
             }
             BranchKind::CbnzX(reg) => {
-                self.load_slot64(RAX, reg)?;
+                self.load_vreg64(RAX, reg)?;
                 self.test_rr64(RAX, RAX);
                 let at = self.offset();
                 self.emit(&[0x0f, 0x85, 0, 0, 0, 0]);
                 Ok(at)
             }
             BranchKind::CbnzW(reg) => {
-                self.load_slot32(RAX, reg)?;
+                self.load_vreg32(RAX, reg)?;
                 self.test_rr32(RAX, RAX);
                 let at = self.offset();
                 self.emit(&[0x0f, 0x85, 0, 0, 0, 0]);
@@ -187,40 +223,38 @@ impl X64BaselineMasm {
     }
 
     pub fn blr_x(&mut self, rn: u8) {
-        self.load_slot64(R11, rn).expect("virtual register fits");
-        self.load_slot64(RDI, 0).expect("argument slot fits");
-        self.load_slot64(RSI, 1).expect("argument slot fits");
-        self.load_slot64(RDX, 2).expect("argument slot fits");
-        self.load_slot64(RCX, 3).expect("argument slot fits");
-        self.load_slot64(R8, 4).expect("argument slot fits");
-        self.load_slot64(R9, 5).expect("argument slot fits");
-        self.load_slot64(RAX, 6).expect("argument slot fits");
+        self.load_vreg64(R11, rn).expect("virtual register fits");
+        self.load_vreg64(RDI, 0).expect("argument slot fits");
+        self.load_vreg64(RSI, 1).expect("argument slot fits");
+        self.load_vreg64(RDX, 2).expect("argument slot fits");
+        self.load_vreg64(RCX, 3).expect("argument slot fits");
+        self.load_vreg64(R8, 4).expect("argument slot fits");
+        self.load_vreg64(R9, 5).expect("argument slot fits");
+        self.load_vreg64(RAX, 6).expect("argument slot fits");
         self.store_frame_disp64(EXTRA_ARG6, RAX);
-        self.load_slot64(RAX, 7).expect("argument slot fits");
+        self.load_vreg64(RAX, 7).expect("argument slot fits");
         self.store_frame_disp64(EXTRA_ARG7, RAX);
         self.emit(&[0x41, 0xff, 0xd3]);
-        self.store_slot64(0, RAX).expect("virtual register fits");
-        self.store_slot64(1, RDX).expect("virtual register fits");
+        self.store_vreg64(0, RAX).expect("virtual register fits");
+        self.store_vreg64(1, RDX).expect("virtual register fits");
     }
 
     pub fn mov_x(&mut self, rd: u8, rn: u8) {
-        self.load_slot64(RAX, rn).expect("virtual register fits");
-        self.store_slot64(rd, RAX).expect("virtual register fits");
+        self.mov_vreg(rd, rn, true).expect("virtual register fits");
     }
 
     pub fn mov_w(&mut self, rd: u8, rn: u8) {
-        self.load_slot32(RAX, rn).expect("virtual register fits");
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        self.mov_vreg(rd, rn, false).expect("virtual register fits");
     }
 
     pub fn mov_imm_u32(&mut self, rd: u8, value: u32) {
         self.mov_imm32(RAX, value);
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
     pub fn mov_imm_u64(&mut self, rd: u8, value: u64) {
         self.mov_imm64(RAX, value);
-        self.store_slot64(rd, RAX).expect("virtual register fits");
+        self.store_vreg64(rd, RAX).expect("virtual register fits");
     }
 
     /// Relocation-site variant of the plain mov_imm (#197). The plain
@@ -256,6 +290,14 @@ impl X64BaselineMasm {
                 self.store_slot64(slot as u8, reg)
                     .expect("entry argument slot fits");
             }
+            // #193: spill the caller's callee-saved registers that
+            // now home virtual registers (see `phys_loc`) into those
+            // vregs' own frame slots; the epilogue restores them from
+            // the same slots, so the frame layout is unchanged.
+            for (slot, reg) in [(19, RBX), (20, R12), (21, R13), (22, R14), (23, R15)] {
+                self.store_slot64(slot, reg)
+                    .expect("callee-saved spill slot fits");
+            }
         }
     }
 
@@ -266,34 +308,67 @@ impl X64BaselineMasm {
     pub fn ldp_post(&mut self, rt: u8, rt2: u8) {
         if !self.epilogue_emitted && rt == 29 && rt2 == 30 {
             self.epilogue_emitted = true;
-            self.load_slot64(RAX, 0).expect("return slot fits");
-            self.load_slot64(RDX, 1).expect("return slot fits");
+            self.load_vreg64(RAX, 0).expect("return slot fits");
+            self.load_vreg64(RDX, 1).expect("return slot fits");
+            // #193: restore the caller's callee-saved registers from
+            // the spill slots the prologue wrote (see `phys_loc`).
+            for (slot, reg) in [(19, RBX), (20, R12), (21, R13), (22, R14), (23, R15)] {
+                self.load_slot64(reg, slot)
+                    .expect("callee-saved reload slot fits");
+            }
             self.emit(&[0x48, 0x89, 0xec]);
             self.emit(&[0x5d]);
         }
     }
 
     pub fn add_imm_u32(&mut self, rd: u8, rn: u8, imm: u32) -> AsmResult {
-        self.load_slot32(RAX, rn)?;
+        // Register-homed destinations accumulate in place (#193).
+        if let PhysLoc::Reg(home) = Self::phys_loc(rd)? {
+            if rd != rn {
+                self.load_vreg32(home, rn)?;
+            }
+            self.alu_imm32(0x81, 0, home, imm);
+            return Ok(());
+        }
+        self.load_vreg32(RAX, rn)?;
         self.alu_imm32(0x81, 0, RAX, imm);
-        self.store_slot32(rd, RAX)
+        self.store_vreg32(rd, RAX)
     }
 
     pub fn add_imm_u64(&mut self, rd: u8, rn: u8, imm: u64) -> AsmResult {
-        self.load_slot64(RAX, rn)?;
+        if let PhysLoc::Reg(home) = Self::phys_loc(rd)? {
+            if rd != rn {
+                self.load_vreg64(home, rn)?;
+            }
+            if let Ok(imm) = i32::try_from(imm) {
+                self.alu_imm32_wide(0x81, 0, home, imm as u32);
+            } else {
+                self.mov_imm64(RCX, imm);
+                self.alu_rm64(0x03, home, RCX);
+            }
+            return Ok(());
+        }
+        self.load_vreg64(RAX, rn)?;
         if let Ok(imm) = i32::try_from(imm) {
             self.alu_imm32_wide(0x81, 0, RAX, imm as u32);
         } else {
             self.mov_imm64(RCX, imm);
             self.alu_rm64(0x03, RAX, RCX);
         }
-        self.store_slot64(rd, RAX)
+        self.store_vreg64(rd, RAX)
     }
 
     pub fn sub_imm_u32(&mut self, rd: u8, rn: u8, imm: u32) -> AsmResult {
-        self.load_slot32(RAX, rn)?;
+        if let PhysLoc::Reg(home) = Self::phys_loc(rd)? {
+            if rd != rn {
+                self.load_vreg32(home, rn)?;
+            }
+            self.alu_imm32(0x81, 5, home, imm);
+            return Ok(());
+        }
+        self.load_vreg32(RAX, rn)?;
         self.alu_imm32(0x81, 5, RAX, imm);
-        self.store_slot32(rd, RAX)
+        self.store_vreg32(rd, RAX)
     }
 
     pub fn add_w(&mut self, rd: u8, rn: u8, rm: u8) {
@@ -317,75 +392,125 @@ impl X64BaselineMasm {
     }
 
     pub fn mul_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.load_slot32(RAX, rn).expect("virtual register fits");
-        self.imul_slot32(RAX, rm).expect("virtual register fits");
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        // In-place / register-destination fast paths (#193), mirroring
+        // binop: multiply straight in the destination's home register.
+        if rd == rn {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rn).expect("virtual register fits") {
+                self.imul_vreg32(home, rm).expect("virtual register fits");
+                return;
+            }
+        }
+        if rm != rd {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rd).expect("virtual register fits") {
+                self.load_vreg32(home, rn).expect("virtual register fits");
+                self.imul_vreg32(home, rm).expect("virtual register fits");
+                return;
+            }
+        }
+        self.load_vreg32(RAX, rn).expect("virtual register fits");
+        self.imul_vreg32(RAX, rm).expect("virtual register fits");
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
     pub fn mul_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.load_slot64(RAX, rn).expect("virtual register fits");
-        self.imul_slot64(RAX, rm).expect("virtual register fits");
-        self.store_slot64(rd, RAX).expect("virtual register fits");
+        if rd == rn {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rn).expect("virtual register fits") {
+                self.imul_vreg64(home, rm).expect("virtual register fits");
+                return;
+            }
+        }
+        if rm != rd {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rd).expect("virtual register fits") {
+                self.load_vreg64(home, rn).expect("virtual register fits");
+                self.imul_vreg64(home, rm).expect("virtual register fits");
+                return;
+            }
+        }
+        self.load_vreg64(RAX, rn).expect("virtual register fits");
+        self.imul_vreg64(RAX, rm).expect("virtual register fits");
+        self.store_vreg64(rd, RAX).expect("virtual register fits");
     }
 
     pub fn udiv_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.load_slot32(RAX, rn).expect("virtual register fits");
+        self.load_vreg32(RAX, rn).expect("virtual register fits");
         self.emit(&[0x31, 0xd2]);
-        self.load_slot32(RCX, rm).expect("virtual register fits");
+        self.load_vreg32(RCX, rm).expect("virtual register fits");
         self.emit_modrm_reg(0xf7, 6, RCX, false);
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
     pub fn sdiv_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.load_slot32(RAX, rn).expect("virtual register fits");
+        self.load_vreg32(RAX, rn).expect("virtual register fits");
         self.emit(&[0x99]);
-        self.load_slot32(RCX, rm).expect("virtual register fits");
+        self.load_vreg32(RCX, rm).expect("virtual register fits");
         self.emit_modrm_reg(0xf7, 7, RCX, false);
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
     pub fn udiv_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.load_slot64(RAX, rn).expect("virtual register fits");
+        self.load_vreg64(RAX, rn).expect("virtual register fits");
         self.emit(&[0x48, 0x31, 0xd2]);
-        self.load_slot64(RCX, rm).expect("virtual register fits");
+        self.load_vreg64(RCX, rm).expect("virtual register fits");
         self.emit_modrm_reg(0xf7, 6, RCX, true);
-        self.store_slot64(rd, RAX).expect("virtual register fits");
+        self.store_vreg64(rd, RAX).expect("virtual register fits");
     }
 
     pub fn sdiv_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.load_slot64(RAX, rn).expect("virtual register fits");
+        self.load_vreg64(RAX, rn).expect("virtual register fits");
         self.emit(&[0x48, 0x99]);
-        self.load_slot64(RCX, rm).expect("virtual register fits");
+        self.load_vreg64(RCX, rm).expect("virtual register fits");
         self.emit_modrm_reg(0xf7, 7, RCX, true);
-        self.store_slot64(rd, RAX).expect("virtual register fits");
+        self.store_vreg64(rd, RAX).expect("virtual register fits");
     }
 
     pub fn msub_w(&mut self, rd: u8, rn: u8, rm: u8, ra: u8) {
-        self.load_slot32(RAX, rn).expect("virtual register fits");
-        self.imul_slot32(RAX, rm).expect("virtual register fits");
-        self.load_slot32(RCX, ra).expect("virtual register fits");
+        self.load_vreg32(RAX, rn).expect("virtual register fits");
+        self.imul_vreg32(RAX, rm).expect("virtual register fits");
+        self.load_vreg32(RCX, ra).expect("virtual register fits");
         self.alu_rm32(0x2b, RCX, RAX);
-        self.store_slot32(rd, RCX).expect("virtual register fits");
+        self.store_vreg32(rd, RCX).expect("virtual register fits");
     }
 
     pub fn msub_x(&mut self, rd: u8, rn: u8, rm: u8, ra: u8) {
-        self.load_slot64(RAX, rn).expect("virtual register fits");
-        self.imul_slot64(RAX, rm).expect("virtual register fits");
-        self.load_slot64(RCX, ra).expect("virtual register fits");
+        self.load_vreg64(RAX, rn).expect("virtual register fits");
+        self.imul_vreg64(RAX, rm).expect("virtual register fits");
+        self.load_vreg64(RCX, ra).expect("virtual register fits");
         self.alu_rm64(0x2b, RCX, RAX);
-        self.store_slot64(rd, RCX).expect("virtual register fits");
+        self.store_vreg64(rd, RCX).expect("virtual register fits");
     }
 
     pub fn neg_w(&mut self, rd: u8, rm: u8) {
-        self.load_slot32(RAX, rm).expect("virtual register fits");
+        if rd == rm {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rm).expect("virtual register fits") {
+                self.emit_modrm_reg(0xf7, 3, home, false);
+                return;
+            }
+        }
+        if let PhysLoc::Reg(home) = Self::phys_loc(rd).expect("virtual register fits") {
+            self.load_vreg32(home, rm).expect("virtual register fits");
+            self.emit_modrm_reg(0xf7, 3, home, false);
+            return;
+        }
+        self.load_vreg32(RAX, rm).expect("virtual register fits");
         self.emit_modrm_reg(0xf7, 3, RAX, false);
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
     pub fn neg_x(&mut self, rd: u8, rm: u8) {
-        self.load_slot64(RAX, rm).expect("virtual register fits");
+        if rd == rm {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rm).expect("virtual register fits") {
+                self.emit_modrm_reg(0xf7, 3, home, true);
+                return;
+            }
+        }
+        if let PhysLoc::Reg(home) = Self::phys_loc(rd).expect("virtual register fits") {
+            self.load_vreg64(home, rm).expect("virtual register fits");
+            self.emit_modrm_reg(0xf7, 3, home, true);
+            return;
+        }
+        self.load_vreg64(RAX, rm).expect("virtual register fits");
         self.emit_modrm_reg(0xf7, 3, RAX, true);
-        self.store_slot64(rd, RAX).expect("virtual register fits");
+        self.store_vreg64(rd, RAX).expect("virtual register fits");
     }
 
     pub fn and_w(&mut self, rd: u8, rn: u8, rm: u8) {
@@ -475,27 +600,27 @@ impl X64BaselineMasm {
     }
 
     pub fn sxth_w(&mut self, rd: u8, rn: u8) {
-        self.movsx_slot32(rd, rn, 0xbf);
+        self.movsx_vreg32(rd, rn, 0xbf);
     }
 
     pub fn sxtb_w(&mut self, rd: u8, rn: u8) {
-        self.movsx_slot32(rd, rn, 0xbe);
+        self.movsx_vreg32(rd, rn, 0xbe);
     }
 
     pub fn cmp_w(&mut self, rn: u8, rm: u8) {
-        self.load_slot32(RAX, rn).expect("virtual register fits");
-        self.cmp_slot32(RAX, rm).expect("virtual register fits");
+        self.load_vreg32(RAX, rn).expect("virtual register fits");
+        self.cmp_vreg32(RAX, rm).expect("virtual register fits");
         self.last_cmp = None;
     }
 
     pub fn cmp_x(&mut self, rn: u8, rm: u8) {
-        self.load_slot64(RAX, rn).expect("virtual register fits");
-        self.cmp_slot64(RAX, rm).expect("virtual register fits");
+        self.load_vreg64(RAX, rn).expect("virtual register fits");
+        self.cmp_vreg64(RAX, rm).expect("virtual register fits");
         self.last_cmp = None;
     }
 
     pub fn cmp_w_imm(&mut self, rn: u8, imm: u32) -> AsmResult {
-        self.load_slot32(RAX, rn)?;
+        self.load_vreg32(RAX, rn)?;
         self.alu_imm32(0x81, 7, RAX, imm);
         self.last_cmp = None;
         Ok(())
@@ -513,16 +638,16 @@ impl X64BaselineMasm {
         }
         self.emit(&[0x0f, 0x90 | cond_code(cond), 0xc0]);
         self.emit(&[0x0f, 0xb6, 0xc0]);
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
     pub fn csel_w(&mut self, rd: u8, rn: u8, rm: u8, cond: Cond) {
-        self.load_slot32(RAX, rm).expect("virtual register fits");
-        self.load_slot32(RCX, rn).expect("virtual register fits");
+        self.load_vreg32(RAX, rm).expect("virtual register fits");
+        self.load_vreg32(RCX, rn).expect("virtual register fits");
         self.emit_rex(false, RCX, RAX);
         self.emit(&[0x0f, 0x40 | cond_code(cond)]);
         self.modrm_rr(RCX, RAX);
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
     pub fn fmov_s_from_w(&mut self, vd: u8, rn: u8) {
@@ -590,29 +715,59 @@ impl X64BaselineMasm {
     }
 
     pub fn fabs_s(&mut self, vd: u8, vn: u8) {
-        self.load_slot32(RAX, vn).expect("virtual register fits");
+        if let PhysLoc::Reg(home) = Self::phys_loc(vd).expect("virtual register fits") {
+            if vd != vn {
+                self.load_vreg32(home, vn).expect("virtual register fits");
+            }
+            self.alu_imm32(0x81, 4, home, 0x7fff_ffff);
+            return;
+        }
+        self.load_vreg32(RAX, vn).expect("virtual register fits");
         self.alu_imm32(0x81, 4, RAX, 0x7fff_ffff);
-        self.store_slot32(vd, RAX).expect("virtual register fits");
+        self.store_vreg32(vd, RAX).expect("virtual register fits");
     }
 
     pub fn fabs_d(&mut self, vd: u8, vn: u8) {
-        self.load_slot64(RAX, vn).expect("virtual register fits");
+        if let PhysLoc::Reg(home) = Self::phys_loc(vd).expect("virtual register fits") {
+            if vd != vn {
+                self.load_vreg64(home, vn).expect("virtual register fits");
+            }
+            self.mov_imm64(RCX, 0x7fff_ffff_ffff_ffff);
+            self.alu_rm64(0x23, home, RCX);
+            return;
+        }
+        self.load_vreg64(RAX, vn).expect("virtual register fits");
         self.mov_imm64(RCX, 0x7fff_ffff_ffff_ffff);
         self.alu_rm64(0x23, RAX, RCX);
-        self.store_slot64(vd, RAX).expect("virtual register fits");
+        self.store_vreg64(vd, RAX).expect("virtual register fits");
     }
 
     pub fn fneg_s(&mut self, vd: u8, vn: u8) {
-        self.load_slot32(RAX, vn).expect("virtual register fits");
+        if let PhysLoc::Reg(home) = Self::phys_loc(vd).expect("virtual register fits") {
+            if vd != vn {
+                self.load_vreg32(home, vn).expect("virtual register fits");
+            }
+            self.alu_imm32(0x81, 6, home, 0x8000_0000);
+            return;
+        }
+        self.load_vreg32(RAX, vn).expect("virtual register fits");
         self.alu_imm32(0x81, 6, RAX, 0x8000_0000);
-        self.store_slot32(vd, RAX).expect("virtual register fits");
+        self.store_vreg32(vd, RAX).expect("virtual register fits");
     }
 
     pub fn fneg_d(&mut self, vd: u8, vn: u8) {
-        self.load_slot64(RAX, vn).expect("virtual register fits");
+        if let PhysLoc::Reg(home) = Self::phys_loc(vd).expect("virtual register fits") {
+            if vd != vn {
+                self.load_vreg64(home, vn).expect("virtual register fits");
+            }
+            self.mov_imm64(RCX, 0x8000_0000_0000_0000);
+            self.alu_rm64(0x33, home, RCX);
+            return;
+        }
+        self.load_vreg64(RAX, vn).expect("virtual register fits");
         self.mov_imm64(RCX, 0x8000_0000_0000_0000);
         self.alu_rm64(0x33, RAX, RCX);
-        self.store_slot64(vd, RAX).expect("virtual register fits");
+        self.store_vreg64(vd, RAX).expect("virtual register fits");
     }
 
     pub fn fsqrt_s(&mut self, vd: u8, vn: u8) {
@@ -672,18 +827,18 @@ impl X64BaselineMasm {
     }
 
     pub fn fcvt_s_from_d(&mut self, vd: u8, vn: u8) {
-        self.load_xmm_slot(0, vn, true)
+        self.load_xmm_vreg(0, vn, true)
             .expect("virtual register fits");
         self.emit(&[0xf2, 0x0f, 0x5a, 0xc0]);
-        self.store_xmm_slot(0, vd, false)
+        self.store_xmm_vreg(0, vd, false)
             .expect("virtual register fits");
     }
 
     pub fn fcvt_d_from_s(&mut self, vd: u8, vn: u8) {
-        self.load_xmm_slot(0, vn, false)
+        self.load_xmm_vreg(0, vn, false)
             .expect("virtual register fits");
         self.emit(&[0xf3, 0x0f, 0x5a, 0xc0]);
-        self.store_xmm_slot(0, vd, true)
+        self.store_xmm_vreg(0, vd, true)
             .expect("virtual register fits");
     }
 
@@ -709,14 +864,22 @@ impl X64BaselineMasm {
 
     pub fn ubfm_w(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
         if immr == 0 {
-            self.load_slot32(RAX, rn).expect("virtual register fits");
             let mask = if imms >= 31 {
                 u32::MAX
             } else {
                 (1u32 << (imms + 1)) - 1
             };
+            // In-place / register-destination fast paths (#193).
+            if let PhysLoc::Reg(home) = Self::phys_loc(rd).expect("virtual register fits") {
+                if rd != rn {
+                    self.load_vreg32(home, rn).expect("virtual register fits");
+                }
+                self.alu_imm32(0x81, 4, home, mask);
+                return;
+            }
+            self.load_vreg32(RAX, rn).expect("virtual register fits");
             self.alu_imm32(0x81, 4, RAX, mask);
-            self.store_slot32(rd, RAX).expect("virtual register fits");
+            self.store_vreg32(rd, RAX).expect("virtual register fits");
         } else {
             self.lsr_w_imm(rd, rn, immr);
         }
@@ -724,13 +887,23 @@ impl X64BaselineMasm {
 
     pub fn ubfm_x(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
         if immr == 0 {
-            self.load_slot64(RAX, rn).expect("virtual register fits");
             let bits = imms + 1;
+            if let PhysLoc::Reg(home) = Self::phys_loc(rd).expect("virtual register fits") {
+                if rd != rn {
+                    self.load_vreg64(home, rn).expect("virtual register fits");
+                }
+                if bits < 64 {
+                    self.mov_imm64(RCX, (1u64 << bits) - 1);
+                    self.alu_rm64(0x23, home, RCX);
+                }
+                return;
+            }
+            self.load_vreg64(RAX, rn).expect("virtual register fits");
             if bits < 64 {
                 self.mov_imm64(RCX, (1u64 << bits) - 1);
                 self.alu_rm64(0x23, RAX, RCX);
             }
-            self.store_slot64(rd, RAX).expect("virtual register fits");
+            self.store_vreg64(rd, RAX).expect("virtual register fits");
         } else {
             self.lsr_x_imm(rd, rn, immr).expect("shift fits");
         }
@@ -773,23 +946,23 @@ impl X64BaselineMasm {
     }
 
     pub fn ldr_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
-        self.load_slot64(RAX, rn)?;
+        self.load_vreg64(RAX, rn)?;
         self.load_mem_disp64(
             RAX,
             RAX,
             i32::try_from(offset).map_err(|_| AsmError::InvalidImmediate)?,
         );
-        self.store_slot64(rt, RAX)
+        self.store_vreg64(rt, RAX)
     }
 
     pub fn ldr_w_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
-        self.load_slot64(RAX, rn)?;
+        self.load_vreg64(RAX, rn)?;
         self.load_mem_disp32(
             RAX,
             RAX,
             i32::try_from(offset).map_err(|_| AsmError::InvalidImmediate)?,
         );
-        self.store_slot32(rt, RAX)
+        self.store_vreg32(rt, RAX)
     }
 
     pub fn ldr_w_unscaled_imm(&mut self, rt: u8, rn: u8, offset: u32) -> AsmResult {
@@ -829,8 +1002,8 @@ impl X64BaselineMasm {
     }
 
     pub fn str_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
-        self.load_slot64(RAX, rn)?;
-        self.load_slot64(RCX, rt)?;
+        self.load_vreg64(RAX, rn)?;
+        self.load_vreg64(RCX, rt)?;
         self.store_mem_disp64(
             RAX,
             i32::try_from(offset).map_err(|_| AsmError::InvalidImmediate)?,
@@ -840,8 +1013,8 @@ impl X64BaselineMasm {
     }
 
     pub fn str_w_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
-        self.load_slot64(RAX, rn)?;
-        self.load_slot32(RCX, rt)?;
+        self.load_vreg64(RAX, rn)?;
+        self.load_vreg32(RCX, rt)?;
         self.store_mem_disp32(
             RAX,
             i32::try_from(offset).map_err(|_| AsmError::InvalidImmediate)?,
@@ -924,6 +1097,117 @@ impl X64BaselineMasm {
         self.store_slot64(slot, src)
     }
 
+    /// Register-to-register move; the 32-bit form also zero-extends
+    /// the destination, matching a 32-bit slot load's semantics.
+    fn mov_rr64(&mut self, dst: u8, src: u8) {
+        self.alu_rm64(0x8b, dst, src);
+    }
+
+    fn mov_rr32(&mut self, dst: u8, src: u8) {
+        self.alu_rm32(0x8b, dst, src);
+    }
+
+    /// Loads virtual register `vreg` into physical register `dst`,
+    /// resolving its location through [`Self::phys_loc`]: a register
+    /// home costs one move, a slot home the frame load it always was.
+    fn load_vreg64(&mut self, dst: u8, vreg: u8) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => {
+                if reg != dst {
+                    self.mov_rr64(dst, reg);
+                }
+                Ok(())
+            }
+            PhysLoc::Slot(_) => self.load_slot64(dst, vreg),
+        }
+    }
+
+    /// The 32-bit load: the value in `dst` is zero-extended either
+    /// way (a 32-bit move zero-extends, as does the slot load).
+    fn load_vreg32(&mut self, dst: u8, vreg: u8) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => {
+                self.mov_rr32(dst, reg);
+                Ok(())
+            }
+            PhysLoc::Slot(_) => self.load_slot32(dst, vreg),
+        }
+    }
+
+    /// Stores physical register `src` into virtual register `vreg`.
+    fn store_vreg64(&mut self, vreg: u8, src: u8) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => {
+                if reg != src {
+                    self.mov_rr64(reg, src);
+                }
+                Ok(())
+            }
+            PhysLoc::Slot(_) => self.store_slot64(vreg, src),
+        }
+    }
+
+    /// The 32-bit store: a register home is zero-extended by the
+    /// 32-bit move, leaving the canonical form a 32-bit slot load
+    /// would produce; a slot home keeps the historical full-width
+    /// store (the slot's upper bits are never read back as 64-bit
+    /// state, matching the pre-mapping encoder).
+    fn store_vreg32(&mut self, vreg: u8, src: u8) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => {
+                self.mov_rr32(reg, src);
+                Ok(())
+            }
+            PhysLoc::Slot(_) => self.store_slot32(vreg, src),
+        }
+    }
+
+    /// A virtual-register to virtual-register move (`mov_x` /
+    /// `mov_w`): register-to-register pairs collapse to a single
+    /// move, and a slot on one side only is accessed directly from
+    /// or to the other side's home register.
+    fn mov_vreg(&mut self, rd: u8, rn: u8, wide: bool) -> AsmResult {
+        match (Self::phys_loc(rd)?, Self::phys_loc(rn)?) {
+            (PhysLoc::Reg(dst), PhysLoc::Reg(src)) => {
+                if wide {
+                    if dst != src {
+                        self.mov_rr64(dst, src);
+                    }
+                } else {
+                    self.mov_rr32(dst, src);
+                }
+                Ok(())
+            }
+            (PhysLoc::Reg(dst), PhysLoc::Slot(_)) => {
+                if wide {
+                    self.load_slot64(dst, rn)
+                } else {
+                    self.load_slot32(dst, rn)
+                }
+            }
+            (PhysLoc::Slot(_), PhysLoc::Reg(src)) => {
+                if wide {
+                    self.store_slot64(rd, src)
+                } else {
+                    // A 32-bit move out of a register home must not
+                    // leak the home's upper bits into the slot (the
+                    // slot-to-slot path zero-extends through RAX).
+                    self.mov_rr32(RAX, src);
+                    self.store_slot64(rd, RAX)
+                }
+            }
+            (PhysLoc::Slot(_), PhysLoc::Slot(_)) => {
+                if wide {
+                    self.load_slot64(RAX, rn)?;
+                    self.store_slot64(rd, RAX)
+                } else {
+                    self.load_slot32(RAX, rn)?;
+                    self.store_slot32(rd, RAX)
+                }
+            }
+        }
+    }
+
     fn mov_imm32(&mut self, reg: u8, value: u32) {
         self.emit_rex(false, 0, reg);
         self.bytes.push(0xb8 | (reg & 7));
@@ -962,33 +1246,107 @@ impl X64BaselineMasm {
         self.bytes.extend_from_slice(&imm.to_le_bytes());
     }
 
-    fn binop_w(&mut self, rd: u8, rn: u8, rm: u8, opcode: u8) -> AsmResult {
-        self.load_slot32(RAX, rn)?;
-        self.load_slot32(RCX, rm)?;
-        self.alu_rm32(opcode, RAX, RCX);
-        self.store_slot32(rd, RAX)
-    }
-
-    fn binop_x(&mut self, rd: u8, rn: u8, rm: u8, opcode: u8) -> AsmResult {
-        self.load_slot64(RAX, rn)?;
-        self.load_slot64(RCX, rm)?;
-        self.alu_rm64(opcode, RAX, RCX);
-        self.store_slot64(rd, RAX)
-    }
-
-    fn imul_slot32(&mut self, dst: u8, slot: u8) -> AsmResult {
-        let disp = Self::slot_disp(slot)?;
-        self.emit_rex(false, dst, RBP);
-        self.emit(&[0x0f, 0xaf]);
-        self.modrm_rbp_disp32(dst, disp);
+    /// Register/memory form of a binary op: computes `dst <op>= src`
+    /// with `src` taken from virtual register `vreg` — directly in a
+    /// register when `vreg` is register-homed, or as the frame-slot
+    /// memory operand when it is not. This is the in-place shape the
+    /// staging path through RAX/RCX collapses to when the result
+    /// overwrites the left operand (#193).
+    fn alu_op_vreg32(&mut self, opcode: u8, dst: u8, vreg: u8) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => self.alu_rm32(opcode, dst, reg),
+            PhysLoc::Slot(disp) => {
+                self.emit_rex(false, dst, RBP);
+                self.bytes.push(opcode);
+                self.modrm_rbp_disp32(dst, disp);
+            }
+        }
         Ok(())
     }
 
-    fn imul_slot64(&mut self, dst: u8, slot: u8) -> AsmResult {
-        let disp = Self::slot_disp(slot)?;
-        self.emit_rex(true, dst, RBP);
-        self.emit(&[0x0f, 0xaf]);
-        self.modrm_rbp_disp32(dst, disp);
+    fn alu_op_vreg64(&mut self, opcode: u8, dst: u8, vreg: u8) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => self.alu_rm64(opcode, dst, reg),
+            PhysLoc::Slot(disp) => {
+                self.emit_rex(true, dst, RBP);
+                self.bytes.push(opcode);
+                self.modrm_rbp_disp32(dst, disp);
+            }
+        }
+        Ok(())
+    }
+
+    fn binop_w(&mut self, rd: u8, rn: u8, rm: u8, opcode: u8) -> AsmResult {
+        // In-place fast path: the result overwrites the left operand
+        // and that operand is register-homed, so the op runs in the
+        // home register with the right operand as a register or
+        // frame-slot operand — no staging moves at all.
+        if rd == rn {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rn)? {
+                return self.alu_op_vreg32(opcode, home, rm);
+            }
+        }
+        // Register-destination path: accumulate straight into the
+        // destination's home register. Excluded when the right
+        // operand is the destination itself: loading the left
+        // operand first would destroy it.
+        if rm != rd {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rd)? {
+                self.load_vreg32(home, rn)?;
+                return self.alu_op_vreg32(opcode, home, rm);
+            }
+        }
+        self.load_vreg32(RAX, rn)?;
+        self.alu_op_vreg32(opcode, RAX, rm)?;
+        self.store_vreg32(rd, RAX)
+    }
+
+    fn binop_x(&mut self, rd: u8, rn: u8, rm: u8, opcode: u8) -> AsmResult {
+        if rd == rn {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rn)? {
+                return self.alu_op_vreg64(opcode, home, rm);
+            }
+        }
+        if rm != rd {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rd)? {
+                self.load_vreg64(home, rn)?;
+                return self.alu_op_vreg64(opcode, home, rm);
+            }
+        }
+        self.load_vreg64(RAX, rn)?;
+        self.alu_op_vreg64(opcode, RAX, rm)?;
+        self.store_vreg64(rd, RAX)
+    }
+
+    fn imul_vreg32(&mut self, dst: u8, vreg: u8) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => {
+                self.emit_rex(false, dst, reg);
+                self.emit(&[0x0f, 0xaf]);
+                self.modrm_rr(reg, dst);
+            }
+            PhysLoc::Slot(disp) => {
+                self.emit_rex(false, dst, RBP);
+                self.emit(&[0x0f, 0xaf]);
+                self.modrm_rbp_disp32(dst, disp);
+            }
+        }
+        Ok(())
+    }
+
+    fn imul_vreg64(&mut self, dst: u8, vreg: u8) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => {
+                self.emit_rex(true, dst, reg);
+                self.emit(&[0x0f, 0xaf]);
+                self.modrm_rr(reg, dst);
+            }
+            PhysLoc::Slot(disp) => {
+                self.emit_rex(true, dst, RBP);
+                self.emit(&[0x0f, 0xaf]);
+                self.modrm_rbp_disp32(dst, disp);
+            }
+        }
         Ok(())
     }
 
@@ -999,34 +1357,67 @@ impl X64BaselineMasm {
     }
 
     fn shift_var(&mut self, rd: u8, rn: u8, rm: u8, wide: bool, subop: u8) {
-        if wide {
-            self.load_slot64(RAX, rn).expect("virtual register fits");
-        } else {
-            self.load_slot32(RAX, rn).expect("virtual register fits");
+        // In-place fast path (#193): shift the home register by CL.
+        // Loading the count into RCX never disturbs the home
+        // register, so this is safe even when rm == rn.
+        if rd == rn {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rn).expect("virtual register fits") {
+                self.load_vreg32(RCX, rm).expect("virtual register fits");
+                self.emit_modrm_reg(0xd3, subop, home, wide);
+                return;
+            }
         }
-        self.load_slot32(RCX, rm).expect("virtual register fits");
+        if wide {
+            self.load_vreg64(RAX, rn).expect("virtual register fits");
+        } else {
+            self.load_vreg32(RAX, rn).expect("virtual register fits");
+        }
+        self.load_vreg32(RCX, rm).expect("virtual register fits");
         self.emit_modrm_reg(0xd3, subop, RAX, wide);
         if wide {
-            self.store_slot64(rd, RAX).expect("virtual register fits");
+            self.store_vreg64(rd, RAX).expect("virtual register fits");
         } else {
-            self.store_slot32(rd, RAX).expect("virtual register fits");
+            self.store_vreg32(rd, RAX).expect("virtual register fits");
         }
     }
 
     fn shift_imm(&mut self, rd: u8, rn: u8, wide: bool, subop: u8, shift: u32) {
+        // In-place fast path (#193): shift the home register directly.
+        if rd == rn {
+            if let PhysLoc::Reg(home) = Self::phys_loc(rn).expect("virtual register fits") {
+                self.emit_rex(wide, subop, home);
+                self.bytes.push(0xc1);
+                self.modrm_rr(home, subop);
+                self.bytes.push(shift as u8);
+                return;
+            }
+        }
+        // Register-destination path.
+        if let PhysLoc::Reg(home) = Self::phys_loc(rd).expect("virtual register fits") {
+            if wide {
+                self.load_vreg64(home, rn).expect("virtual register fits");
+            } else {
+                self.load_vreg32(home, rn).expect("virtual register fits");
+            }
+            self.emit_rex(wide, subop, home);
+            self.bytes.push(0xc1);
+            self.modrm_rr(home, subop);
+            self.bytes.push(shift as u8);
+            return;
+        }
         if wide {
-            self.load_slot64(RAX, rn).expect("virtual register fits");
+            self.load_vreg64(RAX, rn).expect("virtual register fits");
         } else {
-            self.load_slot32(RAX, rn).expect("virtual register fits");
+            self.load_vreg32(RAX, rn).expect("virtual register fits");
         }
         self.emit_rex(wide, subop, RAX);
         self.bytes.push(0xc1);
         self.modrm_rr(RAX, subop);
         self.bytes.push(shift as u8);
         if wide {
-            self.store_slot64(rd, RAX).expect("virtual register fits");
+            self.store_vreg64(rd, RAX).expect("virtual register fits");
         } else {
-            self.store_slot32(rd, RAX).expect("virtual register fits");
+            self.store_vreg32(rd, RAX).expect("virtual register fits");
         }
     }
 
@@ -1036,9 +1427,9 @@ impl X64BaselineMasm {
 
     fn clz(&mut self, rd: u8, rn: u8, wide: bool) {
         if wide {
-            self.load_slot64(RAX, rn).expect("virtual register fits");
+            self.load_vreg64(RAX, rn).expect("virtual register fits");
         } else {
-            self.load_slot32(RAX, rn).expect("virtual register fits");
+            self.load_vreg32(RAX, rn).expect("virtual register fits");
         }
         self.test_rr(RAX, RAX, wide);
         let zero_jcc = self.emit_jcc_placeholder(Cond::Eq);
@@ -1060,17 +1451,17 @@ impl X64BaselineMasm {
         patch_branch(&mut self.bytes, done_jmp, done_target, BranchKind::B)
             .expect("local branch fits");
         if wide {
-            self.store_slot64(rd, RAX).expect("virtual register fits");
+            self.store_vreg64(rd, RAX).expect("virtual register fits");
         } else {
-            self.store_slot32(rd, RAX).expect("virtual register fits");
+            self.store_vreg32(rd, RAX).expect("virtual register fits");
         }
     }
 
     fn ctz(&mut self, rd: u8, rn: u8, wide: bool) {
         if wide {
-            self.load_slot64(RAX, rn).expect("virtual register fits");
+            self.load_vreg64(RAX, rn).expect("virtual register fits");
         } else {
-            self.load_slot32(RAX, rn).expect("virtual register fits");
+            self.load_vreg32(RAX, rn).expect("virtual register fits");
         }
         self.test_rr(RAX, RAX, wide);
         let zero_jcc = self.emit_jcc_placeholder(Cond::Eq);
@@ -1091,9 +1482,9 @@ impl X64BaselineMasm {
         patch_branch(&mut self.bytes, done_jmp, done_target, BranchKind::B)
             .expect("local branch fits");
         if wide {
-            self.store_slot64(rd, RAX).expect("virtual register fits");
+            self.store_vreg64(rd, RAX).expect("virtual register fits");
         } else {
-            self.store_slot32(rd, RAX).expect("virtual register fits");
+            self.store_vreg32(rd, RAX).expect("virtual register fits");
         }
     }
 
@@ -1123,27 +1514,51 @@ impl X64BaselineMasm {
         self.test_rr(lhs, rhs, true);
     }
 
-    fn movsx_slot32(&mut self, rd: u8, rn: u8, opcode2: u8) {
-        let disp = Self::slot_disp(rn).expect("virtual register fits");
-        self.emit_rex(false, RAX, RBP);
-        self.emit(&[0x0f, opcode2]);
-        self.modrm_rbp_disp32(RAX, disp);
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+    fn movsx_vreg32(&mut self, rd: u8, rn: u8, opcode2: u8) {
+        match Self::phys_loc(rn).expect("virtual register fits") {
+            PhysLoc::Reg(reg) => {
+                self.emit_rex(false, RAX, reg);
+                self.emit(&[0x0f, opcode2]);
+                self.modrm_rr(reg, RAX);
+            }
+            PhysLoc::Slot(disp) => {
+                self.emit_rex(false, RAX, RBP);
+                self.emit(&[0x0f, opcode2]);
+                self.modrm_rbp_disp32(RAX, disp);
+            }
+        }
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
-    fn cmp_slot32(&mut self, lhs_reg: u8, rhs_slot: u8) -> AsmResult {
-        let disp = Self::slot_disp(rhs_slot)?;
-        self.emit_rex(false, lhs_reg, RBP);
-        self.bytes.push(0x3b);
-        self.modrm_rbp_disp32(lhs_reg, disp);
+    fn cmp_vreg32(&mut self, lhs_reg: u8, rhs: u8) -> AsmResult {
+        match Self::phys_loc(rhs)? {
+            PhysLoc::Reg(reg) => {
+                self.emit_rex(false, lhs_reg, reg);
+                self.bytes.push(0x3b);
+                self.modrm_rr(reg, lhs_reg);
+            }
+            PhysLoc::Slot(disp) => {
+                self.emit_rex(false, lhs_reg, RBP);
+                self.bytes.push(0x3b);
+                self.modrm_rbp_disp32(lhs_reg, disp);
+            }
+        }
         Ok(())
     }
 
-    fn cmp_slot64(&mut self, lhs_reg: u8, rhs_slot: u8) -> AsmResult {
-        let disp = Self::slot_disp(rhs_slot)?;
-        self.emit_rex(true, lhs_reg, RBP);
-        self.bytes.push(0x3b);
-        self.modrm_rbp_disp32(lhs_reg, disp);
+    fn cmp_vreg64(&mut self, lhs_reg: u8, rhs: u8) -> AsmResult {
+        match Self::phys_loc(rhs)? {
+            PhysLoc::Reg(reg) => {
+                self.emit_rex(true, lhs_reg, reg);
+                self.bytes.push(0x3b);
+                self.modrm_rr(reg, lhs_reg);
+            }
+            PhysLoc::Slot(disp) => {
+                self.emit_rex(true, lhs_reg, RBP);
+                self.bytes.push(0x3b);
+                self.modrm_rbp_disp32(lhs_reg, disp);
+            }
+        }
         Ok(())
     }
 
@@ -1165,25 +1580,78 @@ impl X64BaselineMasm {
         Ok(())
     }
 
+    /// Loads the float bit pattern held by virtual register `vreg`
+    /// into `xmm`: a register home moves GPR to XMM directly
+    /// (`movq`/`movd`), a slot home keeps the historical load.
+    fn load_xmm_vreg(&mut self, xmm: u8, vreg: u8, f64: bool) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => {
+                self.bytes.push(0x66);
+                self.emit_rex(f64, xmm, reg);
+                self.emit_keep_pending(&[0x0f, 0x6e]);
+                self.modrm_rr(reg, xmm);
+                Ok(())
+            }
+            PhysLoc::Slot(_) => self.load_xmm_slot(xmm, vreg, f64),
+        }
+    }
+
+    /// Stores `xmm` into virtual register `vreg`; the counterpart of
+    /// [`Self::load_xmm_vreg`].
+    fn store_xmm_vreg(&mut self, xmm: u8, vreg: u8, f64: bool) -> AsmResult {
+        match Self::phys_loc(vreg)? {
+            PhysLoc::Reg(reg) => {
+                self.bytes.push(0x66);
+                self.emit_rex(f64, xmm, reg);
+                self.emit_keep_pending(&[0x0f, 0x7e]);
+                self.modrm_rr(reg, xmm);
+                Ok(())
+            }
+            PhysLoc::Slot(_) => self.store_xmm_slot(xmm, vreg, f64),
+        }
+    }
+
     fn float_binop(&mut self, vd: u8, vn: u8, vm: u8, f64: bool, opcode: u8) {
-        self.load_xmm_slot(0, vn, f64)
+        self.load_xmm_vreg(0, vn, f64)
             .expect("virtual register fits");
-        let disp = Self::slot_disp(vm).expect("virtual register fits");
-        self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
-        self.emit_rex(false, 0, RBP);
-        self.emit_keep_pending(&[0x0f, opcode]);
-        self.modrm_rbp_disp32(0, disp);
-        self.store_xmm_slot(0, vd, f64)
+        match Self::phys_loc(vm).expect("virtual register fits") {
+            PhysLoc::Reg(_) => {
+                self.load_xmm_vreg(1, vm, f64)
+                    .expect("virtual register fits");
+                self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
+                self.emit_rex(false, 0, 1);
+                self.emit_keep_pending(&[0x0f, opcode]);
+                self.modrm_rr(1, 0);
+            }
+            PhysLoc::Slot(disp) => {
+                self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
+                self.emit_rex(false, 0, RBP);
+                self.emit_keep_pending(&[0x0f, opcode]);
+                self.modrm_rbp_disp32(0, disp);
+            }
+        }
+        self.store_xmm_vreg(0, vd, f64)
             .expect("virtual register fits");
     }
 
     fn float_unop(&mut self, vd: u8, vn: u8, f64: bool, opcode: u8) {
-        let disp = Self::slot_disp(vn).expect("virtual register fits");
-        self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
-        self.emit_rex(false, 0, RBP);
-        self.emit_keep_pending(&[0x0f, opcode]);
-        self.modrm_rbp_disp32(0, disp);
-        self.store_xmm_slot(0, vd, f64)
+        match Self::phys_loc(vn).expect("virtual register fits") {
+            PhysLoc::Reg(_) => {
+                self.load_xmm_vreg(0, vn, f64)
+                    .expect("virtual register fits");
+                self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
+                self.emit_rex(false, 0, 0);
+                self.emit_keep_pending(&[0x0f, opcode]);
+                self.modrm_rr(0, 0);
+            }
+            PhysLoc::Slot(disp) => {
+                self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
+                self.emit_rex(false, 0, RBP);
+                self.emit_keep_pending(&[0x0f, opcode]);
+                self.modrm_rbp_disp32(0, disp);
+            }
+        }
+        self.store_xmm_vreg(0, vd, f64)
             .expect("virtual register fits");
     }
 
@@ -1191,32 +1659,48 @@ impl X64BaselineMasm {
         if !sse41_rounding_supported() {
             return Err(AsmError::UnsupportedFeature);
         }
-        let disp = Self::slot_disp(vn)?;
-        self.emit(&[0x66, 0x0f, 0x3a, if f64 { 0x0b } else { 0x0a }]);
-        self.modrm_rbp_disp32(0, disp);
+        match Self::phys_loc(vn)? {
+            PhysLoc::Reg(_) => {
+                self.load_xmm_vreg(0, vn, f64)?;
+                self.emit(&[0x66, 0x0f, 0x3a, if f64 { 0x0b } else { 0x0a }]);
+                self.modrm_rr(0, 0);
+            }
+            PhysLoc::Slot(disp) => {
+                self.emit(&[0x66, 0x0f, 0x3a, if f64 { 0x0b } else { 0x0a }]);
+                self.modrm_rbp_disp32(0, disp);
+            }
+        }
         self.bytes.push(mode);
-        self.store_xmm_slot(0, vd, f64)
+        self.store_xmm_vreg(0, vd, f64)
     }
 
     fn cvt_int_to_float(&mut self, vd: u8, rn: u8, to_f64: bool, from_i64: bool, signed: bool) {
         if from_i64 {
-            self.load_slot64(RAX, rn).expect("virtual register fits");
+            self.load_vreg64(RAX, rn).expect("virtual register fits");
             if signed {
                 self.cvt_i64_reg_to_float(to_f64);
             } else {
                 self.cvt_u64_reg_to_float(to_f64);
             }
         } else if signed {
-            let disp = Self::slot_disp(rn).expect("virtual register fits");
-            self.emit_rex(true, RAX, RBP);
-            self.emit(&[0x63]);
-            self.modrm_rbp_disp32(RAX, disp);
+            match Self::phys_loc(rn).expect("virtual register fits") {
+                PhysLoc::Reg(reg) => {
+                    self.emit_rex(true, RAX, reg);
+                    self.emit(&[0x63]);
+                    self.modrm_rr(reg, RAX);
+                }
+                PhysLoc::Slot(disp) => {
+                    self.emit_rex(true, RAX, RBP);
+                    self.emit(&[0x63]);
+                    self.modrm_rbp_disp32(RAX, disp);
+                }
+            }
             self.cvt_i64_reg_to_float(to_f64);
         } else {
-            self.load_slot32(RAX, rn).expect("virtual register fits");
+            self.load_vreg32(RAX, rn).expect("virtual register fits");
             self.cvt_i64_reg_to_float(to_f64);
         }
-        self.store_xmm_slot(0, vd, to_f64)
+        self.store_xmm_vreg(0, vd, to_f64)
             .expect("virtual register fits");
     }
 
@@ -1257,24 +1741,47 @@ impl X64BaselineMasm {
     }
 
     fn fcvt_w(&mut self, rd: u8, vn: u8, f64: bool, signed: bool) {
-        let disp = Self::slot_disp(vn).expect("virtual register fits");
-        self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
-        self.emit_rex(!signed, RAX, RBP);
-        self.emit_keep_pending(&[0x0f, 0x2c]);
-        self.modrm_rbp_disp32(RAX, disp);
-        self.store_slot32(rd, RAX).expect("virtual register fits");
+        match Self::phys_loc(vn).expect("virtual register fits") {
+            PhysLoc::Reg(_) => {
+                self.load_xmm_vreg(0, vn, f64)
+                    .expect("virtual register fits");
+                self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
+                self.emit_rex(!signed, RAX, 0);
+                self.emit_keep_pending(&[0x0f, 0x2c]);
+                self.modrm_rr(0, RAX);
+            }
+            PhysLoc::Slot(disp) => {
+                self.bytes.push(if f64 { 0xf2 } else { 0xf3 });
+                self.emit_rex(!signed, RAX, RBP);
+                self.emit_keep_pending(&[0x0f, 0x2c]);
+                self.modrm_rbp_disp32(RAX, disp);
+            }
+        }
+        self.store_vreg32(rd, RAX).expect("virtual register fits");
     }
 
     fn float_cset(&mut self, rd: u8, cond: Cond, width: FloatWidth, lhs: u8, rhs: u8) -> AsmResult {
         let f64 = width == FloatWidth::F64;
-        self.load_xmm_slot(0, lhs, f64)?;
-        let disp = Self::slot_disp(rhs)?;
-        if f64 {
-            self.emit(&[0x66, 0x0f, 0x2e]);
-        } else {
-            self.emit(&[0x0f, 0x2e]);
+        self.load_xmm_vreg(0, lhs, f64)?;
+        match Self::phys_loc(rhs)? {
+            PhysLoc::Reg(_) => {
+                self.load_xmm_vreg(1, rhs, f64)?;
+                if f64 {
+                    self.emit(&[0x66, 0x0f, 0x2e]);
+                } else {
+                    self.emit(&[0x0f, 0x2e]);
+                }
+                self.modrm_rr(1, 0);
+            }
+            PhysLoc::Slot(disp) => {
+                if f64 {
+                    self.emit(&[0x66, 0x0f, 0x2e]);
+                } else {
+                    self.emit(&[0x0f, 0x2e]);
+                }
+                self.modrm_rbp_disp32(0, disp);
+            }
         }
-        self.modrm_rbp_disp32(0, disp);
         match cond {
             Cond::Eq => {
                 self.emit(&[0x0f, 0x94, 0xc0, 0x0f, 0x9b, 0xc1, 0x20, 0xc8]);
@@ -1297,7 +1804,7 @@ impl X64BaselineMasm {
             _ => return Err(AsmError::InvalidImmediate),
         }
         self.emit(&[0x0f, 0xb6, 0xc0]);
-        self.store_slot32(rd, RAX)
+        self.store_vreg32(rd, RAX)
     }
 
     fn load_mem_disp64(&mut self, dst: u8, base: u8, disp: i32) {
@@ -1339,7 +1846,7 @@ impl X64BaselineMasm {
     }
 
     fn load_mem_extend(&mut self, rt: u8, rn: u8, width: u32, signed: bool) {
-        self.load_slot64(RCX, rn).expect("virtual register fits");
+        self.load_vreg64(RCX, rn).expect("virtual register fits");
         match (width, signed) {
             (1, false) => self.emit(&[0x0f, 0xb6]),
             (1, true) => self.emit(&[0x0f, 0xbe]),
@@ -1349,18 +1856,18 @@ impl X64BaselineMasm {
                 self.emit_rex(false, RAX, RCX);
                 self.bytes.push(0x8b);
                 self.modrm_mem_disp32(RAX, RCX, 0);
-                self.store_slot32(rt, RAX).expect("virtual register fits");
+                self.store_vreg32(rt, RAX).expect("virtual register fits");
                 return;
             }
             _ => unreachable!("invalid load width"),
         }
         self.modrm_mem_disp32(RAX, RCX, 0);
-        self.store_slot32(rt, RAX).expect("virtual register fits");
+        self.store_vreg32(rt, RAX).expect("virtual register fits");
     }
 
     fn store_mem_width(&mut self, rt: u8, rn: u8, width: u32) {
-        self.load_slot64(RCX, rn).expect("virtual register fits");
-        self.load_slot32(RAX, rt).expect("virtual register fits");
+        self.load_vreg64(RCX, rn).expect("virtual register fits");
+        self.load_vreg32(RAX, rt).expect("virtual register fits");
         match width {
             1 => {
                 self.emit_rex(false, RAX, RCX);
@@ -1428,11 +1935,73 @@ mod tests {
     }
 
     #[test]
+    fn register_mapping_is_disjoint_from_encoder_scratch() {
+        // #193: no virtual register may be homed in a register the
+        // encoder itself uses as transient scratch (RAX/RCX/RDX for
+        // operands and division, R11 for the call target) or in the
+        // frame/stack pointers, and two vregs never share a home.
+        let mut homes = std::collections::HashSet::new();
+        for vreg in 0..32u8 {
+            if let PhysLoc::Reg(reg) = X64BaselineMasm::phys_loc(vreg).unwrap() {
+                assert!(
+                    !matches!(reg, RAX | RCX | RDX | RBP | R11 | 4),
+                    "vreg {vreg} homed in encoder scratch {reg}"
+                );
+                assert!(homes.insert(reg), "vreg {vreg} shares home {reg}");
+            }
+        }
+        // The call-preserved set is homed in callee-saved registers,
+        // so values survive helper calls without a spill.
+        for vreg in [19u8, 20, 21, 22, 23] {
+            let PhysLoc::Reg(reg) = X64BaselineMasm::phys_loc(vreg).unwrap() else {
+                panic!("vreg {vreg} must be register-homed");
+            };
+            assert!(
+                matches!(reg, RBX | R12 | R13 | R14 | R15),
+                "vreg {vreg} homed in caller-saved {reg}"
+            );
+        }
+    }
+
+    #[test]
+    fn emits_register_only_add_for_mapped_vregs() {
+        // #193: an add whose operands all live in mapped registers
+        // accumulates straight into the destination's home register
+        // — no frame slot and no scratch register is touched.
+        let mut asm = X64BaselineMasm::with_capacity(64);
+        asm.add_x(23, 22, 22);
+        assert_eq!(
+            asm.into_bytes(),
+            vec![
+                0x4d, 0x8b, 0xfe, // mov r15, r14
+                0x4d, 0x03, 0xfe, // add r15, r14
+            ]
+        );
+    }
+
+    #[test]
+    fn emits_direct_slot_load_into_mapped_home() {
+        // #193: mov_x from a slot vreg into a register-homed vreg
+        // loads the slot straight into the home register.
+        let mut asm = X64BaselineMasm::with_capacity(64);
+        asm.mov_x(19, 0);
+        assert_eq!(
+            asm.into_bytes(),
+            vec![
+                0x48, 0x8b, 0x9d, 0xf8, 0xff, 0xff, 0xff, // mov rbx, [rbp - 8]
+            ]
+        );
+    }
+
+    #[test]
     fn emits_integer_add_through_virtual_slots() {
         let mut asm = X64BaselineMasm::with_capacity(64);
         asm.add_w(2, 0, 1);
         let bytes = asm.into_bytes();
-        assert!(bytes.windows(2).any(|window| window == [0x03, 0xc1]));
+        // #193: with both operands in frame slots the add uses the
+        // memory-operand form (add eax, [rbp + disp32]) instead of
+        // staging the right operand through RCX ([0x03, 0xc1]).
+        assert!(bytes.windows(2).any(|window| window == [0x03, 0x85]));
     }
 
     #[test]
