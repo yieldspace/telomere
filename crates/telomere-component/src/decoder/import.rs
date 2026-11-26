@@ -28,9 +28,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
     validate_name_attributes_sort(matches!(desc, ExternDesc::Instance(_)), &name.attributes)
         .map_err(ComponentParseError::InvalidImportName)?;
     validate_annotated_import(ctx, &name, &desc)?;
-    if matches!(desc, ExternDesc::Instance(_)) {
-        ensure_concrete_surface_name(&name)?;
-    }
+    ensure_concrete_surface_name(&name)?;
     match desc {
         ExternDesc::Module(module_ty) => {
             let global_idx = ctx
@@ -160,7 +158,7 @@ fn ensure_concrete_surface_name(name: &crate::ir::ImportName) -> ParseResult<()>
     for label in plain_labels(plain) {
         if !crate::decoder::name::is_kebab_label(label) {
             return Err(ComponentParseError::InvalidImportName(format!(
-                "`{}` is not in kebab case",
+                "`{}` is not a valid extern name",
                 name.original
             )));
         }

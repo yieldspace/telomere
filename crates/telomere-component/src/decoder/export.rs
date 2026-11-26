@@ -28,9 +28,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
     let si = parse_sort_with_idx(ctx)?;
     validate_name_attributes_sort(matches!(si, Sort::Instance(_, _)), &name.attributes)
         .map_err(ComponentParseError::InvalidExportName)?;
-    if matches!(si, Sort::Instance(_, _)) {
-        ensure_concrete_surface_name(&name)?;
-    }
+    ensure_concrete_surface_name(&name)?;
     let desc = parse_option(ctx, parse_externdesc)?;
     if let Some(desc) = &desc {
         validate_annotated_export(ctx, &name, desc)?;
@@ -304,7 +302,7 @@ fn ensure_concrete_surface_name(name: &crate::ir::ExportName) -> ParseResult<()>
     for label in plain_labels(plain) {
         if !crate::decoder::name::is_kebab_label(label) {
             return Err(ComponentParseError::InvalidExportName(format!(
-                "`{}` is not in kebab case",
+                "`{}` is not a valid extern name",
                 name.original
             )));
         }

@@ -265,7 +265,7 @@ fn build_export_name(name: String, options: &NameOptions) -> ParseResult<ExportN
     validate_name_options(NameSide::Export, &name, BaseKind::Other, options)
         .map_err(ComponentParseError::InvalidExportName)?;
     Err(ComponentParseError::InvalidExportName(format!(
-        "Invalid export name: `{}`",
+        "`{}` is not a valid extern name",
         name
     )))
 }
@@ -338,7 +338,7 @@ fn build_import_name(name: String, options: &NameOptions) -> ParseResult<ImportN
     validate_name_options(NameSide::Import, &name, BaseKind::Other, options)
         .map_err(ComponentParseError::InvalidImportName)?;
     Err(ComponentParseError::InvalidImportName(format!(
-        "Invalid import name: `{}`",
+        "`{}` is not a valid extern name",
         name
     )))
 }
