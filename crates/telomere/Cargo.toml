@@ -68,3 +68,13 @@ aot-load = ["dep:telomere-jit-codegen"]
 # Compiling WebAssembly to native code at runtime. Implies `aot-load` and
 # adds the emitter backends plus the codegen crate's assemblers.
 jit = ["aot-load", "telomere-jit-codegen/emit"]
+
+# NOTE(#132): this crate does not inherit [workspace.lints] yet. The
+# unsafe_op_in_unsafe_fn ratchet is enforced per subtree instead, via
+# `#![deny(unsafe_op_in_unsafe_fn)]` in src/parser.rs, src/common.rs,
+# and src/binary/mod.rs. The runtime subtree still has 2,304 measured
+# open sites (2,306 workspace-wide before this change, whose 2
+# common-layer sites it fixed; see docs/unsafe-policy.md). When
+# a subtree reaches zero it gains the same deny; once src/runtime/
+# reaches zero this crate switches to `[lints] workspace = true` and
+# the per-subtree attributes come out.

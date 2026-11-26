@@ -25,3 +25,6 @@ telomere.workspace = true
 telomere-component.workspace = true
 tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 wat = "1.243.0"
+
+[lints]
+workspace = true

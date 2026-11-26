@@ -32,3 +32,6 @@ libc.workspace = true
 # the Unix mapping is implemented directly on libc in code_memory.rs.
 [target.'cfg(not(unix))'.dependencies]
 mmap-rs.workspace = true
+
+[lints]
+workspace = true

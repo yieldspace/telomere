@@ -78,6 +78,12 @@ resolution in `ComponentProgram`.
 | --- | --- | --- |
 | [memory-reduction-audit.md](memory-reduction-audit.md) | Audit | Implemented memory reductions, measurements, and tradeoffs left for later. |
 
+## Policies
+
+| Document | Status | Use it for |
+| --- | --- | --- |
+| [unsafe-policy.md](unsafe-policy.md) | Current policy | Which layers may use `unsafe`, the SAFETY-comment contract every site must satisfy, and the lint ratchet that enforces it (#132). |
+
 ## Verification Commands
 
 Full CI-equivalent checks:

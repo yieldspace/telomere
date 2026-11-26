@@ -1,3 +1,10 @@
+// Unsafe policy (#132, docs/unsafe-policy.md): the common
+// layer is the foundation every other layer builds on, so
+// this subtree is deny-stage in the ratchet: every unsafe
+// operation inside an `unsafe fn` must be scoped in an
+// explicit inner `unsafe` block with a SAFETY comment.
+#![deny(unsafe_op_in_unsafe_fn)]
+
 /// Front-end phase counters (#199): thread-local counts of parse,
 /// optimize, deserialize, and on-demand emit work, used to prove
 /// artifact load paths skip the front-end phases they replace.

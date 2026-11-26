@@ -49,3 +49,6 @@ required-features = ["wasi"]
 [[bin]]
 name = "embed-instances"
 path = "src/bin/instances.rs"
+
+[lints]
+workspace = true

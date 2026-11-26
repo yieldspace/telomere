@@ -872,7 +872,14 @@ impl Stack {
     /// # Safety
     /// Caller must ensure the returned pointer is not used after the stack is dropped or reallocated.
     pub unsafe fn local_area_mut_ptr(&mut self, reference: &LocalReference) -> *mut u8 {
-        self.memory.as_mut_ptr().add(reference.local_top)
+        // SAFETY: `reference` is a frame reference handed out by this
+        // stack's own frame allocation, which rejects any frame whose
+        // end would pass `self.memory.len()` (see
+        // `frame_end_from_local_top`), and the same `local_top` is used
+        // as a slice offset into `self.memory` elsewhere in this
+        // module. So `local_top <= self.memory.len()` and the add
+        // stays inside the allocation or one byte past its end.
+        unsafe { self.memory.as_mut_ptr().add(reference.local_top) }
     }
     pub fn local_tee(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
         self.memory

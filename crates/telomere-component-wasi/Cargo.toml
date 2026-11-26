@@ -26,3 +26,6 @@ wat = "1.243.0"
 default = ["simd", "threads"]
 simd = ["telomere-component/simd"]
 threads = ["telomere-component/threads"]
+
+[lints]
+workspace = true
