@@ -51,11 +51,11 @@ fn compile_component() -> Vec<u8> {
   (alias export $math "double" (func $double))
 
   (type $status (enum "ready" "done"))
-  (export "status" (type $status))
+  (export $status' "status" (type $status))
   (type $modes (flags "fast" "slow"))
-  (export "modes" (type $modes))
+  (export $modes' "modes" (type $modes))
   (type $payload (record (field "value" u32)))
-  (export "payload" (type $payload))
+  (export $payload' "payload" (type $payload))
 
   (core func $bump-lower (canon lower (func $bump)))
   (core func $double-lower (canon lower (func $double)))
@@ -96,7 +96,7 @@ fn compile_component() -> Vec<u8> {
       ))
     )
   )
-  (type $ping-t (func (param "status" $status) (param "mode" $modes) (result $payload)))
+  (type $ping-t (func (param "status" $status') (param "mode" $modes') (result $payload')))
   (func (export "ping") (type $ping-t)
     (canon lift (core func $ping-core "ping")))
 )

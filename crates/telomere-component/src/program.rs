@@ -117,6 +117,26 @@ impl ComponentProgram {
         self.types.get(id.index() as usize)
     }
 
+    /// Returns the type an index denotes, resolving `(eq)`
+    /// generics to the type they denote. An `(eq)` type is
+    /// definitionally its inner type -- including the faces
+    /// plain type exports mint to name the type they export --
+    /// so consumers that inspect a type's shape must see
+    /// through it. A `(sub resource)` generic denotes no
+    /// concrete type and resolves to itself.
+    pub fn resolve_eq_type(&self, id: TypeId) -> Option<&Type> {
+        let mut ty = self.get_type(id)?;
+        while let Type::Generic(generic) = ty {
+            match generic.bound {
+                crate::ir::types::GenericBound::Eq(inner) => {
+                    ty = self.get_type(inner)?;
+                }
+                crate::ir::types::GenericBound::Sub => break,
+            }
+        }
+        Some(ty)
+    }
+
     /// Returns canonical ABI metadata for the type at an index, if available.
     pub fn get_type_info(&self, id: TypeId) -> Option<&ComponentTypeInfo> {
         self.type_infos.get(id.index() as usize)

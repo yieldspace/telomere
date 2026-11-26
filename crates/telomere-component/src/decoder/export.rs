@@ -86,8 +86,37 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             // it -- so a later `(type $face)` reference to this export
             // denotes the face identity, not the underlying resource.
             let mut sub_face_id = None;
+            let mut plain_face_id = None;
             let info = match desc {
-                None => crate::decoder::validator::ExportInfo::TypeEq(type_id),
+                None => {
+                    // A plain export introduces a new type index
+                    // that denotes the exported type under the
+                    // export's name; the type index passed *into*
+                    // the export does not retroactively gain that
+                    // name (external visibility). Mint an `(eq)`
+                    // face for the export -- the analogue of the
+                    // `(sub resource)` face below -- so references
+                    // through the export's index stay distinct
+                    // from references to the definition index.
+                    // Consumers keep seeing the underlying type:
+                    // the generics-replace program resolves
+                    // `ExportTypeEq` through eq aliases (see
+                    // `resolve_export_type_eq`).
+                    let export_id = if matches!(
+                        ctx.validator.get_type(type_id)?,
+                        Type::Resource(_) | Type::DefVal(_) | Type::Generic(_)
+                    ) {
+                        let face_id = ctx
+                            .validator
+                            .new_type(Type::Generic(Generic::new(GenericBound::Eq(type_id))));
+                        ctx.validator.note_plain_export_face(face_id, type_id);
+                        plain_face_id = Some(face_id);
+                        face_id
+                    } else {
+                        type_id
+                    };
+                    crate::decoder::validator::ExportInfo::TypeEq(export_id)
+                }
                 Some(ExternDesc::Eq(id)) => {
                     let item_ty = ctx.validator.get_type(type_id)?;
                     let ascribed_ty = ctx.validator.get_type(id)?;
@@ -152,7 +181,9 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 _ => unreachable!(),
             };
             let focus = ctx.validator.scope_mut();
-            focus.type_indexes.add(sub_face_id.unwrap_or(type_id));
+            focus
+                .type_indexes
+                .add(sub_face_id.or(plain_face_id).unwrap_or(type_id));
             focus.exports.insert(name.original.clone(), info);
             focus.generics_replace_program.push(instr);
             Ok(())

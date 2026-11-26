@@ -73,7 +73,7 @@ fn resolve_defined_type<'a>(
 ) -> Result<&'a Type, ComponentError> {
     match ty {
         ValType::Type(type_id) => program
-            .get_type(*type_id)
+            .resolve_eq_type(*type_id)
             .ok_or_else(|| ComponentError::Link("type id not found".to_owned())),
         ValType::Primitive(_) => Err(ComponentError::Link(
             "expected defined component type".to_owned(),

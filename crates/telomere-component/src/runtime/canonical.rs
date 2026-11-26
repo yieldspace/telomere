@@ -734,6 +734,23 @@ impl HandleTransfer<'_> {
         else {
             return Ok(());
         };
+        // An `(eq)` type is definitionally its inner type, so a
+        // transfer between a type and an eq type that denotes
+        // another (or between two eq types) is a transfer between
+        // the denoted types. This covers the faces plain type
+        // exports mint: an export ascription written through the
+        // export's face must convert values exactly as the same
+        // ascription written through the denoted type itself.
+        if let Type::Generic(generic) = src_ty {
+            if let crate::ir::types::GenericBound::Eq(inner) = generic.bound {
+                return self.defined(value, inner, dst_id);
+            }
+        }
+        if let Type::Generic(generic) = dst_ty {
+            if let crate::ir::types::GenericBound::Eq(inner) = generic.bound {
+                return self.defined(value, src_id, inner);
+            }
+        }
         match (src_ty, dst_ty) {
             (Type::Resource(_), Type::Resource(_)) => self.own(value, src_id, dst_id),
             (Type::DefVal(src_def), Type::DefVal(dst_def)) => {
@@ -1200,6 +1217,7 @@ fn lower_defined_value(
     program: &ComponentProgram,
     store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
+    let type_id = resolve_eq_type_id(program, type_id);
     match program
         .get_type(type_id)
         .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
@@ -1248,6 +1266,7 @@ fn lift_defined_value(
     store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
+    let type_id = resolve_eq_type_id(program, type_id);
     match program
         .get_type(type_id)
         .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
@@ -1594,10 +1613,30 @@ fn flat_types_for_valtype(
     }
 }
 
+/// Resolve a type id through `(eq)` generics to the type it
+/// denotes. An `(eq)` type is definitionally its inner type, so
+/// canonical-ABI dispatch keyed on the denoted type must see
+/// through it -- including the faces plain type exports mint,
+/// whose whole purpose is to be the name a surface uses for the
+/// type it denotes. A `(sub resource)` generic denotes no
+/// concrete type and resolves to itself.
+fn resolve_eq_type_id(program: &ComponentProgram, mut type_id: TypeId) -> TypeId {
+    loop {
+        match program.get_type(type_id) {
+            Some(Type::Generic(generic)) => match generic.bound {
+                crate::ir::types::GenericBound::Eq(inner) => type_id = inner,
+                crate::ir::types::GenericBound::Sub => return type_id,
+            },
+            _ => return type_id,
+        }
+    }
+}
+
 fn flat_types_for_type(
     type_id: TypeId,
     program: &ComponentProgram,
 ) -> Result<Vec<CoreValType>, ComponentError> {
+    let type_id = resolve_eq_type_id(program, type_id);
     match program
         .get_type(type_id)
         .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
@@ -1736,6 +1775,7 @@ fn write_defined_value_to_memory(
     store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
+    let type_id = resolve_eq_type_id(program, type_id);
     let memory = options.memory.as_ref().ok_or_else(|| {
         ComponentError::Runtime("canonical option `memory` is required".to_owned())
     })?;
@@ -1797,6 +1837,7 @@ fn read_defined_value_from_memory(
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
+    let type_id = resolve_eq_type_id(program, type_id);
     match program
         .get_type(type_id)
         .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
@@ -3156,7 +3197,12 @@ fn val_types_equal_modulo_variant_form(
                 return true;
             }
             seen.push((*x, *y));
-            match (program.get_type(*x), program.get_type(*y)) {
+            // An `(eq)` type is definitionally its inner type, so
+            // the comparison sees through eq generics -- including
+            // the faces plain type exports mint, through which an
+            // export ascription may denote the very type a
+            // definition uses directly.
+            match (program.resolve_eq_type(*x), program.resolve_eq_type(*y)) {
                 (Some(Type::DefVal(dx)), Some(Type::DefVal(dy))) => {
                     defval_types_equal_modulo_variant_form(program, dx, dy, seen)
                 }

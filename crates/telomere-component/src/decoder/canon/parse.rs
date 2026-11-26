@@ -129,9 +129,22 @@ fn parse_resource(
         ));
     }
     if matches!(kind, ResourceCanonKind::New | ResourceCanonKind::Rep) {
-        let is_local = match ty_ref {
+        // Locality is a property of the denoted resource: an
+        // `(eq)` type -- an alias, or the face of a plain type
+        // export threaded back through a child's re-export --
+        // denotes the resource it resolves to, so resolve through
+        // eq generics before judging. A `(sub resource)` generic
+        // denotes no concrete resource and stays non-local.
+        let mut resolved_id = type_id;
+        while let Type::Generic(crate::ir::types::Generic {
+            bound: crate::ir::types::GenericBound::Eq(inner),
+            ..
+        }) = ctx.validator.get_type(resolved_id)?
+        {
+            resolved_id = *inner;
+        }
+        let is_local = match ctx.validator.get_type(resolved_id)? {
             Type::Resource(resource) => resource.owner() == ctx.validator.current_scope_id(),
-            Type::Generic(_) => false,
             _ => false,
         };
         if !is_local {

@@ -189,8 +189,9 @@ impl<'a> Validator<'a> {
         let ty = self.get_type(type_id)?.clone();
         if self.type_requires_name(&ty)
             && !contains_type_id(visible, type_id)
-            && !self.resource_visible_by_identity(type_id, visible)?
-            && !self.defval_visible_by_structure(type_id, visible)?
+            && (self.plain_export_face_for(type_id).is_some()
+                || (!self.resource_visible_by_identity(type_id, visible)?
+                    && !self.defval_visible_by_structure(type_id, visible)?))
         {
             return Err(ComponentParseError::TypeMismatch(
                 "type not valid to be used as export".to_owned(),
@@ -326,7 +327,7 @@ impl<'a> Validator<'a> {
             Type::Generic(Generic {
                 bound: GenericBound::Eq(inner),
                 ..
-            }) => self.validate_type_ref(inner, visible, seen),
+            }) => self.validate_type_definition(inner, visible, seen),
             Type::Generic(Generic {
                 bound: GenericBound::Sub,
                 ..
@@ -385,10 +386,18 @@ impl<'a> Validator<'a> {
         seen: &mut VisitTracker,
     ) -> ParseResult<()> {
         let ty = self.get_type(type_id)?.clone();
+        if let Type::Generic(Generic {
+            bound: GenericBound::Eq(inner),
+            ..
+        }) = &ty
+        {
+            return self.validate_eq_mention(type_id, *inner, visible, seen);
+        }
         if self.type_requires_name(&ty) {
             if contains_type_id(visible, type_id)
-                || self.resource_visible_by_identity(type_id, visible)?
-                || self.defval_visible_by_structure(type_id, visible)?
+                || (self.plain_export_face_for(type_id).is_none()
+                    && (self.resource_visible_by_identity(type_id, visible)?
+                        || self.defval_visible_by_structure(type_id, visible)?))
             {
                 Ok(())
             } else {
@@ -402,6 +411,39 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// A mention of an `(eq)` type at a surface. The eq type is a
+    /// name at this surface when it is part of the surface itself
+    /// (an imported eq type, or a plain export's face on the
+    /// export surface): the mention then stands on the name
+    /// alone, exactly like a mention of a named defval or
+    /// resource -- the denoted type's contents are validated at
+    /// the eq type's own surface root (its import or export
+    /// entry), not re-walked from every mention, which would
+    /// attribute the denoted type's own errors to the mentioning
+    /// func. A plain export's face anywhere else -- notably on an
+    /// import surface, since imports may not depend on exports --
+    /// names nothing. Any other eq type is a transitive alias of
+    /// the type it denotes, so the mention stands or falls with
+    /// the inner type's own visibility.
+    fn validate_eq_mention(
+        &self,
+        type_id: TypeId,
+        inner: TypeId,
+        visible: &[TypeId],
+        seen: &mut VisitTracker,
+    ) -> ParseResult<()> {
+        if contains_type_id(visible, type_id) {
+            Ok(())
+        } else if self.is_plain_export_face(type_id) {
+            let ty = self.get_type(type_id)?.clone();
+            Err(ComponentParseError::TypeMismatch(format!(
+                "surface type requires exported/imported name: {type_id:?} => {ty:?}"
+            )))
+        } else {
+            self.validate_type_ref(inner, visible, seen)
+        }
+    }
+
     fn resource_visible_by_identity(
         &self,
         type_id: TypeId,
@@ -412,8 +454,22 @@ impl<'a> Validator<'a> {
         };
 
         for candidate in visible {
-            if let Type::Resource(candidate_resource) = self.get_type(*candidate)? {
-                if candidate_resource == resource {
+            // Candidates may denote the resource through `(eq)`
+            // generics -- aliases, and the faces plain type
+            // exports mint (an instantiated component's resource
+            // reaches this component's surface through its
+            // export's face, and instantiation substitutes the
+            // denoted resource into the surface's func types).
+            let mut candidate_ty = self.get_type(*candidate)?.clone();
+            while let Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) = candidate_ty
+            {
+                candidate_ty = self.get_type(inner)?.clone();
+            }
+            if let Type::Resource(candidate_resource) = candidate_ty {
+                if &candidate_resource == resource {
                     return Ok(true);
                 }
             }
@@ -449,7 +505,8 @@ impl<'a> Validator<'a> {
                 bound: GenericBound::Eq(inner),
                 ..
             }) => {
-                contains_type_id(visible, *inner)
+                contains_type_id(visible, type_id)
+                    || contains_type_id(visible, *inner)
                     || self.resource_visible_by_identity(*inner, visible)?
                     || self
                         .type_root_allows_visible_resource_alias_inner(*inner, visible, visiting)?
@@ -554,8 +611,13 @@ impl<'a> Validator<'a> {
                 bound: GenericBound::Eq(inner),
                 ..
             }) => {
+                // An eq type that is itself part of the surface
+                // (a plain export's face, an imported eq type)
+                // names the resource it denotes: a handle to it
+                // may appear in a structural type at the surface.
                 let inner = *inner;
-                self.handle_target_visible(inner, visible, visiting)
+                Ok(contains_type_id(visible, type_id)
+                    || self.handle_target_visible(inner, visible, visiting)?)
             }
             _ => Ok(false),
         };
@@ -632,11 +694,19 @@ impl<'a> Validator<'a> {
         seen: &mut VisitTracker,
     ) -> ParseResult<()> {
         let ty = self.get_type(type_id)?.clone();
+        if let Type::Generic(Generic {
+            bound: GenericBound::Eq(inner),
+            ..
+        }) = &ty
+        {
+            return self.validate_eq_mention(type_id, *inner, visible, seen);
+        }
         let mut visiting = VisitTracker::new(self.types.len());
         if self.type_requires_nested_name(&ty, &mut visiting)? {
             if contains_type_id(visible, type_id)
-                || self.resource_visible_by_identity(type_id, visible)?
-                || self.defval_visible_by_structure(type_id, visible)?
+                || (self.plain_export_face_for(type_id).is_none()
+                    && (self.resource_visible_by_identity(type_id, visible)?
+                        || self.defval_visible_by_structure(type_id, visible)?))
             {
                 Ok(())
             } else {
@@ -912,6 +982,16 @@ impl<'a> Validator<'a> {
     ) -> ParseResult<()> {
         if let Some(closure) = self.types.visible_closure(type_id) {
             merge_type_ids(visible, &closure);
+            return Ok(());
+        }
+
+        if self.is_plain_export_face(type_id) {
+            // A plain export's `(eq)` face is the externally
+            // visible name the export introduces. The closure
+            // must not expand it to the underlying type, or
+            // mentions of the definition index would count as
+            // mentions of the export's name.
+            merge_type_ids(visible, &[type_id]);
             return Ok(());
         }
 

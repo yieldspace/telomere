@@ -344,30 +344,53 @@ fn ensure_same_resource(
     expected: TypeId,
     context: AnnotatedContext,
 ) -> ParseResult<()> {
-    let checked = match ctx.validator.sub_face_root(expected) {
+    let checked = match ctx.validator.plain_export_face_root(expected) {
         Some(root) => {
-            // The name denotes a `(sub resource)` export face, whose
-            // nominal identity inside this component is the underlying
-            // resource it was minted from (chained faces resolve to
-            // their root). Subtyping alone would accept any resource
-            // through the face's `Sub` bound, so require the
-            // function's resource to be that very resource -- or a
-            // face of it -- and keep the subtype check as the shape
-            // gate.
-            let actual_root = ctx.validator.sub_face_root(actual).unwrap_or(actual);
+            // The name denotes a plain export's `(eq)` face, whose
+            // nominal identity inside this component is the
+            // underlying resource it was minted from (chained faces
+            // resolve to their root). Require the function's
+            // resource to be that very resource -- or a face of
+            // it -- and keep the subtype check between the roots
+            // as the shape gate.
+            let actual_root = ctx
+                .validator
+                .plain_export_face_root(actual)
+                .unwrap_or(actual);
             ctx.validator
                 .get_type(actual_root)?
                 .assert_same_resource_identities(ctx.validator.get_type(root)?, ctx.validator)
                 .and_then(|()| {
                     ctx.validator
-                        .get_type(actual)?
-                        .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator)
+                        .get_type(actual_root)?
+                        .assert_subtype_of(ctx.validator.get_type(root)?, ctx.validator)
                 })
         }
-        None => ctx
-            .validator
-            .get_type(actual)?
-            .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator),
+        None => match ctx.validator.sub_face_root(expected) {
+            Some(root) => {
+                // The name denotes a `(sub resource)` export face, whose
+                // nominal identity inside this component is the underlying
+                // resource it was minted from (chained faces resolve to
+                // their root). Subtyping alone would accept any resource
+                // through the face's `Sub` bound, so require the
+                // function's resource to be that very resource -- or a
+                // face of it -- and keep the subtype check as the shape
+                // gate.
+                let actual_root = ctx.validator.sub_face_root(actual).unwrap_or(actual);
+                ctx.validator
+                    .get_type(actual_root)?
+                    .assert_same_resource_identities(ctx.validator.get_type(root)?, ctx.validator)
+                    .and_then(|()| {
+                        ctx.validator
+                            .get_type(actual)?
+                            .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator)
+                    })
+            }
+            None => ctx
+                .validator
+                .get_type(actual)?
+                .assert_subtype_of(ctx.validator.get_type(expected)?, ctx.validator),
+        },
     };
     checked.map_err(|_| match context {
         AnnotatedContext::Import => crate::decoder::ComponentParseError::TypeMismatch(format!(
