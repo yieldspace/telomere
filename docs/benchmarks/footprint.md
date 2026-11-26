@@ -562,31 +562,38 @@ CI. #164 supplies that observation first and derives the threshold from it.
 
 ### Observed run-to-run variance
 
-On 2026-11-25, the `Embedder footprint` workflow was run three times
-against the code of PR #360: workflow_dispatch runs 45657884890,
-45657902424 and 45657918331 against the PR branch at head
-`ed98a6f53fee141f33bf1f2ad753e635cc298f05` (the #358 change —
-checked arithmetic for locals count accumulation in the core parser,
-with the Codex-review follow-up that restores the total f64 count in
-the reassignment table's v128 arm — merged with current `main` at
-`0ef879b` (PR #362)) (`ubuntu-24.04`, Rust 1.96.0). A three-run
-control against unmodified `main` at `0ef879b` (workflow_dispatch
-runs 45657934302, 45657951682 and 45657968212) isolates the
-attribution recorded in the re-baseline history below; the control
-is byte-identical to the checked-in baseline on the twenty series of
-the `baseline` and core configurations, and the twelve series of the
+On 2026-11-26, the `Embedder footprint` workflow was run three times
+against the code of PR #378: workflow_dispatch runs 45762479268,
+45762489209 and 45762498654 against the PR branch at head
+`213b28542265b18fbe768ce235779b2fc1b880bc` (the #194 change — the
+default memory's local atomic load/store/RMW/cmpxchg handlers
+lowered natively in the shared baseline JIT — merged with current
+`main` at `e6a853d` (PR #377), plus an integration commit allowing
+`clippy::too_many_arguments` on the 64-bit cmpxchg lowering helper)
+(`ubuntu-24.04`, Rust 1.96.0). A three-run control against
+unmodified `main` at `e6a853d` (workflow_dispatch runs 45762509101,
+45762518972 and 45762528888) isolates the attribution recorded in
+the re-baseline history below; the control is byte-identical to the
+checked-in baseline on the twenty series of the `baseline`, `core`,
+`core-nosimd` and `core-aot` configurations, measures slightly
+below it on the `core-jit` series, and the twelve series of the
 three configurations that link `telomere-component` measure below
 their retained baselines. Every run produced byte-identical sizes
 for its tree: for all sixteen profile/configuration rows, the raw
 file size, the `.text` size, the stripped file size, and the
 stripped `.text` size each have a run-to-run spread of **0 B**
 across the samples. The table below shows the checked-in baselines
-(stripped file / stripped `.text`, in bytes): the sixteen series of
-the four core configurations were re-baselined to this campaign's
-branch measurements. The three configurations that link
-`telomere-component` measured well below their baselines on the
-branch (see the history entry); following the established practice
-of re-baselining growth only, their baselines are unchanged.
+(stripped file / stripped `.text`, in bytes): the four series of
+the `core-jit` configuration were re-baselined to this campaign's
+branch measurements. Every other series measured byte-identical to
+or below its baseline on the branch (see the history entry);
+following the established practice of re-baselining growth only,
+their baselines are unchanged.
+A follow-up campaign on the same PR (the Codex P2 fix described in
+the first history entry below) re-measured the branch and `main`
+three times each with a spread of 0 B on every series and
+re-baselined the two `release-size` `core-jit` series a further
++16 B each; the table reflects those two values.
 
 | Profile | Configuration | Stripped file (B) | Stripped `.text` (B) |
 | --- | --- | ---: | ---: |
@@ -595,7 +602,7 @@ of re-baselining growth only, their baselines are unchanged.
 | `release` | `component` | 2,711,648 | 2,151,575 |
 | `release` | `wasi` | 2,939,144 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
-| `release` | `core-jit` | 2,132,976 | 1,640,215 |
+| `release` | `core-jit` | 2,145,040 | 1,648,743 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
 | `release` | `wasi-threads` | 3,154,848 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
@@ -603,11 +610,85 @@ of re-baselining growth only, their baselines are unchanged.
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
 | `release-size` | `wasi` | 1,820,136 | 1,337,047 |
 | `release-size` | `core-nosimd` | 1,004,784 | 711,159 |
-| `release-size` | `core-jit` | 1,542,336 | 1,095,367 |
+| `release-size` | `core-jit` | 1,547,888 | 1,099,447 |
 | `release-size` | `core-aot` | 1,158,576 | 815,847 |
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+PR #378 was re-baselined a second time after the Codex P2 fix
+(commit `1d4529f`: `atomic_load64_half` formed the i64 atomic
+load's high-half displacement as `u64::from(offset + delta)` with
+both operands still `u32`, so a valid 8-byte atomic load at a
+memarg offset near the top of the range — e.g.
+`i64.atomic.load offset=4294967292` — overflowed in the emitter
+and panicked the host under overflow checks instead of compiling
+to an access that traps at run time; the fix widens both operands
+to `u64` before adding). The branch had also merged current
+`main` at `79d48f9` (PR #374) since the first re-baseline.
+Attribution was isolated by measuring current `main` alone three
+times (workflow_dispatch runs 45768655143, 45768668228 and
+45768680439 on `main` at `79d48f9`; all three runs pass the gate;
+the main control is byte-identical to the checked-in baseline on
+the sixteen series of the `baseline`, `core`, `core-nosimd` and
+`core-aot` configurations, measures below it on the `core-jit`
+series by exactly this PR's delta, and measures well below the
+retained baselines on the twelve series of the three
+configurations that link `telomere-component`). This PR's own
+delta against the main control remains confined to the `core-jit`
+configuration: in `release`, stripped file +12,208 B and stripped
+`.text` +8,608 B (unchanged by the fix, landing exactly on the
+first re-baseline); in `release-size`, stripped file +5,600 B and
+stripped `.text` +4,128 B. Against the checked-in baseline only
+the two `release-size` `core-jit` series grow, by +16 B each
+(the widened displacement computation), so only those two series
+are re-baselined to the branch measurements (workflow_dispatch
+runs 45768617733, 45768630162 and 45768642576 on the branch at
+`1d4529f`; spread 0 B on every series). Against the original
+#164 baseline, the largest cumulative growth remains the
+`release` `component` stripped file series at +11.42%
+(2,433,656 B to 2,711,648 B), unchanged because that series'
+baseline is retained. The baseline was re-measured on the branch
+and updated as recorded above, following the procedure below.
+
+PR #378 (#194, the default memory's local atomic
+load/store/RMW/cmpxchg handlers — 63 handlers — lowered natively
+in the shared baseline JIT instead of crossing the current-op
+continuation bridge) was re-baselined after the branch merged
+current `main` at `e6a853d` (PR #377) and an integration commit
+allowed `clippy::too_many_arguments` on the 64-bit cmpxchg
+lowering helper. Attribution was isolated by measuring current
+`main` alone three times (workflow_dispatch runs 45762509101,
+45762518972 and 45762528888 on `main` at `e6a853d`; all three runs
+pass the gate; the main control is byte-identical to the
+checked-in baseline on the twenty series of the `baseline`,
+`core`, `core-nosimd` and `core-aot` configurations, measures
+144 B / 80 B (`release`) and 48 B / 48 B (`release-size`) below it
+on the `core-jit` series, and measures well below the retained
+baselines on the twelve series of the three configurations that
+link `telomere-component`). This PR's own delta against the main
+control is confined to the `core-jit` configuration: in
+`release`, stripped file +12,208 B and stripped `.text`
++8,608 B; in `release-size`, stripped file +5,584 B and stripped
+`.text` +4,112 B — the decoder entries for the eight new
+`BaselineOp` variants and the shared lowering sequences
+(including `checked_atomic_memory_start`) in the telomere
+library, which only the `core-jit` configuration links with the
+jit feature. Every other configuration is byte-identical to
+`main` in both profiles. All four `core-jit` series exceed the
+checked-in baseline, so those four series are re-baselined to the
+branch measurements (workflow_dispatch runs 45762479268,
+45762489209 and 45762498654 on the branch at `213b285`; spread
+0 B on every series). Against the original #164 baseline, the
+largest cumulative growth remains the `release` `component`
+stripped file series at +11.42% (2,433,656 B to 2,711,648 B),
+unchanged because that series' baseline is retained; the
+re-baselined `core-jit` series stand at +7.81% (`release`
+stripped file, 1,989,584 B to 2,145,040 B), +6.97% (`release`
+stripped `.text`), +4.29% (`release-size` stripped file) and
++3.95% (`release-size` stripped `.text`). The baseline was
+re-measured on the branch and updated as recorded above,
+following the procedure below.
 
 PR #349 (#335, canonical handle operations validate handle
 indices against the instance table) was re-baselined a fifth
