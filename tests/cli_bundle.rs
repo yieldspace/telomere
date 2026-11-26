@@ -257,6 +257,40 @@ fn check_accepts_fresh_bundle_and_reports_signature_state() {
 }
 
 #[test]
+fn check_reports_unsigned_bundle_as_unsigned_even_with_a_key() {
+    let dir = TempDir::new("check-unsigned-with-key");
+    let component = write_command_component(&dir, 0);
+    let unsigned = compile_bundle(&dir, &component, &[]);
+
+    // The reported signature state comes from the bundle itself:
+    // supplying an unrelated key file must not present the
+    // unauthenticated bundle as signed by that key.
+    let key = write_key(&dir, "unrelated.bin", 9);
+    let check = run(&[
+        "compile",
+        "--check",
+        &arg(&unsigned),
+        "--verify-key",
+        &arg(&key),
+    ]);
+    assert!(
+        check.status.success(),
+        "an unsigned bundle still checks out structurally: {}",
+        stderr(&check)
+    );
+    assert!(
+        stdout(&check).contains("unsigned"),
+        "the bundle must be reported as unsigned: {}",
+        stdout(&check)
+    );
+    assert!(
+        !stdout(&check).contains("signed with"),
+        "a supplied key must not make an unsigned bundle 'signed': {}",
+        stdout(&check)
+    );
+}
+
+#[test]
 fn tampered_signed_bundle_is_rejected() {
     let dir = TempDir::new("tampered");
     let component = write_command_component(&dir, 0);

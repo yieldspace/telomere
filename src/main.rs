@@ -574,13 +574,13 @@ fn check_component_bundle(command: &CompileCommand, bytes: &[u8]) -> anyhow::Res
         policy,
     ) {
         Ok(loaded) => {
-            // A signed bundle cannot load without its verifier
-            // (see above), so a successful check without one means
-            // the bundle is unsigned; with one, the bundle's key id
-            // necessarily matched the verifier's.
-            let signature = match &verifier {
-                Some(key) => format!("signed with {}", key.key_id()),
-                None => "unsigned".to_owned(),
+            // The reported signature state comes from the bundle
+            // itself, as in `check_aot_artifact`: supplying a key
+            // does not make an unsigned bundle signed.
+            let signature = if loaded.is_unsigned() {
+                "unsigned".to_owned()
+            } else {
+                format!("signed with {}", loaded.key_id())
             };
             let report = loaded.report();
             println!(
