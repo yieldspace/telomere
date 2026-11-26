@@ -12,7 +12,13 @@ use crate::support::parser::core::{parse_name, parse_u32, parse_vec};
 use std::collections::HashMap;
 
 enum LocalCoreType {
-    Func(CoreFuncType),
+    /// A func type in a module type's local type space, together
+    /// with its finality: a bare comptype is final, while a type
+    /// defined by a non-final `sub` (or aliased from one) is not.
+    Func {
+        func: CoreFuncType,
+        is_final: bool,
+    },
     Module,
 }
 
@@ -152,7 +158,7 @@ fn resolve_core_func_type(local_types: &[LocalCoreType], idx: u32) -> SizedResul
         .get(idx as usize)
         .ok_or(ComponentParseError::TypeIdxNotFound(idx))?;
     match ty {
-        LocalCoreType::Func(func_ty) => Ok((0, func_ty.clone())),
+        LocalCoreType::Func { func, .. } => Ok((0, func.clone())),
         LocalCoreType::Module => Err(ComponentParseError::InvalidType(
             "core typeidx must refer to func type".to_owned(),
         )),
@@ -221,14 +227,23 @@ fn parse_core_module_alias(
         0x01 => {
             let (_, count) = parse_u32(ctx.reader)?;
             let (_, index) = parse_u32(ctx.reader)?;
-            let ty = ctx
-                .validator
-                .outer_type_scope(count)?
-                .core_types
-                .get(LocalIdx::new(index))?
-                .clone();
+            let scope = ctx.validator.outer_type_scope(count)?;
+            let ty = scope.core_types.get(LocalIdx::new(index))?.clone();
             match ty {
-                CoreType::Func(func_ty) => local_types.push(LocalCoreType::Func(func_ty)),
+                CoreType::Func(func_ty) => {
+                    // An alias keeps the finality of the type it
+                    // names; a store entry without a finality record
+                    // did not come from a non-final `sub` definition
+                    // (see `SuperTypeInfo`), so it is final.
+                    let is_final = scope
+                        .core_types
+                        .finality(LocalIdx::new(index))
+                        .unwrap_or(true);
+                    local_types.push(LocalCoreType::Func {
+                        func: func_ty,
+                        is_final,
+                    });
+                }
                 CoreType::Module(_) => local_types.push(LocalCoreType::Module),
             }
         }
@@ -277,16 +292,25 @@ fn parse_core_module_type(
                 // cannot be nested (design/mvp/Binary.md).
                 let base_len = local_types.len();
                 let resolve_existing = |idx: u32| {
-                    local_types.get(idx as usize).map(|ty| SuperTypeInfo {
-                        is_func: matches!(ty, LocalCoreType::Func(_)),
-                        is_final: None,
+                    local_types.get(idx as usize).map(|ty| match ty {
+                        LocalCoreType::Func { func, is_final } => SuperTypeInfo {
+                            func: Some(func.clone()),
+                            is_final: *is_final,
+                        },
+                        LocalCoreType::Module => SuperTypeInfo {
+                            func: None,
+                            is_final: true,
+                        },
                     })
                 };
                 let leading = ctx.reader.read_exact_one()?;
                 let (_, defined) =
                     parse_core_rectype(ctx.reader, leading, base_len, &resolve_existing)?;
                 for defined in defined {
-                    local_types.push(LocalCoreType::Func(defined.func));
+                    local_types.push(LocalCoreType::Func {
+                        func: defined.func,
+                        is_final: defined.is_final,
+                    });
                 }
             }
             0x02 => {
@@ -322,7 +346,10 @@ fn parse_core_module_type(
 /// decoder's core type model is just the defined types themselves —
 /// but finality is still needed while a rectype is being decoded: a
 /// supertype index that names a type defined earlier by the same
-/// rectype must name a non-final one.
+/// rectype must name a non-final one. `parse_core_type` hands the bit
+/// to its callers, which record it in the core type store (see
+/// `CoreTypeStore::add_with_finality`), so definitions decoded later
+/// observe the same finality.
 struct DefinedCoreSubtype {
     func: CoreFuncType,
     is_final: bool,
@@ -330,14 +357,31 @@ struct DefinedCoreSubtype {
 
 /// What a supertype index in a `core:rectype` must resolve to.
 struct SuperTypeInfo {
-    /// Whether the referenced type is a func type. Func is the only
-    /// comptype kind this decoder models, so a supertype of any other
-    /// kind cannot be the supertype of a subtype decoded here.
-    is_func: bool,
-    /// Whether the referenced type is final, when known. Types defined
-    /// by earlier definitions do not record finality in `CoreType`, so
-    /// they report `None` and only the kind check applies to them.
-    is_final: Option<bool>,
+    /// The referenced type's signature, when it is a func type. Func
+    /// is the only comptype kind this decoder models, so a supertype
+    /// of any other kind cannot be the supertype of a subtype decoded
+    /// here.
+    func: Option<CoreFuncType>,
+    /// Whether the referenced type is final. A bare comptype is a
+    /// final subtype by definition, and every non-final definition
+    /// passes through the rectype decoder, which records the bit in
+    /// the core type stores and in module-local type spaces, with
+    /// aliases propagating it — so the bit is always known here. A
+    /// store entry without a record did not come from a non-final
+    /// `sub` and is final.
+    is_final: bool,
+}
+
+/// Whether `sub` is a subtype of `sup` as core func types.
+///
+/// Func subtyping is contravariant in the parameters and covariant in
+/// the results. The valtypes this decoder reads (`parse_wasm_valtype`)
+/// admit no non-trivial subtyping between distinct types — the
+/// grammar has no indexed or non-null ref types, and funcref and
+/// externref are unrelated — so the relation reduces to exact
+/// signature equality for every signature that can be stored here.
+fn core_func_type_is_subtype(sub: &CoreFuncType, sup: &CoreFuncType) -> bool {
+    sub == sup
 }
 
 /// Decodes a `core:comptype` whose leading byte has been read. Only
@@ -369,7 +413,11 @@ fn parse_core_comptype(reader: &mut impl BinaryReader, leading: u8) -> SizedResu
 /// Supertype indices below `base_len` name types that were already in
 /// the index space when the enclosing rectype started and are resolved
 /// through `resolve_existing`; indices at or above it name types
-/// defined earlier by the same rectype.
+/// defined earlier by the same rectype. A subtype declares at most
+/// one supertype, and the declared supertype must be a non-final func
+/// type whose signature the decoded comptype matches — the checks
+/// wasmparser reports as "multiple supertypes", "sub type cannot
+/// have a final super type" and "sub type must match super type".
 fn parse_core_subtype_body(
     reader: &mut impl BinaryReader,
     is_final: bool,
@@ -379,6 +427,14 @@ fn parse_core_subtype_body(
 ) -> SizedResult<()> {
     let start = reader.read_count();
     let (_, supertypes) = parse_vec(reader, |v| v, parse_u32)?;
+    // A subtype declares at most one supertype; the count is judged
+    // before any entry is resolved, matching the reference decoder.
+    if supertypes.len() > 1 {
+        return Err(ComponentParseError::InvalidType(
+            "multiple supertypes".to_owned(),
+        ));
+    }
+    let mut supertype = None;
     for idx in supertypes {
         let info = if (idx as usize) < base_len {
             resolve_existing(idx)
@@ -386,24 +442,34 @@ fn parse_core_subtype_body(
             defined
                 .get(idx as usize - base_len)
                 .map(|defined| SuperTypeInfo {
-                    is_func: true,
-                    is_final: Some(defined.is_final),
+                    func: Some(defined.func.clone()),
+                    is_final: defined.is_final,
                 })
         }
         .ok_or(ComponentParseError::TypeIdxNotFound(idx))?;
-        if !info.is_func {
+        let Some(func) = info.func else {
             return Err(ComponentParseError::InvalidType(format!(
                 "core subtype supertype {idx} is not a func type"
             )));
-        }
-        if info.is_final == Some(true) {
+        };
+        if info.is_final {
             return Err(ComponentParseError::InvalidType(format!(
                 "core subtype supertype {idx} is final"
             )));
         }
+        supertype = Some(func);
     }
     let leading = reader.read_exact_one()?;
     let (_, func) = parse_core_comptype(reader, leading)?;
+    // The declared supertype's signature can only be checked now that
+    // the subtype's own comptype has been decoded.
+    if let Some(super_func) = &supertype {
+        if !core_func_type_is_subtype(&func, super_func) {
+            return Err(ComponentParseError::InvalidType(
+                "sub type must match super type".to_owned(),
+            ));
+        }
+    }
     defined.push(DefinedCoreSubtype { func, is_final });
     Ok((reader.read_count() - start, ()))
 }
@@ -472,11 +538,17 @@ fn parse_core_rectype(
 /// typedef inside a component/instance type). Returns every core type
 /// the definition introduces into the core type index space, in index
 /// order: a `core:rectype` can define several types at once (a `rec`
-/// group), the other forms define exactly one.
-pub fn parse_core_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Vec<CoreType>> {
+/// group), the other forms define exactly one. Each type is paired
+/// with its finality, which callers record in the core type store so
+/// that later definitions can validate supertype references against
+/// it (a bare comptype and a module type are final; a type defined by
+/// a non-final `sub` is not).
+pub fn parse_core_type(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> SizedResult<Vec<(CoreType, bool)>> {
     let start = ctx.reader.read_count();
     let types = match ctx.reader.read_exact_one()? {
-        0x50 => vec![CoreType::Module(parse_core_module_type(ctx)?.1)],
+        0x50 => vec![(CoreType::Module(parse_core_module_type(ctx)?.1), true)],
         0x00 => {
             // `core:deftype` shares the 0x50 opcode between
             // `core:moduletype` and a non-final `core:subtype`. The
@@ -494,14 +566,27 @@ pub fn parse_core_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult
             }
             let validator = &*ctx.validator;
             let resolve_existing = |idx: u32| {
-                validator
-                    .scope()
+                let scope = validator.scope();
+                scope
                     .core_types
                     .get(LocalIdx::new(idx))
                     .ok()
-                    .map(|ty| SuperTypeInfo {
-                        is_func: matches!(ty, CoreType::Func(_)),
-                        is_final: None,
+                    .map(|ty| match ty {
+                        CoreType::Func(func) => SuperTypeInfo {
+                            func: Some(func.clone()),
+                            // A store entry without a finality
+                            // record did not come from a non-final
+                            // `sub` definition, so it is final (see
+                            // `SuperTypeInfo`).
+                            is_final: scope
+                                .core_types
+                                .finality(LocalIdx::new(idx))
+                                .unwrap_or(true),
+                        },
+                        CoreType::Module(_) => SuperTypeInfo {
+                            func: None,
+                            is_final: true,
+                        },
                     })
             };
             let mut defined = Vec::new();
@@ -514,7 +599,7 @@ pub fn parse_core_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult
             )?;
             defined
                 .into_iter()
-                .map(|defined| CoreType::Func(defined.func))
+                .map(|defined| (CoreType::Func(defined.func), defined.is_final))
                 .collect()
         }
         leading => {
@@ -525,14 +610,27 @@ pub fn parse_core_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult
             // is the 0x00 case.
             let validator = &*ctx.validator;
             let resolve_existing = |idx: u32| {
-                validator
-                    .scope()
+                let scope = validator.scope();
+                scope
                     .core_types
                     .get(LocalIdx::new(idx))
                     .ok()
-                    .map(|ty| SuperTypeInfo {
-                        is_func: matches!(ty, CoreType::Func(_)),
-                        is_final: None,
+                    .map(|ty| match ty {
+                        CoreType::Func(func) => SuperTypeInfo {
+                            func: Some(func.clone()),
+                            // A store entry without a finality
+                            // record did not come from a non-final
+                            // `sub` definition, so it is final (see
+                            // `SuperTypeInfo`).
+                            is_final: scope
+                                .core_types
+                                .finality(LocalIdx::new(idx))
+                                .unwrap_or(true),
+                        },
+                        CoreType::Module(_) => SuperTypeInfo {
+                            func: None,
+                            is_final: true,
+                        },
                     })
             };
             let (_, defined) = parse_core_rectype(
@@ -543,7 +641,7 @@ pub fn parse_core_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult
             )?;
             defined
                 .into_iter()
-                .map(|defined| CoreType::Func(defined.func))
+                .map(|defined| (CoreType::Func(defined.func), defined.is_final))
                 .collect()
         }
     };

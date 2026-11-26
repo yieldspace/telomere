@@ -26,6 +26,12 @@ impl<T> Default for TypeStore<T> {
 
 pub struct CoreTypeStore<R, T> {
     types: Vec<T>,
+    /// Per-entry finality records, parallel to `types`. Only the core
+    /// type store records these (via `add_with_finality`): whether a
+    /// core type was defined as final decides if it may be named as a
+    /// supertype by a later `sub` definition, and `CoreType` itself
+    /// does not carry that bit. Other stores leave every entry `None`.
+    finalities: Vec<Option<bool>>,
     _phantom: PhantomData<R>,
 }
 
@@ -42,6 +48,7 @@ impl<R, T: Clone> Clone for CoreTypeStore<R, T> {
     fn clone(&self) -> Self {
         Self {
             types: self.types.clone(),
+            finalities: self.finalities.clone(),
             _phantom: PhantomData,
         }
     }
@@ -51,6 +58,7 @@ impl<R, T> Default for CoreTypeStore<R, T> {
     fn default() -> Self {
         Self {
             types: Vec::new(),
+            finalities: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -60,7 +68,23 @@ impl<R, T> CoreTypeStore<R, T> {
     pub fn add(&mut self, ty: T) -> LocalIdx<R> {
         let idx = self.types.len() as u32;
         self.types.push(ty);
+        self.finalities.push(None);
         LocalIdx::new(idx)
+    }
+
+    /// Adds a type together with its finality record (`None` leaves
+    /// the finality unrecorded, exactly like `add`).
+    pub fn add_with_finality(&mut self, ty: T, is_final: Option<bool>) -> LocalIdx<R> {
+        let idx = self.types.len() as u32;
+        self.types.push(ty);
+        self.finalities.push(is_final);
+        LocalIdx::new(idx)
+    }
+
+    /// The recorded finality of the type at `idx`, when the definition
+    /// that introduced it recorded one.
+    pub fn finality(&self, idx: LocalIdx<R>) -> Option<bool> {
+        self.finalities.get(idx.get() as usize).copied().flatten()
     }
 
     pub fn get(&self, idx: LocalIdx<R>) -> ParseResult<&T> {

@@ -99,13 +99,16 @@ fn _parse_component(
                         // One `core:deftype` can define several core
                         // types (a `rec` group); register each of them.
                         let (_, types) = parse_core_type(&mut ctx)?;
-                        for ty in types {
+                        for (ty, is_final) in types {
                             let idx = ctx
                                 .state
                                 .core_type_store
                                 .register(CoreRelation::Defined(ty.clone()));
                             ctx.state.scope_mut().core_types.register(idx);
-                            ctx.validator.scope_mut().core_types.add(ty);
+                            ctx.validator
+                                .scope_mut()
+                                .core_types
+                                .add_with_finality(ty, Some(is_final));
                         }
                     }
                 }

@@ -217,6 +217,12 @@ fn parse_core_export(
                 .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_types.register(gidx);
             if let CoreModuleExportType::Type(ty) = target_export_type {
+                // No finality is recorded for an exported core type:
+                // the export type model carries only the `CoreType`,
+                // and a core module's exported types are plain
+                // functypes, so the entry resolves as final when a
+                // later `sub` names it (see `SuperTypeInfo` in
+                // decoder/core/types.rs).
                 ctx.validator.scope_mut().core_types.add(ty);
             } else {
                 return Err(ComponentParseError::InvalidSortType(
@@ -304,13 +310,18 @@ fn parse_outer_export(
                 .core_types
                 .get(LocalIdx::new(idx))?;
             ctx.state.scope_mut().core_types.register(gidx);
-            let ty = ctx
-                .validator
-                .outer_scope(ct)?
+            let (ty, is_final) = {
+                let scope = ctx.validator.outer_scope(ct)?;
+                let local_idx = LocalIdx::new(idx);
+                (
+                    scope.core_types.get(local_idx)?.clone(),
+                    scope.core_types.finality(local_idx),
+                )
+            };
+            ctx.validator
+                .scope_mut()
                 .core_types
-                .get(LocalIdx::new(idx))?
-                .clone();
-            ctx.validator.scope_mut().core_types.add(ty);
+                .add_with_finality(ty, is_final);
         }
         SortType::Component => {
             let gidx = ctx

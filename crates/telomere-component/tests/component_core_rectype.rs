@@ -82,11 +82,13 @@ fn upstream_moduletype_with_bare_sub_declarator_is_accepted() {
 
 #[test]
 fn prefixed_sub_with_supertype_is_accepted() {
-    // Type 0 is a plain functype; type 1 is a non-final subtype of it.
+    // Type 0 is a non-final subtype with no supertypes (a bare
+    // functype would be final and could not be subtyped at all);
+    // type 1 subtypes it with a matching signature.
     let bytes = core_type_section(&[
         0x02, // 2 core types
-        0x60, 0x00, 0x00, // functype ()->()
-        0x00, 0x50, 0x01, 0x00, 0x60, 0x01, 0x7f, 0x00, // sub (super 0) (func (i32)->())
+        0x00, 0x50, 0x00, 0x60, 0x00, 0x00, // sub, 0 supertypes, functype ()->()
+        0x00, 0x50, 0x01, 0x00, 0x60, 0x00, 0x00, // sub (super 0), functype ()->()
     ]);
     compile(&bytes).expect("prefixed sub with a valid supertype must be accepted");
 }
@@ -181,4 +183,138 @@ fn moduletype_sub_with_unknown_supertype_is_rejected() {
         0x01, 0x50, 0x01, 0x05, 0x60, 0x00, 0x00, // type: sub (super 5) (func)
     ]);
     expect_rejected(&bytes, "type idx not found");
+}
+
+// ---------------------------------------------------------------------------
+// Supertype validation completeness (Codex review of PR #371): a declared
+// supertype must be non-final and signature-matching no matter where it was
+// defined — the same rectype, an earlier definition, or a module type's
+// local type space (including aliases into it) — and a subtype declares at
+// most one supertype. wasmparser rejects the negative shapes with "sub type
+// cannot have a final super type", "sub type must match super type" and
+// "multiple supertypes".
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sub_of_bare_functype_from_earlier_definition_is_rejected() {
+    // Type 0 is a bare functype, which is a final subtype; type 1
+    // cannot subtype it even though the two are separate definitions.
+    let bytes = core_type_section(&[
+        0x02, // 2 core types
+        0x60, 0x00, 0x00, // functype ()->() (final)
+        0x00, 0x50, 0x01, 0x00, 0x60, 0x00, 0x00, // sub (super 0), functype ()->()
+    ]);
+    expect_rejected(&bytes, "is final");
+}
+
+#[test]
+fn moduletype_sub_of_final_local_type_is_rejected() {
+    // Local type 0 is a bare functype declarator (final); local
+    // type 1 cannot subtype it.
+    let bytes = core_type_section(&[
+        0x01, // 1 core type
+        0x50, 0x02, // moduletype, 2 decls
+        0x01, 0x60, 0x00, 0x00, // type: functype ()->() (final)
+        0x01, 0x50, 0x01, 0x00, 0x60, 0x00, 0x00, // type: sub (super 0), functype ()->()
+    ]);
+    expect_rejected(&bytes, "is final");
+}
+
+#[test]
+fn moduletype_sub_of_aliased_final_type_is_rejected() {
+    // The moduletype aliases the component's bare functype (final)
+    // as its local type 0; a subtype of the alias is still a subtype
+    // of a final type.
+    let bytes = core_type_section(&[
+        0x02, // 2 core types
+        0x60, 0x00, 0x00, // functype ()->() (final)
+        0x50, 0x02, // moduletype, 2 decls
+        0x02, 0x10, 0x01, 0x01, 0x00, // alias outer 1 0 (core type)
+        0x01, 0x50, 0x01, 0x00, 0x60, 0x00, 0x00, // type: sub (super 0), functype ()->()
+    ]);
+    expect_rejected(&bytes, "is final");
+}
+
+#[test]
+fn sub_with_mismatched_signature_in_rec_group_is_rejected() {
+    // (sub (func)) followed by (sub 0 (func (param i32))): the
+    // subtype's signature must match its supertype's.
+    let bytes = core_type_section(&[
+        0x01, // 1 core type entry
+        0x4e, 0x02, // rec, 2 subtypes
+        0x50, 0x00, 0x60, 0x00, 0x00, // sub, functype ()->()
+        0x50, 0x01, 0x00, 0x60, 0x01, 0x7f, 0x00, // sub (super 0), functype (i32)->()
+    ]);
+    expect_rejected(&bytes, "sub type must match super type");
+}
+
+#[test]
+fn sub_with_mismatched_signature_from_earlier_definition_is_rejected() {
+    // The supertype is a non-final subtype from an earlier
+    // definition; the signature check applies across definitions too.
+    let bytes = core_type_section(&[
+        0x02, // 2 core types
+        0x00, 0x50, 0x00, 0x60, 0x00, 0x00, // sub, 0 supertypes, functype ()->()
+        0x00, 0x50, 0x01, 0x00, 0x60, 0x01, 0x7f, 0x00, // sub (super 0), functype (i32)->()
+    ]);
+    expect_rejected(&bytes, "sub type must match super type");
+}
+
+#[test]
+fn moduletype_sub_with_mismatched_signature_is_rejected() {
+    let bytes = core_type_section(&[
+        0x01, // 1 core type
+        0x50, 0x02, // moduletype, 2 decls
+        0x01, 0x50, 0x00, 0x60, 0x00, 0x00, // type: sub, functype ()->()
+        0x01, 0x50, 0x01, 0x00, 0x60, 0x01, 0x7f,
+        0x00, // type: sub (super 0), functype (i32)->()
+    ]);
+    expect_rejected(&bytes, "sub type must match super type");
+}
+
+#[test]
+fn moduletype_sub_with_valid_supertype_is_accepted() {
+    let bytes = core_type_section(&[
+        0x01, // 1 core type
+        0x50, 0x02, // moduletype, 2 decls
+        0x01, 0x50, 0x00, 0x60, 0x00, 0x00, // type: sub, functype ()->()
+        0x01, 0x50, 0x01, 0x00, 0x60, 0x00, 0x00, // type: sub (super 0), functype ()->()
+    ]);
+    compile(&bytes).expect("moduletype sub with a valid supertype must be accepted");
+}
+
+#[test]
+fn sub_with_multiple_supertypes_in_rec_group_is_rejected() {
+    let bytes = core_type_section(&[
+        0x01, // 1 core type entry
+        0x4e, 0x03, // rec, 3 subtypes
+        0x50, 0x00, 0x60, 0x00, 0x00, // sub, functype ()->()
+        0x50, 0x00, 0x60, 0x00, 0x00, // sub, functype ()->()
+        0x50, 0x02, 0x00, 0x01, 0x60, 0x00, 0x00, // sub (super 0 1), functype ()->()
+    ]);
+    expect_rejected(&bytes, "multiple supertypes");
+}
+
+#[test]
+fn prefixed_sub_with_multiple_supertypes_is_rejected() {
+    let bytes = core_type_section(&[
+        0x03, // 3 core types
+        0x00, 0x50, 0x00, 0x60, 0x00, 0x00, // sub, 0 supertypes, functype ()->()
+        0x00, 0x50, 0x00, 0x60, 0x00, 0x00, // sub, 0 supertypes, functype ()->()
+        0x00, 0x50, 0x02, 0x00, 0x01, 0x60, 0x00, 0x00, // sub (super 0 1), functype ()->()
+    ]);
+    expect_rejected(&bytes, "multiple supertypes");
+}
+
+#[test]
+fn moduletype_sub_with_multiple_supertypes_is_rejected() {
+    let bytes = core_type_section(&[
+        0x01, // 1 core type
+        0x50, 0x03, // moduletype, 3 decls
+        0x01, 0x50, 0x00, 0x60, 0x00, 0x00, // type: sub, functype ()->()
+        0x01, 0x50, 0x00, 0x60, 0x00, 0x00, // type: sub, functype ()->()
+        0x01, 0x50, 0x02, 0x00, 0x01, 0x60, 0x00,
+        0x00, // type: sub (super 0 1), functype ()->()
+    ]);
+    expect_rejected(&bytes, "multiple supertypes");
 }
