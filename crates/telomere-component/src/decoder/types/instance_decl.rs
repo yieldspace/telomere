@@ -22,20 +22,7 @@ pub fn _parse_instance_decl(
         None => ctx.reader.read_exact_one()?,
     };
     match b {
-        0x00 => {
-            let (_, types) = parse_core_type(ctx)?;
-            for DefinedCoreType {
-                ty,
-                is_final,
-                identity,
-            } in types
-            {
-                ctx.validator
-                    .scope_mut()
-                    .core_types
-                    .add_with_records(ty, Some(is_final), identity);
-            }
-        }
+        0x00 => parse_core_type_decl(ctx)?,
         0x01 => {
             let t = parse_type(ctx, depth)?;
             let id = ctx.validator.new_type(t);
@@ -58,5 +45,27 @@ pub fn _parse_instance_decl(
             )));
         }
     };
+    Ok(())
+}
+
+/// Parses a core type declaration inside an instance type, recording
+/// each defined type's finality and func identity in the core type
+/// store. Out of line so `_parse_instance_decl`'s frame stays small on
+/// the recursive type-parsing path (the nesting-depth stack budget is
+/// calibrated against those frames).
+#[inline(never)]
+fn parse_core_type_decl(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
+    let (_, types) = parse_core_type(ctx)?;
+    for DefinedCoreType {
+        ty,
+        is_final,
+        identity,
+    } in types
+    {
+        ctx.validator
+            .scope_mut()
+            .core_types
+            .add_with_records(ty, Some(is_final), identity);
+    }
     Ok(())
 }
