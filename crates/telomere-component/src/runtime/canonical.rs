@@ -3104,6 +3104,127 @@ pub(super) fn program_func_type(
     }
 }
 
+/// Whether two function types denote the same component type up to the
+/// declared constructors of variant-shaped types.
+///
+/// The component model treats `option`, `result` and `enum` as sugar for
+/// particular variants: subtyping, size and flattening only ever look at
+/// the cases, so a type declared with one constructor and the variant it
+/// desugars to are the *same* type with the same canonical layout. The
+/// one place the constructor is observable is the dynamic value
+/// representation chosen when lifting (see `variant_representation`).
+/// This comparison is therefore structural equality that resolves type
+/// indices through `program` and ignores only `VariantForm`; everything
+/// that affects layout or identity — record and case labels, list
+/// fixed lengths, resource identities — must match exactly.
+pub(super) fn func_types_equal_modulo_variant_form(
+    program: &ComponentProgram,
+    a: &FuncType,
+    b: &FuncType,
+) -> bool {
+    let mut seen = Vec::new();
+    a.params.len() == b.params.len()
+        && a.params
+            .iter()
+            .zip(&b.params)
+            .all(|(x, y)| val_types_equal_modulo_variant_form(program, x, y, &mut seen))
+        && match (&a.result, &b.result) {
+            (None, None) => true,
+            (Some(x), Some(y)) => val_types_equal_modulo_variant_form(program, x, y, &mut seen),
+            _ => false,
+        }
+}
+
+fn val_types_equal_modulo_variant_form(
+    program: &ComponentProgram,
+    a: &ValType,
+    b: &ValType,
+    seen: &mut Vec<(TypeId, TypeId)>,
+) -> bool {
+    match (a, b) {
+        (ValType::Primitive(x), ValType::Primitive(y)) => x == y,
+        (ValType::Type(x), ValType::Type(y)) => {
+            if x == y {
+                return true;
+            }
+            // Defined types form a DAG (a type only references earlier
+            // indices), but guard against re-entering a pair anyway: a
+            // pair already under comparison is assumed equal, which is
+            // the coinductive reading and cannot manufacture a layout
+            // difference.
+            if seen.contains(&(*x, *y)) {
+                return true;
+            }
+            seen.push((*x, *y));
+            match (program.get_type(*x), program.get_type(*y)) {
+                (Some(Type::DefVal(dx)), Some(Type::DefVal(dy))) => {
+                    defval_types_equal_modulo_variant_form(program, dx, dy, seen)
+                }
+                (Some(Type::Resource(rx)), Some(Type::Resource(ry))) => rx == ry,
+                _ => false,
+            }
+        }
+        (ValType::Type(x), ValType::Primitive(y)) | (ValType::Primitive(y), ValType::Type(x)) => {
+            matches!(
+                program.get_type(*x),
+                Some(Type::DefVal(DefValType::Primitive(found))) if found == y
+            )
+        }
+    }
+}
+
+fn defval_types_equal_modulo_variant_form(
+    program: &ComponentProgram,
+    a: &DefValType,
+    b: &DefValType,
+    seen: &mut Vec<(TypeId, TypeId)>,
+) -> bool {
+    match (a, b) {
+        (DefValType::Primitive(x), DefValType::Primitive(y)) => x == y,
+        (DefValType::Record(x), DefValType::Record(y)) => {
+            x.len() == y.len()
+                && x.iter().zip(y.iter()).all(|(f, g)| {
+                    f.label == g.label
+                        && val_types_equal_modulo_variant_form(program, &f.ty, &g.ty, seen)
+                })
+        }
+        (DefValType::Variant(x), DefValType::Variant(y)) => {
+            // `form` is deliberately not compared: it is the declared
+            // constructor, the single difference this comparison exists
+            // to abstract over. Labels and payload types must match.
+            x.cases.len() == y.cases.len()
+                && x.cases.iter().zip(&y.cases).all(|(c, d)| {
+                    c.label == d.label
+                        && match (&c.ty, &d.ty) {
+                            (None, None) => true,
+                            (Some(t), Some(u)) => {
+                                val_types_equal_modulo_variant_form(program, t, u, seen)
+                            }
+                            _ => false,
+                        }
+                })
+        }
+        (DefValType::Flags(x), DefValType::Flags(y)) => x == y,
+        (DefValType::List(x, fixed_x), DefValType::List(y, fixed_y)) => {
+            fixed_x == fixed_y && val_types_equal_modulo_variant_form(program, x, y, seen)
+        }
+        (DefValType::Own(x), DefValType::Own(y))
+        | (DefValType::Borrow(x), DefValType::Borrow(y)) => {
+            // Handles denote resources nominally: the two indices must
+            // be the same entry or entries for the same resource. A
+            // generic face is only equal to itself (handled by the
+            // index comparison); faces of one resource under different
+            // indices stay distinct, as they do for subtyping.
+            x == y
+                || matches!(
+                    (program.get_type(*x), program.get_type(*y)),
+                    (Some(Type::Resource(rx)), Some(Type::Resource(ry))) if rx == ry
+                )
+        }
+        _ => false,
+    }
+}
+
 fn validate_resource_type(
     program: &ComponentProgram,
     type_id: TypeId,

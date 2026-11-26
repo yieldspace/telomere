@@ -1,4 +1,7 @@
-use super::canonical::{program_func_type, register_host_argument_handles, runtime_resource_id};
+use super::canonical::{
+    func_types_equal_modulo_variant_form, program_func_type, register_host_argument_handles,
+    runtime_resource_id,
+};
 use super::host::{
     linker_binding_to_callable, materialize_inline_core_instance, vm_result_to_component_error,
 };
@@ -1107,6 +1110,61 @@ fn resolve_component_export_key(
     Err(ComponentError::ExportNotFound(name.to_owned()))
 }
 
+/// Present a resolved function under the type its export declares.
+///
+/// An export may ascribe a type to the function it exports; validation
+/// has already checked the function's own type is a subtype of the
+/// ascribed one, and the ascribed type is the function's public type —
+/// the one `get_func` / `get_typed_func` validate bindings against. The
+/// callable, however, is built from the function's definition and
+/// converts values at the boundary using the *definition's* type. When
+/// the two types differ only in the declared constructors of
+/// variant-shaped types (a definition returning a declared `variant`
+/// exported as returning the `result` it desugars to, say), they are
+/// the same type with the same canonical layout, but the definition's
+/// constructors would choose the wrong dynamic representations at this
+/// boundary: a typed binding accepted against the export type would
+/// then fail when invoked. Rebuild the callable under the export type
+/// in exactly that case.
+///
+/// Anything further apart — an ascription that changes the canonical
+/// layout, or a callable whose types belong to another program — keeps
+/// the definition's type, as before.
+fn present_callable_under_export_type(
+    program: &Rc<ComponentProgram>,
+    callable: Rc<ResolvedCallable>,
+    export_type_id: TypeId,
+) -> Rc<ResolvedCallable> {
+    let ResolvedCallable::Lifted {
+        core,
+        func_type,
+        options,
+        program: callable_program,
+        shared,
+        handles,
+    } = &*callable
+    else {
+        return callable;
+    };
+    if !Rc::ptr_eq(program, callable_program) {
+        return callable;
+    }
+    let Ok(export_type) = program_func_type(program, export_type_id) else {
+        return callable;
+    };
+    if !func_types_equal_modulo_variant_form(program, func_type, &export_type) {
+        return callable;
+    }
+    Rc::new(ResolvedCallable::Lifted {
+        core: core.clone(),
+        func_type: export_type,
+        options: options.clone(),
+        program: callable_program.clone(),
+        shared: shared.clone(),
+        handles: handles.clone(),
+    })
+}
+
 impl RuntimeComponentInstance {
     fn new_component(component: Component, env: Rc<RuntimeEnv>) -> Self {
         Self {
@@ -1142,7 +1200,7 @@ impl RuntimeComponentInstance {
                     Some(ComponentExport::Instance(idx)) => {
                         RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
                     }
-                    Some(ComponentExport::Func { idx, .. }) => {
+                    Some(ComponentExport::Func { idx, type_id }) => {
                         if self.env.parent.is_none() {
                             if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx)
                             {
@@ -1157,7 +1215,12 @@ impl RuntimeComponentInstance {
                                 }
                             }
                         }
-                        RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
+                        let callable = self.env.resolve_func(*idx, store)?;
+                        RuntimeExport::Func(present_callable_under_export_type(
+                            &self.env.program,
+                            callable,
+                            *type_id,
+                        ))
                     }
                     Some(ComponentExport::Module(idx)) => RuntimeExport::CoreModule(Box::new(
                         self.env.resolve_core_module(*idx, store)?,

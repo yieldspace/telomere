@@ -11,6 +11,18 @@
 //! (bindings are type-erased at registration; every typed-import mismatch
 //! surfaces at call time). The last test pins that the declared-variant
 //! argument is at least not silently reinterpreted as a `Result` there.
+//!
+//! Round 2 (export ascriptions): an export may ascribe a supertype to the
+//! function it exports, and that ascribed type is the function's public
+//! type — the one typed bindings validate against. When the ascription
+//! differs from the definition's type only in the declared constructors
+//! of variant-shaped types (a declared `variant` exported as the
+//! `result` / `option` it desugars to), calls through the export must
+//! convert values per the export type, or a binding accepted at lookup
+//! fails when invoked. The tests at the bottom pin that the ascribed
+//! representation is honored on the flat and memory paths, in both
+//! directions, and that an ascription naming the variant itself changes
+//! nothing.
 
 use telomere_component::{ComponentEngine, ComponentError, ComponentLinker, ComponentValue};
 
@@ -316,4 +328,202 @@ async fn typed_host_import_does_not_silently_convert_declared_variant() {
             .expect("dynamic call should succeed"),
         vec![ComponentValue::U32(0)]
     );
+}
+
+/// The Codex round-2 shape: a function whose own type returns a declared
+/// variant, exported under an ascription naming the `result` type the
+/// variant desugars to. The core function returns the discriminant.
+fn result_ascribed_export() -> &'static str {
+    r#"
+(component
+  (type $v (variant (case "ok") (case "err")))
+  (core module $m
+    (func (export "f") (result i32) i32.const 0))
+  (core instance $i (instantiate $m))
+  (func $f (result $v)
+    (canon lift (core func $i "f")))
+  (export "f" (func $f) (func (result (result))))
+)
+"#
+}
+
+#[tokio::test]
+async fn typed_result_binding_honors_export_ascription() {
+    let (store, instance) =
+        instantiate_component(result_ascribed_export(), &ComponentLinker::new()).await;
+
+    // The binding validates against the export's ascribed type and the
+    // call must now succeed: values are lifted per the export type.
+    let func = instance
+        .get_typed_func::<(), Result<(), ()>>("f")
+        .expect("ascribed result type must bind as Result");
+    assert_eq!(
+        func.call(&store, ())
+            .await
+            .expect("typed call should succeed"),
+        Ok(())
+    );
+
+    // The dynamic API sees the same representation as a function whose
+    // type is declared with the `result` constructor outright.
+    let (control_store, control) =
+        instantiate_component(&payloadless_export("(result)"), &ComponentLinker::new()).await;
+    let control_dynamic = control
+        .call(&control_store, "f", &[])
+        .await
+        .expect("control dynamic call should succeed");
+    assert!(matches!(
+        control_dynamic.as_slice(),
+        [ComponentValue::Result { .. }]
+    ));
+    let dynamic = instance
+        .call(&store, "f", &[])
+        .await
+        .expect("dynamic call should succeed");
+    assert_eq!(dynamic, control_dynamic);
+}
+
+#[tokio::test]
+async fn variant_ascription_keeps_variant_representation() {
+    // Ascribing the very variant type the function already has must not
+    // change anything: the export type is still a declared variant, so a
+    // Result binding is rejected at lookup and dynamic values stay
+    // Variants.
+    let component = r#"
+(component
+  (type $v (variant (case "ok") (case "err")))
+  (core module $m
+    (func (export "f") (result i32) i32.const 0))
+  (core instance $i (instantiate $m))
+  (func $f (result $v)
+    (canon lift (core func $i "f")))
+  (export "f" (func $f) (func (result $v)))
+)
+"#;
+    let (store, instance) = instantiate_component(component, &ComponentLinker::new()).await;
+    assert!(
+        instance.get_typed_func::<(), Result<(), ()>>("f").is_err(),
+        "variant-ascribed export must not bind as Result"
+    );
+    let dynamic = instance
+        .call(&store, "f", &[])
+        .await
+        .expect("dynamic call should succeed");
+    assert_eq!(
+        dynamic,
+        vec![ComponentValue::Variant {
+            case: "ok".to_owned(),
+            value: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn typed_result_param_honors_export_ascription() {
+    // Parameter direction: the function's own type takes the declared
+    // variant; the export ascribes the `result` it desugars to. The core
+    // function echoes the discriminant it receives.
+    let component = r#"
+(component
+  (type $v (variant (case "ok") (case "err")))
+  (core module $m
+    (func (export "run") (param i32) (result i32) (local.get 0)))
+  (core instance $i (instantiate $m))
+  (func $f (param "value" $v) (result u32)
+    (canon lift (core func $i "run")))
+  (export "run" (func $f) (func (param "value" (result)) (result u32)))
+)
+"#;
+    let (store, instance) = instantiate_component(component, &ComponentLinker::new()).await;
+    let func = instance
+        .get_typed_func::<(Result<(), ()>,), u32>("run")
+        .expect("ascribed result parameter must bind as Result");
+    assert_eq!(
+        func.call(&store, (Ok(()),))
+            .await
+            .expect("typed call should succeed"),
+        0
+    );
+    assert_eq!(
+        func.call(&store, (Err(()),))
+            .await
+            .expect("typed call should succeed"),
+        1
+    );
+}
+
+/// A component exporting two functions that return an option-shaped
+/// declared variant through memory, ascribed as returning `(option u32)`.
+/// `some` writes discriminant 1 / payload 42 at offset 0; `none` points
+/// at zeroed memory (discriminant 0).
+fn option_ascribed_exports() -> &'static str {
+    r#"
+(component
+  (type $v (variant (case "none") (case "some" u32)))
+  (core module $m
+    (memory (export "memory") 1)
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      i32.const 1024)
+    (func (export "some") (result i32)
+      i32.const 0
+      i32.const 1
+      i32.store
+      i32.const 4
+      i32.const 42
+      i32.store
+      i32.const 0)
+    (func (export "none") (result i32)
+      i32.const 64)
+  )
+  (core instance $i (instantiate $m))
+  (func $some (result $v)
+    (canon lift (core func $i "some") (memory (core memory $i "memory")) (realloc (core func $i "realloc"))))
+  (func $none (result $v)
+    (canon lift (core func $i "none") (memory (core memory $i "memory")) (realloc (core func $i "realloc"))))
+  (export "some" (func $some) (func (result (option u32))))
+  (export "none" (func $none) (func (result (option u32))))
+)
+"#
+}
+
+#[tokio::test]
+async fn typed_option_binding_honors_export_ascription() {
+    let (store, instance) =
+        instantiate_component(option_ascribed_exports(), &ComponentLinker::new()).await;
+
+    let some = instance
+        .get_typed_func::<(), Option<u32>>("some")
+        .expect("ascribed option type must bind as Option");
+    assert_eq!(
+        some.call(&store, ())
+            .await
+            .expect("typed call should succeed"),
+        Some(42)
+    );
+    let none = instance
+        .get_typed_func::<(), Option<u32>>("none")
+        .expect("ascribed option type must bind as Option");
+    assert_eq!(
+        none.call(&store, ())
+            .await
+            .expect("typed call should succeed"),
+        None
+    );
+
+    // Dynamic calls through the exports produce Option values too.
+    let dynamic = instance
+        .call(&store, "some", &[])
+        .await
+        .expect("dynamic call should succeed");
+    assert_eq!(
+        dynamic,
+        vec![ComponentValue::Option(Some(Box::new(ComponentValue::U32(
+            42
+        ))))]
+    );
+    let dynamic = instance
+        .call(&store, "none", &[])
+        .await
+        .expect("dynamic call should succeed");
+    assert_eq!(dynamic, vec![ComponentValue::Option(None)]);
 }
