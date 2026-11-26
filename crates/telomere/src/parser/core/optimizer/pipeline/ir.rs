@@ -160,6 +160,7 @@ fn lower_operand(
     program: &BasicBlockProgram,
 ) -> LoweredOperand {
     if is_direct_call_op(record.op) && idx == 0 {
+        // SAFETY: this branch is gated on a direct-call op, whose first operand the parser always builds as a CallRecipeRef (the call parsing in instruction.rs), and operands reaching here were copied from the fully initialized parser stream; CallRecipeRef is plain data (two u32 fields).
         return LoweredOperand::CallRecipeRef(unsafe { operand.call_recipe_ref });
     }
     if let Some(target) = control_target_operand(record, idx) {
@@ -167,6 +168,7 @@ fn lower_operand(
             return LoweredOperand::JumpTarget(block_id);
         }
     }
+    // SAFETY: operands reaching here were copied from the parser-built stream, where every operand is fully initialized -- narrow values via the Operand::from_* constructors (zero tail), wide ones via eight-byte arms -- so the raw eight-byte arm reads no uninitialized bytes.
     LoweredOperand::Raw(unsafe { operand.encoded })
 }
 
