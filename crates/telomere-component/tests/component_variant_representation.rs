@@ -309,8 +309,8 @@ async fn declared_variant_with_result_shape_lifts_as_variant_flat() {
 async fn declared_variant_with_payloadless_cases_lifts_as_variant_flat() {
     let component = flat_echo_component(
         r#"(type $value (variant (case "a") (case "b")))
-           (export "value" (type $value))"#,
-        "$value",
+           (export $value' "value" (type $value))"#,
+        "$value'",
     );
     assert_flat_echo(
         &component,
@@ -331,9 +331,9 @@ async fn nested_declared_variant_keeps_variant_form_through_memory() {
     let component = r#"
 (component
   (type $inner (variant (case "none") (case "some" u32)))
-  (export "inner" (type $inner))
-  (type $value (variant (case "wrap" $inner) (case "empty")))
-  (export "value" (type $value))
+  (export $inner' "inner" (type $inner))
+  (type $value (variant (case "wrap" $inner') (case "empty")))
+  (export $value' "value" (type $value))
   (core module $m
     (memory (export "memory") 1)
     (global $bump (mut i32) (i32.const 32))
@@ -358,7 +358,7 @@ async fn nested_declared_variant_keeps_variant_form_through_memory() {
     )
   )
   (core instance $i (instantiate $m))
-  (func (export "run") (param "value" $value) (result $value)
+  (func (export "run") (param "value" $value') (result $value')
     (canon lift (core func $i "run") (memory (core memory $i "memory")) (realloc (core func $i "realloc")))
   )
 )
@@ -416,8 +416,8 @@ async fn result_and_enum_types_keep_their_representations_flat() {
 
     let enum_component = flat_echo_component(
         r#"(type $value (enum "a" "b"))
-           (export "value" (type $value))"#,
-        "$value",
+           (export $value' "value" (type $value))"#,
+        "$value'",
     );
     assert_flat_echo(&enum_component, ComponentValue::Enum("b".to_owned())).await;
 }

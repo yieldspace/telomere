@@ -470,13 +470,27 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
             }
             Type::DefVal(DefValType::Own(_))
             | Type::DefVal(DefValType::Borrow(_))
-            | Type::Resource(_)
-            | Type::Generic(_) => ComponentTypeInfo {
+            | Type::Resource(_) => ComponentTypeInfo {
                 id: type_id.index(),
                 flat_len: 1,
                 indirect_size: 4,
                 indirect_align: 4,
                 fixed_length: None,
+            },
+            Type::Generic(generic) => match generic.bound {
+                // An `(eq)` type is definitionally its inner
+                // type, so its canonical-ABI metadata is the
+                // denoted type's own.
+                crate::ir::types::GenericBound::Eq(inner) => {
+                    type_info(inner, types, memo, visiting)?
+                }
+                crate::ir::types::GenericBound::Sub => ComponentTypeInfo {
+                    id: type_id.index(),
+                    flat_len: 1,
+                    indirect_size: 4,
+                    indirect_align: 4,
+                    fixed_length: None,
+                },
             },
             Type::Func(_) | Type::Component(_) | Type::Instance(_) => ComponentTypeInfo {
                 id: type_id.index(),

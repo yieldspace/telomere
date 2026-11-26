@@ -109,6 +109,14 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
                 };
                 let actual = ctx.validator.get_type(type_id)?.clone();
                 let formal_root = ctx.validator.get_type(*formal_type_id)?.clone();
+                // A `(sub resource)` import is satisfied only by a
+                // type that denotes a resource. The argument may
+                // name the resource through an `(eq)` face -- a
+                // plain type export of it, or an alias -- so judge
+                // the denoted type, not the face: a face of a
+                // primitive or of a defined value type is not a
+                // resource, however it is written.
+                let actual_is_resource = actual.is_resource_or_face(ctx.validator)?;
                 match (&actual, component_def) {
                     (
                         Type::Resource(_) | Type::Generic(_),
@@ -116,7 +124,7 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
                             id: _,
                             bound: GenericBound::Sub,
                         },
-                    ) => {
+                    ) if actual_is_resource => {
                         unified.insert(*formal_type_id, type_id);
                     }
                     (

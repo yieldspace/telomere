@@ -80,19 +80,6 @@ const EXCLUDED: &[(&str, &str)] = &[
          984)",
     ),
     (
-        "validation/external-visibility.wast",
-        "a plain type export names the underlying type in telomere's \
-         surface model, so a func mentioning the local resource or \
-         record type is accepted as an export (lines 27, 69) and the \
-         valid record-through-the-export case is rejected instead \
-         (line 79). The reference validator distinguishes the \
-         export's own type index from the underlying type; matching \
-         that requires (eq) export faces in the type index space \
-         plus eq resolution across the canonical-ABI and runtime \
-         type consumers (issue #321). The flags case (line 129) is \
-         fixed: flags types must be named at a surface",
-    ),
-    (
         "validation/max-value-size.wast",
         "the effective type size limit now follows the spec's \
          elem_size < 2^28 rule (issue #323; pinned locally by \
@@ -372,13 +359,13 @@ async fn upstream_harness_runtime_directives_smoke() {
             r#"
 (component
   (type $r (record (field "a" u32) (field "b" bool)))
-  (export "r" (type $r))
+  (export $r' "r" (type $r))
   (type $v (variant (case "a") (case "b" u32)))
-  (export "v" (type $v))
+  (export $v' "v" (type $v))
   (type $fl (flags "a" "b" "c"))
-  (export "fl" (type $fl))
+  (export $fl' "fl" (type $fl))
   (type $en (enum "x" "y" "z"))
-  (export "en" (type $en))
+  (export $en' "en" (type $en))
   (core module $M
     (memory (export "mem") 1)
     (func (export "fr") (result i32)
@@ -392,10 +379,10 @@ async fn upstream_harness_runtime_directives_smoke() {
     (func (export "ff") (result i32) (i32.const 5))
     (func (export "fe") (result i32) (i32.const 2)))
   (core instance $m (instantiate $M))
-  (func (export "fr") (result $r) (canon lift (core func $m "fr") (memory (core memory $m "mem"))))
-  (func (export "fv") (result $v) (canon lift (core func $m "fv") (memory (core memory $m "mem"))))
-  (func (export "ff") (result $fl) (canon lift (core func $m "ff")))
-  (func (export "fe") (result $en) (canon lift (core func $m "fe"))))
+  (func (export "fr") (result $r') (canon lift (core func $m "fr") (memory (core memory $m "mem"))))
+  (func (export "fv") (result $v') (canon lift (core func $m "fv") (memory (core memory $m "mem"))))
+  (func (export "ff") (result $fl') (canon lift (core func $m "ff")))
+  (func (export "fe") (result $en') (canon lift (core func $m "fe"))))
 (assert_return (invoke "fr") (record.const (field "a" u32.const 42) (field "b" bool.const true)))
 (assert_return (invoke "fv") (variant.const "b" (u32.const 77)))
 (assert_return (invoke "ff") (flags.const "a" "c"))

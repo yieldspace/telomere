@@ -19,7 +19,8 @@ use crate::decoder::{
     ParseResult, SizedResult,
 };
 use crate::ir::types::{
-    Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType, VariantForm, VariantType,
+    Case, DefValType, FuncType, Generic, GenericBound, LabelValType, PrimValType, Type, ValType,
+    VariantForm, VariantType,
 };
 use crate::ir::{Label, ResourceId};
 use crate::support::binary::BinaryReader;
@@ -354,6 +355,19 @@ fn is_resource_like_type(
     ctx: &ParseContext<impl BinaryReader>,
     type_id: crate::ir::TypeId,
 ) -> ParseResult<bool> {
+    // An `(eq)` type -- an alias, or the face of a plain type
+    // export -- denotes the type it resolves to, so resolve through
+    // eq generics before judging: a face of a primitive is not a
+    // resource, and a face of a resource is. A `(sub resource)`
+    // generic denotes no concrete type and stays resource-like.
+    let mut type_id = type_id;
+    while let Type::Generic(Generic {
+        bound: GenericBound::Eq(inner),
+        ..
+    }) = ctx.validator.get_type(type_id)?
+    {
+        type_id = *inner;
+    }
     Ok(match ctx.validator.get_type(type_id)? {
         Type::Resource(_) | Type::Generic(_) => true,
         Type::DefVal(DefValType::Own(inner)) | Type::DefVal(DefValType::Borrow(inner)) => {

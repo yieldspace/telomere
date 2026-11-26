@@ -41,6 +41,16 @@ pub struct Validator<'a> {
     /// inside the component still needs the correspondence (see
     /// [`Validator::sub_face_root`]).
     sub_faces: HashMap<TypeId, TypeId>,
+    /// For each plain type export, the `(eq)` face it minted,
+    /// mapped to the underlying type it was minted from. A plain
+    /// export introduces a new type index that denotes the
+    /// exported type under the export's name; the reference
+    /// validator distinguishes that index from the definition
+    /// index of the underlying type (external visibility), so
+    /// the export registers the face in the type index space and
+    /// in the export metadata, while consumers keep resolving
+    /// the face through its `Eq` bound to the underlying type.
+    plain_export_faces: HashMap<TypeId, TypeId>,
 }
 
 #[derive(Copy, Clone)]
@@ -94,6 +104,7 @@ impl<'a> Validator<'a> {
             types: TypeArena::default(),
             transform_generation: Cell::new(0),
             sub_faces: HashMap::new(),
+            plain_export_faces: HashMap::new(),
         }
     }
 
@@ -196,6 +207,48 @@ impl<'a> Validator<'a> {
     /// inside the component that minted it.
     pub fn note_sub_ascribed_face(&mut self, face: TypeId, underlying: TypeId) {
         self.sub_faces.insert(face, underlying);
+    }
+
+    /// Record that `face` -- the `(eq)` identity minted by a
+    /// plain type export -- stands for `underlying` inside the
+    /// component that minted it.
+    pub fn note_plain_export_face(&mut self, face: TypeId, underlying: TypeId) {
+        self.plain_export_faces.insert(face, underlying);
+    }
+
+    /// Whether `id` is the `(eq)` face minted by a plain type
+    /// export in this component.
+    pub fn is_plain_export_face(&self, id: TypeId) -> bool {
+        self.plain_export_faces.contains_key(&id)
+    }
+
+    /// The `(eq)` face a plain type export in this component
+    /// minted for `underlying`, if any. A type with a face has
+    /// exactly one externally-visible name in this component --
+    /// the face -- so surface mentions of the underlying index
+    /// itself are not name mentions, however the underlying type
+    /// might otherwise be matched (by resource identity or by
+    /// defval structure).
+    pub fn plain_export_face_for(&self, underlying: TypeId) -> Option<TypeId> {
+        self.plain_export_faces
+            .iter()
+            .find(|(_, value)| **value == underlying)
+            .map(|(face, _)| *face)
+    }
+
+    /// Resolve `id` through plain-export faces to the underlying
+    /// type the outermost face was minted from. Returns
+    /// `Some(root)` when `id` is such a face (a re-export of an
+    /// exported name chains through the faces it denotes);
+    /// `None` when `id` is not a plain-export face.
+    pub fn plain_export_face_root(&self, id: TypeId) -> Option<TypeId> {
+        let mut id = id;
+        let mut found = false;
+        while let Some(&underlying) = self.plain_export_faces.get(&id) {
+            found = true;
+            id = underlying;
+        }
+        found.then_some(id)
     }
 
     /// Resolve `id` through `Eq` aliases and `(sub resource)`

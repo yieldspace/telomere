@@ -603,12 +603,12 @@ unchanged.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,593,688 | 1,205,863 |
-| `release` | `component` | 2,711,648 | 2,151,575 |
-| `release` | `wasi` | 2,939,144 | 2,325,959 |
+| `release` | `component` | 2,717,576 | 2,151,575 |
+| `release` | `wasi` | 2,945,072 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
 | `release` | `core-jit` | 2,155,128 | 1,656,599 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
-| `release` | `wasi-threads` | 3,154,848 | 2,493,271 |
+| `release` | `wasi-threads` | 3,160,776 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,119,576 | 790,695 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
@@ -620,6 +620,189 @@ unchanged.
 
 #### Re-baseline history
 
+The PR #384 Codex review round-5 fix
+(`assert_type_ids_subtype_of` in
+`decoder/validator/subtyping.rs` now resolves both
+equality chains to their roots before comparing, so two
+plain-export faces of one resource compare as the
+resource they both denote; `validate_eq_mention` in
+`decoder/validator/validate_types.rs` now judges a
+plain export face by the naming requirement of the type
+it denotes, so a face of a primitive or an anonymous
+container needs no surface name while a face of a named
+type still does) was re-baselined on the #365 branch.
+Attribution was isolated against the round-4 tree
+itself: the pull-request run 45865649303 measured the
+pre-fix head `0530897` in CI and passed the gate, and
+the round-5 fix commit `8b544fb` — the only change
+between the two heads — moves only the twelve series
+of the three configurations that link
+`telomere-component`: in `release`, stripped file
++208 B and stripped `.text` +208 B on all three; in
+`release-size`, stripped file +224 B (`component`,
+`wasi-threads`) and +240 B (`wasi`), stripped `.text`
++224 B (`component`, `wasi-threads`) and +240 B
+(`wasi`). Every other series is byte-identical between
+the two heads. Against the checked-in baseline only
+the three `release` stripped file series grow (+208 B
+each), so only those three series are re-baselined to
+the branch measurements (workflow_dispatch runs
+45872799759, 45872814913 and 45872830716 on the branch
+at `8b544fb`; spread 0 B on every series, and the
+pull-request run 45871375119 at the same head measured
+byte-identically). Against the original #164 baseline,
+the largest cumulative growth is now the `release`
+`component` stripped file series at +11.67%
+(2,433,656 B to 2,717,576 B).
+
+The PR #384 Codex review round-4 fix (`parse_instantiate`
+in `decoder/instance.rs` now judges a `(sub resource)`
+import argument by the type it denotes through `(eq)`
+faces, so a plain export's face of a primitive or a
+defined value type no longer satisfies a resource import;
+the `(Eq, Sub)` arm of `GenericBound::assert_subtype_of`
+in `ir/types.rs` judges its bound target the same way)
+was re-baselined on the #365 branch. Attribution was
+isolated against the round-3 tree itself: the
+pull-request run 45857183153 measured the pre-fix head
+`7ec7237` in CI and passed the gate, and the round-4 fix
+commit `d03dd0d` — the only change between the two
+heads — moves only the twelve series of the three
+configurations that link `telomere-component`: in
+`release`, stripped file +512 B and stripped `.text`
++448 B on all three; in `release-size`, stripped file
++208 B (`component`) and +192 B (`wasi`,
+`wasi-threads`), stripped `.text` +192 B (`component`)
+and +176 B (`wasi`, `wasi-threads`). Every other series
+is byte-identical between the two heads. Against the
+checked-in baseline only the three `release` stripped
+file series grow (+512 B each), so only those three
+series are re-baselined to the branch measurements
+(workflow_dispatch runs 45864362796, 45864383452 and
+45864401428 on the branch at `d03dd0d`; spread 0 B on
+every series, and the pull-request run 45862629694 at
+the same head measured byte-identically). Against the
+original #164 baseline, the largest cumulative growth
+is now the `release` `component` stripped file series
+at +11.66% (2,433,656 B to 2,717,368 B).
+
+The PR #384 Codex review round-3 fix (the `Own`/`Borrow`
+leaf of `defval_types_equal_modulo_variant_form` in
+`runtime/canonical.rs` now resolves `(eq)` faces to the
+type they denote before comparing resource identities, so
+a declared variant over `(own $r)` compares equal to its
+export ascription written as `(option (own $face))`) was
+re-baselined on the #365 branch. Attribution was isolated
+against the round-2 tree itself: the pull-request run
+45846146691 measured the pre-fix head `ab541d0` in CI and
+passed the gate, and the round-3 fix commit `7d55360` —
+the only change between the two heads — moves only the
+twelve series of the three configurations that link
+`telomere-component`: in `release`, stripped file +176 B
+and stripped `.text` +176 B on all three; in
+`release-size`, stripped file +64 B and stripped `.text`
++64 B on all three. Every other series is byte-identical
+between the two heads. Against the checked-in baseline
+only the three `release` stripped file series grow
+(+176 B each), so only those three series are
+re-baselined to the branch measurements
+(workflow_dispatch runs 45855689145, 45855709460 and
+45855730682 on the branch at `7d55360`; spread 0 B on
+every series, and the pull-request run 45854324276 at
+the same head measured byte-identically). Against the
+original #164 baseline, the largest cumulative growth is
+now the `release` `component` stripped file series at
++11.64% (2,433,656 B to 2,716,856 B).
+
+The PR #384 Codex review round-2 fix (the remaining
+traversals and comparisons that met an `(eq)` face — the
+borrow and memory-requirement traversals in
+`decoder/validator/size.rs`, the mixed primitive comparison
+in `runtime/canonical.rs`, annotated-name root
+normalisation, and the `(eq …)` ascription branch in
+`decoder/export.rs` — now resolve it to the type it
+denotes) was re-baselined on the #365 branch. Attribution
+was isolated against the integrated tree itself: the
+pull-request run 45831335741 measured the pre-fix head
+`d954c8f` in CI and passed the gate, and the round-2 fix
+commit `cb4eb7c` — the only change between the two
+heads — moves only the twelve series of the three
+configurations that link `telomere-component`: in
+`release`, stripped file +480 B (`component`, `wasi`) and
++464 B (`wasi-threads`) and stripped `.text` +400 B on all
+three; in `release-size`, stripped file +256 B
+(`component`) and +272 B (`wasi`, `wasi-threads`) and
+stripped `.text` +208 B (`component`) and +224 B (`wasi`,
+`wasi-threads`). Every other series is byte-identical
+between the two heads. Against the checked-in baseline
+only the three `release` stripped file series grow
+(`component` +480 B, `wasi` +480 B, `wasi-threads`
++464 B), so only those three series are re-baselined to
+the branch measurements (workflow_dispatch runs
+45843366760, 45843388098 and 45843411918 on the branch at
+`cb4eb7c`; spread 0 B on every series, and the
+pull-request run 45841060403 at the same head measured
+byte-identically). Against the original #164 baseline,
+the largest cumulative growth is now the `release`
+`component` stripped file series at +11.63% (2,433,656 B
+to 2,716,680 B).
+
+The PR #384 Codex review fix (the remaining `(eq)` face
+consumers — typed bindings, annotated-name shape checks,
+canon resource ops, value types and value imports — now
+resolve the face to the type it denotes before inspecting
+shape or kind) was re-baselined on the #365 branch.
+Attribution was isolated by measuring current `main` alone
+three times (workflow_dispatch runs 45825689603, 45825709336
+and 45825736689 on `main` at `cc6550b`; all three runs pass
+the gate). The fix's own delta against the main control is
+confined to the three configurations that link
+`telomere-component`: in `release`, stripped file +6,432 B
+and stripped `.text` +6,048 B on all three; in `release-size`,
+stripped file +3,952 B (`component`) and +3,936 B (`wasi`,
+`wasi-threads`) and stripped `.text` +3,344 B (`component`)
+and +3,328 B (`wasi`, `wasi-threads`). Every other series is
+byte-identical to `main` in both profiles except `core-jit`,
+where the branch measures below both the main control and
+the checked-in baseline because `main` gained `core-jit`
+size after this branch's merge point. Against the checked-in
+baseline only the three `release` stripped file series grow
+(`component` +1,984 B, `wasi` +2,000 B, `wasi-threads`
++2,000 B), so only those three series are re-baselined to
+the branch measurements (workflow_dispatch runs 45825636440,
+45825653204 and 45825670500 on the branch at `3f7431f`;
+spread 0 B on every series). Against the original #164
+baseline, the largest cumulative growth is now the `release`
+`component` stripped file series at +11.61% (2,433,656 B to
+2,716,200 B).
+
+The #365 change (plain type exports mint an `(eq)` face in the
+type index space, confined to validation identity, with every
+consumer resolving the `(eq)` generic to the type it denotes)
+was re-baselined after the branch merged current `main` at
+`2d653bf` (PRs #379, #382 and #383). Attribution was isolated by
+measuring current `main` alone three times (workflow_dispatch
+runs 45812192789, 45812208358 and 45812224165 on `main` at
+`2d653bf`; all three runs pass the gate). This change's own
+delta against the main control is confined to the three
+configurations that link `telomere-component`: in `release`,
+stripped file +4,448 B (`component`) and +4,432 B (`wasi`,
+`wasi-threads`) and stripped `.text` +4,128 B on all three; in
+`release-size`, stripped file +3,120 B and stripped `.text`
++2,704 B on all three. Every other series is byte-identical to
+`main` in both profiles. Against the checked-in baseline only
+the three `release` stripped file series grow (`component`
++2,568 B, `wasi` +2,552 B, `wasi-threads` +2,568 B; the
+`release` `.text` series and every `release-size` series
+measure below their retained baselines), so only those three
+series are re-baselined to the branch measurements
+(workflow_dispatch runs 45813419836, 45813435144 and
+45813449727 on the branch at `c503a07`; spread 0 B on every
+series). Against the original #164 baseline, the largest
+cumulative growth is now the `release` `component` stripped
+file series at +11.53% (2,433,656 B to 2,714,216 B). The
+baseline was re-measured on the branch and updated as recorded
+above, following the procedure below.
 A follow-up campaign on PR #381 re-baselined the four `core-jit`
 series a second time, for the Codex P2 fix (commit `876525d`):
 `movsx_vreg32` emitted no REX prefix for a byte source whose r/m

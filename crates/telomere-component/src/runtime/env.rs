@@ -1266,7 +1266,10 @@ fn value_matches_type(
     }
     match ty {
         ValType::Primitive(prim) => value_matches_prim(value, prim),
-        ValType::Type(id) => match program.get_type(*id) {
+        // An `(eq)` type -- an alias, or the face of a plain type
+        // export -- denotes its underlying type; judge the value
+        // against the denoted type.
+        ValType::Type(id) => match program.resolve_eq_type(*id) {
             Some(Type::DefVal(def)) => {
                 let def = def.clone();
                 value_matches_defval(program, value, &def)

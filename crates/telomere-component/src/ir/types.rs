@@ -689,7 +689,14 @@ impl GenericBound {
         match (self, parent) {
             (GenericBound::Eq(a), GenericBound::Eq(b)) => a.assert_subtype_of(*b, validator)?,
             (GenericBound::Eq(type_id), GenericBound::Sub) => {
-                if !validator.get_type(*type_id)?.is_resource() {
+                // The bound target may itself be a generic -- an
+                // abstract resource, a `(sub resource)` face, or a
+                // plain export's `(eq)` face of a resource -- so
+                // judge the type it denotes, not its surface kind.
+                if !validator
+                    .get_type(*type_id)?
+                    .is_resource_or_face(validator)?
+                {
                     Err(ComponentParseError::TypeMismatch(
                         "expected any resource".to_owned(),
                     ))?
