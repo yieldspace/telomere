@@ -865,6 +865,32 @@ impl RuntimeEnv {
         Ok(table)
     }
 
+    pub(super) fn resolve_core_global(
+        &self,
+        idx: GlobalIdx<CoreGlobal>,
+        store: &Store,
+    ) -> Result<CoreExportRef, ComponentError> {
+        if let Some(global) = self.caches.core_globals.borrow().get(&idx).cloned() {
+            return Ok(global);
+        }
+        let global = match self.program.core_global_store.get(&idx) {
+            Some(CoreRelation::FromCoreExport(instance_idx, name)) => CoreExportRef {
+                instance: self.resolve_core_instance(*instance_idx, store)?,
+                export_name: name.clone(),
+            },
+            _ => {
+                return Err(ComponentError::Unsupported(
+                    "runtime only supports core globals from core exports".to_owned(),
+                ))
+            }
+        };
+        self.caches
+            .core_globals
+            .borrow_mut()
+            .insert(idx, global.clone());
+        Ok(global)
+    }
+
     fn resolve_runtime_options(
         &self,
         options: &CanonicalOptions,
@@ -915,6 +941,7 @@ impl RuntimeEnv {
             core_funcs: RefCell::new(caches.core_funcs.borrow().clone()),
             core_memories: RefCell::new(caches.core_memories.borrow().clone()),
             core_tables: RefCell::new(caches.core_tables.borrow().clone()),
+            core_globals: RefCell::new(caches.core_globals.borrow().clone()),
             values: RefCell::new(caches.values.borrow().clone()),
         }
     }

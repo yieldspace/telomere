@@ -57,6 +57,12 @@ pub enum ComponentParseError {
     /// Error for invalid core sort.
     #[error("invalid core sort: {0:?}")]
     InvalidCoreSort(u8),
+    /// A byte that cannot start the named production, worded after the
+    /// reference decoder's diagnostic (`invalid leading byte (0x..) for
+    /// ..`), so malformed binaries are rejected with the canonical
+    /// message instead of a paraphrase.
+    #[error("invalid leading byte (0x{0:x}) for {1}")]
+    InvalidLeadingByte(u8, &'static str),
     #[error("invalid signature: {0:?}")]
     InvalidSignature(String),
     #[error("export `{0:?}` not found")]

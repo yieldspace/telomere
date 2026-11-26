@@ -1,8 +1,8 @@
 use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
 use crate::ir::{
-    CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
-    CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, DefinedInstance, Func,
-    GlobalIdx, Instance, InstanceImport, Relation, ResourceId, TypeId, Value,
+    CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreGlobal,
+    CoreInstance, CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, DefinedInstance,
+    Func, GlobalIdx, Instance, InstanceImport, Relation, ResourceId, TypeId, Value,
 };
 use crate::linker::{ComponentLinkerInstance, LinkerBinding, ResourceDropFn};
 use crate::support::common::InstanceHandle;
@@ -128,6 +128,7 @@ struct RuntimeCaches {
     core_funcs: RefCell<HashMap<GlobalIdx<CoreFunc>, RuntimeCoreFunc>>,
     core_memories: RefCell<HashMap<GlobalIdx<CoreMemory>, CoreExportRef>>,
     core_tables: RefCell<HashMap<GlobalIdx<CoreTable>, CoreExportRef>>,
+    core_globals: RefCell<HashMap<GlobalIdx<CoreGlobal>, CoreExportRef>>,
     values: RefCell<HashMap<GlobalIdx<Value>, ComponentValue>>,
 }
 

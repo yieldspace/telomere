@@ -210,9 +210,12 @@ fn parse_core_module_alias(
     let start = ctx.reader.read_count();
     let sort = ctx.reader.read_exact_one()?;
     if sort != 0x10 {
-        return Err(ComponentParseError::Unsupported(format!(
-            "unsupported core module alias sort: {sort}"
-        )));
+        // `core:alias` fixes the sort byte to 0x10 (type); any other
+        // byte is an invalid leading byte for the outer alias kind.
+        return Err(ComponentParseError::InvalidLeadingByte(
+            sort,
+            "outer alias kind",
+        ));
     }
     match ctx.reader.read_exact_one()? {
         0x01 => {
@@ -230,9 +233,12 @@ fn parse_core_module_alias(
             }
         }
         x => {
-            return Err(ComponentParseError::InvalidSignature(format!(
-                "invalid core module alias kind: {x}"
-            )));
+            // `core:alias` fixes the target byte to 0x01 (outer); any
+            // other byte is an invalid leading byte for the target.
+            return Err(ComponentParseError::InvalidLeadingByte(
+                x,
+                "outer alias target",
+            ));
         }
     }
     Ok((ctx.reader.read_count() - start, ()))

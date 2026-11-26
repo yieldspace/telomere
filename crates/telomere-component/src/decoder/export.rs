@@ -62,6 +62,12 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 name.original.clone(),
                 crate::decoder::validator::ExportInfo::CoreModule(ty.clone()),
             );
+            // An export appends the exported item to its sort's index
+            // space, so the validator's core module store must grow by
+            // one entry as well (the state store above already does via
+            // `register`); without it, a later reference to the
+            // export-introduced index fails with `type idx not found`.
+            focus.core_modules.add(ty.clone());
             focus
                 .generics_replace_program
                 .push(GenericsReplaceDSL::ExportCoreModule(
@@ -169,6 +175,12 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             ctx.state
                 .scope_mut()
                 .add_export(&name, ComponentExport::Component(idx));
+            // An export appends the exported item to its sort's index
+            // space: the state store must map the export-introduced
+            // index to the same component (the validator's
+            // `component_indexes` below already grows), mirroring the
+            // instance/func/value arms.
+            ctx.state.scope_mut().components.register(idx);
             let focus = ctx.validator.scope_mut();
             focus.component_indexes.add(export_type_id);
             focus.exports.insert(

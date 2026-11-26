@@ -63,31 +63,22 @@ const EXCLUDED: &[(&str, &str)] = &[
          182-185",
     ),
     (
-        "linking/unit.wast",
-        "inline core instances exporting globals are not supported \
-         by the runtime (issue #324; lines 2010, 2043, with the \
-         knock-on invoke failures at lines 2011-2012). The line 799 \
-         func import rejection and the dependent count-1/count-2 \
-         failures at lines 863-866 (issues #321, #347) are fixed",
-    ),
-    (
         "binary/binary.wast",
         "malformed-binary strictness is fixed (#319: section sizes \
-         are enforced and core decode reasons are preserved) and \
-         the core rectype/moduletype 0x50 `sub` prefix encodings \
-         are fixed (#355; the line 891 and 948 cases now pass), \
-         but the file still fails on other defects: two binary \
-         extern-name cases (lines 1467, 1481 - a malformed name is \
-         accepted, and another is rejected with a non-canonical \
-         message) remain after the split extern-name encoding fix \
-         (issue #318; the lines 1297, 1316 cases now pass); async \
-         type encodings the decoder does not know - stream (0x66) \
-         and async func (0x43) types, async being a documented \
-         non-goal (lines 556, 742, 754, 993); the CM_MAP map type \
-         (0x63), a documented non-goal (line 984); and alias sort \
-         validation - an invalid component outer-alias sort is \
-         accepted and a core alias sort is rejected with a \
-         non-canonical message (issue #356; lines 460, 924)",
+         are enforced and core decode reasons are preserved), the \
+         core rectype/moduletype 0x50 `sub` prefix encodings are \
+         fixed (#355; the line 891 and 948 cases now pass), and \
+         alias sort validation is fixed (#356; the line 460 and \
+         924 cases now pass), but the file still fails on other \
+         defects: two binary extern-name cases (lines 1467, 1481 \
+         - a malformed name is accepted, and another is rejected \
+         with a non-canonical message) remain after the split \
+         extern-name encoding fix (issue #318; the lines 1297, \
+         1316 cases now pass); async type encodings the decoder \
+         does not know - stream (0x66) and async func (0x43) \
+         types, async being a documented non-goal (lines 556, \
+         742, 754, 993); and the CM_MAP map type (0x63), a \
+         documented non-goal (line 984)",
     ),
     (
         "validation/external-visibility.wast",
@@ -113,9 +104,7 @@ const EXCLUDED: &[(&str, &str)] = &[
     (
         "validation/indicies.wast",
         "uses async/threads canonical operations (waitable-set, \
-         thread.new-indirect, future), which are documented non-goals, \
-         and a valid core-module import/alias shape is rejected with \
-         `type idx not found` (line 340)",
+         thread.new-indirect, future), which are documented non-goals",
     ),
 ];
 
