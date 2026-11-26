@@ -1593,9 +1593,14 @@ pub(crate) unsafe fn call_next(
 /// of the toolchain's sibling-call optimisation. Every interpreter
 /// segment entry point routes through this driver (or through
 /// [`resume_loop_dispatch`] after its first dispatch) in
-/// `loop-dispatch-fallback` builds: the scheduler's task entry, the
-/// JIT interpreter-continuation bridge and stub, and the lazy-call
-/// continuation entry.
+/// `loop-dispatch-fallback` builds: the scheduler's task entry and
+/// the JIT interpreter-continuation bridge and stub. The lazy-call
+/// continuation entry is the deliberate exception: it is only ever
+/// reached from a handler this driver (or the stub's resume) already
+/// dispatched, so it returns `call_code`'s bounce to that existing
+/// driver instead of starting another one -- nesting a driver per
+/// call cycle would make host-stack depth grow with the number of
+/// call cycles again.
 ///
 /// # Safety
 /// - `first` must reference the active decoded instruction stream for
@@ -1643,11 +1648,14 @@ pub(crate) unsafe fn drive_loop_dispatch(
 /// whose first dispatch already happened. Some segment entries
 /// dispatch their first handler through a form other than `(*pc).op`
 /// -- the JIT continuation stub dispatches a specific handler by
-/// kind, and the JIT bridge entries dispatch through `call_code`
-/// itself so its stop check applies to the first instruction. Those
-/// entries pass the first dispatch's result here; if it bounced,
-/// stepping continues with [`drive_loop_dispatch`] at `ctx.cont`,
-/// and if it did not, the result is the segment's result unchanged.
+/// kind, and the JIT interpreter-continuation bridge dispatches
+/// through `call_code` itself so its stop check applies to the first
+/// instruction. Those entries pass the first dispatch's result here;
+/// if it bounced, stepping continues with [`drive_loop_dispatch`] at
+/// `ctx.cont`, and if it did not, the result is the segment's result
+/// unchanged. (The lazy-call continuation entry does not come here:
+/// it executes inside a segment a driver already owns and returns
+/// its bounce to that driver directly.)
 ///
 /// # Safety
 /// - Same requirements as [`drive_loop_dispatch`]; in addition, the

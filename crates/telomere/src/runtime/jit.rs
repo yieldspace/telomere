@@ -187,13 +187,23 @@ pub(crate) unsafe fn enter_current_frame_from_lazy_call(
         VMResult::ResourceLimitExceeded => return VMResult::ResourceLimitExceeded,
     };
     if exit.kind == JitNativeExit::CONTINUE_PTR && exit.value == continuation as u64 {
-        #[cfg(not(feature = "loop-dispatch-fallback"))]
+        // Both dispatch modes return `call_code`'s result directly.
+        // In threaded builds it is the tail dispatch itself. In
+        // loop-dispatch fallback builds `call_code` only records the
+        // continuation in `ctx.cont` and bounces, and this entry was
+        // itself reached from a handler the segment's trampoline
+        // driver dispatched (or from the JIT continuation stub, which
+        // resumes the segment once the handler returns), so the bounce
+        // belongs to that existing driver. Starting another driver
+        // here -- the first fallback version routed this through
+        // `resume_loop_dispatch` -- nests one driver per call cycle
+        // inside the enclosing one, and host-stack depth grows with
+        // the number of call cycles again: measured on the pinned
+        // toolchain in an interpreted loop calling a compiled callee,
+        // the driver nesting depth reached the iteration count
+        // (20,000) and the stack grew linearly with it (Codex review
+        // on PR #387).
         return unsafe { vm::call_code(continuation, ctx) };
-        // #114: in loop-dispatch fallback builds, `call_code` bounces
-        // without dispatching; continue the segment through the
-        // trampoline driver (see `vm::resume_loop_dispatch`).
-        #[cfg(feature = "loop-dispatch-fallback")]
-        return unsafe { vm::resume_loop_dispatch(vm::call_code(continuation, ctx), ctx) };
     }
     unsafe { handle_exit(exit, code_base, ctx) }
 }
