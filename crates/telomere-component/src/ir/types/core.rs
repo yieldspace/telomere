@@ -104,10 +104,30 @@ impl CoreFuncIdentity {
     /// declared with a signature matching its supertype's, so every
     /// type on a chain shares the chain head's signature.
     pub fn is_subtype_of(&self, sup: &Self) -> bool {
-        let mut cache = IdentityEqCache::new();
+        self.is_subtype_of_with_cache(sup, &mut IdentityEqCache::new())
+    }
+
+    /// `is_subtype_of` with the comparison cache supplied by the
+    /// caller, so a matching operation that checks many func types
+    /// against one another (a whole module-type match or module
+    /// instantiation) reuses the pairs decided by its earlier
+    /// checks instead of re-deriving them per function import --
+    /// with a fresh cache per import, matching two module types
+    /// whose imports reference levels of one shared identity tower
+    /// costs time quadratic in the number of imports. Sharing the
+    /// cache across the checks of one matching operation is sound:
+    /// a cached entry is the structural equality of two identity
+    /// nodes, a pure function of the two immutable graphs that no
+    /// matching context can change, and every graph taking part in
+    /// one matching operation outlives the operation, so no node
+    /// address can be recycled while the cache is in use. The
+    /// subtype relation itself is never cached -- each call still
+    /// runs its own chain walk -- so the walk's direction cannot
+    /// leak between checks either.
+    pub(crate) fn is_subtype_of_with_cache(&self, sup: &Self, cache: &mut IdentityEqCache) -> bool {
         let mut current = self;
         loop {
-            if current.eq_memoized(sup, &mut cache) {
+            if current.eq_memoized(sup, cache) {
                 return true;
             }
             match &current.supertype {
@@ -202,7 +222,11 @@ fn take_group_externals(rec_group: Arc<CoreRecGroup>, work: &mut Vec<Arc<CoreFun
 /// The memoisation tables for one identity comparison session; see
 /// `CoreFuncIdentity::eq_memoized`. Identity pairs and rec-group
 /// pairs are keyed in separate maps because they are different
-/// node kinds.
+/// node kinds. A session spans a single comparison or a single
+/// whole matching operation (`CoreModuleType::assert_subtype_of` /
+/// `assert_instantiation_args`), never longer: every graph taking
+/// part must outlive the session, because pairs are keyed by node
+/// address.
 #[derive(Default)]
 pub(crate) struct IdentityEqCache {
     identities: HashMap<(usize, usize), bool>,
@@ -525,6 +549,10 @@ impl CoreModuleType {
     }
 
     pub fn assert_subtype_of(&self, parent: &Self) -> ParseResult<()> {
+        // One comparison cache for the whole match: the per-import
+        // and per-export checks below share the identity pairs they
+        // decide (see `CoreFuncIdentity::is_subtype_of_with_cache`).
+        let mut cache = IdentityEqCache::new();
         for (module, actual_imports) in &self.imports {
             let Some(expected_imports) = parent.imports.get(module) else {
                 return Err(ComponentParseError::TypeMismatch(
@@ -537,7 +565,7 @@ impl CoreModuleType {
                         "core module import mismatch".to_owned(),
                     ));
                 };
-                expected_import.assert_satisfies_import(actual_import)?;
+                expected_import.assert_satisfies_import_with_cache(actual_import, &mut cache)?;
             }
         }
         for (name, expected_export) in &parent.exports {
@@ -546,7 +574,7 @@ impl CoreModuleType {
                     "core module import mismatch".to_owned(),
                 ));
             };
-            expected_export.assert_satisfied_by(actual_export)?;
+            expected_export.assert_satisfied_by_with_cache(actual_export, &mut cache)?;
         }
         Ok(())
     }
@@ -555,6 +583,9 @@ impl CoreModuleType {
         &self,
         actual_args: &HashMap<String, CoreInstanceType>,
     ) -> ParseResult<()> {
+        // One comparison cache for the whole instantiation match,
+        // as in `assert_subtype_of` above.
+        let mut cache = IdentityEqCache::new();
         for (module_name, expected_imports) in &self.imports {
             let actual_instance = actual_args.get(module_name).ok_or_else(|| {
                 ComponentParseError::TypeMismatch("core module import mismatch".to_owned())
@@ -563,7 +594,7 @@ impl CoreModuleType {
                 let actual_ty = actual_instance.exports.get(export_name).ok_or_else(|| {
                     ComponentParseError::TypeMismatch("core module import mismatch".to_owned())
                 })?;
-                expected_ty.assert_satisfied_by(actual_ty)?;
+                expected_ty.assert_satisfied_by_with_cache(actual_ty, &mut cache)?;
             }
         }
         Ok(())
@@ -572,6 +603,18 @@ impl CoreModuleType {
 
 impl CoreModuleImportType {
     pub fn assert_satisfied_by(&self, actual: &CoreModuleExportType) -> ParseResult<()> {
+        self.assert_satisfied_by_with_cache(actual, &mut IdentityEqCache::new())
+    }
+
+    /// `assert_satisfied_by` with the identity comparison cache
+    /// supplied by the caller, so a whole module match shares the
+    /// pairs it decides across its function imports (see
+    /// `CoreFuncIdentity::is_subtype_of_with_cache`).
+    pub(crate) fn assert_satisfied_by_with_cache(
+        &self,
+        actual: &CoreModuleExportType,
+        cache: &mut IdentityEqCache,
+    ) -> ParseResult<()> {
         match (self, actual) {
             (CoreModuleImportType::Func(expected), CoreModuleExportType::Func(actual)) => {
                 // The provided func's type must be a subtype of the
@@ -581,7 +624,9 @@ impl CoreModuleImportType {
                 // `(func)` does not satisfy an import declared with
                 // a non-final `(sub (func))` type.
                 if actual.signature == expected.signature
-                    && actual.identity.is_subtype_of(&expected.identity)
+                    && actual
+                        .identity
+                        .is_subtype_of_with_cache(&expected.identity, cache)
                 {
                     Ok(())
                 } else {
@@ -606,6 +651,17 @@ impl CoreModuleImportType {
     }
 
     pub fn assert_satisfies_import(&self, actual: &CoreModuleImportType) -> ParseResult<()> {
+        self.assert_satisfies_import_with_cache(actual, &mut IdentityEqCache::new())
+    }
+
+    /// `assert_satisfies_import` with the identity comparison
+    /// cache supplied by the caller, as in
+    /// `assert_satisfied_by_with_cache`.
+    pub(crate) fn assert_satisfies_import_with_cache(
+        &self,
+        actual: &CoreModuleImportType,
+        cache: &mut IdentityEqCache,
+    ) -> ParseResult<()> {
         match (self, actual) {
             (CoreModuleImportType::Func(expected), CoreModuleImportType::Func(actual)) => {
                 // Module-type subtyping is contravariant in the
@@ -615,7 +671,9 @@ impl CoreModuleImportType {
                 // towards `actual` — the table and memory arms
                 // below swap their arguments the same way.
                 if actual.signature == expected.signature
-                    && expected.identity.is_subtype_of(&actual.identity)
+                    && expected
+                        .identity
+                        .is_subtype_of_with_cache(&actual.identity, cache)
                 {
                     Ok(())
                 } else {
@@ -642,21 +700,29 @@ impl CoreModuleImportType {
 
 impl CoreModuleExportType {
     pub fn assert_satisfied_by(&self, actual: &CoreModuleExportType) -> ParseResult<()> {
+        self.assert_satisfied_by_with_cache(actual, &mut IdentityEqCache::new())
+    }
+
+    /// `assert_satisfied_by` with the identity comparison cache
+    /// supplied by the caller, as in
+    /// `CoreModuleImportType::assert_satisfied_by_with_cache`.
+    pub(crate) fn assert_satisfied_by_with_cache(
+        &self,
+        actual: &CoreModuleExportType,
+        cache: &mut IdentityEqCache,
+    ) -> ParseResult<()> {
         match self {
-            CoreModuleExportType::Func(expected) => {
-                CoreModuleImportType::Func(expected.clone()).assert_satisfied_by(actual)
-            }
+            CoreModuleExportType::Func(expected) => CoreModuleImportType::Func(expected.clone())
+                .assert_satisfied_by_with_cache(actual, cache),
             CoreModuleExportType::Table(expected) => {
-                CoreModuleImportType::Table(*expected).assert_satisfied_by(actual)
+                CoreModuleImportType::Table(*expected).assert_satisfied_by_with_cache(actual, cache)
             }
-            CoreModuleExportType::Memory(expected) => {
-                CoreModuleImportType::Memory(*expected).assert_satisfied_by(actual)
-            }
-            CoreModuleExportType::Global(expected) => {
-                CoreModuleImportType::Global(*expected).assert_satisfied_by(actual)
-            }
+            CoreModuleExportType::Memory(expected) => CoreModuleImportType::Memory(*expected)
+                .assert_satisfied_by_with_cache(actual, cache),
+            CoreModuleExportType::Global(expected) => CoreModuleImportType::Global(*expected)
+                .assert_satisfied_by_with_cache(actual, cache),
             _ => {
-                if self.eq_memoized(actual, &mut IdentityEqCache::new()) {
+                if self.eq_memoized(actual, cache) {
                     Ok(())
                 } else {
                     Err(ComponentParseError::TypeMismatch(
@@ -1063,5 +1129,47 @@ mod tests {
             .expect("identical tower-carrying instance exports must match");
         let different = instance_with_tower(64, true);
         assert!(expected.assert_satisfied_by(&different).is_err());
+    }
+
+    #[test]
+    fn shared_cache_across_subtype_walks_agrees_with_fresh_caches() {
+        // Round 7: whole matching operations share one comparison
+        // cache across their per-import subtype walks. A cached
+        // entry is the structural equality of two immutable
+        // identity graphs -- a pure function of the pair -- so
+        // sharing must not change any walk's outcome: the same
+        // pairs, run through one shared cache in both orders and
+        // through fresh caches (`is_subtype_of`), must agree.
+        let pairs: Vec<(Arc<CoreFuncIdentity>, Arc<CoreFuncIdentity>, bool)> = vec![
+            (tower_identity(6, false), tower_identity(6, false), true),
+            (tower_identity(6, false), tower_identity(6, true), false),
+            (
+                group_tower_identity(6, false),
+                group_tower_identity(6, false),
+                true,
+            ),
+            (
+                group_tower_identity(6, false),
+                group_tower_identity(6, true),
+                false,
+            ),
+        ];
+        let mut shared = IdentityEqCache::new();
+        for (lhs, rhs, expected) in &pairs {
+            assert_eq!(
+                lhs.is_subtype_of_with_cache(rhs, &mut shared),
+                *expected,
+                "shared-cache walk must decide the pair as a fresh cache does"
+            );
+        }
+        for (lhs, rhs, expected) in pairs.iter().rev() {
+            assert_eq!(
+                lhs.is_subtype_of_with_cache(rhs, &mut shared),
+                *expected,
+                "decisions recorded earlier in the shared cache must not leak \
+                 into later walks"
+            );
+            assert_eq!(lhs.is_subtype_of(rhs), *expected);
+        }
     }
 }

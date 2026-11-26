@@ -61,6 +61,25 @@
 //! (depth 100,000 aborted). All four comparisons now go through
 //! the bounded (memoised, iterative) equality; the ascription
 //! tests at the bottom pin each path.
+//!
+//! Round 7 (a further Codex finding on the cache's lifetime):
+//! the bounded comparison memoised within one subtype walk, but
+//! `CoreModuleType::assert_instantiation_args` (and
+//! `assert_subtype_of`) started a fresh cache for every function
+//! import, so matching two module types whose many imports
+//! reference levels of one shared identity tower re-derived the
+//! tower's node pairs per import -- quadratic in the number of
+//! imports (measured on the unmodified code: 42 ms at 500
+//! imports, 99 ms at 1,000, 400 ms at 2,000, 1.65 s at 4,000,
+//! ~4x per doubling; Codex measured 4.45 s at 4,000 and 17.89 s
+//! at 8,000 on its shape). One cache now spans each whole
+//! matching operation; a cached pair is the structural equality
+//! of two immutable identity graphs, a pure function no matching
+//! context can change, and every graph taking part outlives the
+//! operation, so sharing cannot change any outcome (measured
+//! post-fix: 57 ms at 4,000 imports, 119 ms at 8,000 -- linear,
+//! dominated by parsing). The many-import tests at the bottom
+//! pin the scaling and that distinct towers are not conflated.
 
 use telomere_component::ComponentEngine;
 
@@ -774,4 +793,105 @@ fn identity_tower_with_deep_difference_is_rejected_through_instance_type_ascript
         ),
         "core module export mismatch",
     );
+}
+
+/// Builds the module-type declarations for the round-7 shape: the
+/// round-5 tower (one-edge subtype chains) of `n` groups, with `n`
+/// function imports/exports, function `f{k}` having type `$a{k}`.
+/// Matching import `f{k}` descends `k` tower levels, so with a
+/// fresh comparison cache per import the whole match costs
+/// 1 + 2 + ... + n pair derivations -- quadratic in `n`. With
+/// `alter_deepest`, the first group's first member is a plain type
+/// of a different signature, as in `deep_group_tower_decls`.
+fn many_func_tower_decls(n: usize, import: bool, alter_deepest: bool) -> String {
+    let mut decls = String::from("(type $a0 (sub (func)))\n");
+    for i in 1..n {
+        let first = if alter_deepest && i == 1 {
+            "(type $b1 (func (param i32)))".to_string()
+        } else {
+            format!("(type $b{i} (sub $a{} (func)))", i - 1)
+        };
+        decls.push_str(&format!("(rec {first} (type $a{i} (sub (func))))\n"));
+    }
+    for k in 0..n {
+        if import {
+            decls.push_str(&format!("(import \"i\" \"f{k}\" (func (type $a{k})))\n"));
+        } else {
+            decls.push_str(&format!("(export \"f{k}\" (func (type $a{k})))\n"));
+        }
+    }
+    decls
+}
+
+#[test]
+fn many_imports_sharing_identity_tower_satisfy_import() {
+    // Round 7: one comparison cache spans the whole instantiation
+    // match, so the tower's node pairs are decided once and reused
+    // by every import. On the unmodified code this shape cost
+    // ~1.65 s at 4,000 imports and grew ~4x per doubling (the
+    // 8,000-import case extrapolates to ~6.6 s; Codex measured
+    // 17.89 s on its shape); with the shared cache it compiles in
+    // ~0.1 s, linear in the input. Completion is the assertion.
+    compile(&instantiate_with_typed_module(
+        &many_func_tower_decls(8_000, true, false),
+        &many_func_tower_decls(8_000, false, false),
+    ))
+    .expect("many imports sharing an identity tower must satisfy the import");
+}
+
+#[test]
+fn many_imports_with_deep_difference_are_rejected() {
+    // The provider's tower differs only in the first (deepest)
+    // group's first member; the match must descend the shared
+    // tower, decide inequality at the bottom, and reject -- the
+    // shared cache must not turn the deep difference into an
+    // acceptance.
+    expect_rejected(&instantiate_with_typed_module(
+        &many_func_tower_decls(2_000, true, false),
+        &many_func_tower_decls(2_000, false, true),
+    ));
+}
+
+/// One tower of the round-4 shape under name prefix `p` (`$p0`,
+/// `$p1`, ...), with no func import/export attached.
+fn prefixed_identity_tower_decls(p: &str, depth: usize, alter_deepest: bool) -> String {
+    let mut decls = format!("(type ${p}0 (sub (func)))\n");
+    for i in 1..=depth {
+        let first = if alter_deepest && i == 1 {
+            format!("(type ${p}b1 (func (param i32)))")
+        } else {
+            format!("(type ${p}b{i} (sub ${p}{} (func)))", i - 1)
+        };
+        decls.push_str(&format!(
+            "(rec {first} (type ${p}{i} (sub ${p}{} (func))))\n",
+            i - 1
+        ));
+    }
+    decls
+}
+
+#[test]
+fn shared_cache_does_not_conflate_distinct_towers() {
+    // Round 7: within one instantiation match, the consumer
+    // imports two funcs typed by one tower's top; the provider
+    // exports the first with that tower and the second with a
+    // distinct tower differing only at its deepest member. The
+    // pairs decided while matching the first func must not leak
+    // into the second match: the instantiation is rejected. The
+    // positive control (both exports from the consumer's tower)
+    // is accepted.
+    let consumer = format!(
+        "{}(import \"i\" \"fa\" (func (type $a40)))\n(import \"i\" \"fb\" (func (type $a40)))",
+        prefixed_identity_tower_decls("a", 40, false)
+    );
+    let provider = |second_altered: bool| {
+        format!(
+            "{}{}(export \"fa\" (func (type $a40)))\n(export \"fb\" (func (type $c40)))",
+            prefixed_identity_tower_decls("a", 40, false),
+            prefixed_identity_tower_decls("c", 40, second_altered)
+        )
+    };
+    compile(&instantiate_with_typed_module(&consumer, &provider(false)))
+        .expect("exports from the consumer's own tower must satisfy the imports");
+    expect_rejected(&instantiate_with_typed_module(&consumer, &provider(true)));
 }
