@@ -1,22 +1,22 @@
 {
   "version": 1,
   "source": {
-    "summary": "GitHub Actions 'Embedder footprint' runs for the PR #384 Codex review round-2 fix (branch fix/365-eq-face-identity at head cb4eb7c830e7b91c2669ef2886eebff6f59ec3b5 \u2014 the remaining traversals and comparisons that met an (eq) face now resolve it to the type it denotes: the borrow and memory-requirement traversals in the validator, the mixed primitive comparison in the runtime, annotated-name root normalisation, and the (eq \u2026) ascription branch in the decoder) on top of the integrated #365 tree at d954c8f (ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45843366760, 45843388098 and 45843411918 against the branch produced byte-identical sizes for every gated series; the four core-jit series in this file are retained from PR #381's campaign (workflow_dispatch runs 45817815567, 45817829767 and 45817843974)",
-    "commit": "cb4eb7c830e7b91c2669ef2886eebff6f59ec3b5",
-    "date": "2026-11-26",
+    "summary": "GitHub Actions 'Embedder footprint' runs for the PR #384 Codex review round-3 fix (branch fix/365-eq-face-identity at head 7d553603f9c7495c93877b8914faea5fece452ee \u2014 the Own/Borrow leaf of defval_types_equal_modulo_variant_form in runtime/canonical.rs now resolves (eq) faces to the type they denote before comparing resource identities, so a declared variant over (own $r) compares equal to its export ascription written as (option (own $face))) on top of the round-2 tree at ab541d0 (ubuntu-24.04, Rust 1.96.0): workflow_dispatch runs 45855689145, 45855709460 and 45855730682 against the branch produced byte-identical sizes for every gated series; the four core-jit series in this file are retained from PR #381's campaign (workflow_dispatch runs 45817815567, 45817829767 and 45817843974)",
+    "commit": "7d553603f9c7495c93877b8914faea5fece452ee",
+    "date": "2026-11-27",
     "runner": "ubuntu-24.04",
     "toolchain": "1.96.0",
     "sample_size": 3,
     "run_ids": [
-      45843366760,
-      45843388098,
-      45843411918
+      45855689145,
+      45855709460,
+      45855730682
     ],
     "cross_check_run_ids": [
-      45841060403,
-      45831335741
+      45854324276,
+      45846146691
     ],
-    "derivation": "Re-baseline for the PR #384 Codex review round-2 fix (the remaining (eq) face traversals and comparisons resolve the face to the type it denotes), following the round-1 re-baseline at 6dba579 and the integration merge d954c8f. Attribution was isolated against the integrated tree itself: pull-request run 45831335741 measured the pre-fix head d954c8f in CI and passed the gate, and the round-2 fix commit cb4eb7c \u2014 the only change between the two heads \u2014 moves only the twelve series of the three configurations that link telomere-component: in release, stripped file +480 B (component, wasi) and +464 B (wasi-threads) and stripped .text +400 B on all three; in release-size, stripped file +256 B (component) and +272 B (wasi, wasi-threads) and stripped .text +208 B (component) and +224 B (wasi, wasi-threads). Every other series is byte-identical between the two heads. Against the checked-in baseline only the three release stripped file series grow (component +480 B, wasi +480 B, wasi-threads +464 B; every .text series and every release-size series measures at or below its retained baseline), so only those three series are re-baselined to the branch measurements and every other baseline is retained, following the established practice of re-baselining growth only. Run-to-run spread was 0 B for every gated series across the three branch samples, and the pull-request run 45841060403 at the same head measured byte-identically once more. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.63% (2,433,656 B to 2,716,680 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Merge note for the integration with main cc6550bce007ca8d747160778aab6c3e41af272e (PR #381): the four core-jit series are retained from PR #381's second re-baseline campaign (branch runs 45817815567, 45817829767 and 45817843974; main control runs 45817858119, 45817871880 and 45817883664 on main at 2d653bfae0bd3ac995c17a0d26154f531762d28c), which re-baselined them for the #193 register mapping and the Codex P2 REX fix in movsx_vreg32; against the original #164 baseline those series stand at +8.32% (release stripped file, 1,989,584 B to 2,155,128 B), +7.48% (release stripped .text), +4.57% (release-size stripped file) and +4.24% (release-size stripped .text). The three release stripped file series of the component-linked configurations are from this PR's round-1 and round-2 campaigns, and every other series is identical in the campaigns' baselines, so the merged file is the union of the re-baselines."
+    "derivation": "Re-baseline for the PR #384 Codex review round-3 fix (the Own/Borrow leaf of defval_types_equal_modulo_variant_form in runtime/canonical.rs resolves (eq) faces to the type they denote before comparing resource identities), following the round-2 re-baseline at ab541d0. Attribution was isolated against the round-2 tree itself: pull-request run 45846146691 measured the pre-fix head ab541d0 in CI and passed the gate, and the round-3 fix commit 7d55360 \u2014 the only change between the two heads \u2014 moves only the twelve series of the three configurations that link telomere-component: in release, stripped file +176 B and stripped .text +176 B on all three; in release-size, stripped file +64 B and stripped .text +64 B on all three. Every other series is byte-identical between the two heads. Against the checked-in baseline only the three release stripped file series grow (+176 B each; every .text series and every release-size series measures at or below its retained baseline), so only those three series are re-baselined to the branch measurements and every other baseline is retained, following the established practice of re-baselining growth only. Run-to-run spread was 0 B for every gated series across the three branch samples, and the pull-request run 45854324276 at the same head measured byte-identically once more. Against the original #164 baseline, the largest cumulative growth is now the release component stripped file series at +11.64% (2,433,656 B to 2,716,856 B). The core-aot configuration, added by PR #267 after the #164 baseline, is not part of the cumulative comparison. Merge note for the integration with main cc6550bce007ca8d747160778aab6c3e41af272e (PR #381), retained from the round-2 campaign record: the four core-jit series are retained from PR #381's second re-baseline campaign (branch runs 45817815567, 45817829767 and 45817843974; main control runs 45817858119, 45817871880 and 45817883664 on main at 2d653bfae0bd3ac995c17a0d26154f531762d28c), which re-baselined them for the #193 register mapping and the Codex P2 REX fix in movsx_vreg32; against the original #164 baseline those series stand at +8.32% (release stripped file, 1,989,584 B to 2,155,128 B), +7.48% (release stripped .text), +4.57% (release-size stripped file) and +4.24% (release-size stripped .text). The three release stripped file series of the component-linked configurations are from this PR's round-1, round-2 and round-3 campaigns, and every other series is identical in the campaigns' baselines, so the merged file is the union of the re-baselines."
   },
   "thresholds": {
     "release": {
@@ -42,8 +42,8 @@
       },
       "component": {
         "stripped_file_bytes": {
-          "baseline": 2716680,
-          "threshold": 2716680
+          "baseline": 2716856,
+          "threshold": 2716856
         },
         "stripped_text_bytes": {
           "baseline": 2151575,
@@ -52,8 +52,8 @@
       },
       "wasi": {
         "stripped_file_bytes": {
-          "baseline": 2944176,
-          "threshold": 2944176
+          "baseline": 2944352,
+          "threshold": 2944352
         },
         "stripped_text_bytes": {
           "baseline": 2325959,
@@ -92,8 +92,8 @@
       },
       "wasi-threads": {
         "stripped_file_bytes": {
-          "baseline": 3159880,
-          "threshold": 3159880
+          "baseline": 3160056,
+          "threshold": 3160056
         },
         "stripped_text_bytes": {
           "baseline": 2493271,

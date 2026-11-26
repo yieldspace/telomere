@@ -603,12 +603,12 @@ unchanged.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,593,688 | 1,205,863 |
-| `release` | `component` | 2,716,680 | 2,151,575 |
-| `release` | `wasi` | 2,944,176 | 2,325,959 |
+| `release` | `component` | 2,716,856 | 2,151,575 |
+| `release` | `wasi` | 2,944,352 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
 | `release` | `core-jit` | 2,155,128 | 1,656,599 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
-| `release` | `wasi-threads` | 3,159,880 | 2,493,271 |
+| `release` | `wasi-threads` | 3,160,056 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,119,576 | 790,695 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
@@ -619,6 +619,34 @@ unchanged.
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+The PR #384 Codex review round-3 fix (the `Own`/`Borrow`
+leaf of `defval_types_equal_modulo_variant_form` in
+`runtime/canonical.rs` now resolves `(eq)` faces to the
+type they denote before comparing resource identities, so
+a declared variant over `(own $r)` compares equal to its
+export ascription written as `(option (own $face))`) was
+re-baselined on the #365 branch. Attribution was isolated
+against the round-2 tree itself: the pull-request run
+45846146691 measured the pre-fix head `ab541d0` in CI and
+passed the gate, and the round-3 fix commit `7d55360` —
+the only change between the two heads — moves only the
+twelve series of the three configurations that link
+`telomere-component`: in `release`, stripped file +176 B
+and stripped `.text` +176 B on all three; in
+`release-size`, stripped file +64 B and stripped `.text`
++64 B on all three. Every other series is byte-identical
+between the two heads. Against the checked-in baseline
+only the three `release` stripped file series grow
+(+176 B each), so only those three series are
+re-baselined to the branch measurements
+(workflow_dispatch runs 45855689145, 45855709460 and
+45855730682 on the branch at `7d55360`; spread 0 B on
+every series, and the pull-request run 45854324276 at
+the same head measured byte-identically). Against the
+original #164 baseline, the largest cumulative growth is
+now the `release` `component` stripped file series at
++11.64% (2,433,656 B to 2,716,856 B).
 
 The PR #384 Codex review round-2 fix (the remaining
 traversals and comparisons that met an `(eq)` face — the
