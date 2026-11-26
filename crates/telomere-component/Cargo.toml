@@ -31,8 +31,12 @@ tokio = { workspace = true, default-features = false, features = ["macros", "rt"
 # Enables the feature-gated canonical ABI fuzz adapter for this crate's own
 # tests, so `cargo test --workspace` replays the committed `canon_lift_args`
 # corpus without anyone having to remember `--features fuzzing`. Normal builds
-# of the crate are unaffected.
-telomere-component = { path = ".", features = ["fuzzing"] }
+# of the crate are unaffected. `default-features = false` is load-bearing:
+# without it, this self dev-dependency re-enables the default features (simd
+# and threads) in every `--all-targets` build, which silently defeats the
+# feature-coverage cells that check this crate with each flag isolated
+# (mirroring the `telomere` crate's self dev-dependency).
+telomere-component = { path = ".", default-features = false, features = ["fuzzing"] }
 
 [[bench]]
 name = "telomere_component_bench"
