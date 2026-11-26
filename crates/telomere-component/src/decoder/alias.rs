@@ -263,6 +263,22 @@ fn parse_outer_export(
     ctx: &mut ParseContext<impl BinaryReader>,
     sort: SortType,
 ) -> ParseResult<()> {
+    // An outer alias may only name the sorts in `outeraliassort`:
+    // core module, core type, component and type. Anything else is
+    // malformed, and the sort is judged before the count/index are
+    // read, matching the reference decoder's error precedence.
+    match sort {
+        SortType::Core(CoreSortType::Module)
+        | SortType::Core(CoreSortType::Type)
+        | SortType::Component
+        | SortType::Type => {}
+        _ => {
+            return Err(ComponentParseError::InvalidLeadingByte(
+                sort_leading_byte(sort),
+                "component outer alias kind",
+            ));
+        }
+    }
     let (_, ct) = parse_u32(ctx.reader)?;
     let (_, idx) = parse_u32(ctx.reader)?;
     match sort {
@@ -310,16 +326,6 @@ fn parse_outer_export(
                 .get(LocalIdx::new(idx))?;
             ctx.validator.scope_mut().component_indexes.add(ty);
         }
-        SortType::Func => {
-            let gidx = ctx.state.outer_scope(ct)?.funcs.get(LocalIdx::new(idx))?;
-            ctx.state.scope_mut().funcs.register(gidx);
-            let ty = ctx
-                .validator
-                .outer_scope(ct)?
-                .func_indexes
-                .get(LocalIdx::new(idx))?;
-            ctx.validator.scope_mut().func_indexes.add(ty);
-        }
         SortType::Type => {
             let ty = ctx
                 .validator
@@ -331,36 +337,27 @@ fn parse_outer_export(
             }
             ctx.validator.scope_mut().type_indexes.add(ty);
         }
-        SortType::Instance => {
-            let gidx = ctx
-                .state
-                .outer_scope(ct)?
-                .instances
-                .get(LocalIdx::new(idx))?;
-            ctx.state.scope_mut().instances.register(gidx);
-            let ty = ctx
-                .validator
-                .outer_scope(ct)?
-                .instance_indexes
-                .get(LocalIdx::new(idx))?;
-            ctx.validator.scope_mut().instance_indexes.add(ty);
-        }
-        SortType::Value => {
-            let gidx = ctx.state.outer_scope(ct)?.values.get(LocalIdx::new(idx))?;
-            ctx.state.scope_mut().values.register(gidx);
-            let ty = ctx
-                .validator
-                .outer_scope(ct)?
-                .value_indexes
-                .get(LocalIdx::new(idx))?
-                .clone();
-            ctx.validator.scope_mut().value_indexes.add(ty);
-        }
-        SortType::Core(kind) => {
-            return Err(ComponentParseError::Unsupported(format!(
-                "unsupported outer alias sort: {kind:?}"
-            )));
+        SortType::Func | SortType::Value | SortType::Instance | SortType::Core(_) => {
+            return Err(ComponentParseError::InvalidLeadingByte(
+                sort_leading_byte(sort),
+                "component outer alias kind",
+            ));
         }
     }
     Ok(())
+}
+
+/// The byte that leads the binary encoding of `sort`, as named by the
+/// reference decoder's `invalid leading byte` diagnostics: a component
+/// sort is a single byte, and a core sort is reported by its own byte
+/// (the byte after the `0x00` core prefix).
+fn sort_leading_byte(sort: SortType) -> u8 {
+    match sort {
+        SortType::Core(core) => core as u8,
+        SortType::Func => 0x01,
+        SortType::Value => 0x02,
+        SortType::Type => 0x03,
+        SortType::Component => 0x04,
+        SortType::Instance => 0x05,
+    }
 }
