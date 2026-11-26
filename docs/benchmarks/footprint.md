@@ -603,12 +603,12 @@ unchanged.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,593,688 | 1,205,863 |
-| `release` | `component` | 2,717,368 | 2,151,575 |
-| `release` | `wasi` | 2,944,864 | 2,325,959 |
+| `release` | `component` | 2,717,576 | 2,151,575 |
+| `release` | `wasi` | 2,945,072 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
 | `release` | `core-jit` | 2,155,128 | 1,656,599 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
-| `release` | `wasi-threads` | 3,160,568 | 2,493,271 |
+| `release` | `wasi-threads` | 3,160,776 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,119,576 | 790,695 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
@@ -619,6 +619,41 @@ unchanged.
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+The PR #384 Codex review round-5 fix
+(`assert_type_ids_subtype_of` in
+`decoder/validator/subtyping.rs` now resolves both
+equality chains to their roots before comparing, so two
+plain-export faces of one resource compare as the
+resource they both denote; `validate_eq_mention` in
+`decoder/validator/validate_types.rs` now judges a
+plain export face by the naming requirement of the type
+it denotes, so a face of a primitive or an anonymous
+container needs no surface name while a face of a named
+type still does) was re-baselined on the #365 branch.
+Attribution was isolated against the round-4 tree
+itself: the pull-request run 45865649303 measured the
+pre-fix head `0530897` in CI and passed the gate, and
+the round-5 fix commit `8b544fb` — the only change
+between the two heads — moves only the twelve series
+of the three configurations that link
+`telomere-component`: in `release`, stripped file
++208 B and stripped `.text` +208 B on all three; in
+`release-size`, stripped file +224 B (`component`,
+`wasi-threads`) and +240 B (`wasi`), stripped `.text`
++224 B (`component`, `wasi-threads`) and +240 B
+(`wasi`). Every other series is byte-identical between
+the two heads. Against the checked-in baseline only
+the three `release` stripped file series grow (+208 B
+each), so only those three series are re-baselined to
+the branch measurements (workflow_dispatch runs
+45872799759, 45872814913 and 45872830716 on the branch
+at `8b544fb`; spread 0 B on every series, and the
+pull-request run 45871375119 at the same head measured
+byte-identically). Against the original #164 baseline,
+the largest cumulative growth is now the `release`
+`component` stripped file series at +11.67%
+(2,433,656 B to 2,717,576 B).
 
 The PR #384 Codex review round-4 fix (`parse_instantiate`
 in `decoder/instance.rs` now judges a `(sub resource)`
