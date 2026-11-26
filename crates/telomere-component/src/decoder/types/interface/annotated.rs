@@ -367,18 +367,29 @@ fn ensure_same_resource(
     context: AnnotatedContext,
 ) -> ParseResult<()> {
     let checked = match ctx.validator.plain_export_face_root(expected) {
-        Some(root) => {
+        Some(plain_root) => {
             // The name denotes a plain export's `(eq)` face, whose
             // nominal identity inside this component is the
             // underlying resource it was minted from (chained faces
-            // resolve to their root). Require the function's
-            // resource to be that very resource -- or a face of
-            // it -- and keep the subtype check between the roots
-            // as the shape gate.
-            let actual_root = ctx
+            // resolve to their root). The plain face may itself
+            // denote a `(sub resource)` export face -- a plain
+            // re-export of a sub-ascribed export -- so keep
+            // resolving through sub faces to reach the resource.
+            // Require the function's resource to be that very
+            // resource -- or a face of it -- and keep the subtype
+            // check between the roots as the shape gate.
+            let root = ctx
+                .validator
+                .sub_face_root(plain_root)
+                .unwrap_or(plain_root);
+            let actual_plain_root = ctx
                 .validator
                 .plain_export_face_root(actual)
                 .unwrap_or(actual);
+            let actual_root = ctx
+                .validator
+                .sub_face_root(actual_plain_root)
+                .unwrap_or(actual_plain_root);
             ctx.validator
                 .get_type(actual_root)?
                 .assert_same_resource_identities(ctx.validator.get_type(root)?, ctx.validator)

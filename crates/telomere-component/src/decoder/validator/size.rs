@@ -176,7 +176,18 @@ impl<'a> Validator<'a> {
 
         let result = match self.get_type(type_id)? {
             Type::DefVal(def) => self.defval_contains_borrow(def, visiting),
-            Type::Generic(_)
+            // An `(eq)` face denotes its bound type, so a borrow
+            // reachable only through the face is still a borrow in
+            // the type; a `sub` face denotes an abstract resource,
+            // which contains no borrow.
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => self.type_contains_borrow_with_tracker(*inner, visiting),
+            Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            })
             | Type::Resource(_)
             | Type::Func(_)
             | Type::Component(_)
@@ -255,6 +266,14 @@ impl<'a> Validator<'a> {
         }
         let found = match self.get_type(type_id) {
             Ok(Type::DefVal(def)) => self.defval_needs_memory(def, visiting),
+            // An `(eq)` face denotes its bound type, so the denoted
+            // type's memory need is the face's memory need; a `sub`
+            // face denotes an abstract resource, which needs no
+            // memory.
+            Ok(Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            })) => self.type_id_needs_memory(*inner, visiting),
             Ok(_) => false,
             Err(_) => {
                 visiting.leave(type_id);

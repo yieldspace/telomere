@@ -135,7 +135,14 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                     // The identity walk checks every resource-reference
                     // leaf; the subtype check below decides the rest.
                     item_ty.assert_same_resource_identities(ascribed_ty, ctx.validator)?;
-                    item_ty.assert_subtype_of(ascribed_ty, ctx.validator)?;
+                    // The subtype half goes through the ID-aware
+                    // check: the exported item may itself be an
+                    // `(eq)` face (a plain type export of the
+                    // ascribed type) and the ascribed side an `(eq)`
+                    // bound over that very face -- the type-level
+                    // relation unwraps the face on the left but
+                    // rejects an `Eq` bound on the right.
+                    ctx.validator.assert_type_ids_subtype_of(type_id, id)?;
                     crate::decoder::validator::ExportInfo::TypeEq(id)
                 }
                 Some(ExternDesc::Sub) => {

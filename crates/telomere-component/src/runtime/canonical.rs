@@ -3211,8 +3211,12 @@ fn val_types_equal_modulo_variant_form(
             }
         }
         (ValType::Type(x), ValType::Primitive(y)) | (ValType::Primitive(y), ValType::Type(x)) => {
+            // The type side may be an `(eq)` face -- including one a
+            // plain type export minted -- denoting the primitive, so
+            // resolve it before comparing, as the (Type, Type) arm
+            // above does.
             matches!(
-                program.get_type(*x),
+                program.resolve_eq_type(*x),
                 Some(Type::DefVal(DefValType::Primitive(found))) if found == y
             )
         }
