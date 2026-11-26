@@ -157,7 +157,18 @@ fn parse_core_export(
                 .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_funcs.register(gidx);
             if let CoreModuleExportType::Func(ty) = target_export_type {
-                ctx.validator.scope_mut().core_funcs.add(ty);
+                // The core func index space records signatures,
+                // and the store keeps the func's canonical identity
+                // in its parallel record (see
+                // `CoreTypeStore::add_with_records`), so a core
+                // instance assembled from this func through inline
+                // exports presents the declared type rather than
+                // the bare type of its signature.
+                ctx.validator.scope_mut().core_funcs.add_with_records(
+                    ty.signature,
+                    None,
+                    Some(ty.identity),
+                );
             } else {
                 return Err(ComponentParseError::InvalidSortType(
                     SortType::Core(CoreSortType::Func),
@@ -217,6 +228,13 @@ fn parse_core_export(
                 .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_types.register(gidx);
             if let CoreModuleExportType::Type(ty) = target_export_type {
+                // Neither finality nor canonical identity is
+                // recorded for an exported core type: the export
+                // type model carries only the `CoreType`, and a
+                // core module's exported types are plain functypes,
+                // so the entry resolves as final — the bare type of
+                // its signature — when a later `sub` names it (see
+                // `SuperTypeInfo` in decoder/core/types.rs).
                 ctx.validator.scope_mut().core_types.add(ty);
             } else {
                 return Err(ComponentParseError::InvalidSortType(
@@ -304,13 +322,19 @@ fn parse_outer_export(
                 .core_types
                 .get(LocalIdx::new(idx))?;
             ctx.state.scope_mut().core_types.register(gidx);
-            let ty = ctx
-                .validator
-                .outer_scope(ct)?
+            let (ty, is_final, identity) = {
+                let scope = ctx.validator.outer_scope(ct)?;
+                let local_idx = LocalIdx::new(idx);
+                (
+                    scope.core_types.get(local_idx)?.clone(),
+                    scope.core_types.finality(local_idx),
+                    scope.core_types.identity(local_idx),
+                )
+            };
+            ctx.validator
+                .scope_mut()
                 .core_types
-                .get(LocalIdx::new(idx))?
-                .clone();
-            ctx.validator.scope_mut().core_types.add(ty);
+                .add_with_records(ty, is_final, identity);
         }
         SortType::Component => {
             let gidx = ctx

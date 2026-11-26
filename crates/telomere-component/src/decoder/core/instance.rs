@@ -4,7 +4,9 @@ use crate::decoder::{
     parse_core_instance_local_idx, parse_core_module_local_idx, parse_core_sort, parse_vec_range,
     ParseResult, SizedResult,
 };
-use crate::ir::types::{CoreInstanceType, CoreModuleExportType, CoreSortType};
+use crate::ir::types::{
+    CoreFuncIdentity, CoreInstanceType, CoreModuleExportType, CoreModuleFuncType, CoreSortType,
+};
 use crate::ir::{
     CoreInstance, CoreInstanceInlineExport, CoreRelation, DefinedInstance, GlobalIdx, LocalIdx,
 };
@@ -110,14 +112,28 @@ pub fn parse_core_instance_inline_export(
     let (_, idx) = parse_u32(ctx.reader)?;
     match sort {
         CoreSortType::Func => {
-            let ty = ctx
+            let local_idx = LocalIdx::new(idx);
+            let signature = ctx.validator.scope().core_funcs.get(local_idx)?.clone();
+            // The store records the canonical identity of a func
+            // that entered the index space carrying one (an alias
+            // of a typed instance export); a func without a record
+            // is the bare type of its signature.
+            let identity = ctx
                 .validator
                 .scope()
                 .core_funcs
-                .get(LocalIdx::new(idx))?
-                .clone();
-            let idx = ctx.state.scope().core_funcs.get(LocalIdx::new(idx))?;
-            Ok((name, ty.into(), CoreInstanceInlineExport::Func(idx)))
+                .identity(local_idx)
+                .unwrap_or_else(|| CoreFuncIdentity::bare(signature.clone()));
+            let idx = ctx.state.scope().core_funcs.get(local_idx)?;
+            Ok((
+                name,
+                CoreModuleFuncType {
+                    signature,
+                    identity,
+                }
+                .into(),
+                CoreInstanceInlineExport::Func(idx),
+            ))
         }
         CoreSortType::Table => {
             let ty = *ctx.validator.scope().core_tables.get(LocalIdx::new(idx))?;

@@ -65,16 +65,19 @@ const EXCLUDED: &[(&str, &str)] = &[
     (
         "binary/binary.wast",
         "malformed-binary strictness is fixed (#319: section sizes \
-         are enforced and core decode reasons are preserved) and \
-         binary extern names are validated (issue #359; the \
-         lines 1467, 1481 cases now pass), but the file still \
-         fails on other defects: async type encodings the \
-         decoder \
-         does not know - stream (0x66) and async func (0x43) types, \
-         async being a documented non-goal (lines 556, 742, 754, \
-         993); the CM_MAP map type (0x63), a documented non-goal \
-         (line 984); core rectype/moduletype encodings (the 0x50 \
-         `sub` prefix wart; issue #355; lines 891, 948)",
+         are enforced and core decode reasons are preserved), the \
+         core rectype/moduletype 0x50 `sub` prefix encodings are \
+         fixed (#355; the line 891 and 948 cases now pass), alias \
+         sort validation is fixed (#356; the line 460 and 924 \
+         cases now pass), and binary extern names are validated \
+         for every sort (#359; the line 1467 and 1481 cases now \
+         pass, after the split extern-name encoding fix in #318 \
+         for lines 1297, 1316), but the file still fails on other \
+         defects: async type encodings the decoder does not know \
+         - stream (0x66) and async func (0x43) types, async being \
+         a documented non-goal (lines 556, 742, 754, 993); and \
+         the CM_MAP map type (0x63), a documented non-goal (line \
+         984)",
     ),
     (
         "validation/external-visibility.wast",

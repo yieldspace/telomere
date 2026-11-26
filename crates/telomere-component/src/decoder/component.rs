@@ -8,7 +8,8 @@ use crate::decoder::validator::ParseState;
 use crate::decoder::value::parse_value_def;
 use crate::decoder::{
     parse_core_instance, parse_core_type, parse_layer, parse_magic, parse_section_type,
-    parse_vec_range, parse_version, ComponentParseError, ParseContext, ParseResult, Validator,
+    parse_vec_range, parse_version, ComponentParseError, DefinedCoreType, ParseContext,
+    ParseResult, Validator,
 };
 use crate::ir::types::{CoreModuleType, Type};
 use crate::ir::{ComponentSection, CoreModule, CoreRelation, Relation};
@@ -57,64 +58,31 @@ fn _parse_component(
         // spill into the following sections, and a body that ends early
         // (or a declared size that runs past the end of the input) is
         // malformed instead of being silently resynchronised.
+        //
+        // The section bodies live in `#[inline(never)]` helpers so this
+        // recursive frame stays small: a nested component recurses
+        // through here once per level, and the nesting-depth stack
+        // budget is calibrated against the sum of these frames and the
+        // core parser's.
         match st {
             ComponentSection::Custom => {
-                let mut sized_reader = ctx.reader.take(section_size);
-                parse_custom_section(&mut sized_reader, section_size)?;
-                finish_section(&mut sized_reader, section_start, section_size)?;
+                parse_custom_section_body(ctx, section_size, section_start)?;
             }
             ComponentSection::Type => {
-                let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        let ty = parse_type(&mut ctx, depth)?;
-                        let id = ctx.validator.new_type(ty);
-                        ctx.validator.validate_effective_type_size(id)?;
-                        ctx.validator.scope_mut().type_indexes.add(id);
-                    }
-                }
-                finish_section(&mut sized_reader, section_start, section_size)?;
+                parse_type_section(ctx, section_size, section_start, depth)?;
             }
             ComponentSection::CoreModule => {
-                let mut sized_reader = ctx.reader.take(section_size);
-                let module = parse_core_module_section(ctx.state, &mut sized_reader)?;
-                finish_section(&mut sized_reader, section_start, section_size)?;
-                validate_core_module_contract(&module)?;
-                let ty = CoreModuleType::from(&module);
-                let idx = ctx
-                    .state
-                    .core_module_store
-                    .register(CoreRelation::Defined(CoreModule { module }));
-                #[cfg(feature = "aot-bundle")]
-                ctx.state.bind_core_module_substitution(idx);
-                ctx.state.scope_mut().core_modules.register(idx);
-                ctx.validator.scope_mut().core_modules.add(ty);
+                parse_core_module_section_body(ctx, section_size, section_start)?;
             }
             ComponentSection::CoreType => {
-                let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        let (_, ty) = parse_core_type(&mut ctx)?;
-                        let idx = ctx
-                            .state
-                            .core_type_store
-                            .register(CoreRelation::Defined(ty.clone()));
-                        ctx.state.scope_mut().core_types.register(idx);
-                        ctx.validator.scope_mut().core_types.add(ty);
-                    }
-                }
-                finish_section(&mut sized_reader, section_start, section_size)?;
+                parse_core_type_section(ctx, section_size, section_start)?;
             }
             ComponentSection::CoreInstance => {
                 let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        parse_core_instance(&mut ctx)?;
-                    }
-                }
+                parse_vec_items(
+                    &mut ParseContext::new(&mut sized_reader, ctx.state, ctx.validator),
+                    parse_core_instance,
+                )?;
                 finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Component => {
@@ -129,89 +97,54 @@ fn _parse_component(
                     }
                     finish_section(&mut sized_reader, section_start, section_size)?;
                 }
-                let component_ty = ctx.validator.make_component();
-                let component = ctx
-                    .state
-                    .scope()
-                    .make_component(&ctx.state.core_instance_store, &ctx.state.instance_store);
-
-                ctx.validator.pop_scope();
-                ctx.state.pop_scope();
-
-                let component_type_id = ctx.validator.new_type(Type::Component(component_ty));
-                ctx.validator
-                    .validate_effective_type_size(component_type_id)?;
-                ctx.validator
-                    .validate_component_type_definition(component_type_id)?;
-                ctx.validator
-                    .scope_mut()
-                    .component_indexes
-                    .add(component_type_id);
-
-                let idx = ctx
-                    .state
-                    .component_store
-                    .register(Relation::Defined(component));
-                ctx.state.scope_mut().components.register(idx);
+                finish_nested_component(ctx)?;
             }
             ComponentSection::Export => {
                 let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        parse_export(&mut ctx)?;
-                    }
-                }
+                parse_vec_items(
+                    &mut ParseContext::new(&mut sized_reader, ctx.state, ctx.validator),
+                    parse_export,
+                )?;
                 finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Import => {
                 let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        parse_import(&mut ctx)?;
-                    }
-                }
+                parse_vec_items(
+                    &mut ParseContext::new(&mut sized_reader, ctx.state, ctx.validator),
+                    parse_import,
+                )?;
                 finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Instance => {
                 let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        parse_instance(&mut ctx)?;
-                    }
-                }
+                parse_vec_items(
+                    &mut ParseContext::new(&mut sized_reader, ctx.state, ctx.validator),
+                    parse_instance,
+                )?;
                 finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Alias => {
                 let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        parse_alias(&mut ctx)?;
-                    }
-                }
+                parse_vec_items(
+                    &mut ParseContext::new(&mut sized_reader, ctx.state, ctx.validator),
+                    parse_alias,
+                )?;
                 finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Canon => {
                 let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        parse_canon(&mut ctx)?;
-                    }
-                }
+                parse_vec_items(
+                    &mut ParseContext::new(&mut sized_reader, ctx.state, ctx.validator),
+                    parse_canon,
+                )?;
                 finish_section(&mut sized_reader, section_start, section_size)?;
             }
             ComponentSection::Value => {
                 let mut sized_reader = ctx.reader.take(section_size);
-                {
-                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
-                    for _ in parse_vec_range(&mut ctx)? {
-                        parse_value_def(&mut ctx)?;
-                    }
-                }
+                parse_vec_items(
+                    &mut ParseContext::new(&mut sized_reader, ctx.state, ctx.validator),
+                    parse_value_def,
+                )?;
                 finish_section(&mut sized_reader, section_start, section_size)?;
             }
             v => {
@@ -221,6 +154,138 @@ fn _parse_component(
             }
         }
     }
+    Ok(())
+}
+
+/// Parses a section body that is a counted vector of items handled by
+/// a single item parser (core instances, exports, imports, instances,
+/// aliases, canon definitions, value definitions), through a context
+/// over the section's size-limited reader.
+#[inline(never)]
+fn parse_vec_items<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
+    parse_item: fn(&mut ParseContext<R>) -> ParseResult<()>,
+) -> ParseResult<()> {
+    for _ in parse_vec_range(ctx)? {
+        parse_item(ctx)?;
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn parse_custom_section_body<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
+    section_size: usize,
+    section_start: usize,
+) -> ParseResult<()> {
+    let mut sized_reader = ctx.reader.take(section_size);
+    parse_custom_section(&mut sized_reader, section_size)?;
+    finish_section(&mut sized_reader, section_start, section_size)
+}
+
+#[inline(never)]
+fn parse_type_section<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
+    section_size: usize,
+    section_start: usize,
+    depth: u32,
+) -> ParseResult<()> {
+    let mut sized_reader = ctx.reader.take(section_size);
+    {
+        let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+        for _ in parse_vec_range(&mut ctx)? {
+            let ty = parse_type(&mut ctx, depth)?;
+            let id = ctx.validator.new_type(ty);
+            ctx.validator.validate_effective_type_size(id)?;
+            ctx.validator.scope_mut().type_indexes.add(id);
+        }
+    }
+    finish_section(&mut sized_reader, section_start, section_size)
+}
+
+#[inline(never)]
+fn parse_core_module_section_body<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
+    section_size: usize,
+    section_start: usize,
+) -> ParseResult<()> {
+    let mut sized_reader = ctx.reader.take(section_size);
+    let module = parse_core_module_section(ctx.state, &mut sized_reader)?;
+    finish_section(&mut sized_reader, section_start, section_size)?;
+    validate_core_module_contract(&module)?;
+    let ty = CoreModuleType::from(&module);
+    let idx = ctx
+        .state
+        .core_module_store
+        .register(CoreRelation::Defined(CoreModule { module }));
+    #[cfg(feature = "aot-bundle")]
+    ctx.state.bind_core_module_substitution(idx);
+    ctx.state.scope_mut().core_modules.register(idx);
+    ctx.validator.scope_mut().core_modules.add(ty);
+    Ok(())
+}
+
+#[inline(never)]
+fn parse_core_type_section<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
+    section_size: usize,
+    section_start: usize,
+) -> ParseResult<()> {
+    let mut sized_reader = ctx.reader.take(section_size);
+    {
+        let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
+        for _ in parse_vec_range(&mut ctx)? {
+            // One `core:deftype` can define several core
+            // types (a `rec` group); register each of them.
+            let (_, types) = parse_core_type(&mut ctx)?;
+            for DefinedCoreType {
+                ty,
+                is_final,
+                identity,
+            } in types
+            {
+                let idx = ctx
+                    .state
+                    .core_type_store
+                    .register(CoreRelation::Defined(ty.clone()));
+                ctx.state.scope_mut().core_types.register(idx);
+                ctx.validator
+                    .scope_mut()
+                    .core_types
+                    .add_with_records(ty, Some(is_final), identity);
+            }
+        }
+    }
+    finish_section(&mut sized_reader, section_start, section_size)
+}
+
+/// Registers a just-parsed nested component in the enclosing scopes.
+#[inline(never)]
+fn finish_nested_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<()> {
+    let component_ty = ctx.validator.make_component();
+    let component = ctx
+        .state
+        .scope()
+        .make_component(&ctx.state.core_instance_store, &ctx.state.instance_store);
+
+    ctx.validator.pop_scope();
+    ctx.state.pop_scope();
+
+    let component_type_id = ctx.validator.new_type(Type::Component(component_ty));
+    ctx.validator
+        .validate_effective_type_size(component_type_id)?;
+    ctx.validator
+        .validate_component_type_definition(component_type_id)?;
+    ctx.validator
+        .scope_mut()
+        .component_indexes
+        .add(component_type_id);
+
+    let idx = ctx
+        .state
+        .component_store
+        .register(Relation::Defined(component));
+    ctx.state.scope_mut().components.register(idx);
     Ok(())
 }
 
