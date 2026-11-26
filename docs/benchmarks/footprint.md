@@ -603,12 +603,12 @@ unchanged.
 | --- | --- | ---: | ---: |
 | `release` | `baseline` | 345,656 | 261,679 |
 | `release` | `core` | 1,593,688 | 1,205,863 |
-| `release` | `component` | 2,716,856 | 2,151,575 |
-| `release` | `wasi` | 2,944,352 | 2,325,959 |
+| `release` | `component` | 2,717,368 | 2,151,575 |
+| `release` | `wasi` | 2,944,864 | 2,325,959 |
 | `release` | `core-nosimd` | 1,402,576 | 1,060,695 |
 | `release` | `core-jit` | 2,155,128 | 1,656,599 |
 | `release` | `core-aot` | 1,639,600 | 1,239,095 |
-| `release` | `wasi-threads` | 3,160,056 | 2,493,271 |
+| `release` | `wasi-threads` | 3,160,568 | 2,493,271 |
 | `release-size` | `baseline` | 296,384 | 228,114 |
 | `release-size` | `core` | 1,119,576 | 790,695 |
 | `release-size` | `component` | 1,698,904 | 1,255,271 |
@@ -619,6 +619,37 @@ unchanged.
 | `release-size` | `wasi-threads` | 1,962,856 | 1,431,751 |
 
 #### Re-baseline history
+
+The PR #384 Codex review round-4 fix (`parse_instantiate`
+in `decoder/instance.rs` now judges a `(sub resource)`
+import argument by the type it denotes through `(eq)`
+faces, so a plain export's face of a primitive or a
+defined value type no longer satisfies a resource import;
+the `(Eq, Sub)` arm of `GenericBound::assert_subtype_of`
+in `ir/types.rs` judges its bound target the same way)
+was re-baselined on the #365 branch. Attribution was
+isolated against the round-3 tree itself: the
+pull-request run 45857183153 measured the pre-fix head
+`7ec7237` in CI and passed the gate, and the round-4 fix
+commit `d03dd0d` — the only change between the two
+heads — moves only the twelve series of the three
+configurations that link `telomere-component`: in
+`release`, stripped file +512 B and stripped `.text`
++448 B on all three; in `release-size`, stripped file
++208 B (`component`) and +192 B (`wasi`,
+`wasi-threads`), stripped `.text` +192 B (`component`)
+and +176 B (`wasi`, `wasi-threads`). Every other series
+is byte-identical between the two heads. Against the
+checked-in baseline only the three `release` stripped
+file series grow (+512 B each), so only those three
+series are re-baselined to the branch measurements
+(workflow_dispatch runs 45864362796, 45864383452 and
+45864401428 on the branch at `d03dd0d`; spread 0 B on
+every series, and the pull-request run 45862629694 at
+the same head measured byte-identically). Against the
+original #164 baseline, the largest cumulative growth
+is now the `release` `component` stripped file series
+at +11.66% (2,433,656 B to 2,717,368 B).
 
 The PR #384 Codex review round-3 fix (the `Own`/`Borrow`
 leaf of `defval_types_equal_modulo_variant_form` in
