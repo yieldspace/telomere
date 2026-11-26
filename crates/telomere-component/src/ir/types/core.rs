@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The canonical identity of a declared core func type: its
-/// signature, its finality, and the identity of its declared
-/// supertype, if any.
+/// signature, its finality, the identity of its declared
+/// supertype, if any, and its recursion-group context.
 ///
 /// Core WebAssembly type matching is defined over canonical types:
 /// two defined types are the same type when their canonical forms
@@ -28,11 +28,58 @@ use std::sync::Arc;
 /// apply the chain rule instead of comparing signatures alone: a
 /// plain `(func)` is not a subtype of a declared `(sub (func))`,
 /// even though the signatures agree.
+///
+/// Canonicalisation treats a recursion group as a unit: a type
+/// defined inside an explicit `rec` group is identified by the
+/// group's whole canonical form plus its own position in it, so a
+/// member of a multi-member group is a different type from a
+/// standalone definition of the same shape. `rec_group` carries
+/// that context; it is `None` for a standalone definition, and a
+/// group of one member is a standalone definition (canonicalisation
+/// does not distinguish the two), so singleton groups are
+/// normalised to `None` as well.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoreFuncIdentity {
     pub signature: CoreFuncType,
     pub is_final: bool,
     pub supertype: Option<Arc<CoreFuncIdentity>>,
+    /// The canonical form of the explicit recursion group this
+    /// type was defined in, when the group has more than one
+    /// member; `None` for a standalone definition.
+    pub rec_group: Option<Arc<CoreRecGroup>>,
+    /// This type's position within `rec_group` (0 when there is
+    /// no group context).
+    pub rec_index: u32,
+}
+
+/// The canonical form of one explicit recursion group: the
+/// structural description of every member, in declaration order.
+/// A member's declared supertype is expressed relative to the
+/// group when it names another member, so the form is built
+/// without referring to the members' own identities (which carry
+/// the group itself).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreRecGroup {
+    pub members: Vec<CoreRecMember>,
+}
+
+/// One member of a `CoreRecGroup`, described structurally.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreRecMember {
+    pub signature: CoreFuncType,
+    pub is_final: bool,
+    pub supertype: Option<CoreRecSuper>,
+}
+
+/// A declared supertype as recorded in a `CoreRecMember`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CoreRecSuper {
+    /// The supertype is an earlier member of the same group, by
+    /// position.
+    Member(u32),
+    /// The supertype is a type defined outside the group; its
+    /// canonical identity is carried in full.
+    External(Arc<CoreFuncIdentity>),
 }
 
 impl CoreFuncIdentity {
@@ -43,6 +90,8 @@ impl CoreFuncIdentity {
             signature,
             is_final: true,
             supertype: None,
+            rec_group: None,
+            rec_index: 0,
         })
     }
 

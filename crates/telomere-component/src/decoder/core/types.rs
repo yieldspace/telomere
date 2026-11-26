@@ -1,7 +1,7 @@
 use crate::decoder::{ComponentParseError, ParseContext, SizedResult};
 use crate::ir::types::{
     CoreFuncIdentity, CoreFuncType, CoreModuleExportType, CoreModuleFuncType, CoreModuleImportType,
-    CoreModuleType, CoreType,
+    CoreModuleType, CoreRecGroup, CoreRecMember, CoreRecSuper, CoreType,
 };
 use crate::ir::LocalIdx;
 use crate::support::binary::BinaryReader;
@@ -462,7 +462,7 @@ fn parse_core_subtype_body(
     reader: &mut impl BinaryReader,
     is_final: bool,
     base_len: usize,
-    defined: &mut Vec<DefinedCoreSubtype>,
+    defined: &mut Vec<ParsedCoreSubtype>,
     resolve_existing: &dyn Fn(u32) -> Option<SuperTypeInfo>,
 ) -> SizedResult<()> {
     let start = reader.read_count();
@@ -475,20 +475,28 @@ fn parse_core_subtype_body(
         ));
     }
     let mut supertype = None;
-    let mut supertype_identity = None;
+    let mut declared_supertype = None;
     for idx in supertypes {
-        let info = if (idx as usize) < base_len {
-            resolve_existing(idx)
+        // A supertype index below `base_len` names a type defined
+        // before this recursion group; at or above it, an earlier
+        // member of the group itself. The member case is recorded
+        // by position: the member's identity is only linked once
+        // the whole group has been decoded and its canonical form
+        // is fixed (see `finalize_defined`).
+        let (info, member_position) = if (idx as usize) < base_len {
+            (resolve_existing(idx), None)
         } else {
-            defined
-                .get(idx as usize - base_len)
-                .map(|defined| SuperTypeInfo {
+            let position = idx as usize - base_len;
+            (
+                defined.get(position).map(|defined| SuperTypeInfo {
                     func: Some(defined.func.clone()),
                     is_final: defined.is_final,
-                    identity: Some(defined.identity.clone()),
-                })
-        }
-        .ok_or(ComponentParseError::TypeIdxNotFound(idx))?;
+                    identity: None,
+                }),
+                Some(position),
+            )
+        };
+        let info = info.ok_or(ComponentParseError::TypeIdxNotFound(idx))?;
         let Some(func) = info.func else {
             return Err(ComponentParseError::InvalidType(format!(
                 "core subtype supertype {idx} is not a func type"
@@ -499,8 +507,14 @@ fn parse_core_subtype_body(
                 "core subtype supertype {idx} is final"
             )));
         }
+        declared_supertype = Some(match member_position {
+            Some(position) => ParsedSupertype::Member(position),
+            None => ParsedSupertype::External(
+                info.identity
+                    .unwrap_or_else(|| CoreFuncIdentity::bare(func.clone())),
+            ),
+        });
         supertype = Some(func);
-        supertype_identity = info.identity;
     }
     let leading = reader.read_exact_one()?;
     let (_, func) = parse_core_comptype(reader, leading)?;
@@ -513,15 +527,10 @@ fn parse_core_subtype_body(
             ));
         }
     }
-    let identity = Arc::new(CoreFuncIdentity {
-        signature: func.clone(),
-        is_final,
-        supertype: supertype_identity,
-    });
-    defined.push(DefinedCoreSubtype {
+    defined.push(ParsedCoreSubtype {
         func,
         is_final,
-        identity,
+        supertype: declared_supertype,
     });
     Ok((reader.read_count() - start, ()))
 }
@@ -532,7 +541,7 @@ fn parse_core_subtype(
     reader: &mut impl BinaryReader,
     leading: u8,
     base_len: usize,
-    defined: &mut Vec<DefinedCoreSubtype>,
+    defined: &mut Vec<ParsedCoreSubtype>,
     resolve_existing: &dyn Fn(u32) -> Option<SuperTypeInfo>,
 ) -> SizedResult<()> {
     let start = reader.read_count();
@@ -546,11 +555,10 @@ fn parse_core_subtype(
         0x5e..=0x60 => {
             // A bare comptype is a final subtype with no supertypes.
             let (_, func) = parse_core_comptype(reader, leading)?;
-            let identity = CoreFuncIdentity::bare(func.clone());
-            defined.push(DefinedCoreSubtype {
+            defined.push(ParsedCoreSubtype {
                 func,
                 is_final: true,
-                identity,
+                supertype: None,
             });
         }
         x => {
@@ -585,7 +593,79 @@ fn parse_core_rectype(
             parse_core_subtype(reader, leading, base_len, &mut defined, resolve_existing)?;
         }
     }
-    Ok((reader.read_count() - start, defined))
+    Ok((reader.read_count() - start, finalize_defined(defined)))
+}
+
+/// A subtype as decoded, before its recursion group is complete.
+/// The declared supertype is not yet an identity: one naming an
+/// earlier member of the same group can only be linked once the
+/// group's canonical form is fixed, because the member identities
+/// carry that form (see `CoreFuncIdentity::rec_group`).
+struct ParsedCoreSubtype {
+    func: CoreFuncType,
+    is_final: bool,
+    supertype: Option<ParsedSupertype>,
+}
+
+/// A declared supertype of a `ParsedCoreSubtype`.
+enum ParsedSupertype {
+    /// An earlier member of the same recursion group, by position.
+    Member(usize),
+    /// A type defined before the group started, by its canonical
+    /// identity.
+    External(Arc<CoreFuncIdentity>),
+}
+
+/// Links the member identities of a fully decoded recursion group:
+/// builds the group's canonical form (for a multi-member group),
+/// then each member's identity in declaration order — a declared
+/// supertype inside the group always names an earlier member, so
+/// its identity is already built when it is linked. A group of one
+/// member is the standalone definition of that member and gets no
+/// group context, exactly like `CoreFuncIdentity::bare`.
+fn finalize_defined(parsed: Vec<ParsedCoreSubtype>) -> Vec<DefinedCoreSubtype> {
+    let group = if parsed.len() > 1 {
+        Some(Arc::new(CoreRecGroup {
+            members: parsed
+                .iter()
+                .map(|member| CoreRecMember {
+                    signature: member.func.clone(),
+                    is_final: member.is_final,
+                    supertype: member.supertype.as_ref().map(|supertype| match supertype {
+                        ParsedSupertype::Member(position) => CoreRecSuper::Member(*position as u32),
+                        ParsedSupertype::External(identity) => {
+                            CoreRecSuper::External(identity.clone())
+                        }
+                    }),
+                })
+                .collect(),
+        }))
+    } else {
+        None
+    };
+    let mut identities: Vec<Arc<CoreFuncIdentity>> = Vec::with_capacity(parsed.len());
+    for (position, member) in parsed.iter().enumerate() {
+        let supertype = member.supertype.as_ref().map(|supertype| match supertype {
+            ParsedSupertype::Member(member_position) => identities[*member_position].clone(),
+            ParsedSupertype::External(identity) => identity.clone(),
+        });
+        identities.push(Arc::new(CoreFuncIdentity {
+            signature: member.func.clone(),
+            is_final: member.is_final,
+            supertype,
+            rec_group: group.clone(),
+            rec_index: position as u32,
+        }));
+    }
+    parsed
+        .into_iter()
+        .zip(identities)
+        .map(|(member, identity)| DefinedCoreSubtype {
+            func: member.func,
+            is_final: member.is_final,
+            identity,
+        })
+        .collect()
 }
 
 /// One core type defined by a `core:deftype`, together with the
@@ -677,7 +757,7 @@ pub fn parse_core_type(
                 &mut defined,
                 &resolve_existing,
             )?;
-            defined
+            finalize_defined(defined)
                 .into_iter()
                 .map(|defined| DefinedCoreType {
                     ty: CoreType::Func(defined.func),

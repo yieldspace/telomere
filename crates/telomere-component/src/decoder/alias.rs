@@ -157,14 +157,18 @@ fn parse_core_export(
                 .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_funcs.register(gidx);
             if let CoreModuleExportType::Func(ty) = target_export_type {
-                // The core func index space records signatures
-                // only, so the func's canonical identity does not
-                // survive this alias: a core instance assembled
-                // from this func through inline exports presents
-                // the bare type. (The instance's own export
-                // descriptors, which instantiation matching usually
-                // consumes, do keep the identity.)
-                ctx.validator.scope_mut().core_funcs.add(ty.signature);
+                // The core func index space records signatures,
+                // and the store keeps the func's canonical identity
+                // in its parallel record (see
+                // `CoreTypeStore::add_with_records`), so a core
+                // instance assembled from this func through inline
+                // exports presents the declared type rather than
+                // the bare type of its signature.
+                ctx.validator.scope_mut().core_funcs.add_with_records(
+                    ty.signature,
+                    None,
+                    Some(ty.identity),
+                );
             } else {
                 return Err(ComponentParseError::InvalidSortType(
                     SortType::Core(CoreSortType::Func),
