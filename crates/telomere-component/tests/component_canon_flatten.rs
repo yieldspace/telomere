@@ -15,6 +15,18 @@
 //! now memoised per type; a 40-deep chain is only feasible at all
 //! with the caches (2^40 uncached steps). The time bound is a loose
 //! backstop, not the primary assertion.
+//!
+//! The memoised flat representation is also bounded: each type
+//! retains at most `MAX_FLAT_PARAMS + 1` values, since every consumer
+//! only distinguishes lengths up to the flat limit. Before the bound,
+//! a wide type behind a chain of single-field wrappers made every
+//! wrapper retain a complete copy of the wide representation (Codex
+//! probe on PR #372: 20 doubling tuple definitions plus 128 wrappers
+//! peaked at ~71 MB resident versus ~5 MB without the wrappers,
+//! measured locally with this shape). The wrapper test below uses
+//! 512 wrappers, which would retain ~512 full copies unbounded; it
+//! pins the bound by completion and by the unchanged rejection, not
+//! by a wall-clock or resident-memory threshold.
 
 use telomere_component::ComponentEngine;
 
@@ -111,4 +123,55 @@ fn memory_deep_in_shared_chain_is_still_detected() {
             .contains("canonical option `memory` is required"),
         "expected a memory-required error, got: {error}"
     );
+}
+
+fn doubling_tuples(depth: usize) -> String {
+    let mut types = "(type $t0 (tuple u8))".to_string();
+    for k in 1..depth {
+        types.push_str(&format!(" (type $t{k} (tuple $t{} $t{}))", k - 1, k - 1));
+    }
+    types
+}
+
+#[test]
+fn wide_type_behind_many_wrappers_stays_bounded() {
+    // $t19 flattens to 2^19 values. Each of the 512 single-field
+    // wrappers around it has the same flattened form; with an
+    // unbounded per-type cache every wrapper would retain a complete
+    // copy. The bounded cache retains a prefix of at most
+    // MAX_FLAT_PARAMS + 1 values per type, so this completes with
+    // the same rejection as the bare chain: the flattened parameter
+    // list exceeds the flat limit, so a memory option is required.
+    let mut types = doubling_tuples(20);
+    types.push_str(" (type $w0 (tuple $t19))");
+    for k in 1..512 {
+        types.push_str(&format!(" (type $w{k} (tuple $w{}))", k - 1));
+    }
+    let text = lift_component(&types, "i32", "$w511");
+    let error = compile_component(&text)
+        .err()
+        .unwrap_or_else(|| panic!("expected the wrapped wide lift to be rejected"));
+    assert!(
+        error
+            .to_string()
+            .contains("canonical option `memory` is required"),
+        "expected a memory-required error, got: {error}"
+    );
+}
+
+#[test]
+fn at_limit_chain_behind_wrappers_lifts_with_exact_signature() {
+    // The 15-deep u8 variant chain flattens to exactly the flat
+    // limit (16 values). Wrapping it in single-field tuples must not
+    // change the flattened form: the bounded cache stores exact
+    // prefixes below the bound, so the wrapped type still lifts
+    // against a core function with 16 i32 parameters and no memory.
+    let mut types = variant_chain(15, "u8");
+    types.push_str(" (type $w0 (tuple $v14))");
+    types.push_str(" (type $w1 (tuple $w0))");
+    types.push_str(" (type $w2 (tuple $w1))");
+    let core_params = vec!["i32"; 16].join(" ");
+    let text = lift_component(&types, &core_params, "$w2");
+    compile_component(&text)
+        .unwrap_or_else(|error| panic!("expected the wrapped chain to compile, got: {error}"));
 }

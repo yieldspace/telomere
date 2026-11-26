@@ -2,6 +2,25 @@ use super::*;
 use crate::ir::TypeId;
 use std::collections::HashSet;
 
+/// Upper bound on the flat representation retained per type.
+///
+/// Every consumer of a flattened type only distinguishes lengths up
+/// to `MAX_FLAT_PARAMS`: longer parameter and result lists are passed
+/// indirectly through memory instead. Retaining the first
+/// `MAX_FLAT_PARAMS + 1` values is therefore enough — a cached vector
+/// of exactly that length means "at least this many", and prefixes
+/// compose exactly (concatenation is positional and the variant join
+/// is element-wise, so a join or concatenation of prefixes is a
+/// prefix of the true result). Without the bound, a chain of
+/// single-field wrappers around a wide type each retained a complete
+/// copy of the wide representation, so peak memory grew with
+/// depth x width on inputs whose flattened values are never used
+/// (the lift is rejected for a missing `memory` option only after
+/// flattening). Measured on PR #372: 20 doubling tuple definitions
+/// followed by 128 single-element wrappers peaked at ~71 MB resident
+/// versus ~5 MB without the wrappers.
+const MAX_CACHED_FLAT_LEN: usize = MAX_FLAT_PARAMS + 1;
+
 pub(super) fn flatten_func_type(
     func_ty: &FuncType,
     ctx: &ParseContext<impl BinaryReader>,
@@ -91,7 +110,10 @@ fn flatten_val_type(
 /// growing exponentially, while the definitions alone stayed flat).
 /// The discipline matches the validator's size / alignment / borrow
 /// caches (PR #364): only completed results are cached and errors are
-/// not cached. A type already on the current traversal stack is never
+/// not cached. The retained representation is bounded by
+/// `MAX_CACHED_FLAT_LEN`; see its documentation for why a prefix is
+/// all any consumer needs. A type already on the current traversal
+/// stack is never
 /// cached either; defined types cannot actually be recursive (a
 /// definition only references earlier types), so the re-entry guard is
 /// defensive and reports an error rather than recursing without bound,
@@ -115,6 +137,7 @@ fn flatten_type_by_id(
     let result = flatten_type(ctx.validator.get_type(type_id)?, ctx, visiting, &mut flat);
     visiting.remove(&type_id);
     result?;
+    flat.truncate(MAX_CACHED_FLAT_LEN);
     out.extend_from_slice(&flat);
     ctx.validator.set_flattened_types(type_id, flat);
     Ok(())
