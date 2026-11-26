@@ -8,7 +8,7 @@
 
 use crate::decoder::types::parse_valtype;
 use crate::decoder::{ComponentParseError, ParseContext, ParseResult, Validator};
-use crate::ir::types::{DefValType, PrimValType, Type, ValType};
+use crate::ir::types::{DefValType, Generic, GenericBound, PrimValType, Type, ValType};
 use crate::ir::{Relation, TypeId, Value};
 use crate::support::binary::BinaryReader;
 use crate::support::parser::core::{parse_name, parse_u32};
@@ -111,12 +111,29 @@ fn validate_valtype(
     }
 }
 
+/// Resolves an `(eq)` generic -- an alias, or the face of a plain
+/// type export -- to the type index it denotes. Any other type
+/// resolves to itself.
+fn resolve_eq_type_id(validator: &Validator, mut id: TypeId) -> ParseResult<TypeId> {
+    while let Type::Generic(Generic {
+        bound: GenericBound::Eq(inner),
+        ..
+    }) = validator.get_type(id)?
+    {
+        id = *inner;
+    }
+    Ok(id)
+}
+
 fn validate_type_id(
     validator: &Validator,
     id: TypeId,
     allow_own: bool,
     visiting: &mut HashSet<TypeId>,
 ) -> ParseResult<()> {
+    // An `(eq)` type denotes the type it resolves to; judge (and
+    // track) the denoted type.
+    let id = resolve_eq_type_id(validator, id)?;
     if !visiting.insert(id) {
         // Recursive type: the cycle is already being checked on the stack.
         return Ok(());
@@ -211,7 +228,7 @@ fn decode_value(
     let start = reader.read_count();
     let value = match ty {
         ValType::Primitive(prim) => decode_prim(prim, reader)?,
-        ValType::Type(id) => match validator.get_type(*id)? {
+        ValType::Type(id) => match validator.get_type(resolve_eq_type_id(validator, *id)?)? {
             Type::DefVal(def) => {
                 let def = def.clone();
                 decode_defval(validator, &def, reader, depth, budget)?

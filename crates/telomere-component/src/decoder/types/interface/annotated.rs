@@ -296,7 +296,8 @@ fn result_ok_own_resource_type(
     let ValType::Type(type_id) = val_ty else {
         return None;
     };
-    let Type::DefVal(DefValType::Variant(cases)) = ctx.validator.get_type(*type_id).ok()? else {
+    let type_id = resolve_eq_alias(ctx, *type_id)?;
+    let Type::DefVal(DefValType::Variant(cases)) = ctx.validator.get_type(type_id).ok()? else {
         return None;
     };
     if cases.len() != 2 || cases[0].label.0 != "ok" || cases[1].label.0 != "err" {
@@ -309,17 +310,37 @@ fn is_result_type(ctx: &ParseContext<impl BinaryReader>, val_ty: &ValType) -> bo
     let ValType::Type(type_id) = val_ty else {
         return false;
     };
-    let Ok(Type::DefVal(DefValType::Variant(cases))) = ctx.validator.get_type(*type_id) else {
+    let Some(type_id) = resolve_eq_alias(ctx, *type_id) else {
+        return false;
+    };
+    let Ok(Type::DefVal(DefValType::Variant(cases))) = ctx.validator.get_type(type_id) else {
         return false;
     };
     cases.len() == 2 && cases[0].label.0 == "ok" && cases[1].label.0 == "err"
+}
+
+/// Resolves an `(eq)` generic -- an alias, or the face of a plain
+/// type export -- to the type it denotes. Any other type resolves to
+/// itself. The shape helpers below judge the denoted type: a face of
+/// an `own` type is an `own` type for constructor/method purposes.
+fn resolve_eq_alias(ctx: &ParseContext<impl BinaryReader>, mut type_id: TypeId) -> Option<TypeId> {
+    loop {
+        match ctx.validator.get_type(type_id).ok()? {
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => type_id = *inner,
+            _ => return Some(type_id),
+        }
+    }
 }
 
 fn own_resource_type(ctx: &ParseContext<impl BinaryReader>, val_ty: &ValType) -> Option<TypeId> {
     let ValType::Type(type_id) = val_ty else {
         return None;
     };
-    let Type::DefVal(DefValType::Own(resource)) = ctx.validator.get_type(*type_id).ok()? else {
+    let type_id = resolve_eq_alias(ctx, *type_id)?;
+    let Type::DefVal(DefValType::Own(resource)) = ctx.validator.get_type(type_id).ok()? else {
         return None;
     };
     Some(*resource)
@@ -332,7 +353,8 @@ fn borrow_resource_param(
     let ValType::Type(type_id) = val_ty else {
         return None;
     };
-    let Type::DefVal(DefValType::Borrow(resource)) = ctx.validator.get_type(*type_id).ok()? else {
+    let type_id = resolve_eq_alias(ctx, *type_id)?;
+    let Type::DefVal(DefValType::Borrow(resource)) = ctx.validator.get_type(type_id).ok()? else {
         return None;
     };
     Some(*resource)

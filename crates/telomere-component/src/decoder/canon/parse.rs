@@ -121,28 +121,30 @@ fn parse_resource(
 ) -> ParseResult<()> {
     let type_idx = parse_type_local_idx(ctx)?;
     let type_id = ctx.validator.scope().type_indexes.get(type_idx)?;
-    let ty_ref = ctx.validator.get_type(type_id)?;
-    let is_resource = matches!(ty_ref, Type::Resource(_) | Type::Generic(_));
+    // Both checks below judge the denoted type: an `(eq)` type -- an
+    // alias, or the face of a plain type export -- denotes the type
+    // it resolves to, so resolve through eq generics before checking
+    // whether this is a resource type at all. A `(sub resource)`
+    // generic denotes no concrete type and stays as it is: it is a
+    // resource type in its own right, but never a local one.
+    let mut resolved_id = type_id;
+    while let Type::Generic(crate::ir::types::Generic {
+        bound: crate::ir::types::GenericBound::Eq(inner),
+        ..
+    }) = ctx.validator.get_type(resolved_id)?
+    {
+        resolved_id = *inner;
+    }
+    let is_resource = matches!(
+        ctx.validator.get_type(resolved_id)?,
+        Type::Resource(_) | Type::Generic(_)
+    );
     if !is_resource {
         return Err(ComponentParseError::TypeMismatch(
             "not a resource type".to_owned(),
         ));
     }
     if matches!(kind, ResourceCanonKind::New | ResourceCanonKind::Rep) {
-        // Locality is a property of the denoted resource: an
-        // `(eq)` type -- an alias, or the face of a plain type
-        // export threaded back through a child's re-export --
-        // denotes the resource it resolves to, so resolve through
-        // eq generics before judging. A `(sub resource)` generic
-        // denotes no concrete resource and stays non-local.
-        let mut resolved_id = type_id;
-        while let Type::Generic(crate::ir::types::Generic {
-            bound: crate::ir::types::GenericBound::Eq(inner),
-            ..
-        }) = ctx.validator.get_type(resolved_id)?
-        {
-            resolved_id = *inner;
-        }
         let is_local = match ctx.validator.get_type(resolved_id)? {
             Type::Resource(resource) => resource.owner() == ctx.validator.current_scope_id(),
             _ => false,

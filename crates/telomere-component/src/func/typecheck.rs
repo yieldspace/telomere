@@ -41,7 +41,11 @@ pub(super) fn ensure_matches_type<T>(
 fn type_matches(ty: &ValType, program: &ComponentProgram, expected: TypeExpectation) -> bool {
     match ty {
         ValType::Primitive(prim) => primitive_matches(prim, expected),
-        ValType::Type(type_id) => match program.get_type(*type_id) {
+        // An `(eq)` type -- an alias, or the face of a plain type
+        // export -- denotes its underlying type, so resolve through
+        // it before judging the shape: a primitive reached through an
+        // export's face is the primitive it denotes.
+        ValType::Type(type_id) => match program.resolve_eq_type(*type_id) {
             Some(Type::DefVal(DefValType::Primitive(prim))) => primitive_matches(prim, expected),
             _ => false,
         },
