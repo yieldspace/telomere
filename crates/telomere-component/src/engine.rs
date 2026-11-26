@@ -160,6 +160,8 @@ impl ComponentEngine {
             program,
             crate::bundle::ComponentBundleArtifacts::new(used),
             report,
+            envelope.key_id.clone(),
+            envelope.signature.is_empty(),
         ))
     }
 

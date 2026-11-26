@@ -99,6 +99,34 @@ never instantiates, so no guest code runs), runs the core AoT
 pipeline per section, and emits the keyed set, signed as a whole
 when a signer is given.
 
+## CLI surface
+
+`telomere-cli` (built with `--features jit`, which enables this
+crate's `aot-bundle` feature) wires the producer and loader to the
+command line, mirroring the core artifact surface (#199):
+
+- `telomere compile --bundle COMPONENT [-o OUT.tbnd]` packages a
+  component. The default output is the component path with `.tbnd`
+  appended. `--sign-key` (or the `TELOMERE_SIGN_KEY` environment
+  variable) signs the bundle as a whole with the CLI's HMAC-SHA256
+  key file; without a key the bundle is unsigned.
+- `telomere component BUNDLE` detects the `TELOBND1` magic and
+  loads the bundle through `compile_bundle` / `instantiate_bundle`
+  instead of the plain path. `--verify-key` supplies the
+  verification key for a signed bundle; `--trust-unverified-artifact`
+  is the explicit opt-in that runs an unsigned one. With neither,
+  bundles are refused with the loader's typed error, exactly like
+  core AoT artifacts on the run path.
+- `telomere compile --check BUNDLE` validates a bundle against the
+  running build (signature posture, keyed-set pre-check, per-artifact
+  fingerprints, substitution decode) without instantiating or
+  installing anything. An unsigned bundle checks out as unsigned;
+  a signed bundle still requires its `--verify-key`.
+
+In a build without `--features jit`, all three entry points name
+the input as a component bundle and refuse it, rather than failing
+with a parse error.
+
 ## Non-goals and limits
 
 - No serialization of component-level structures (above).
@@ -109,6 +137,3 @@ when a signer is given.
 - The section walker mirrors the decoder's nesting limit (100):
   sections deeper than the limit get no ordinal, and such
   components fail at decode with the decoder's own error.
-- CLI wiring (`telomere compile` growing a bundle mode) is a
-  follow-up: the producer and loader here are the seam it needs,
-  and the CLI surface is being reworked concurrently (#199).
