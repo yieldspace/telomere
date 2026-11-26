@@ -54,6 +54,27 @@ impl Cond {
     }
 }
 
+/// Where one virtual register of the shared lowering physically
+/// lives on a target (#193). The baseline register discipline is the
+/// AArch64 one — vregs 0-7 are call arguments/results, 9-17 are
+/// call-clobbered scratch, 19-28 survive calls, 29/30 are the frame
+/// pair — and each encoder publishes how it maps that file onto its
+/// own machine: on aarch64 the mapping is the identity, while on
+/// x86_64 and riscv64 the call-preserved subset and part of the
+/// scratch set live in real registers and the residue stays in frame
+/// slots. Encoders resolve every virtual-register access through
+/// this mapping, so a mapped register costs no memory traffic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PhysLoc {
+    /// A physical general-purpose register, in the target encoder's
+    /// own register numbering.
+    Reg(u8),
+    /// A frame slot, as a byte displacement from the frame base
+    /// register the encoder anchors slots to (RBP on x86_64, S0 on
+    /// riscv64). Negative, matching each encoder's `slot_disp`.
+    Slot(i32),
+}
+
 /// The placeholder branch shapes the lowering can request. `CbzW` is
 /// only encodable on aarch64; the other encoders reject it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +96,10 @@ pub enum BranchKind {
 /// only emit them when a host feature is present (x86_64 SSE4.1);
 /// encoders that always can simply return `Ok(())`.
 pub trait BaselineMasm: Sized {
+    /// The physical location of virtual register `vreg` on this
+    /// target (#193); see [`PhysLoc`]. The mapping is a static
+    /// property of the encoder, identical at every emission site.
+    fn phys_loc(vreg: u8) -> AsmResult<PhysLoc>;
     fn with_capacity(capacity: usize) -> Self;
     fn offset(&self) -> usize;
     fn truncate(&mut self, len: usize);
@@ -213,6 +238,9 @@ pub trait BaselineMasm: Sized {
 macro_rules! impl_baseline_masm {
     ($ty:ty) => {
         impl $crate::masm::BaselineMasm for $ty {
+            fn phys_loc(vreg: u8) -> $crate::masm::AsmResult<$crate::masm::PhysLoc> {
+                <$ty>::phys_loc(vreg)
+            }
             fn with_capacity(capacity: usize) -> Self {
                 <$ty>::with_capacity(capacity)
             }
