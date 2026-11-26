@@ -10,6 +10,9 @@ pub async fn run(command: ComponentCommand) -> anyhow::Result<ExitCode> {
     let path = command.name.clone();
     let bytes = std::fs::read(&path)
         .with_context(|| format!("failed to read component `{}`", path.display()))?;
+    if bytes.starts_with(crate::COMPONENT_BUNDLE_MAGIC) {
+        return run_bundle_bytes(&bytes, &path, &command).await;
+    }
     run_component_bytes(&bytes, &path, &command).await
 }
 
@@ -34,8 +37,78 @@ async fn run_component_bytes(
         .await
         .with_context(|| format!("failed to instantiate component `{}`", path.display()))?;
 
+    invoke_run_export(instance, &store, &state).await
+}
+
+/// Runs a component bundle (#201) produced by `compile --bundle`:
+/// the fail-closed library loader verifies the bundle under the
+/// command's key/trust posture, then the loaded bundle is
+/// instantiated and run exactly like a plain component.
+#[cfg(feature = "jit")]
+async fn run_bundle_bytes(
+    bytes: &[u8],
+    path: &Path,
+    command: &ComponentCommand,
+) -> anyhow::Result<ExitCode> {
+    let engine = ComponentEngine::new();
+    let verifier = match &command.verify_key {
+        Some(key_path) => Some(crate::aot_key::HmacSha256Key::load(key_path)?),
+        None => None,
+    };
+    let policy = telomere::AotLoadPolicy {
+        allow_unsigned: command.trust_unverified_artifact,
+    };
+    let loaded = engine
+        .compile_bundle(
+            bytes,
+            verifier
+                .as_ref()
+                .map(|key| key as &dyn telomere::AotVerifier),
+            policy,
+        )
+        .with_context(|| format!("failed to load component bundle `{}`", path.display()))?;
+
+    let state = build_wasi_state(path, command)?;
+    let mut linker = ComponentLinker::new();
+    add_to_linker_sync(&mut linker, state.clone())
+        .context("failed to register WASI imports into component linker")?;
+
+    let store = telomere::Store::new();
+    let instance = engine
+        .instantiate_bundle(&loaded, &store, &linker)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to instantiate component bundle `{}`",
+                path.display()
+            )
+        })?;
+
+    invoke_run_export(instance, &store, &state).await
+}
+
+#[cfg(not(feature = "jit"))]
+async fn run_bundle_bytes(
+    _bytes: &[u8],
+    path: &Path,
+    _command: &ComponentCommand,
+) -> anyhow::Result<ExitCode> {
+    anyhow::bail!(
+        "`{}` is a telomere component bundle; running it requires a telomere-cli build with `--features jit`",
+        path.display()
+    )
+}
+
+/// Invokes the instance's `wasi:cli/run` export and maps the
+/// outcome (including a guest `proc_exit`-style status carried by
+/// the WASI state) to the process exit code.
+async fn invoke_run_export(
+    instance: telomere_component::ComponentInstance,
+    store: &telomere::Store,
+    state: &WasiState,
+) -> anyhow::Result<ExitCode> {
     let exports = bindings::Exports::new(instance);
-    let result = exports.wasi_cli_run().run(&store).await;
+    let result = exports.wasi_cli_run().run(store).await;
     if let Some(code) = state.exit_code() {
         return Ok(ExitCode::from(code));
     }
@@ -136,6 +209,8 @@ mod tests {
     fn command() -> ComponentCommand {
         ComponentCommand {
             name: PathBuf::from("guest.wasm"),
+            verify_key: None,
+            trust_unverified_artifact: false,
             preopens: Vec::new(),
             env: Vec::new(),
             no_inherit_env: true,

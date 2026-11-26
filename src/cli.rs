@@ -84,6 +84,10 @@ pub enum Command {
     /// the artifact transparently). Artifacts are pinned to the exact
     /// build that produced them: a different telomere build rejects
     /// them with a fingerprint error instead of loading them.
+    ///
+    /// With `--bundle` the input is a Wasm component instead, packaged
+    /// into a component bundle (#201) that the `component` subcommand
+    /// loads transparently.
     Compile(CompileCommand),
     /// Print the resolved measurement-only optimizer switch state as JSON.
     #[cfg(feature = "measure-switches")]
@@ -92,7 +96,8 @@ pub enum Command {
 
 #[derive(Args, Debug, Clone)]
 pub struct CompileCommand {
-    /// Path to the core Wasm module to compile, or the artifact to
+    /// Path to the core Wasm module to compile, the component to
+    /// package when `--bundle` is passed, or the artifact to
     /// validate when `--check` is passed.
     #[arg(value_name = "MODULE")]
     pub name: PathBuf,
@@ -100,7 +105,7 @@ pub struct CompileCommand {
     /// Where to write the artifact.
     ///
     /// Defaults to the module path with `.tpre` appended (`.taot`
-    /// for `--aot`).
+    /// for `--aot`, `.tbnd` for `--bundle`).
     #[arg(long = "output", short = 'o', value_name = "OUTPUT")]
     pub output: Option<PathBuf>,
 
@@ -112,11 +117,23 @@ pub struct CompileCommand {
     #[arg(long = "aot", default_value_t = false)]
     pub aot: bool,
 
-    /// Sign the AoT artifact with the key in this file
-    /// (HMAC-SHA256, #199). The environment variable
-    /// `TELOMERE_SIGN_KEY` names the same kind of file when the
-    /// flag is absent. Without a key the artifact is unsigned,
+    /// Package a Wasm component into a component bundle (#201)
+    /// instead of compiling a core module: the bundle carries the
+    /// component binary plus an AoT artifact for each embedded core
+    /// module, keyed by section hash, and the `component` subcommand
+    /// loads it transparently.
+    ///
+    /// Requires a build with `--features jit`. `--sign-key` signs
+    /// the bundle as a whole; without a key the bundle is unsigned,
     /// which loaders refuse unless explicitly trusted.
+    #[arg(long = "bundle", default_value_t = false, conflicts_with = "aot")]
+    pub bundle: bool,
+
+    /// Sign the AoT artifact (or, with `--bundle`, the component
+    /// bundle) with the key in this file (HMAC-SHA256, #199). The
+    /// environment variable `TELOMERE_SIGN_KEY` names the same kind
+    /// of file when the flag is absent. Without a key the artifact
+    /// is unsigned, which loaders refuse unless explicitly trusted.
     #[arg(long = "sign-key", value_name = "PATH")]
     pub sign_key: Option<PathBuf>,
 
@@ -132,16 +149,35 @@ pub struct CompileCommand {
     #[arg(
         long = "check",
         default_value_t = false,
-        conflicts_with_all = ["output", "aot", "sign_key"]
+        conflicts_with_all = ["output", "aot", "bundle", "sign_key"]
     )]
     pub check: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct ComponentCommand {
-    /// Path to the component to run.
+    /// Path to the component to run, or to a component bundle
+    /// produced by `compile --bundle` (detected by its magic and
+    /// loaded through the bundle path).
     #[arg(value_name = "COMPONENT")]
     pub name: PathBuf,
+
+    /// Verify a signed component bundle against the key in this
+    /// file (HMAC-SHA256, #199). Required to run a bundle produced
+    /// by `compile --bundle --sign-key`; the bundle's key id must
+    /// match the id derived from this file. Plain components do
+    /// not consult it.
+    #[arg(long = "verify-key", value_name = "PATH")]
+    pub verify_key: Option<PathBuf>,
+
+    /// Run an unsigned component bundle without any verification
+    /// (#201). This is an explicit developer-mode opt-in: an
+    /// unsigned bundle is arbitrary native code supplied by
+    /// whoever wrote the file, so never pass this for bundles
+    /// from an untrusted source. Plain components do not consult
+    /// it.
+    #[arg(long = "trust-unverified-artifact", default_value_t = false)]
+    pub trust_unverified_artifact: bool,
 
     /// Grant the guest a host directory, optionally under a different guest path.
     ///
@@ -416,6 +452,69 @@ mod tests {
         assert!(compile.check);
         assert_eq!(compile.name, PathBuf::from("module.taot"));
         assert_eq!(compile.verify_key, Some(PathBuf::from("key.bin")));
+    }
+
+    #[test]
+    fn parses_compile_bundle_with_sign_key() {
+        let cli = Cli::try_parse_from([
+            "telomere-cli",
+            "compile",
+            "guest.wasm",
+            "--bundle",
+            "--sign-key",
+            "key.bin",
+            "-o",
+            "guest.tbnd",
+        ])
+        .expect("compile --bundle invocation should parse");
+
+        let Some(Command::Compile(compile)) = cli.command else {
+            panic!("compile subcommand should be selected");
+        };
+        assert_eq!(compile.name, PathBuf::from("guest.wasm"));
+        assert!(compile.bundle);
+        assert!(!compile.aot);
+        assert!(!compile.check);
+        assert_eq!(compile.sign_key, Some(PathBuf::from("key.bin")));
+        assert_eq!(compile.output, Some(PathBuf::from("guest.tbnd")));
+    }
+
+    #[test]
+    fn compile_bundle_conflicts_with_aot_and_check() {
+        let error =
+            Cli::try_parse_from(["telomere-cli", "compile", "guest.wasm", "--bundle", "--aot"])
+                .expect_err("--bundle must not combine with --aot");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+
+        let error = Cli::try_parse_from([
+            "telomere-cli",
+            "compile",
+            "guest.wasm",
+            "--bundle",
+            "--check",
+        ])
+        .expect_err("--bundle must not combine with --check");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn parses_component_bundle_load_policy_flags() {
+        let cli = Cli::try_parse_from([
+            "telomere-cli",
+            "component",
+            "guest.tbnd",
+            "--verify-key",
+            "key.bin",
+            "--trust-unverified-artifact",
+        ])
+        .expect("component bundle invocation should parse");
+
+        let Some(Command::Component(component)) = cli.command else {
+            panic!("component subcommand should be selected");
+        };
+        assert_eq!(component.name, PathBuf::from("guest.tbnd"));
+        assert_eq!(component.verify_key, Some(PathBuf::from("key.bin")));
+        assert!(component.trust_unverified_artifact);
     }
 
     #[test]
