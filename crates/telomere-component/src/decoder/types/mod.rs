@@ -18,7 +18,9 @@ use crate::decoder::{
     parse_option, parse_type_local_idx, parse_vec_range, ComponentParseError, ParseContext,
     ParseResult, SizedResult,
 };
-use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
+use crate::ir::types::{
+    Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType, VariantForm, VariantType,
+};
 use crate::ir::{Label, ResourceId};
 use crate::support::binary::BinaryReader;
 use crate::support::common::ValType as CoreValType;
@@ -118,7 +120,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>, depth: u32) -> Pars
             if cases.is_empty() {
                 return Err(ComponentParseError::EmptyVariant);
             }
-            Type::DefVal(DefValType::Variant(cases))
+            Type::DefVal(DefValType::Variant(VariantType::declared(cases)))
         }
         DEFVALTYPE_LIST => {
             let valtype = parse_valtype(ctx)?;
@@ -185,22 +187,31 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>, depth: u32) -> Pars
             if labels.is_empty() {
                 return Err(ComponentParseError::EmptyEnum);
             }
-            Type::DefVal(DefValType::Variant(labels))
+            Type::DefVal(DefValType::Variant(VariantType::new(
+                labels,
+                VariantForm::Enum,
+            )))
         }
         DEFVALTYPE_OPTION => {
             let t = parse_valtype(ctx)?;
-            Type::DefVal(DefValType::Variant(vec![
-                Case::new(Label::new("none".to_string()), None),
-                Case::new(Label::new("some".to_string()), Some(t)),
-            ]))
+            Type::DefVal(DefValType::Variant(VariantType::new(
+                vec![
+                    Case::new(Label::new("none".to_string()), None),
+                    Case::new(Label::new("some".to_string()), Some(t)),
+                ],
+                VariantForm::Option,
+            )))
         }
         DEFVALTYPE_RESULT => {
             let t = parse_option(ctx, parse_valtype)?;
             let u = parse_option(ctx, parse_valtype)?;
-            Type::DefVal(DefValType::Variant(vec![
-                Case::new(Label::new("ok".to_string()), t),
-                Case::new(Label::new("err".to_string()), u),
-            ]))
+            Type::DefVal(DefValType::Variant(VariantType::new(
+                vec![
+                    Case::new(Label::new("ok".to_string()), t),
+                    Case::new(Label::new("err".to_string()), u),
+                ],
+                VariantForm::Result,
+            )))
         }
         DEFVALTYPE_OWN => {
             let idx = parse_type_local_idx(ctx)?;

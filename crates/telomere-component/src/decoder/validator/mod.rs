@@ -644,7 +644,7 @@ mod tests {
                 let discriminant = discriminant_elem_size(cases.len());
                 let mut max_case_alignment = 1;
                 let mut max_payload = 0;
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         max_case_alignment =
                             max_case_alignment.max(naive_val_alignment(validator, ty, visiting)?);
@@ -710,7 +710,7 @@ mod tests {
             }
             DefValType::Variant(cases) => {
                 let mut alignment = discriminant_elem_size(cases.len());
-                for case in cases {
+                for case in cases.iter() {
                     if let Some(ty) = &case.ty {
                         alignment = alignment.max(naive_val_alignment(validator, ty, visiting)?);
                     }

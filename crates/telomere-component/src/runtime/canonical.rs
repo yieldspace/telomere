@@ -1256,8 +1256,8 @@ fn lift_defined_value(
         Type::DefVal(DefValType::Record(fields)) => {
             lift_record_value(fields, options, program, store, cursor)
         }
-        Type::DefVal(DefValType::Variant(cases)) => {
-            lift_variant_value(cases, options, program, store, cursor)
+        Type::DefVal(DefValType::Variant(variant)) => {
+            lift_variant_value(variant, options, program, store, cursor)
         }
         Type::DefVal(DefValType::Flags(labels)) => lift_flags_value(labels, cursor),
         Type::DefVal(DefValType::List(elem, maybe_len)) => {
@@ -1625,7 +1625,7 @@ fn flat_types_for_defval(
         }
         DefValType::Variant(cases) => {
             let mut payload = Vec::new();
-            for case in cases {
+            for case in cases.iter() {
                 if let Some(ty) = &case.ty {
                     for (index, flat_ty) in
                         flat_types_for_valtype(ty, program)?.into_iter().enumerate()
@@ -1807,8 +1807,8 @@ fn read_defined_value_from_memory(
         Type::DefVal(DefValType::Record(fields)) => {
             read_record_value_from_memory(fields, options, program, store, memory, ptr)
         }
-        Type::DefVal(DefValType::Variant(cases)) => {
-            read_variant_value_from_memory(cases, options, program, store, memory, ptr)
+        Type::DefVal(DefValType::Variant(variant)) => {
+            read_variant_value_from_memory(variant, options, program, store, memory, ptr)
         }
         Type::DefVal(DefValType::Flags(labels)) => {
             read_flags_value_from_memory(labels, memory, store, ptr)
@@ -2109,18 +2109,18 @@ fn write_variant_value_to_memory(
 }
 
 fn read_variant_value_from_memory(
-    cases: &[Case],
+    variant: &VariantType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
     store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
-    let discriminant = read_variant_discriminant_from_memory(store, memory, ptr, cases.len())?;
-    let case = cases
+    let discriminant = read_variant_discriminant_from_memory(store, memory, ptr, variant.len())?;
+    let case = variant
         .get(discriminant)
         .ok_or_else(|| ComponentError::Trap("invalid variant discriminant".to_owned()))?;
-    let (payload_offset, _) = variant_payload_offset_and_size(cases, program)?;
+    let (payload_offset, _) = variant_payload_offset_and_size(variant, program)?;
     let payload = if let Some(ty) = &case.ty {
         Some(Box::new(read_value_from_memory(
             ty,
@@ -2134,34 +2134,7 @@ fn read_variant_value_from_memory(
         None
     };
 
-    if is_option_cases(cases) {
-        return Ok(ComponentValue::Option(payload));
-    }
-    if is_result_cases(cases) {
-        let payload = if case.ty.is_none() {
-            Some(Box::new(ComponentValue::Tuple(Vec::new())))
-        } else {
-            payload
-        };
-        return Ok(match case.label.0.as_str() {
-            "ok" => ComponentValue::Result {
-                ok: payload,
-                err: None,
-            },
-            "err" => ComponentValue::Result {
-                ok: None,
-                err: payload,
-            },
-            _ => unreachable!(),
-        });
-    }
-    if is_enum_cases(cases) {
-        return Ok(ComponentValue::Enum(case.label.0.clone()));
-    }
-    Ok(ComponentValue::Variant {
-        case: case.label.0.clone(),
-        value: payload,
-    })
+    Ok(variant_representation(variant, case, payload))
 }
 
 fn write_flags_value_to_memory(
@@ -2537,17 +2510,17 @@ fn lower_variant_value(
 }
 
 fn lift_variant_value(
-    cases: &[Case],
+    variant: &VariantType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
     store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     let case_index = cursor.next_i32()? as usize;
-    let case = cases
+    let case = variant
         .get(case_index)
         .ok_or_else(|| ComponentError::Trap("invalid variant discriminant".to_owned()))?;
-    let payload_types = variant_payload_flat_types(cases, program)?;
+    let payload_types = variant_payload_flat_types(variant, program)?;
     let raw_payload = payload_types
         .iter()
         .map(|ty| cursor.next_for_type(*ty))
@@ -2567,34 +2540,55 @@ fn lift_variant_value(
     } else {
         None
     };
-    if is_option_cases(cases) {
-        return Ok(ComponentValue::Option(payload));
-    }
-    if is_result_cases(cases) {
-        let payload = if case.ty.is_none() {
-            Some(Box::new(ComponentValue::Tuple(Vec::new())))
-        } else {
-            payload
-        };
-        return Ok(match case.label.0.as_str() {
-            "ok" => ComponentValue::Result {
-                ok: payload,
-                err: None,
+    Ok(variant_representation(variant, case, payload))
+}
+
+/// Choose the dynamic representation for a lifted variant-shaped value.
+///
+/// The representation follows the constructor the type was declared with
+/// (its `VariantForm`), not the shape of its cases: a type declared as
+/// `variant { none, some(T) }` lifts to `ComponentValue::Variant`, while a
+/// type declared as `option T` — whose cases are identical — lifts to
+/// `ComponentValue::Option`. The shape checks remain as a sanity guard:
+/// a form whose cases do not have the expected shape (which the decoder
+/// cannot produce) falls back to the plain `Variant` representation.
+fn variant_representation(
+    variant: &VariantType,
+    case: &Case,
+    payload: Option<Box<ComponentValue>>,
+) -> ComponentValue {
+    match variant.form {
+        VariantForm::Option if is_option_cases(variant) => ComponentValue::Option(payload),
+        VariantForm::Result if is_result_cases(variant) => match case.label.0.as_str() {
+            "ok" | "err" => {
+                let payload = if case.ty.is_none() {
+                    Some(Box::new(ComponentValue::Tuple(Vec::new())))
+                } else {
+                    payload
+                };
+                if case.label.0 == "ok" {
+                    ComponentValue::Result {
+                        ok: payload,
+                        err: None,
+                    }
+                } else {
+                    ComponentValue::Result {
+                        ok: None,
+                        err: payload,
+                    }
+                }
+            }
+            _ => ComponentValue::Variant {
+                case: case.label.0.clone(),
+                value: payload,
             },
-            "err" => ComponentValue::Result {
-                ok: None,
-                err: payload,
-            },
-            _ => unreachable!(),
-        });
+        },
+        VariantForm::Enum if is_enum_cases(variant) => ComponentValue::Enum(case.label.0.clone()),
+        _ => ComponentValue::Variant {
+            case: case.label.0.clone(),
+            value: payload,
+        },
     }
-    if is_enum_cases(cases) {
-        return Ok(ComponentValue::Enum(case.label.0.clone()));
-    }
-    Ok(ComponentValue::Variant {
-        case: case.label.0.clone(),
-        value: payload,
-    })
 }
 
 fn lower_flags_value(
@@ -3107,6 +3101,127 @@ pub(super) fn program_func_type(
         _ => Err(ComponentError::Runtime(
             "function type is missing".to_owned(),
         )),
+    }
+}
+
+/// Whether two function types denote the same component type up to the
+/// declared constructors of variant-shaped types.
+///
+/// The component model treats `option`, `result` and `enum` as sugar for
+/// particular variants: subtyping, size and flattening only ever look at
+/// the cases, so a type declared with one constructor and the variant it
+/// desugars to are the *same* type with the same canonical layout. The
+/// one place the constructor is observable is the dynamic value
+/// representation chosen when lifting (see `variant_representation`).
+/// This comparison is therefore structural equality that resolves type
+/// indices through `program` and ignores only `VariantForm`; everything
+/// that affects layout or identity — record and case labels, list
+/// fixed lengths, resource identities — must match exactly.
+pub(super) fn func_types_equal_modulo_variant_form(
+    program: &ComponentProgram,
+    a: &FuncType,
+    b: &FuncType,
+) -> bool {
+    let mut seen = Vec::new();
+    a.params.len() == b.params.len()
+        && a.params
+            .iter()
+            .zip(&b.params)
+            .all(|(x, y)| val_types_equal_modulo_variant_form(program, x, y, &mut seen))
+        && match (&a.result, &b.result) {
+            (None, None) => true,
+            (Some(x), Some(y)) => val_types_equal_modulo_variant_form(program, x, y, &mut seen),
+            _ => false,
+        }
+}
+
+fn val_types_equal_modulo_variant_form(
+    program: &ComponentProgram,
+    a: &ValType,
+    b: &ValType,
+    seen: &mut Vec<(TypeId, TypeId)>,
+) -> bool {
+    match (a, b) {
+        (ValType::Primitive(x), ValType::Primitive(y)) => x == y,
+        (ValType::Type(x), ValType::Type(y)) => {
+            if x == y {
+                return true;
+            }
+            // Defined types form a DAG (a type only references earlier
+            // indices), but guard against re-entering a pair anyway: a
+            // pair already under comparison is assumed equal, which is
+            // the coinductive reading and cannot manufacture a layout
+            // difference.
+            if seen.contains(&(*x, *y)) {
+                return true;
+            }
+            seen.push((*x, *y));
+            match (program.get_type(*x), program.get_type(*y)) {
+                (Some(Type::DefVal(dx)), Some(Type::DefVal(dy))) => {
+                    defval_types_equal_modulo_variant_form(program, dx, dy, seen)
+                }
+                (Some(Type::Resource(rx)), Some(Type::Resource(ry))) => rx == ry,
+                _ => false,
+            }
+        }
+        (ValType::Type(x), ValType::Primitive(y)) | (ValType::Primitive(y), ValType::Type(x)) => {
+            matches!(
+                program.get_type(*x),
+                Some(Type::DefVal(DefValType::Primitive(found))) if found == y
+            )
+        }
+    }
+}
+
+fn defval_types_equal_modulo_variant_form(
+    program: &ComponentProgram,
+    a: &DefValType,
+    b: &DefValType,
+    seen: &mut Vec<(TypeId, TypeId)>,
+) -> bool {
+    match (a, b) {
+        (DefValType::Primitive(x), DefValType::Primitive(y)) => x == y,
+        (DefValType::Record(x), DefValType::Record(y)) => {
+            x.len() == y.len()
+                && x.iter().zip(y.iter()).all(|(f, g)| {
+                    f.label == g.label
+                        && val_types_equal_modulo_variant_form(program, &f.ty, &g.ty, seen)
+                })
+        }
+        (DefValType::Variant(x), DefValType::Variant(y)) => {
+            // `form` is deliberately not compared: it is the declared
+            // constructor, the single difference this comparison exists
+            // to abstract over. Labels and payload types must match.
+            x.cases.len() == y.cases.len()
+                && x.cases.iter().zip(&y.cases).all(|(c, d)| {
+                    c.label == d.label
+                        && match (&c.ty, &d.ty) {
+                            (None, None) => true,
+                            (Some(t), Some(u)) => {
+                                val_types_equal_modulo_variant_form(program, t, u, seen)
+                            }
+                            _ => false,
+                        }
+                })
+        }
+        (DefValType::Flags(x), DefValType::Flags(y)) => x == y,
+        (DefValType::List(x, fixed_x), DefValType::List(y, fixed_y)) => {
+            fixed_x == fixed_y && val_types_equal_modulo_variant_form(program, x, y, seen)
+        }
+        (DefValType::Own(x), DefValType::Own(y))
+        | (DefValType::Borrow(x), DefValType::Borrow(y)) => {
+            // Handles denote resources nominally: the two indices must
+            // be the same entry or entries for the same resource. A
+            // generic face is only equal to itself (handled by the
+            // index comparison); faces of one resource under different
+            // indices stay distinct, as they do for subtyping.
+            x == y
+                || matches!(
+                    (program.get_type(*x), program.get_type(*y)),
+                    (Some(Type::Resource(rx)), Some(Type::Resource(ry))) if rx == ry
+                )
+        }
+        _ => false,
     }
 }
 
