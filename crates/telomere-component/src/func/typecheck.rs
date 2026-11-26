@@ -125,6 +125,16 @@ pub(super) fn extract_option_payload_type<'a>(
             "typed component binding expects option".to_owned(),
         ));
     };
+    // Only a type actually declared with the `option` constructor may bind
+    // to `Option<T>`: a declared `variant` with the same none/some cases is
+    // the same component type, but its values lift as
+    // `ComponentValue::Variant`, so accepting it here would produce a
+    // wrapper that only fails when invoked.
+    if cases.form != VariantForm::Option {
+        return Err(ComponentError::Link(
+            "typed component binding expects option".to_owned(),
+        ));
+    }
     match cases.cases.as_slice() {
         [none, some] if none.label.0 == "none" && none.ty.is_none() && some.label.0 == "some" => {
             some.ty.as_ref().ok_or_else(|| {
@@ -146,6 +156,14 @@ pub(super) fn extract_result_payload_types<'a>(
             "typed component binding expects result".to_owned(),
         ));
     };
+    // Same rule as `extract_option_payload_type`: the declared constructor
+    // must be `result`, not a declared `variant` with ok/err cases, whose
+    // values lift as `ComponentValue::Variant`.
+    if cases.form != VariantForm::Result {
+        return Err(ComponentError::Link(
+            "typed component binding expects result".to_owned(),
+        ));
+    }
     match cases.cases.as_slice() {
         [ok, err] if ok.label.0 == "ok" && err.label.0 == "err" => {
             Ok((ok.ty.as_ref(), err.ty.as_ref()))

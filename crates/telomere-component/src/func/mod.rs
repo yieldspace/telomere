@@ -6,7 +6,7 @@ mod traits;
 mod typecheck;
 mod typed;
 
-use crate::ir::types::{DefValType, PrimValType, Type, ValType};
+use crate::ir::types::{DefValType, PrimValType, Type, ValType, VariantForm};
 use crate::runtime::RuntimeInstance;
 use crate::support::Store;
 use crate::{ComponentError, ComponentInstance, ComponentProgram, ComponentValue};
