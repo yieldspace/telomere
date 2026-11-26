@@ -258,6 +258,34 @@ async fn signed_bundle_round_trip_substitutes_installs_and_runs() {
     assert_eq!(report.installed, 1);
 }
 
+#[test]
+fn loaded_bundle_reports_its_own_signature_state() {
+    let bytes = component_bytes(ADD_COMPONENT);
+    let engine = ComponentEngine::new();
+
+    let signed = build_component_bundle(&bytes, Some(&signer())).expect("build signed bundle");
+    let loaded = engine
+        .compile_bundle(&signed, Some(&signer()), AotLoadPolicy::default())
+        .expect("load signed bundle");
+    assert!(!loaded.is_unsigned());
+    assert_eq!(loaded.key_id(), "test-key-1");
+
+    let unsigned = build_component_bundle(&bytes, None).expect("build unsigned bundle");
+    let loaded = engine
+        .compile_bundle(&unsigned, None, allow_unsigned())
+        .expect("load unsigned bundle");
+    assert!(loaded.is_unsigned());
+    assert_eq!(loaded.key_id(), "");
+
+    // A verifier supplied alongside the unsigned opt-in does not
+    // change what the bundle itself carries.
+    let loaded = engine
+        .compile_bundle(&unsigned, Some(&signer()), allow_unsigned())
+        .expect("load unsigned bundle with a verifier");
+    assert!(loaded.is_unsigned());
+    assert_eq!(loaded.key_id(), "");
+}
+
 #[tokio::test]
 async fn cli_style_command_component_runs_via_bundle() {
     let bytes = component_bytes(RUN_COMPONENT);
