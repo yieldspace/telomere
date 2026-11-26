@@ -1,0 +1,111 @@
+name: Platform matrix
+
+# #148: the platform cells that are too heavy for the per-PR workflow.
+# Per the issue's wall-clock constraint these jobs run on a daily
+# schedule, on pushes to main, and on manual dispatch — not on pull
+# requests. ci.yaml keeps the per-PR cells (glibc workspace tests,
+# native JIT tests on Linux x86_64 and macOS arm64, riscv64 check).
+# A failure here is a real platform regression report; these jobs are
+# not required status checks, so they never block a merge.
+
+on:
+  push:
+    branches: [ "main" ]
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  musl-test:
+    name: Workspace tests (x86_64-unknown-linux-musl)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: platform-musl
+
+      # x86_64 musl binaries are statically linked, so the glibc host
+      # executes them natively; this is the same suite as the glibc
+      # workspace-test job in ci.yaml, rebuilt for the musl target.
+      # (The mmap-rs/__clear_cache musl link failure this job once
+      # surfaced was fixed in the crate by #380, so no -lgcc link
+      # workaround is needed here anymore.)
+      - name: Test workspace on musl
+        run: cargo test --verbose --release --workspace --target x86_64-unknown-linux-musl
+
+  aarch64-test:
+    name: Workspace tests (aarch64-unknown-linux-gnu)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: platform-aarch64-linux
+
+      - name: Test workspace on Linux aarch64
+        run: cargo test --verbose --release --workspace
+
+  riscv64-qemu-test:
+    name: telomere tests under QEMU (riscv64gc-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          targets: riscv64gc-unknown-linux-gnu
+
+      - name: Install QEMU user mode and the riscv64 cross linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user gcc-riscv64-linux-gnu
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: platform-riscv64-qemu
+
+      # Executes the telomere suite (default features: interpreter,
+      # no JIT) under qemu-riscv64. Before this job the riscv64 target
+      # was check-only in CI (jit-cross-check in ci.yaml), so riscv64
+      # code paths never ran anywhere in automation.
+      - name: Test telomere under QEMU riscv64
+        env:
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: "qemu-riscv64 -L /usr/riscv64-linux-gnu"
+        run: cargo test --verbose --release -p telomere --target riscv64gc-unknown-linux-gnu
