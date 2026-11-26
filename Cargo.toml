@@ -39,6 +39,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 [dev-dependencies]
 wat = "1.243.0"
 
+[lints]
+workspace = true
+
 [workspace]
 resolver = "2"
 members = [
@@ -60,6 +63,15 @@ license = "Apache-2.0"
 authors = ["sizumita", "tignear"]
 homepage = "https://github.com/yieldspace/telomere"
 keywords = ["webassembly", "runtime"]
+
+[workspace.lints.rust]
+# Unsafe policy ratchet (#132, docs/unsafe-policy.md): every unsafe
+# operation inside an `unsafe fn` must sit in an explicit inner
+# `unsafe` block with a SAFETY comment. Declared here at `warn`;
+# the lint workflow's `-D warnings` makes it a hard error in CI for
+# every crate that has opted in below. Crates/subtrees that have not
+# reached zero sites yet are staged per docs/unsafe-policy.md.
+unsafe_op_in_unsafe_fn = "warn"
 
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }

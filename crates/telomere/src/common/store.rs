@@ -2532,7 +2532,12 @@ impl StoreState {
     #[inline]
     pub unsafe fn get<T>(&self) -> Option<&T> {
         let ptr = self.0 as *const T;
-        ptr.as_ref()
+        // SAFETY: this function's contract requires the stored pointer
+        // to be either null or a live value of type `T` for the
+        // duration of the returned reference. `as_ref` maps null to
+        // `None` and otherwise reborrows exactly the value that
+        // contract covers.
+        unsafe { ptr.as_ref() }
     }
 }
 
