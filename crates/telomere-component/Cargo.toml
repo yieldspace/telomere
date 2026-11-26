@@ -54,8 +54,4 @@ fuzzing = []
 # and installing them needs the emit-gated patching backends, so this
 # turns on the core `jit` feature (which includes `aot-load`).
 aot-bundle = ["telomere/jit"]
-component-gated-feature-nested-namespaces-and-packages = []
 component-gated-feature-async = []
-component-gated-feature-threading-builtins = []
-component-gated-feature-fixed-length-lists = []
-component-gated-feature-error-context-type = []
